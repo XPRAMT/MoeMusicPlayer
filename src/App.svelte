@@ -155,6 +155,7 @@
     shortcutActionFor,
     shortcutBindingLabel,
     shortcutTargetIsEditable,
+    shortcutTargetIsSeekBar,
     shortcutTargetIsScrollable,
   } from './lib/shortcuts.js';
   import type { ShortcutAction, ShortcutBinding, ShortcutSettings } from './lib/ipc';
@@ -2145,6 +2146,8 @@
   }
 
   function shortcutEventShouldRun(target: EventTarget | null): boolean {
+    // The seek bar keeps focus after a click; shortcuts still apply there (their preventDefault stops the native 1 ms range step).
+    if (shortcutTargetIsSeekBar(target)) return true;
     return !shortcutTargetIsEditable(target) && !(target instanceof Element && target.closest('button, a, [role="slider"]'));
   }
 

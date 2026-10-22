@@ -240,6 +240,14 @@ export function removeShortcutBinding(settings, action, binding) {
  * @param {EventTarget | null} target
  * @returns {boolean}
  */
+export function shortcutTargetIsSeekBar(target) {
+  return target instanceof Element && Boolean(target.closest('.progress-slider'));
+}
+
+/**
+ * @param {EventTarget | null} target
+ * @returns {boolean}
+ */
 export function shortcutTargetIsEditable(target) {
   if (!(target instanceof Element)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
@@ -254,4 +262,17 @@ export function shortcutTargetIsScrollable(target) {
   return Boolean(target.closest(
     '.lyrics-view, .lyrics-candidates, .paged-viewport, .settings-panel, .settings-source-panel, .quick-settings-drawer-scroll, .source-list',
   ));
+}
+
+/**
+ * Seek step for a key pressed on the focused seek bar, or null when the key is not a step key.
+ * @param {string} key
+ * @returns {number | null}
+ */
+export function playbackSeekKeyStepMs(key) {
+  if (key === 'ArrowRight' || key === 'ArrowUp') return 5_000;
+  if (key === 'ArrowLeft' || key === 'ArrowDown') return -5_000;
+  if (key === 'PageUp') return 30_000;
+  if (key === 'PageDown') return -30_000;
+  return null;
 }

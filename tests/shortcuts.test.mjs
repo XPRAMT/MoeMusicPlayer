@@ -7,6 +7,7 @@ import {
   removeShortcutBinding,
   shortcutActionFor,
   shortcutBindingLabel,
+  playbackSeekKeyStepMs,
 } from '../src/lib/shortcuts.js';
 
 test('shortcut defaults bind the keyboard and the gamepad the way the player starts', () => {
@@ -79,4 +80,21 @@ test('invalid shortcut settings fall back per action without dropping the rest',
   assert.deepEqual(normalized.playPause, [{ device: 'keyboard', code: 'KeyK' }]);
   assert.deepEqual(normalized.seekBack, defaultShortcutSettings().seekBack);
   assert.deepEqual(normalized.next, defaultShortcutSettings().next);
+});
+
+test('the focused seek bar does not block shortcuts and steps from the live clock', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const bar = await readFile(new URL('../src/lib/PlaybackProgress.svelte', import.meta.url), 'utf8');
+  assert.match(app, /function shortcutEventShouldRun[^}]*shortcutTargetIsSeekBar\(target\)\) return true;/s);
+  assert.match(bar, /onkeydown=\{handleSeekKeydown\}/);
+  assert.match(bar, /if \(event\.defaultPrevented\) return;/);
+  assert.match(bar, /if \(event\.repeat[^\n]*\) return;/);
+  assert.match(bar, /estimatePlaybackPosition\(clock, performance\.now\(\)\)[^\n]*\n\s*void onSeek\(clampPlaybackPosition\(now \+ step/);
+  assert.equal(playbackSeekKeyStepMs('ArrowRight'), 5000);
+  assert.equal(playbackSeekKeyStepMs('ArrowLeft'), -5000);
+  assert.equal(playbackSeekKeyStepMs('PageUp'), 30000);
+  assert.equal(playbackSeekKeyStepMs('PageDown'), -30000);
+  assert.equal(playbackSeekKeyStepMs('Home'), null);
+  assert.equal(playbackSeekKeyStepMs('KeyA'), null);
 });

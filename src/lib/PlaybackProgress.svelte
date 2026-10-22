@@ -8,6 +8,7 @@
     playbackSeekDisplayPosition,
     shouldReleasePlaybackSeekDraft,
   } from './playback-scrubber';
+  import { playbackSeekKeyStepMs } from './shortcuts.js';
   import type { TimelineStyle } from './ipc';
   import {
     estimatePlaybackPosition,
@@ -168,6 +169,19 @@
     draftTrackId = null;
   }
 
+  // Arrow / Page keys on the focused bar: the native range step is 1 ms and starts from the once-a-second text
+  // position, so it would seek slightly backwards. Seek from the live clock instead (bound shortcuts run first and
+  // already called preventDefault). Home/End stay native (absolute).
+  function handleSeekKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return;
+    const step = playbackSeekKeyStepMs(event.key);
+    if (step === null) return;
+    event.preventDefault();
+    if (event.repeat || !seekEnabled || isSending || seekInFlight) return;
+    const now = clock ? estimatePlaybackPosition(clock, performance.now()) : positionMs;
+    void onSeek(clampPlaybackPosition(now + step, durationMs));
+  }
+
   function finishPointerSeek(): void {
     if (pointerActive) commitDraft();
   }
@@ -187,6 +201,7 @@
       aria-label={tr("播放進度")}
       disabled={!seekEnabled}
       onpointerdown={beginPointerSeek}
+      onkeydown={handleSeekKeydown}
       oninput={updateDraft}
       onchange={commitDraft}
       onblur={commitDraft}
