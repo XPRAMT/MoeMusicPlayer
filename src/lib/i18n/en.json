@@ -879,5 +879,13 @@
   "MoeMusicPlayer 需要「本機網路」權限，才能搜尋區域網路中的伺服器並連線到遠端 SMB 伺服器。": "MoeMusicPlayer needs local network access to find servers on your network and connect to remote SMB servers.",
   "按下「前往授權」後，Android 會詢問是否允許。允許後會接著開啟新增遠端伺服器表單；拒絕時不會連線。": "After you choose “Go to permission”, Android will ask to allow access. If allowed, the add remote server form opens; if denied, no connection is made.",
   "尚未授予本機網路權限；允許後才能新增遠端伺服器。": "Local network access was not granted. Allow it before adding a remote server.",
-  "授權中": "Requesting permission"
+  "授權中": "Requesting permission",
+  "主螢幕": "Primary",
+  "自訂": "Custom",
+  "所有螢幕": "All monitors",
+  "播放器所在螢幕": "Player’s monitor",
+  "編號依 Windows 設定 → 系統 → 顯示器的順序（按「識別」可確認）；暫時沒接上的螢幕仍保留選擇。": "Numbered in the order of Windows Settings → System → Display (press “Identify” to check). Monitors that are unplugged for now keep their choice.",
+  "螢幕 {0}": "Monitor {0}",
+  "選擇螢幕": "Choose monitors",
+  "顯示在哪些螢幕": "Show on"
 }

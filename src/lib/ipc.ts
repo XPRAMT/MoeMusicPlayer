@@ -227,6 +227,21 @@ export interface TaskbarLyricsSettings {
   showTranslation: boolean;
   /** The same shadow / outline / off choice as the lyrics on the Now Playing page. */
   textEffect: LyricsTextEffect;
+  /** Which taskbars show lyrics (ADR 0031). */
+  displayMode: 'all' | 'playerMonitor' | 'custom';
+  /** Stable monitor ids chosen in `custom` mode (kept while a monitor is unplugged). */
+  customMonitors: string[];
+}
+
+/** A connected monitor for the taskbar-lyrics monitor choice (ADR 0031). */
+export interface TaskbarLyricsMonitor {
+  id: string;
+  /** 1-based, as close to the numbers in Windows Settings → Display as can be read. */
+  number: number;
+  name: string;
+  primary: boolean;
+  width: number;
+  height: number;
 }
 
 /** Now Playing cover size remembered across restarts (shrunk only). */
@@ -946,6 +961,10 @@ interface IpcContract {
   taskbar_lyrics_theme: {
     args: Record<string, never>;
     result: boolean;
+  };
+  taskbar_lyrics_monitors: {
+    args: Record<string, never>;
+    result: TaskbarLyricsMonitor[];
   };
   audio_list_output_devices: {
     args: Record<string, never>;

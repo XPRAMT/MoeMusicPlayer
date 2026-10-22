@@ -44,7 +44,7 @@
     IconVolumeOff,
     IconX,
   } from '@tabler/icons-svelte-runes';
-  import { emitTo, listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { isTauri } from '@tauri-apps/api/core';
   import {
     getErrorText,
@@ -183,12 +183,13 @@
     formatDsdOutputRate,
     normalizeDsdSettings,
   } from './lib/dsd-settings.js';
-  import type { DsdPlaybackSettings, LanguageChoice, TaskbarLyricsSettings } from './lib/ipc';
+  import type { DsdPlaybackSettings, LanguageChoice, TaskbarLyricsMonitor, TaskbarLyricsSettings } from './lib/ipc';
   import {
     DEFAULT_TASKBAR_LYRICS_SETTINGS,
     TASKBAR_LYRICS_FONT_SIZE_PX,
     TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT,
     normalizeTaskbarLyricsSettings,
+    toggleTaskbarLyricsMonitor,
   } from './lib/taskbar-lyrics-settings.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
@@ -587,6 +588,8 @@
   let languageError = $state<string | null>(null);
   let taskbarLyricsSettings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
   let taskbarLyricsError = $state<string | null>(null);
+  /** Connected monitors for the custom monitor choice (ADR 0031), refreshed when they change. */
+  let taskbarLyricsMonitors = $state<TaskbarLyricsMonitor[]>([]);
   let taskbarLyricsRevision = 0;
   let taskbarLyricsQueue: Promise<void> = Promise.resolve();
   let dseeHxError = $state<string | null>(null);
@@ -1755,14 +1758,31 @@
     taskbarLyricsData = buildTaskbarLyricsData(lyricsState.trackId, shown);
   });
 
-  // Send them to the taskbar window whenever they change, and when the window opens and asks. (`capabilities` is
-  // replaced every few seconds, so only its platform, a plain value, is tracked: the same lyrics are not sent again.)
+  // Send them to the taskbar windows (one per taskbar, ADR 0031) whenever they change, and when a window opens and
+  // asks. They are broadcast: only the lyrics windows listen. (`capabilities` is replaced every few seconds, so only
+  // its platform, a plain value, is tracked: the same lyrics are not sent again.)
   let isWindowsPlatform = $derived(capabilities?.platform === 'windows');
   let taskbarLyricsEnabled = $derived(taskbarLyricsSettings.enabled);
   $effect(() => {
     const data = taskbarLyricsData;
     if (!isTauri() || !data || !isWindowsPlatform || !taskbarLyricsEnabled) return;
-    void emitTo('taskbar-lyrics', 'taskbar-lyrics-data', data).catch(() => {});
+    void emit('taskbar-lyrics-data', data).catch(() => {});
+  });
+
+  // The monitor list for the custom choice: read once, then follow hot-plugging (the watcher reports changes).
+  $effect(() => {
+    if (!isTauri() || !isWindowsPlatform) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void invokeCommand('taskbar_lyrics_monitors', {})
+      .then((monitors) => { if (!disposed) taskbarLyricsMonitors = monitors; })
+      .catch(() => {});
+    void listen<TaskbarLyricsMonitor[]>('taskbar-lyrics-monitors', (event) => {
+      taskbarLyricsMonitors = event.payload;
+    })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
   });
 
   $effect(() => {
@@ -1770,7 +1790,7 @@
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen('taskbar-lyrics-request', () => {
-      if (taskbarLyricsData) void emitTo('taskbar-lyrics', 'taskbar-lyrics-data', taskbarLyricsData).catch(() => {});
+      if (taskbarLyricsData) void emit('taskbar-lyrics-data', taskbarLyricsData).catch(() => {});
     })
       .then((stop) => { if (disposed) stop(); else unlisten = stop; })
       .catch(() => {});
@@ -3539,7 +3559,7 @@
   function forwardTaskbarLyricsPlayback(): void {
     const sample = lastTaskbarLyricsPlayback;
     if (!sample || !isTauri() || capabilities?.platform !== 'windows' || !taskbarLyricsSettings.enabled) return;
-    void emitTo('taskbar-lyrics', 'taskbar-lyrics-playback', sample).catch(() => {});
+    void emit('taskbar-lyrics-playback', sample).catch(() => {});
   }
 
   /** The position now, from the clock (falls back to the last sample). */
@@ -4272,6 +4292,34 @@
                       <input type="checkbox" checked={taskbarLyricsSettings.enabled} onchange={(event) => setTaskbarLyricsSettings({ enabled: event.currentTarget.checked })} />
                       <span><strong>{tr("顯示工作列歌詞")}</strong><small>{tr("在工作列空白處繪製目前播放的歌詞")}</small></span>
                     </label>
+                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-display-label">
+                      <span id="{scope}taskbar-lyrics-display-label" class="cover-corner-setting-label"><strong>{tr("顯示在哪些螢幕")}</strong></span>
+                      <div class="layout-choice-row lyrics-text-effect-row">
+                        {#each [['all', tr('所有螢幕')], ['playerMonitor', tr('播放器所在螢幕')], ['custom', tr('自訂')]] as [value, label] (value)}
+                          <button
+                            type="button"
+                            aria-pressed={taskbarLyricsSettings.displayMode === value}
+                            class:chosen={taskbarLyricsSettings.displayMode === value}
+                            onclick={() => setTaskbarLyricsSettings({ displayMode: value as TaskbarLyricsSettings['displayMode'] })}
+                          >{label}</button>
+                        {/each}
+                      </div>
+                      {#if taskbarLyricsSettings.displayMode === 'custom'}
+                        <div class="layout-choice-row taskbar-lyrics-monitor-row" role="group" aria-label={tr("選擇螢幕")}>
+                          {#each taskbarLyricsMonitors as monitor (monitor.id)}
+                            <button
+                              type="button"
+                              aria-pressed={taskbarLyricsSettings.customMonitors.includes(monitor.id)}
+                              aria-label={tr("螢幕 {0}", [String(monitor.number)])}
+                              title={`${monitor.name ? `${monitor.name} · ` : ''}${monitor.width}×${monitor.height}${monitor.primary ? ` · ${tr("主螢幕")}` : ''}`}
+                              class:chosen={taskbarLyricsSettings.customMonitors.includes(monitor.id)}
+                              onclick={() => setTaskbarLyricsSettings({ customMonitors: toggleTaskbarLyricsMonitor(taskbarLyricsSettings.customMonitors, monitor.id) })}
+                            >{monitor.number}</button>
+                          {/each}
+                        </div>
+                        <small class="taskbar-lyrics-monitor-hint">{tr("編號依 Windows 設定 → 系統 → 顯示器的順序（按「識別」可確認）；暫時沒接上的螢幕仍保留選擇。")}</small>
+                      {/if}
+                    </div>
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-align-label">
                       <span id="{scope}taskbar-lyrics-align-label" class="cover-corner-setting-label"><strong>{tr("對齊")}</strong></span>
                       <div class="layout-choice-row lyrics-text-effect-row">

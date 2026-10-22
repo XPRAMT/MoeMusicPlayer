@@ -2710,6 +2710,22 @@ input:focus-visible {
   gap: var(--settings-item-gap);
 }
 
+.layout-choice-row.taskbar-lyrics-monitor-row {
+  margin-top: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+}
+
+.layout-choice-row.taskbar-lyrics-monitor-row button {
+  min-height: 44px;
+  place-items: center;
+}
+
+.taskbar-lyrics-monitor-hint {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
 .taskbar-lyrics-heading {
   margin-top: 12px;
 }

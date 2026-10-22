@@ -864,6 +864,19 @@ pub enum TaskbarLyricsAlign {
     Right,
 }
 
+/// Which taskbars show lyrics (ADR 0031).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskbarLyricsDisplayMode {
+    /// Every monitor's taskbar.
+    #[default]
+    All,
+    /// Only the taskbar on the monitor the main player window is on; follows the window.
+    PlayerMonitor,
+    /// The monitors in `customMonitors`.
+    Custom,
+}
+
 /// Interface language (ADR 0019): follow the system, or a fixed language.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum UiLanguage {
@@ -907,9 +920,16 @@ pub struct TaskbarLyricsSettings {
     /// opposite of the text colour (black behind light text, white behind dark text). Default none: the text as it was.
     #[serde(default = "default_taskbar_lyrics_text_effect")]
     pub text_effect: LyricsTextEffect,
+    /// Which taskbars show lyrics (ADR 0031). Older files without it show them on every taskbar.
+    #[serde(default)]
+    pub display_mode: TaskbarLyricsDisplayMode,
+    /// Stable monitor ids (`DisplayMonitor::id`) chosen in `Custom` mode; kept while a monitor is unplugged.
+    #[serde(default)]
+    pub custom_monitors: Vec<String>,
 }
 
 impl TaskbarLyricsSettings {
+    pub const MAX_CUSTOM_MONITORS: usize = 32;
     pub const FONT_SIZE_RANGE_PX: (u8, u8) = (1, 50);
     pub const DEFAULT_FONT_SIZE_PX: u8 = 20;
     pub const TRANSLATION_SCALE_RANGE_PERCENT: (u8, u8) = (1, 100);
@@ -928,6 +948,15 @@ impl TaskbarLyricsSettings {
             self.custom_color = Self::DEFAULT_CUSTOM_COLOR.to_owned();
         }
         self.custom_color.make_ascii_lowercase();
+        let mut monitors: Vec<String> = Vec::with_capacity(self.custom_monitors.len());
+        for id in std::mem::take(&mut self.custom_monitors) {
+            let id = id.trim().to_owned();
+            if !id.is_empty() && id.len() <= 512 && !monitors.contains(&id) {
+                monitors.push(id);
+            }
+        }
+        monitors.truncate(Self::MAX_CUSTOM_MONITORS);
+        self.custom_monitors = monitors;
         self
     }
 }
@@ -943,6 +972,8 @@ impl Default for TaskbarLyricsSettings {
             custom_color: Self::DEFAULT_CUSTOM_COLOR.to_owned(),
             show_translation: false,
             text_effect: default_taskbar_lyrics_text_effect(),
+            display_mode: TaskbarLyricsDisplayMode::default(),
+            custom_monitors: Vec::new(),
         }
     }
 }
@@ -991,6 +1022,17 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         text_effect: field("textEffect")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.text_effect),
+        display_mode: field("displayMode")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.display_mode),
+        custom_monitors: field("customMonitors")
+            .and_then(|value| value.as_array().cloned())
+            .map(|ids| {
+                ids.into_iter()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or(defaults.custom_monitors),
     }
     .normalized()
 }
@@ -3196,6 +3238,46 @@ mod tests {
     }
 
     #[test]
+    fn taskbar_lyrics_display_mode_defaults_to_every_taskbar_and_keeps_offline_monitors() {
+        // An old file without the fields shows lyrics on every taskbar.
+        let old =
+            lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true, "fontSizePx": 18})));
+        assert_eq!(old.display_mode, TaskbarLyricsDisplayMode::All);
+        assert!(old.custom_monitors.is_empty());
+        assert_eq!(
+            TaskbarLyricsSettings::default().display_mode,
+            TaskbarLyricsDisplayMode::All
+        );
+        let player =
+            lenient_taskbar_lyrics(Some(serde_json::json!({"displayMode": "playerMonitor"})));
+        assert_eq!(player.display_mode, TaskbarLyricsDisplayMode::PlayerMonitor);
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"displayMode": "everywhere"})))
+                .display_mode,
+            TaskbarLyricsDisplayMode::All
+        );
+        // Ids are trimmed, de-duplicated and kept whether or not the monitor is connected; junk is dropped.
+        let custom = lenient_taskbar_lyrics(Some(serde_json::json!({
+            "displayMode": "custom",
+            "customMonitors": [" A ", "A", "", 3, "B"]
+        })));
+        assert_eq!(custom.display_mode, TaskbarLyricsDisplayMode::Custom);
+        assert_eq!(custom.custom_monitors, vec!["A".to_owned(), "B".to_owned()]);
+        assert!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"customMonitors": "A"})))
+                .custom_monitors
+                .is_empty()
+        );
+        // The struct itself (what the settings page sends) also accepts the old shape.
+        let sent: TaskbarLyricsSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true, "align": "left", "fontSizePx": 20, "translationScalePercent": 100,
+            "useCustomColor": false, "customColor": "#00e1ff", "showTranslation": false
+        }))
+        .unwrap();
+        assert_eq!(sent.display_mode, TaskbarLyricsDisplayMode::All);
+    }
+
+    #[test]
     fn taskbar_lyrics_settings_repair_field_by_field_and_roundtrip() {
         let defaults = TaskbarLyricsSettings::default();
         assert!(defaults.enabled, "the taskbar lyrics are on by default");
@@ -3244,6 +3326,8 @@ mod tests {
             custom_color: "#112233".into(),
             show_translation: true,
             text_effect: LyricsTextEffect::Stroke,
+            display_mode: TaskbarLyricsDisplayMode::Custom,
+            custom_monitors: vec![r"\\?\DISPLAY#AUS28A0#1".into()],
         };
         store
             .update(|settings| {
@@ -3258,6 +3342,11 @@ mod tests {
         assert!(persisted["taskbarLyrics"].get("area").is_none());
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
         assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
+        assert_eq!(persisted["taskbarLyrics"]["displayMode"], "custom");
+        assert_eq!(
+            persisted["taskbarLyrics"]["customMonitors"][0],
+            r"\\?\DISPLAY#AUS28A0#1"
+        );
         // An old file has no effect, and junk is no effect either: both fall back to the default, a shadow.
         assert_eq!(
             lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true}))).text_effect,

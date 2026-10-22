@@ -19,6 +19,7 @@ symphonia = { version = "=0.5.5", default-features = false, features = ["mkv"] }
 # The `#[implement]` macro (COM callback objects) names this crate; same version the `windows` crate uses.
 windows-core = "=0.62.2"
 windows = { version = "0.62.2", features = [
+    "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",

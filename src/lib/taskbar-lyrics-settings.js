@@ -8,8 +8,12 @@ export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#00e1ff';
 
 export const TASKBAR_LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
+/** Which taskbars show lyrics (ADR 0031): every monitor, the player window's monitor, or the chosen monitors. */
+export const TASKBAR_LYRICS_DISPLAY_MODES = Object.freeze(['all', 'playerMonitor', 'custom']);
+/** Same cap as settings.rs `MAX_CUSTOM_MONITORS`. */
+export const TASKBAR_LYRICS_MAX_CUSTOM_MONITORS = 32;
 
-/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none' }} TaskbarLyricsSettings */
+/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[] }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
@@ -21,7 +25,36 @@ export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   customColor: TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR,
   showTranslation: false,
   textEffect: 'shadow',
+  displayMode: 'all',
+  customMonitors: /** @type {string[]} */ (/** @type {unknown} */ (Object.freeze([]))),
 });
+
+/**
+ * Stable monitor ids, trimmed and de-duplicated in order (offline monitors are kept: they are just ids).
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+export function normalizeTaskbarLyricsMonitorIds(value) {
+  if (!Array.isArray(value)) return [];
+  /** @type {string[]} */
+  const ids = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const id = item.trim();
+    if (id !== '' && id.length <= 512 && !ids.includes(id)) ids.push(id);
+  }
+  return ids.slice(0, TASKBAR_LYRICS_MAX_CUSTOM_MONITORS);
+}
+
+/**
+ * Turn one monitor on or off in the custom choice; the ids of unplugged monitors stay as they are.
+ * @param {readonly string[]} chosen @param {string} id
+ * @returns {string[]}
+ */
+export function toggleTaskbarLyricsMonitor(chosen, id) {
+  const ids = normalizeTaskbarLyricsMonitorIds(chosen);
+  return ids.includes(id) ? ids.filter((value) => value !== id) : normalizeTaskbarLyricsMonitorIds([...ids, id]);
+}
 
 /** @param {unknown} value */
 export function isHexColor(value) {
@@ -56,6 +89,10 @@ export function normalizeTaskbarLyricsSettings(value) {
     textEffect: TASKBAR_LYRICS_TEXT_EFFECTS.includes(/** @type {string} */ (source.textEffect))
       ? /** @type {'shadow'|'stroke'|'none'} */ (source.textEffect)
       : defaults.textEffect,
+    displayMode: TASKBAR_LYRICS_DISPLAY_MODES.includes(/** @type {string} */ (source.displayMode))
+      ? /** @type {'all'|'playerMonitor'|'custom'} */ (source.displayMode)
+      : defaults.displayMode,
+    customMonitors: normalizeTaskbarLyricsMonitorIds(source.customMonitors),
   };
 }
 

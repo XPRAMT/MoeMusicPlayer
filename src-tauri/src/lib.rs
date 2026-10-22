@@ -7166,6 +7166,18 @@ fn taskbar_lyrics_theme() -> bool {
     false
 }
 
+/// The connected monitors for the taskbar-lyrics monitor choice (ADR 0031); empty off Windows.
+#[tauri::command]
+fn taskbar_lyrics_monitors() -> Vec<serde_json::Value> {
+    #[cfg(target_os = "windows")]
+    return taskbar_lyrics::monitors()
+        .into_iter()
+        .filter_map(|monitor| serde_json::to_value(monitor).ok())
+        .collect();
+    #[cfg(not(target_os = "windows"))]
+    Vec::new()
+}
+
 /// Persist the DSD gain and output rate, then apply them to the running player: the gain eases in smoothly while a
 /// track plays; a new output rate restarts a playing DSD track from its position.
 #[tauri::command]
@@ -11924,11 +11936,11 @@ pub fn run() {
 
     builder
         .on_window_event(|window, event| {
-            // A close request sent to the taskbar-lyrics window (tools that close "the process's main window" can
+            // A close request sent to a taskbar-lyrics window (tools that close "the process's main window" can
             // pick it, and Windows sends WM_CLOSE to every window at logoff) means the app should quit: forward it
             // to the main window's normal close flow instead of destroying only the lyrics window.
             #[cfg(target_os = "windows")]
-            if window.label() == taskbar_lyrics::WINDOW_LABEL {
+            if taskbar_lyrics::is_window_label(window.label()) {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     if let Some(main) = window.app_handle().get_webview_window("main") {
@@ -12042,6 +12054,7 @@ pub fn run() {
             settings_get_taskbar_lyrics,
             settings_set_taskbar_lyrics,
             taskbar_lyrics_theme,
+            taskbar_lyrics_monitors,
             settings_set_dsd,
             settings_get_cover_zoom,
             settings_set_cover_zoom,

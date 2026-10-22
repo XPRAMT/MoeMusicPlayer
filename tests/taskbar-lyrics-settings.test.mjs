@@ -7,13 +7,14 @@ import {
   getTaskbarLyricsColor,
   getTaskbarLyricsEffectRgb,
   normalizeTaskbarLyricsSettings,
+  toggleTaskbarLyricsMonitor,
 } from '../src/lib/taskbar-lyrics-settings.js';
 
 test('taskbar lyrics settings are repaired field by field', () => {
   assert.deepEqual(normalizeTaskbarLyricsSettings(null), DEFAULT_TASKBAR_LYRICS_SETTINGS);
   assert.deepEqual(normalizeTaskbarLyricsSettings({
     enabled: true, align: 'center', fontSizePx: 20.4, translationScalePercent: 60.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
-  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow' });
+  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow', displayMode: 'all', customMonitors: [] });
   const repaired = normalizeTaskbarLyricsSettings({ enabled: 'yes', area: 'up', align: 3, fontSizePx: 99, customColor: 'red', showTranslation: 1 });
   assert.deepEqual(repaired, { ...DEFAULT_TASKBAR_LYRICS_SETTINGS, fontSizePx: 50 });
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 1 }).fontSizePx, 1);
@@ -24,6 +25,19 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 400 }).translationScalePercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ translationScalePercent: 'half' }).translationScalePercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 'big' }).fontSizePx, 20);
+});
+
+test('old settings show lyrics on every taskbar; the monitor choice keeps offline ids', () => {
+  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.displayMode, 'all');
+  assert.equal(normalizeTaskbarLyricsSettings({ enabled: true }).displayMode, 'all');
+  assert.equal(normalizeTaskbarLyricsSettings({ displayMode: 'playerMonitor' }).displayMode, 'playerMonitor');
+  assert.equal(normalizeTaskbarLyricsSettings({ displayMode: 'everywhere' }).displayMode, 'all');
+  assert.deepEqual(normalizeTaskbarLyricsSettings({ displayMode: 'custom', customMonitors: [' A ', 'A', '', 3, 'B'] }).customMonitors, ['A', 'B']);
+  assert.deepEqual(normalizeTaskbarLyricsSettings({ customMonitors: 'A' }).customMonitors, []);
+  // 'offline' is a monitor that is not connected now: toggling another monitor leaves it chosen.
+  assert.deepEqual(toggleTaskbarLyricsMonitor(['offline'], 'B'), ['offline', 'B']);
+  assert.deepEqual(toggleTaskbarLyricsMonitor(['offline', 'B'], 'B'), ['offline']);
+  assert.deepEqual(toggleTaskbarLyricsMonitor([], 'A'), ['A']);
 });
 
 test('colour follows the taskbar theme unless a custom colour is chosen', () => {
