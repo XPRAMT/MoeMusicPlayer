@@ -98,7 +98,7 @@ export function normalizeTaskbarLyricsSettings(value) {
 
 /**
  * Text colour of the taskbar lyrics: the custom colour, or black or white to contrast with the taskbar's own theme.
- * @param {TaskbarLyricsSettings} settings
+ * @param {{ useCustomColor: boolean, customColor: string }} settings
  * @param {boolean} taskbarIsLight
  */
 export function getTaskbarLyricsColor(settings, taskbarIsLight) {
@@ -110,7 +110,7 @@ export function getTaskbarLyricsColor(settings, taskbarIsLight) {
  * The colour of the shadow or outline, as `r, g, b`: the opposite of the text, so it separates the text from whatever
  * is behind it (black behind light text, white behind dark text; the same idea as the Now Playing lyrics, which use
  * the inverse of the text colour).
- * @param {TaskbarLyricsSettings} settings
+ * @param {{ useCustomColor: boolean, customColor: string }} settings
  * @param {boolean} taskbarIsLight
  */
 export function getTaskbarLyricsEffectRgb(settings, taskbarIsLight) {

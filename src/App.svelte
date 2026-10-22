@@ -199,6 +199,16 @@
   import PlaybackProgress from './lib/PlaybackProgress.svelte';
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
+  import LyricsLookSettings from './lib/LyricsLookSettings.svelte';
+  import type { FloatingLyricsAndroidStatus, FloatingLyricsSettings } from './lib/ipc';
+  import {
+    DEFAULT_FLOATING_LYRICS_SETTINGS,
+    LYRICS_SETTINGS_TAB_STORAGE_KEY,
+    buildFloatingLyricsNativeData,
+    normalizeFloatingLyricsSettings,
+    normalizeLyricsSettingsTab,
+  } from './lib/floating-lyrics-settings.js';
+  import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lib/lyrics-timing-offset.js';
   import OutputDevicesSettings from './lib/OutputDevicesSettings.svelte';
   import OpacityCalculation from './lib/OpacityCalculation.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
@@ -592,6 +602,22 @@
   let taskbarLyricsMonitors = $state<TaskbarLyricsMonitor[]>([]);
   let taskbarLyricsRevision = 0;
   let taskbarLyricsQueue: Promise<void> = Promise.resolve();
+  /** Floating lyrics (ADR 0032): saved apart from the taskbar lyrics, with the same look options. */
+  let floatingLyricsSettings = $state<FloatingLyricsSettings>({ ...DEFAULT_FLOATING_LYRICS_SETTINGS });
+  let floatingLyricsError = $state<string | null>(null);
+  let floatingLyricsRevision = 0;
+  let floatingLyricsQueue: Promise<void> = Promise.resolve();
+  /** Android only: the overlay permission and the lock state the phone keeps. */
+  let floatingLyricsAndroidStatus = $state<FloatingLyricsAndroidStatus | null>(null);
+  /** Bumped when the per-track lyrics delay changes, so the Android overlay gets the new offset. */
+  let lyricsDelayRevision = $state(0);
+  let lyricsSettingsTab = $state<'general' | 'taskbar' | 'floating'>(
+    normalizeLyricsSettingsTab(typeof localStorage === 'undefined' ? null : localStorage.getItem(LYRICS_SETTINGS_TAB_STORAGE_KEY), true),
+  );
+  function chooseLyricsSettingsTab(tab: 'general' | 'taskbar' | 'floating'): void {
+    lyricsSettingsTab = tab;
+    try { localStorage.setItem(LYRICS_SETTINGS_TAB_STORAGE_KEY, tab); } catch { /* storage unavailable */ }
+  }
   let dseeHxError = $state<string | null>(null);
   let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(
     normalizeNowPlayingAppearancePreferences(DEFAULT_NOW_PLAYING_APPEARANCE_PREFERENCES),
@@ -1508,6 +1534,7 @@
         loadDseeHx(),
         loadDsdSettings(),
         loadTaskbarLyricsSettings(),
+        loadFloatingLyricsSettings(),
         loadLanguage(),
         loadCoverZoom(),
         loadShortcutSettings(),
@@ -1743,9 +1770,12 @@
     }
   }
 
-  /** Lyrics are loaded while something shows them: the Now Playing page (once opened) or the taskbar lyrics. */
+  /** Lyrics are loaded while something shows them: the Now Playing page (once opened), the taskbar lyrics or the
+   * floating lyrics. */
   $effect(() => {
-    const wanted = isNowPlayingMounted || (capabilities?.platform === 'windows' && taskbarLyricsSettings.enabled);
+    const wanted = isNowPlayingMounted
+      || (capabilities?.platform === 'windows' && taskbarLyricsSettings.enabled)
+      || floatingLyricsSettings.enabled;
     const track = playback?.currentTrack ?? null;
     const id = wanted && track ? track.id : null;
     untrack(() => void lyricsController.setTrack(id));
@@ -1762,11 +1792,58 @@
   // asks. They are broadcast: only the lyrics windows listen. (`capabilities` is replaced every few seconds, so only
   // its platform, a plain value, is tracked: the same lyrics are not sent again.)
   let isWindowsPlatform = $derived(capabilities?.platform === 'windows');
-  let taskbarLyricsEnabled = $derived(taskbarLyricsSettings.enabled);
+  // The floating lyrics window (ADR 0032) listens to the same broadcasts.
+  let taskbarLyricsEnabled = $derived(taskbarLyricsSettings.enabled || floatingLyricsSettings.enabled);
   $effect(() => {
     const data = taskbarLyricsData;
     if (!isTauri() || !data || !isWindowsPlatform || !taskbarLyricsEnabled) return;
     void emit('taskbar-lyrics-data', data).catch(() => {});
+  });
+
+  // Android: the native overlay draws the lines itself from the playback service's position (so it keeps going while
+  // this page is in the background); it gets the lyrics, with the per-track delay folded into one offset, whenever
+  // they change.
+  let isAndroidPlatform = $derived(capabilities?.platform === 'android');
+  let visibleLyricsSettingsTab = $derived(normalizeLyricsSettingsTab(lyricsSettingsTab, isWindowsPlatform));
+  let floatingLyricsEnabled = $derived(floatingLyricsSettings.enabled);
+  $effect(() => {
+    const data = taskbarLyricsData;
+    lyricsDelayRevision;
+    if (!isTauri() || !isAndroidPlatform || !floatingLyricsEnabled) return;
+    const trackId = data?.trackId ?? null;
+    const offset = lyricsDisplayOffsetMs(data?.offsetMs, untrack(() => loadLyricsTimingOffsetSec(trackId)));
+    const durationMs = untrack(() => playback?.currentTrack?.id === trackId ? playback?.currentTrack?.durationMs ?? null : null);
+    const payload = { data: buildFloatingLyricsNativeData(data, offset, durationMs) };
+    void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload }).catch(() => {});
+  });
+  $effect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen(LYRICS_TIMING_OFFSET_EVENT, () => { lyricsDelayRevision += 1; })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
+  // Push the look settings to the overlay (the lock state is the phone's own: see setFloatingLyricsAndroidLocked).
+  $effect(() => {
+    const settings = floatingLyricsSettings;
+    if (!isTauri() || !isAndroidPlatform) return;
+    void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { settings } })
+      .then(() => refreshFloatingLyricsAndroidStatus())
+      .catch(() => {});
+  });
+  // The main window follows changes made from the floating window itself (its lock button).
+  $effect(() => {
+    if (!isTauri() || !isWindowsPlatform) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<unknown>('floating-lyrics-settings', (event) => {
+      floatingLyricsSettings = normalizeFloatingLyricsSettings(event.payload);
+    })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
   });
 
   // The monitor list for the custom choice: read once, then follow hot-plugging (the watcher reports changes).
@@ -2393,6 +2470,92 @@
       taskbarLyricsError = tr("無法讀取工作列歌詞設定：{0}", [getErrorText(error)]);
     }
   }
+
+  async function loadFloatingLyricsSettings(): Promise<void> {
+    const revision = floatingLyricsRevision;
+    try {
+      const stored = await invokeCommand('settings_get_floating_lyrics', {});
+      if (revision !== floatingLyricsRevision) return;
+      floatingLyricsSettings = normalizeFloatingLyricsSettings(stored);
+    } catch (error) {
+      if (revision !== floatingLyricsRevision) return;
+      floatingLyricsError = tr("無法讀取浮動歌詞設定：{0}", [getErrorText(error)]);
+    }
+  }
+
+  function setFloatingLyricsSettings(patch: Partial<FloatingLyricsSettings>): void {
+    const next = normalizeFloatingLyricsSettings({ ...floatingLyricsSettings, ...patch });
+    floatingLyricsSettings = next;
+    floatingLyricsError = null;
+    const revision = ++floatingLyricsRevision;
+    if (!isTauri()) return;
+    floatingLyricsQueue = floatingLyricsQueue.catch(() => undefined).then(async () => {
+      if (revision !== floatingLyricsRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_floating_lyrics', { settings: next });
+        if (revision === floatingLyricsRevision) floatingLyricsSettings = normalizeFloatingLyricsSettings(saved);
+      } catch (error) {
+        if (revision === floatingLyricsRevision) floatingLyricsError = getErrorText(error);
+      }
+    });
+  }
+
+  async function setFloatingLyricsLocked(locked: boolean): Promise<void> {
+    if (capabilities?.platform === 'android') {
+      await setFloatingLyricsAndroidLocked(locked);
+      return;
+    }
+    try {
+      floatingLyricsSettings = normalizeFloatingLyricsSettings(await invokeCommand('floating_lyrics_set_locked', { locked }));
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+  }
+
+  async function resetFloatingLyricsPosition(): Promise<void> {
+    try {
+      floatingLyricsSettings = normalizeFloatingLyricsSettings(await invokeCommand('floating_lyrics_reset_position', {}));
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+  }
+
+  async function refreshFloatingLyricsAndroidStatus(): Promise<void> {
+    if (!isTauri() || capabilities?.platform !== 'android') return;
+    try {
+      const status = await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsStatus' }) as Partial<FloatingLyricsAndroidStatus> | null;
+      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true };
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+  }
+
+  /** Android: the overlay is unlocked from here only (it does not take touches in fixed mode). */
+  async function setFloatingLyricsAndroidLocked(locked: boolean): Promise<void> {
+    try {
+      await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { setLocked: locked } });
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+    await refreshFloatingLyricsAndroidStatus();
+  }
+
+  async function openOverlayPermissionSettings(): Promise<void> {
+    try {
+      await invokeCommand('floating_lyrics_android', { command: 'openOverlayPermissionSettings' });
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+  }
+
+  // Back from the system permission page (or from the overlay's own lock button): read the state again.
+  $effect(() => {
+    if (!isAndroidPlatform || settingsSection !== 'lyrics' || visibleLyricsSettingsTab !== 'floating') return;
+    void refreshFloatingLyricsAndroidStatus();
+    const onVisible = () => { if (document.visibilityState === 'visible') void refreshFloatingLyricsAndroidStatus(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  });
 
   function setTaskbarLyricsSettings(patch: Partial<TaskbarLyricsSettings>): void {
     const next = normalizeTaskbarLyricsSettings({ ...taskbarLyricsSettings, ...patch });
@@ -3558,7 +3721,8 @@
 
   function forwardTaskbarLyricsPlayback(): void {
     const sample = lastTaskbarLyricsPlayback;
-    if (!sample || !isTauri() || capabilities?.platform !== 'windows' || !taskbarLyricsSettings.enabled) return;
+    if (!sample || !isTauri() || capabilities?.platform !== 'windows'
+      || (!taskbarLyricsSettings.enabled && !floatingLyricsSettings.enabled)) return;
     void emit('taskbar-lyrics-playback', sample).catch(() => {});
   }
 
@@ -4265,23 +4429,38 @@
                     <h3>{tr("歌詞顯示")}</h3>
                   </div>
                 </div>
-                <NowPlayingQuickSettingsControls
-                  groups="lyrics"
-                  showGroupHeading={false}
-                  layout={nowPlayingLayout}
-                  appearance={nowPlayingAppearancePreferences}
-                  autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
-                  coverClarityPercent={themePreferences.coverBackgroundClarityPercent}
-                  onCoverClarityChange={updateCoverBackgroundClarity}
-                  opacityCalculation={nowPlayingBackgroundOpacityCalculation}
-                  lyrics={lyricsPreferences}
-                  onLayoutChange={setNowPlayingLayout}
-                  onAppearanceChange={updateNowPlayingAppearancePreferences}
-                  onLyricsChange={updateLyricsPreferences}
-                  onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
-                />
-                {#if capabilities?.platform === 'windows'}
-                  <div class="settings-panel-header taskbar-lyrics-heading">
+                <div class="settings-tabs lyrics-settings-tabs" role="tablist" aria-label={tr("歌詞設定分頁")}>
+                  {#each [['general', tr('一般')], ['taskbar', tr('工作列歌詞')], ['floating', tr('浮動歌詞')]] as [tab, label] (tab)}
+                    {#if tab !== 'taskbar' || capabilities?.platform === 'windows'}
+                      <button
+                        class="soft-button settings-tab"
+                        type="button"
+                        role="tab"
+                        aria-selected={visibleLyricsSettingsTab === tab}
+                        onclick={() => chooseLyricsSettingsTab(tab as 'general' | 'taskbar' | 'floating')}
+                      >{label}</button>
+                    {/if}
+                  {/each}
+                </div>
+                {#if visibleLyricsSettingsTab === 'general'}
+                  <NowPlayingQuickSettingsControls
+                    groups="lyrics"
+                    showGroupHeading={false}
+                    layout={nowPlayingLayout}
+                    appearance={nowPlayingAppearancePreferences}
+                    autoBackgroundOpacity={themePreferences.colorMode === 'autoBackgroundOpacity'}
+                    coverClarityPercent={themePreferences.coverBackgroundClarityPercent}
+                    onCoverClarityChange={updateCoverBackgroundClarity}
+                    opacityCalculation={nowPlayingBackgroundOpacityCalculation}
+                    lyrics={lyricsPreferences}
+                    onLayoutChange={setNowPlayingLayout}
+                    onAppearanceChange={updateNowPlayingAppearancePreferences}
+                    onLyricsChange={updateLyricsPreferences}
+                    onLyricsReset={() => updateLyricsPreferences(DEFAULT_LYRICS_PREFERENCES, true)}
+                  />
+                {/if}
+                {#if visibleLyricsSettingsTab === 'taskbar'}
+                  <div class="settings-panel-header">
                     <div>
                       <h3>{tr("工作列歌詞")}</h3>
                       <p>{tr("在工作列沒被工作鈕和系統匣佔用的空白處顯示目前這一句歌詞（只顯示有時間軸的歌詞）。工作列自動隱藏、有全螢幕程式或空白處太窄時不顯示。")}</p>
@@ -4320,76 +4499,71 @@
                         <small class="taskbar-lyrics-monitor-hint">{tr("編號依 Windows 設定 → 系統 → 顯示器的順序（按「識別」可確認）；暫時沒接上的螢幕仍保留選擇。")}</small>
                       {/if}
                     </div>
-                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-align-label">
-                      <span id="{scope}taskbar-lyrics-align-label" class="cover-corner-setting-label"><strong>{tr("對齊")}</strong></span>
-                      <div class="layout-choice-row lyrics-text-effect-row">
-                        {#each [['left', tr('靠左')], ['center', tr('置中')], ['right', tr('靠右')]] as [value, label] (value)}
-                          <button
-                            type="button"
-                            aria-pressed={taskbarLyricsSettings.align === value}
-                            class:chosen={taskbarLyricsSettings.align === value}
-                            onclick={() => setTaskbarLyricsSettings({ align: value as TaskbarLyricsSettings['align'] })}
-                          >{label}</button>
-                        {/each}
-                      </div>
-                    </div>
-                    <label class="lyrics-preference-range">
-                      <span><strong>{tr("字體大小")}</strong><output>{taskbarLyricsSettings.fontSizePx} px</output></span>
-                      <input
-                        type="range"
-                        min={TASKBAR_LYRICS_FONT_SIZE_PX.min}
-                        max={TASKBAR_LYRICS_FONT_SIZE_PX.max}
-                        step="1"
-                        value={taskbarLyricsSettings.fontSizePx}
-                        aria-label={tr("工作列歌詞字體大小")}
-                        oninput={(event) => setTaskbarLyricsSettings({ fontSizePx: Number(event.currentTarget.value) })}
-                      />
-                    </label>
-                    <label class="lyrics-preference-toggle">
-                      <input type="checkbox" checked={taskbarLyricsSettings.useCustomColor} onchange={(event) => setTaskbarLyricsSettings({ useCustomColor: event.currentTarget.checked })} />
-                      <span><strong>{tr("自訂顏色")}</strong><small>{tr("關閉時依工作列的深淺色自動使用黑色或白色")}</small></span>
-                      <input
-                        class="taskbar-lyrics-color"
-                        type="color"
-                        value={taskbarLyricsSettings.customColor}
-                        disabled={!taskbarLyricsSettings.useCustomColor}
-                        aria-label={tr("工作列歌詞顏色")}
-                        oninput={(event) => setTaskbarLyricsSettings({ customColor: event.currentTarget.value })}
-                      />
-                    </label>
-                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-effect-label">
-                      <span id="{scope}taskbar-lyrics-effect-label" class="cover-corner-setting-label"><strong>{tr("歌詞外觀")}</strong></span>
-                      <div class="layout-choice-row lyrics-text-effect-row">
-                        {#each [['shadow', tr('陰影'), tr('歌詞陰影')], ['stroke', tr('描邊'), tr('歌詞描邊')], ['none', tr('關閉'), tr('關閉歌詞外觀')]] as [value, label, description] (value)}
-                          <button
-                            type="button"
-                            aria-label={description}
-                            aria-pressed={taskbarLyricsSettings.textEffect === value}
-                            class:chosen={taskbarLyricsSettings.textEffect === value}
-                            onclick={() => setTaskbarLyricsSettings({ textEffect: value as TaskbarLyricsSettings['textEffect'] })}
-                          >{label}</button>
-                        {/each}
-                      </div>
-                    </div>
-                    <label class="lyrics-preference-toggle">
-                      <input type="checkbox" checked={taskbarLyricsSettings.showTranslation} onchange={(event) => setTaskbarLyricsSettings({ showTranslation: event.currentTarget.checked })} />
-                      <span><strong>{tr("顯示譯文")}</strong><small>{tr("歌詞有翻譯時，在原文下方多顯示一行較小的譯文")}</small></span>
-                    </label>
-                    <label class="lyrics-preference-range">
-                      <span><strong>{tr("譯文大小（相對原文）")}</strong><output>{taskbarLyricsSettings.translationScalePercent}%</output></span>
-                      <input
-                        type="range"
-                        min={TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.min}
-                        max={TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.max}
-                        step="1"
-                        value={taskbarLyricsSettings.translationScalePercent}
-                        disabled={!taskbarLyricsSettings.showTranslation}
-                        aria-label={tr("譯文大小（相對原文）")}
-                        oninput={(event) => setTaskbarLyricsSettings({ translationScalePercent: Number(event.currentTarget.value) })}
-                      />
-                    </label>
+                    <LyricsLookSettings
+                      settings={taskbarLyricsSettings}
+                      onChange={setTaskbarLyricsSettings}
+                      idPrefix="{scope}taskbar-lyrics"
+                      fontAriaLabel={tr("工作列歌詞字體大小")}
+                      colorAriaLabel={tr("工作列歌詞顏色")}
+                      autoColorHint={tr("關閉時依工作列的深淺色自動使用黑色或白色")}
+                    />
                     {#if taskbarLyricsError}
                       <p class="settings-preference-status" role="status">{taskbarLyricsError}</p>
+                    {/if}
+                  </div>
+                {/if}
+                {#if visibleLyricsSettingsTab === 'floating'}
+                  <div class="settings-panel-header">
+                    <div>
+                      <h3>{tr("浮動歌詞")}</h3>
+                      <p>{capabilities?.platform === 'android'
+                        ? tr("在其他 App 上方顯示目前這一句歌詞（只顯示有時間軸的歌詞）。移動模式可用手指拖曳；固定模式不接收觸控，只能在這裡解除鎖定。")
+                        : tr("在桌面最上層顯示目前這一句歌詞（只顯示有時間軸的歌詞）。移動模式可拖曳，滑鼠移上去按鎖頭切到固定模式；固定模式滑鼠可穿透，移上去按解鎖切回移動模式。")}</p>
+                    </div>
+                  </div>
+                  <div class="taskbar-lyrics-settings" role="group" aria-label={tr("浮動歌詞設定")}>
+                    <label class="lyrics-preference-toggle">
+                      <input type="checkbox" checked={floatingLyricsSettings.enabled} onchange={(event) => setFloatingLyricsSettings({ enabled: event.currentTarget.checked })} />
+                      <span><strong>{tr("顯示浮動歌詞")}</strong><small>{tr("可以和工作列歌詞同時開啟")}</small></span>
+                    </label>
+                    {#if capabilities?.platform === 'android'}
+                      <div class="cover-corner-setting">
+                        <span class="cover-corner-setting-label"><strong>{tr("顯示在其他應用程式上層")}</strong></span>
+                        <p class="taskbar-lyrics-monitor-hint">{floatingLyricsAndroidStatus?.canDrawOverlays
+                          ? tr("已允許。")
+                          : tr("尚未允許：請在系統設定中允許 MoeMusicPlayer「顯示在其他應用程式上層」，浮動歌詞才會出現。")}</p>
+                        {#if !floatingLyricsAndroidStatus?.canDrawOverlays}
+                          <button class="soft-button" type="button" onclick={openOverlayPermissionSettings}>{tr("開啟系統設定")}</button>
+                        {/if}
+                      </div>
+                    {/if}
+                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}floating-lyrics-mode-label">
+                      <span id="{scope}floating-lyrics-mode-label" class="cover-corner-setting-label"><strong>{tr("模式")}</strong></span>
+                      <div class="layout-choice-row lyrics-text-effect-row">
+                        {#each [[false, tr('移動模式')], [true, tr('固定模式')]] as [value, label] (String(value))}
+                          {@const current = capabilities?.platform === 'android' ? floatingLyricsAndroidStatus?.locked === true : floatingLyricsSettings.locked}
+                          <button
+                            type="button"
+                            aria-pressed={current === value}
+                            class:chosen={current === value}
+                            onclick={() => void setFloatingLyricsLocked(value as boolean)}
+                          >{label}</button>
+                        {/each}
+                      </div>
+                      {#if capabilities?.platform !== 'android'}
+                        <button class="soft-button floating-lyrics-reset" type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void resetFloatingLyricsPosition()}>{tr("重設位置")}</button>
+                      {/if}
+                    </div>
+                    <LyricsLookSettings
+                      settings={floatingLyricsSettings}
+                      onChange={setFloatingLyricsSettings}
+                      idPrefix="{scope}floating-lyrics"
+                      fontAriaLabel={tr("浮動歌詞字體大小")}
+                      colorAriaLabel={tr("浮動歌詞顏色")}
+                      autoColorHint={tr("關閉時使用白色")}
+                    />
+                    {#if floatingLyricsError}
+                      <p class="settings-preference-status" role="status">{floatingLyricsError}</p>
                     {/if}
                   </div>
                 {/if}

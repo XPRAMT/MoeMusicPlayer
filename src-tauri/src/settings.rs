@@ -988,6 +988,109 @@ fn is_hex_color(value: &str) -> bool {
         && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Window position of the floating lyrics, in physical pixels of the virtual desktop (Windows; ADR 0032).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FloatingLyricsPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// Floating lyrics (ADR 0032): the same look options as the taskbar lyrics, saved separately, plus the move/fixed
+/// mode and the window position. Android keeps its own overlay position and lock state on the phone.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloatingLyricsSettings {
+    pub enabled: bool,
+    pub align: TaskbarLyricsAlign,
+    pub font_size_px: u8,
+    pub translation_scale_percent: u8,
+    pub use_custom_color: bool,
+    pub custom_color: String,
+    pub show_translation: bool,
+    pub text_effect: LyricsTextEffect,
+    /// Fixed mode: click-through, only the unlock button reacts. False: move mode (draggable).
+    pub locked: bool,
+    /// None: the default place on the primary monitor.
+    pub position: Option<FloatingLyricsPosition>,
+}
+
+impl FloatingLyricsSettings {
+    pub const DEFAULT_FONT_SIZE_PX: u8 = 28;
+    pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 80;
+    /// Far outside any real desktop; such a position is dropped.
+    pub const POSITION_LIMIT: i32 = 1_000_000;
+
+    pub fn normalized(mut self) -> Self {
+        let look = TaskbarLyricsSettings {
+            font_size_px: self.font_size_px,
+            translation_scale_percent: self.translation_scale_percent,
+            custom_color: std::mem::take(&mut self.custom_color),
+            ..TaskbarLyricsSettings::default()
+        }
+        .normalized();
+        self.font_size_px = look.font_size_px;
+        self.translation_scale_percent = look.translation_scale_percent;
+        self.custom_color = look.custom_color;
+        if self.position.is_some_and(|position| {
+            position.x.abs() > Self::POSITION_LIMIT || position.y.abs() > Self::POSITION_LIMIT
+        }) {
+            self.position = None;
+        }
+        self
+    }
+}
+
+impl Default for FloatingLyricsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            align: TaskbarLyricsAlign::default(),
+            font_size_px: Self::DEFAULT_FONT_SIZE_PX,
+            translation_scale_percent: Self::DEFAULT_TRANSLATION_SCALE_PERCENT,
+            use_custom_color: false,
+            custom_color: TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR.to_owned(),
+            show_translation: true,
+            text_effect: LyricsTextEffect::Shadow,
+            locked: false,
+            position: None,
+        }
+    }
+}
+
+/// Missing, malformed or out-of-range values fall back to the floating defaults field by field.
+pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> FloatingLyricsSettings {
+    let defaults = FloatingLyricsSettings::default();
+    let Some(object) = value.as_ref().and_then(serde_json::Value::as_object) else {
+        return defaults;
+    };
+    let field = |name: &str| object.get(name).cloned();
+    let flag = |name: &str, fallback: bool| field(name).and_then(|value| value.as_bool()).unwrap_or(fallback);
+    let byte = |name: &str, fallback: u8| {
+        field(name)
+            .and_then(|value| value.as_u64())
+            .map_or(fallback, |value| value.min(255) as u8)
+    };
+    FloatingLyricsSettings {
+        enabled: flag("enabled", defaults.enabled),
+        align: field("align")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.align),
+        font_size_px: byte("fontSizePx", defaults.font_size_px),
+        translation_scale_percent: byte("translationScalePercent", defaults.translation_scale_percent),
+        use_custom_color: flag("useCustomColor", defaults.use_custom_color),
+        custom_color: field("customColor")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or(defaults.custom_color),
+        show_translation: flag("showTranslation", defaults.show_translation),
+        text_effect: field("textEffect")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.text_effect),
+        locked: flag("locked", defaults.locked),
+        position: field("position").and_then(|value| serde_json::from_value(value).ok()),
+    }
+    .normalized()
+}
+
 /// Missing, malformed or out-of-range values fall back to the defaults field by field.
 fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSettings {
     let defaults = TaskbarLyricsSettings::default();
@@ -1847,6 +1950,9 @@ pub struct AppSettings {
     /// Lyrics on the Windows taskbar (Settings → lyrics).
     #[serde(default)]
     pub taskbar_lyrics: TaskbarLyricsSettings,
+    /// Floating lyrics window / overlay (Settings → lyrics → floating lyrics; ADR 0032).
+    #[serde(default)]
+    pub floating_lyrics: FloatingLyricsSettings,
     /// Interface language (Settings → main).
     #[serde(default)]
     pub language: UiLanguage,
@@ -1887,6 +1993,7 @@ impl Default for AppSettings {
             library_source_scope: player_db::LibrarySourceScope::All,
             cover_zoom: CoverZoomSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
+            floating_lyrics: FloatingLyricsSettings::default(),
             language: UiLanguage::default(),
         }
     }
@@ -2371,6 +2478,7 @@ struct RawSettings {
     library_source_scope: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
+    floating_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
 }
 
@@ -2448,6 +2556,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
             .unwrap_or_default(),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
+        floating_lyrics: lenient_floating_lyrics(raw.floating_lyrics),
         language: lenient_language(raw.language),
     };
     // Former max was 64; clamp so older saved values still load.
@@ -3235,6 +3344,54 @@ mod tests {
         let persisted: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["language"], "zh-CN");
+    }
+
+    #[test]
+    fn floating_lyrics_settings_are_separate_and_repair_field_by_field() {
+        let defaults = FloatingLyricsSettings::default();
+        assert!(!defaults.enabled);
+        assert!(!defaults.locked);
+        assert_eq!(defaults.position, None);
+        assert_eq!(lenient_floating_lyrics(None), defaults);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!("x"))), defaults);
+        let parsed = lenient_floating_lyrics(Some(serde_json::json!({
+            "enabled": true,
+            "align": "right",
+            "fontSizePx": 99,
+            "translationScalePercent": 0,
+            "customColor": "#ABCDEF",
+            "useCustomColor": true,
+            "textEffect": "stroke",
+            "locked": true,
+            "position": {"x": -1200, "y": 300},
+            "showTranslation": "yes"
+        })));
+        assert!(parsed.enabled && parsed.locked && parsed.use_custom_color);
+        assert_eq!(parsed.align, TaskbarLyricsAlign::Right);
+        assert_eq!(parsed.font_size_px, TaskbarLyricsSettings::FONT_SIZE_RANGE_PX.1);
+        assert_eq!(parsed.translation_scale_percent, 1);
+        assert_eq!(parsed.custom_color, "#abcdef");
+        assert_eq!(parsed.text_effect, LyricsTextEffect::Stroke);
+        assert_eq!(parsed.position, Some(FloatingLyricsPosition { x: -1200, y: 300 }));
+        assert_eq!(parsed.show_translation, defaults.show_translation);
+        let far = lenient_floating_lyrics(Some(serde_json::json!({"position": {"x": 5_000_000, "y": 0}})));
+        assert_eq!(far.position, None);
+        let broken = lenient_floating_lyrics(Some(serde_json::json!({"position": "here", "customColor": "red"})));
+        assert_eq!(broken.position, None);
+        assert_eq!(broken.custom_color, TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR);
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(lenient_floating_lyrics(Some(json)), parsed);
+    }
+
+    #[test]
+    fn older_settings_files_get_floating_lyrics_off_without_touching_taskbar_lyrics() {
+        let directory = test_directory("floating-lyrics-migration");
+        let path = directory.join("settings.json");
+        std::fs::write(&path, r#"{"taskbarLyrics":{"enabled":true,"fontSizePx":18}}"#).unwrap();
+        let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot.floating_lyrics, FloatingLyricsSettings::default());
+        assert_eq!(snapshot.taskbar_lyrics.font_size_px, 18);
     }
 
     #[test]

@@ -233,6 +233,25 @@ export interface TaskbarLyricsSettings {
   customMonitors: string[];
 }
 
+/** The look options shared by the taskbar and floating lyrics. */
+export type LyricsLookSettings = Pick<TaskbarLyricsSettings,
+  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect'>;
+
+/** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
+export interface FloatingLyricsSettings extends LyricsLookSettings {
+  enabled: boolean;
+  /** Fixed mode (click-through); false: move mode. Android keeps its own lock state on the phone. */
+  locked: boolean;
+  /** Physical pixels of the virtual desktop (Windows); null: the default place. */
+  position: { x: number; y: number } | null;
+}
+
+/** Answer of `floating_lyrics_android('floatingLyricsStatus')`. */
+export interface FloatingLyricsAndroidStatus {
+  canDrawOverlays: boolean;
+  locked: boolean;
+}
+
 /** A connected monitor for the taskbar-lyrics monitor choice (ADR 0031). */
 export interface TaskbarLyricsMonitor {
   id: string;
@@ -957,6 +976,26 @@ interface IpcContract {
   settings_set_taskbar_lyrics: {
     args: { settings: TaskbarLyricsSettings };
     result: TaskbarLyricsSettings;
+  };
+  settings_get_floating_lyrics: {
+    args: Record<string, never>;
+    result: FloatingLyricsSettings;
+  };
+  settings_set_floating_lyrics: {
+    args: { settings: FloatingLyricsSettings };
+    result: FloatingLyricsSettings;
+  };
+  floating_lyrics_set_locked: {
+    args: { locked: boolean };
+    result: FloatingLyricsSettings;
+  };
+  floating_lyrics_reset_position: {
+    args: Record<string, never>;
+    result: FloatingLyricsSettings;
+  };
+  floating_lyrics_android: {
+    args: { command: 'floatingLyricsUpdate' | 'floatingLyricsStatus' | 'openOverlayPermissionSettings'; payload?: unknown };
+    result: unknown;
   };
   taskbar_lyrics_theme: {
     args: Record<string, never>;
