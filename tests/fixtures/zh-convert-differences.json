@@ -1,0 +1,149 @@
+{
+  "description": "Documented differences between the former opencc-js conversion (zh-convert-opencc-js.json) and crates/player-zh. ADR 0030.",
+  "differences": [
+    {
+      "category": "keep-zhi",
+      "input": "只因为你",
+      "field": "searchTraditional",
+      "openccJs": "只因爲你",
+      "rust": "只因為你",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "里面",
+      "field": "searchTraditional",
+      "openccJs": "裏面",
+      "rust": "裡面",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "着急",
+      "field": "searchTraditional",
+      "openccJs": "着急",
+      "rust": "著急",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "看着你",
+      "field": "searchTraditional",
+      "openccJs": "看着你",
+      "rust": "看著你",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "为了",
+      "field": "searchTraditional",
+      "openccJs": "爲了",
+      "rust": "為了",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "群众",
+      "field": "searchTraditional",
+      "openccJs": "羣衆",
+      "rust": "群眾",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "床上",
+      "field": "searchTraditional",
+      "openccJs": "牀上",
+      "rust": "床上",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "峰",
+      "field": "searchTraditional",
+      "openccJs": "峯",
+      "rust": "峰",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "秘密",
+      "field": "searchTraditional",
+      "openccJs": "祕密",
+      "rust": "秘密",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "吃饭",
+      "field": "searchTraditional",
+      "openccJs": "喫飯",
+      "rust": "吃飯",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "这里",
+      "field": "searchTraditional",
+      "openccJs": "這裏",
+      "rust": "這裡",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "lyrics",
+      "input": "乘着风",
+      "field": "searchTraditional",
+      "openccJs": "乘着風",
+      "rust": "乘著風",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "one-to-many",
+      "input": "面条",
+      "field": "searchTraditional",
+      "openccJs": "麪條",
+      "rust": "麵條",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "traditional-input",
+      "input": "看著你",
+      "field": "searchSimplified",
+      "openccJs": "看著你",
+      "rust": "看着你",
+      "reason": "t2s 先跑 TWVariantsRevPhrases + TWVariantsRev（tw2s），台灣字形「著」作助詞時轉成「着」；「著名」等由片語表保留。"
+    },
+    {
+      "category": "traditional-input",
+      "input": "裏面",
+      "field": "searchTraditional",
+      "openccJs": "裏面",
+      "rust": "裡面",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "traditional-input",
+      "input": "羣衆",
+      "field": "searchTraditional",
+      "openccJs": "羣衆",
+      "rust": "群眾",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "traditional-input",
+      "input": "爲了",
+      "field": "searchTraditional",
+      "openccJs": "爲了",
+      "rust": "為了",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    },
+    {
+      "category": "traditional-input",
+      "input": "祕密",
+      "field": "searchTraditional",
+      "openccJs": "祕密",
+      "rust": "秘密",
+      "reason": "搜尋的繁體改用與顯示相同的 s2tw（加 TWVariants 台灣字形），舊搜尋只用 OpenCC 標準繁體。"
+    }
+  ]
+}

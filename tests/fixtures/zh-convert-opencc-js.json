@@ -1,0 +1,1224 @@
+{
+  "description": "Golden table recorded from opencc-js 1.4.2 (opencc-data 1.4.2) with the pre-ADR-0030 frontend rules. Regenerate with node scripts/generate-zh-convert-fixture.mjs; the Rust converter (crates/player-zh) reads this file and must reproduce it except for the documented entries in zh-convert-differences.json.",
+  "source": "opencc-js 1.4.2 / OpenCC ver.1.4.2 (025f371dc7)",
+  "cases": [
+    {
+      "category": "keep-zhi",
+      "input": "只有你",
+      "lyricsTraditional": "只有你",
+      "searchTraditional": "只有你",
+      "searchSimplified": "只有你"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "这只有我知道",
+      "lyricsTraditional": "這只有我知道",
+      "searchTraditional": "這只有我知道",
+      "searchSimplified": "这只有我知道"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "一只猫",
+      "lyricsTraditional": "一只貓",
+      "searchTraditional": "一只貓",
+      "searchSimplified": "一只猫"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "两只老虎",
+      "lyricsTraditional": "兩只老虎",
+      "searchTraditional": "兩只老虎",
+      "searchSimplified": "两只老虎"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "船只",
+      "lyricsTraditional": "船只",
+      "searchTraditional": "船只",
+      "searchSimplified": "船只"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "只字不提",
+      "lyricsTraditional": "只字不提",
+      "searchTraditional": "只字不提",
+      "searchSimplified": "只字不提"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "只要你在",
+      "lyricsTraditional": "只要你在",
+      "searchTraditional": "只要你在",
+      "searchSimplified": "只要你在"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "我只是想你",
+      "lyricsTraditional": "我只是想你",
+      "searchTraditional": "我只是想你",
+      "searchSimplified": "我只是想你"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "这只小鸟只会唱歌",
+      "lyricsTraditional": "這只小鳥只會唱歌",
+      "searchTraditional": "這只小鳥只會唱歌",
+      "searchSimplified": "这只小鸟只会唱歌"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "只因为你",
+      "lyricsTraditional": "只因為你",
+      "searchTraditional": "只因爲你",
+      "searchSimplified": "只因为你"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "不只是朋友",
+      "lyricsTraditional": "不只是朋友",
+      "searchTraditional": "不只是朋友",
+      "searchSimplified": "不只是朋友"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "只好这样",
+      "lyricsTraditional": "只好這樣",
+      "searchTraditional": "只好這樣",
+      "searchSimplified": "只好这样"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "只能等待",
+      "lyricsTraditional": "只能等待",
+      "searchTraditional": "只能等待",
+      "searchSimplified": "只能等待"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "几只羊",
+      "lyricsTraditional": "幾只羊",
+      "searchTraditional": "幾只羊",
+      "searchSimplified": "几只羊"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "一只只",
+      "lyricsTraditional": "一只只",
+      "searchTraditional": "一只只",
+      "searchSimplified": "一只只"
+    },
+    {
+      "category": "keep-zhi",
+      "input": "只身一人",
+      "lyricsTraditional": "只身一人",
+      "searchTraditional": "只身一人",
+      "searchSimplified": "只身一人"
+    },
+    {
+      "category": "kana",
+      "input": "さよならの夏",
+      "lyricsTraditional": "さよならの夏",
+      "searchTraditional": "さよならの夏",
+      "searchSimplified": "さよならの夏"
+    },
+    {
+      "category": "kana",
+      "input": "君の名は",
+      "lyricsTraditional": "君の名は",
+      "searchTraditional": "君の名は",
+      "searchSimplified": "君の名は"
+    },
+    {
+      "category": "kana",
+      "input": "東京の空",
+      "lyricsTraditional": "東京の空",
+      "searchTraditional": "東京の空",
+      "searchSimplified": "東京の空"
+    },
+    {
+      "category": "kana",
+      "input": "恋は雨上がりのように",
+      "lyricsTraditional": "恋は雨上がりのように",
+      "searchTraditional": "恋は雨上がりのように",
+      "searchSimplified": "恋は雨上がりのように"
+    },
+    {
+      "category": "kana",
+      "input": "カタオモイ",
+      "lyricsTraditional": "カタオモイ",
+      "searchTraditional": "カタオモイ",
+      "searchSimplified": "カタオモイ"
+    },
+    {
+      "category": "kana",
+      "input": "心のスキマ",
+      "lyricsTraditional": "心のスキマ",
+      "searchTraditional": "心のスキマ",
+      "searchSimplified": "心のスキマ"
+    },
+    {
+      "category": "kana",
+      "input": "愛してる、ありがとう",
+      "lyricsTraditional": "愛してる、ありがとう",
+      "searchTraditional": "愛してる、ありがとう",
+      "searchSimplified": "愛してる、ありがとう"
+    },
+    {
+      "category": "kana",
+      "input": "夜に駆ける",
+      "lyricsTraditional": "夜に駆ける",
+      "searchTraditional": "夜に駆ける",
+      "searchSimplified": "夜に駆ける"
+    },
+    {
+      "category": "kana",
+      "input": "髪を梳かして",
+      "lyricsTraditional": "髪を梳かして",
+      "searchTraditional": "髪を梳かして",
+      "searchSimplified": "髪を梳かして"
+    },
+    {
+      "category": "kanji-no-kana",
+      "input": "東京",
+      "lyricsTraditional": "東京",
+      "searchTraditional": "東京",
+      "searchSimplified": "东京"
+    },
+    {
+      "category": "kanji-no-kana",
+      "input": "千本桜",
+      "lyricsTraditional": "千本桜",
+      "searchTraditional": "千本桜",
+      "searchSimplified": "千本桜"
+    },
+    {
+      "category": "kanji-no-kana",
+      "input": "残響散歌",
+      "lyricsTraditional": "殘響散歌",
+      "searchTraditional": "殘響散歌",
+      "searchSimplified": "残响散歌"
+    },
+    {
+      "category": "kanji-no-kana",
+      "input": "紅蓮華",
+      "lyricsTraditional": "紅蓮華",
+      "searchTraditional": "紅蓮華",
+      "searchSimplified": "红莲华"
+    },
+    {
+      "category": "kanji-no-kana",
+      "input": "大和",
+      "lyricsTraditional": "大和",
+      "searchTraditional": "大和",
+      "searchSimplified": "大和"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "里面",
+      "lyricsTraditional": "裡面",
+      "searchTraditional": "裏面",
+      "searchSimplified": "里面"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "线",
+      "lyricsTraditional": "線",
+      "searchTraditional": "線",
+      "searchSimplified": "线"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "着急",
+      "lyricsTraditional": "著急",
+      "searchTraditional": "着急",
+      "searchSimplified": "着急"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "看着你",
+      "lyricsTraditional": "看著你",
+      "searchTraditional": "看着你",
+      "searchSimplified": "看着你"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "为了",
+      "lyricsTraditional": "為了",
+      "searchTraditional": "爲了",
+      "searchSimplified": "为了"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "温暖",
+      "lyricsTraditional": "溫暖",
+      "searchTraditional": "溫暖",
+      "searchSimplified": "温暖"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "群众",
+      "lyricsTraditional": "群眾",
+      "searchTraditional": "羣衆",
+      "searchSimplified": "群众"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "台湾",
+      "lyricsTraditional": "臺灣",
+      "searchTraditional": "臺灣",
+      "searchSimplified": "台湾"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "奶",
+      "lyricsTraditional": "奶",
+      "searchTraditional": "奶",
+      "searchSimplified": "奶"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "床上",
+      "lyricsTraditional": "床上",
+      "searchTraditional": "牀上",
+      "searchSimplified": "床上"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "峰",
+      "lyricsTraditional": "峰",
+      "searchTraditional": "峯",
+      "searchSimplified": "峰"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "说",
+      "lyricsTraditional": "說",
+      "searchTraditional": "說",
+      "searchSimplified": "说"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "秘密",
+      "lyricsTraditional": "秘密",
+      "searchTraditional": "祕密",
+      "searchSimplified": "秘密"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "眼泪",
+      "lyricsTraditional": "眼淚",
+      "searchTraditional": "眼淚",
+      "searchSimplified": "眼泪"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "吃饭",
+      "lyricsTraditional": "吃飯",
+      "searchTraditional": "喫飯",
+      "searchSimplified": "吃饭"
+    },
+    {
+      "category": "taiwan-glyphs",
+      "input": "这里",
+      "lyricsTraditional": "這裡",
+      "searchTraditional": "這裏",
+      "searchSimplified": "这里"
+    },
+    {
+      "category": "lyrics",
+      "input": "我爱你",
+      "lyricsTraditional": "我愛你",
+      "searchTraditional": "我愛你",
+      "searchSimplified": "我爱你"
+    },
+    {
+      "category": "lyrics",
+      "input": "你是我的眼",
+      "lyricsTraditional": "你是我的眼",
+      "searchTraditional": "你是我的眼",
+      "searchSimplified": "你是我的眼"
+    },
+    {
+      "category": "lyrics",
+      "input": "后来我总算学会了如何去爱",
+      "lyricsTraditional": "後來我總算學會了如何去愛",
+      "searchTraditional": "後來我總算學會了如何去愛",
+      "searchSimplified": "后来我总算学会了如何去爱"
+    },
+    {
+      "category": "lyrics",
+      "input": "可惜不是你陪我到最后",
+      "lyricsTraditional": "可惜不是你陪我到最後",
+      "searchTraditional": "可惜不是你陪我到最後",
+      "searchSimplified": "可惜不是你陪我到最后"
+    },
+    {
+      "category": "lyrics",
+      "input": "天空飘来五个字",
+      "lyricsTraditional": "天空飄來五個字",
+      "searchTraditional": "天空飄來五個字",
+      "searchSimplified": "天空飘来五个字"
+    },
+    {
+      "category": "lyrics",
+      "input": "那些年我们一起追的女孩",
+      "lyricsTraditional": "那些年我們一起追的女孩",
+      "searchTraditional": "那些年我們一起追的女孩",
+      "searchSimplified": "那些年我们一起追的女孩"
+    },
+    {
+      "category": "lyrics",
+      "input": "风继续吹",
+      "lyricsTraditional": "風繼續吹",
+      "searchTraditional": "風繼續吹",
+      "searchSimplified": "风继续吹"
+    },
+    {
+      "category": "lyrics",
+      "input": "月亮代表我的心",
+      "lyricsTraditional": "月亮代表我的心",
+      "searchTraditional": "月亮代表我的心",
+      "searchSimplified": "月亮代表我的心"
+    },
+    {
+      "category": "lyrics",
+      "input": "我们的爱情到这刚刚好",
+      "lyricsTraditional": "我們的愛情到這剛剛好",
+      "searchTraditional": "我們的愛情到這剛剛好",
+      "searchSimplified": "我们的爱情到这刚刚好"
+    },
+    {
+      "category": "lyrics",
+      "input": "听妈妈的话",
+      "lyricsTraditional": "聽媽媽的話",
+      "searchTraditional": "聽媽媽的話",
+      "searchSimplified": "听妈妈的话"
+    },
+    {
+      "category": "lyrics",
+      "input": "说好不哭",
+      "lyricsTraditional": "說好不哭",
+      "searchTraditional": "說好不哭",
+      "searchSimplified": "说好不哭"
+    },
+    {
+      "category": "lyrics",
+      "input": "晴天",
+      "lyricsTraditional": "晴天",
+      "searchTraditional": "晴天",
+      "searchSimplified": "晴天"
+    },
+    {
+      "category": "lyrics",
+      "input": "青花瓷",
+      "lyricsTraditional": "青花瓷",
+      "searchTraditional": "青花瓷",
+      "searchSimplified": "青花瓷"
+    },
+    {
+      "category": "lyrics",
+      "input": "夜曲",
+      "lyricsTraditional": "夜曲",
+      "searchTraditional": "夜曲",
+      "searchSimplified": "夜曲"
+    },
+    {
+      "category": "lyrics",
+      "input": "稻香",
+      "lyricsTraditional": "稻香",
+      "searchTraditional": "稻香",
+      "searchSimplified": "稻香"
+    },
+    {
+      "category": "lyrics",
+      "input": "简单爱",
+      "lyricsTraditional": "簡單愛",
+      "searchTraditional": "簡單愛",
+      "searchSimplified": "简单爱"
+    },
+    {
+      "category": "lyrics",
+      "input": "七里香",
+      "lyricsTraditional": "七里香",
+      "searchTraditional": "七里香",
+      "searchSimplified": "七里香"
+    },
+    {
+      "category": "lyrics",
+      "input": "发如雪",
+      "lyricsTraditional": "發如雪",
+      "searchTraditional": "發如雪",
+      "searchSimplified": "发如雪"
+    },
+    {
+      "category": "lyrics",
+      "input": "烟花易冷",
+      "lyricsTraditional": "煙花易冷",
+      "searchTraditional": "煙花易冷",
+      "searchSimplified": "烟花易冷"
+    },
+    {
+      "category": "lyrics",
+      "input": "红尘客栈",
+      "lyricsTraditional": "紅塵客棧",
+      "searchTraditional": "紅塵客棧",
+      "searchSimplified": "红尘客栈"
+    },
+    {
+      "category": "lyrics",
+      "input": "岁月神偷",
+      "lyricsTraditional": "歲月神偷",
+      "searchTraditional": "歲月神偷",
+      "searchSimplified": "岁月神偷"
+    },
+    {
+      "category": "lyrics",
+      "input": "光年之外",
+      "lyricsTraditional": "光年之外",
+      "searchTraditional": "光年之外",
+      "searchSimplified": "光年之外"
+    },
+    {
+      "category": "lyrics",
+      "input": "泡沫",
+      "lyricsTraditional": "泡沫",
+      "searchTraditional": "泡沫",
+      "searchSimplified": "泡沫"
+    },
+    {
+      "category": "lyrics",
+      "input": "像我这样的人",
+      "lyricsTraditional": "像我這樣的人",
+      "searchTraditional": "像我這樣的人",
+      "searchSimplified": "像我这样的人"
+    },
+    {
+      "category": "lyrics",
+      "input": "演员",
+      "lyricsTraditional": "演員",
+      "searchTraditional": "演員",
+      "searchSimplified": "演员"
+    },
+    {
+      "category": "lyrics",
+      "input": "丑八怪",
+      "lyricsTraditional": "醜八怪",
+      "searchTraditional": "醜八怪",
+      "searchSimplified": "丑八怪"
+    },
+    {
+      "category": "lyrics",
+      "input": "后会无期",
+      "lyricsTraditional": "後會無期",
+      "searchTraditional": "後會無期",
+      "searchSimplified": "后会无期"
+    },
+    {
+      "category": "lyrics",
+      "input": "起风了",
+      "lyricsTraditional": "起風了",
+      "searchTraditional": "起風了",
+      "searchSimplified": "起风了"
+    },
+    {
+      "category": "lyrics",
+      "input": "下山",
+      "lyricsTraditional": "下山",
+      "searchTraditional": "下山",
+      "searchSimplified": "下山"
+    },
+    {
+      "category": "lyrics",
+      "input": "沙漠骆驼",
+      "lyricsTraditional": "沙漠駱駝",
+      "searchTraditional": "沙漠駱駝",
+      "searchSimplified": "沙漠骆驼"
+    },
+    {
+      "category": "lyrics",
+      "input": "一路向北",
+      "lyricsTraditional": "一路向北",
+      "searchTraditional": "一路向北",
+      "searchSimplified": "一路向北"
+    },
+    {
+      "category": "lyrics",
+      "input": "离开我的依赖",
+      "lyricsTraditional": "離開我的依賴",
+      "searchTraditional": "離開我的依賴",
+      "searchSimplified": "离开我的依赖"
+    },
+    {
+      "category": "lyrics",
+      "input": "乘着风",
+      "lyricsTraditional": "乘著風",
+      "searchTraditional": "乘着風",
+      "searchSimplified": "乘着风"
+    },
+    {
+      "category": "lyrics",
+      "input": "钟无艳",
+      "lyricsTraditional": "鍾無豔",
+      "searchTraditional": "鍾無豔",
+      "searchSimplified": "钟无艳"
+    },
+    {
+      "category": "lyrics",
+      "input": "忘记时间",
+      "lyricsTraditional": "忘記時間",
+      "searchTraditional": "忘記時間",
+      "searchSimplified": "忘记时间"
+    },
+    {
+      "category": "lyrics",
+      "input": "樱花树下",
+      "lyricsTraditional": "櫻花樹下",
+      "searchTraditional": "櫻花樹下",
+      "searchSimplified": "樱花树下"
+    },
+    {
+      "category": "titles-artists",
+      "input": "周杰伦",
+      "lyricsTraditional": "周杰倫",
+      "searchTraditional": "周杰倫",
+      "searchSimplified": "周杰伦"
+    },
+    {
+      "category": "titles-artists",
+      "input": "邓紫棋",
+      "lyricsTraditional": "鄧紫棋",
+      "searchTraditional": "鄧紫棋",
+      "searchSimplified": "邓紫棋"
+    },
+    {
+      "category": "titles-artists",
+      "input": "林俊杰",
+      "lyricsTraditional": "林俊傑",
+      "searchTraditional": "林俊傑",
+      "searchSimplified": "林俊杰"
+    },
+    {
+      "category": "titles-artists",
+      "input": "陈奕迅",
+      "lyricsTraditional": "陳奕迅",
+      "searchTraditional": "陳奕迅",
+      "searchSimplified": "陈奕迅"
+    },
+    {
+      "category": "titles-artists",
+      "input": "王菲",
+      "lyricsTraditional": "王菲",
+      "searchTraditional": "王菲",
+      "searchSimplified": "王菲"
+    },
+    {
+      "category": "titles-artists",
+      "input": "张学友",
+      "lyricsTraditional": "張學友",
+      "searchTraditional": "張學友",
+      "searchSimplified": "张学友"
+    },
+    {
+      "category": "titles-artists",
+      "input": "蔡依林",
+      "lyricsTraditional": "蔡依林",
+      "searchTraditional": "蔡依林",
+      "searchSimplified": "蔡依林"
+    },
+    {
+      "category": "titles-artists",
+      "input": "五月天",
+      "lyricsTraditional": "五月天",
+      "searchTraditional": "五月天",
+      "searchSimplified": "五月天"
+    },
+    {
+      "category": "titles-artists",
+      "input": "薛之谦",
+      "lyricsTraditional": "薛之謙",
+      "searchTraditional": "薛之謙",
+      "searchSimplified": "薛之谦"
+    },
+    {
+      "category": "titles-artists",
+      "input": "毛不易",
+      "lyricsTraditional": "毛不易",
+      "searchTraditional": "毛不易",
+      "searchSimplified": "毛不易"
+    },
+    {
+      "category": "titles-artists",
+      "input": "华晨宇",
+      "lyricsTraditional": "華晨宇",
+      "searchTraditional": "華晨宇",
+      "searchSimplified": "华晨宇"
+    },
+    {
+      "category": "titles-artists",
+      "input": "李荣浩",
+      "lyricsTraditional": "李榮浩",
+      "searchTraditional": "李榮浩",
+      "searchSimplified": "李荣浩"
+    },
+    {
+      "category": "titles-artists",
+      "input": "许嵩",
+      "lyricsTraditional": "許嵩",
+      "searchTraditional": "許嵩",
+      "searchSimplified": "许嵩"
+    },
+    {
+      "category": "titles-artists",
+      "input": "汪苏泷",
+      "lyricsTraditional": "汪蘇瀧",
+      "searchTraditional": "汪蘇瀧",
+      "searchSimplified": "汪苏泷"
+    },
+    {
+      "category": "titles-artists",
+      "input": "刘若英",
+      "lyricsTraditional": "劉若英",
+      "searchTraditional": "劉若英",
+      "searchSimplified": "刘若英"
+    },
+    {
+      "category": "titles-artists",
+      "input": "梁静茹",
+      "lyricsTraditional": "梁靜茹",
+      "searchTraditional": "梁靜茹",
+      "searchSimplified": "梁静茹"
+    },
+    {
+      "category": "titles-artists",
+      "input": "杨丞琳",
+      "lyricsTraditional": "楊丞琳",
+      "searchTraditional": "楊丞琳",
+      "searchSimplified": "杨丞琳"
+    },
+    {
+      "category": "titles-artists",
+      "input": "萧敬腾",
+      "lyricsTraditional": "蕭敬騰",
+      "searchTraditional": "蕭敬騰",
+      "searchSimplified": "萧敬腾"
+    },
+    {
+      "category": "titles-artists",
+      "input": "张惠妹",
+      "lyricsTraditional": "張惠妹",
+      "searchTraditional": "張惠妹",
+      "searchSimplified": "张惠妹"
+    },
+    {
+      "category": "titles-artists",
+      "input": "苏打绿",
+      "lyricsTraditional": "蘇打綠",
+      "searchTraditional": "蘇打綠",
+      "searchSimplified": "苏打绿"
+    },
+    {
+      "category": "titles-artists",
+      "input": "G.E.M. 邓紫棋",
+      "lyricsTraditional": "G.E.M. 鄧紫棋",
+      "searchTraditional": "G.E.M. 鄧紫棋",
+      "searchSimplified": "G.E.M. 邓紫棋"
+    },
+    {
+      "category": "titles-artists",
+      "input": "Jay Chou 周杰伦",
+      "lyricsTraditional": "Jay Chou 周杰倫",
+      "searchTraditional": "Jay Chou 周杰倫",
+      "searchSimplified": "Jay Chou 周杰伦"
+    },
+    {
+      "category": "one-to-many",
+      "input": "头发",
+      "lyricsTraditional": "頭髮",
+      "searchTraditional": "頭髮",
+      "searchSimplified": "头发"
+    },
+    {
+      "category": "one-to-many",
+      "input": "发现",
+      "lyricsTraditional": "發現",
+      "searchTraditional": "發現",
+      "searchSimplified": "发现"
+    },
+    {
+      "category": "one-to-many",
+      "input": "发展",
+      "lyricsTraditional": "發展",
+      "searchTraditional": "發展",
+      "searchSimplified": "发展"
+    },
+    {
+      "category": "one-to-many",
+      "input": "理发",
+      "lyricsTraditional": "理髮",
+      "searchTraditional": "理髮",
+      "searchSimplified": "理发"
+    },
+    {
+      "category": "one-to-many",
+      "input": "出发",
+      "lyricsTraditional": "出發",
+      "searchTraditional": "出發",
+      "searchSimplified": "出发"
+    },
+    {
+      "category": "one-to-many",
+      "input": "干杯",
+      "lyricsTraditional": "乾杯",
+      "searchTraditional": "乾杯",
+      "searchSimplified": "干杯"
+    },
+    {
+      "category": "one-to-many",
+      "input": "干净",
+      "lyricsTraditional": "乾淨",
+      "searchTraditional": "乾淨",
+      "searchSimplified": "干净"
+    },
+    {
+      "category": "one-to-many",
+      "input": "干部",
+      "lyricsTraditional": "幹部",
+      "searchTraditional": "幹部",
+      "searchSimplified": "干部"
+    },
+    {
+      "category": "one-to-many",
+      "input": "树干",
+      "lyricsTraditional": "樹幹",
+      "searchTraditional": "樹幹",
+      "searchSimplified": "树干"
+    },
+    {
+      "category": "one-to-many",
+      "input": "面条",
+      "lyricsTraditional": "麵條",
+      "searchTraditional": "麪條",
+      "searchSimplified": "面条"
+    },
+    {
+      "category": "one-to-many",
+      "input": "面对",
+      "lyricsTraditional": "面對",
+      "searchTraditional": "面對",
+      "searchSimplified": "面对"
+    },
+    {
+      "category": "one-to-many",
+      "input": "后面",
+      "lyricsTraditional": "後面",
+      "searchTraditional": "後面",
+      "searchSimplified": "后面"
+    },
+    {
+      "category": "one-to-many",
+      "input": "皇后",
+      "lyricsTraditional": "皇后",
+      "searchTraditional": "皇后",
+      "searchSimplified": "皇后"
+    },
+    {
+      "category": "one-to-many",
+      "input": "以后",
+      "lyricsTraditional": "以後",
+      "searchTraditional": "以後",
+      "searchSimplified": "以后"
+    },
+    {
+      "category": "one-to-many",
+      "input": "系统",
+      "lyricsTraditional": "系統",
+      "searchTraditional": "系統",
+      "searchSimplified": "系统"
+    },
+    {
+      "category": "one-to-many",
+      "input": "关系",
+      "lyricsTraditional": "關係",
+      "searchTraditional": "關係",
+      "searchSimplified": "关系"
+    },
+    {
+      "category": "one-to-many",
+      "input": "联系",
+      "lyricsTraditional": "聯繫",
+      "searchTraditional": "聯繫",
+      "searchSimplified": "联系"
+    },
+    {
+      "category": "one-to-many",
+      "input": "钟表",
+      "lyricsTraditional": "鐘錶",
+      "searchTraditional": "鐘錶",
+      "searchSimplified": "钟表"
+    },
+    {
+      "category": "one-to-many",
+      "input": "钟情",
+      "lyricsTraditional": "鍾情",
+      "searchTraditional": "鍾情",
+      "searchSimplified": "钟情"
+    },
+    {
+      "category": "one-to-many",
+      "input": "历史",
+      "lyricsTraditional": "歷史",
+      "searchTraditional": "歷史",
+      "searchSimplified": "历史"
+    },
+    {
+      "category": "one-to-many",
+      "input": "日历",
+      "lyricsTraditional": "日曆",
+      "searchTraditional": "日曆",
+      "searchSimplified": "日历"
+    },
+    {
+      "category": "one-to-many",
+      "input": "复杂",
+      "lyricsTraditional": "複雜",
+      "searchTraditional": "複雜",
+      "searchSimplified": "复杂"
+    },
+    {
+      "category": "one-to-many",
+      "input": "重复",
+      "lyricsTraditional": "重複",
+      "searchTraditional": "重複",
+      "searchSimplified": "重复"
+    },
+    {
+      "category": "one-to-many",
+      "input": "答复",
+      "lyricsTraditional": "答覆",
+      "searchTraditional": "答覆",
+      "searchSimplified": "答复"
+    },
+    {
+      "category": "one-to-many",
+      "input": "松树",
+      "lyricsTraditional": "松樹",
+      "searchTraditional": "松樹",
+      "searchSimplified": "松树"
+    },
+    {
+      "category": "one-to-many",
+      "input": "放松",
+      "lyricsTraditional": "放鬆",
+      "searchTraditional": "放鬆",
+      "searchSimplified": "放松"
+    },
+    {
+      "category": "one-to-many",
+      "input": "云朵",
+      "lyricsTraditional": "雲朵",
+      "searchTraditional": "雲朵",
+      "searchSimplified": "云朵"
+    },
+    {
+      "category": "one-to-many",
+      "input": "人云亦云",
+      "lyricsTraditional": "人云亦云",
+      "searchTraditional": "人云亦云",
+      "searchSimplified": "人云亦云"
+    },
+    {
+      "category": "one-to-many",
+      "input": "台风",
+      "lyricsTraditional": "颱風",
+      "searchTraditional": "颱風",
+      "searchSimplified": "台风"
+    },
+    {
+      "category": "one-to-many",
+      "input": "天台",
+      "lyricsTraditional": "天台",
+      "searchTraditional": "天台",
+      "searchSimplified": "天台"
+    },
+    {
+      "category": "one-to-many",
+      "input": "余生",
+      "lyricsTraditional": "餘生",
+      "searchTraditional": "餘生",
+      "searchSimplified": "余生"
+    },
+    {
+      "category": "one-to-many",
+      "input": "多余",
+      "lyricsTraditional": "多餘",
+      "searchTraditional": "多餘",
+      "searchSimplified": "多余"
+    },
+    {
+      "category": "one-to-many",
+      "input": "斗争",
+      "lyricsTraditional": "鬥爭",
+      "searchTraditional": "鬥爭",
+      "searchSimplified": "斗争"
+    },
+    {
+      "category": "one-to-many",
+      "input": "北斗",
+      "lyricsTraditional": "北斗",
+      "searchTraditional": "北斗",
+      "searchSimplified": "北斗"
+    },
+    {
+      "category": "one-to-many",
+      "input": "只读",
+      "lyricsTraditional": "只讀",
+      "searchTraditional": "只讀",
+      "searchSimplified": "只读"
+    },
+    {
+      "category": "one-to-many",
+      "input": "制作",
+      "lyricsTraditional": "製作",
+      "searchTraditional": "製作",
+      "searchSimplified": "制作"
+    },
+    {
+      "category": "one-to-many",
+      "input": "制服",
+      "lyricsTraditional": "制服",
+      "searchTraditional": "制服",
+      "searchSimplified": "制服"
+    },
+    {
+      "category": "traditional-input",
+      "input": "頭髮",
+      "lyricsTraditional": "頭髮",
+      "searchTraditional": "頭髮",
+      "searchSimplified": "头发"
+    },
+    {
+      "category": "traditional-input",
+      "input": "發現",
+      "lyricsTraditional": "發現",
+      "searchTraditional": "發現",
+      "searchSimplified": "发现"
+    },
+    {
+      "category": "traditional-input",
+      "input": "看著你",
+      "lyricsTraditional": "看著你",
+      "searchTraditional": "看著你",
+      "searchSimplified": "看著你"
+    },
+    {
+      "category": "traditional-input",
+      "input": "裡面",
+      "lyricsTraditional": "裡面",
+      "searchTraditional": "裡面",
+      "searchSimplified": "里面"
+    },
+    {
+      "category": "traditional-input",
+      "input": "裏面",
+      "lyricsTraditional": "裡面",
+      "searchTraditional": "裏面",
+      "searchSimplified": "里面"
+    },
+    {
+      "category": "traditional-input",
+      "input": "溫暖",
+      "lyricsTraditional": "溫暖",
+      "searchTraditional": "溫暖",
+      "searchSimplified": "温暖"
+    },
+    {
+      "category": "traditional-input",
+      "input": "眾人",
+      "lyricsTraditional": "眾人",
+      "searchTraditional": "眾人",
+      "searchSimplified": "众人"
+    },
+    {
+      "category": "traditional-input",
+      "input": "臺灣",
+      "lyricsTraditional": "臺灣",
+      "searchTraditional": "臺灣",
+      "searchSimplified": "台湾"
+    },
+    {
+      "category": "traditional-input",
+      "input": "台灣",
+      "lyricsTraditional": "臺灣",
+      "searchTraditional": "臺灣",
+      "searchSimplified": "台湾"
+    },
+    {
+      "category": "traditional-input",
+      "input": "後來",
+      "lyricsTraditional": "後來",
+      "searchTraditional": "後來",
+      "searchSimplified": "后来"
+    },
+    {
+      "category": "traditional-input",
+      "input": "鍾無艷",
+      "lyricsTraditional": "鍾無艷",
+      "searchTraditional": "鍾無艷",
+      "searchSimplified": "钟无艳"
+    },
+    {
+      "category": "traditional-input",
+      "input": "鐘錶",
+      "lyricsTraditional": "鐘錶",
+      "searchTraditional": "鐘錶",
+      "searchSimplified": "钟表"
+    },
+    {
+      "category": "traditional-input",
+      "input": "乾杯",
+      "lyricsTraditional": "乾杯",
+      "searchTraditional": "乾杯",
+      "searchSimplified": "干杯"
+    },
+    {
+      "category": "traditional-input",
+      "input": "幹部",
+      "lyricsTraditional": "幹部",
+      "searchTraditional": "幹部",
+      "searchSimplified": "干部"
+    },
+    {
+      "category": "traditional-input",
+      "input": "於是",
+      "lyricsTraditional": "於是",
+      "searchTraditional": "於是",
+      "searchSimplified": "于是"
+    },
+    {
+      "category": "traditional-input",
+      "input": "著名",
+      "lyricsTraditional": "著名",
+      "searchTraditional": "著名",
+      "searchSimplified": "著名"
+    },
+    {
+      "category": "traditional-input",
+      "input": "著作",
+      "lyricsTraditional": "著作",
+      "searchTraditional": "著作",
+      "searchSimplified": "著作"
+    },
+    {
+      "category": "traditional-input",
+      "input": "沈默",
+      "lyricsTraditional": "沈默",
+      "searchTraditional": "沈默",
+      "searchSimplified": "沉默"
+    },
+    {
+      "category": "traditional-input",
+      "input": "瞭解",
+      "lyricsTraditional": "瞭解",
+      "searchTraditional": "瞭解",
+      "searchSimplified": "了解"
+    },
+    {
+      "category": "traditional-input",
+      "input": "羣衆",
+      "lyricsTraditional": "群眾",
+      "searchTraditional": "羣衆",
+      "searchSimplified": "群众"
+    },
+    {
+      "category": "traditional-input",
+      "input": "綫",
+      "lyricsTraditional": "綫",
+      "searchTraditional": "綫",
+      "searchSimplified": "线"
+    },
+    {
+      "category": "traditional-input",
+      "input": "爲了",
+      "lyricsTraditional": "為了",
+      "searchTraditional": "爲了",
+      "searchSimplified": "为了"
+    },
+    {
+      "category": "traditional-input",
+      "input": "說",
+      "lyricsTraditional": "說",
+      "searchTraditional": "說",
+      "searchSimplified": "说"
+    },
+    {
+      "category": "traditional-input",
+      "input": "祕密",
+      "lyricsTraditional": "秘密",
+      "searchTraditional": "祕密",
+      "searchSimplified": "秘密"
+    },
+    {
+      "category": "mixed",
+      "input": "Love 你",
+      "lyricsTraditional": "Love 你",
+      "searchTraditional": "Love 你",
+      "searchSimplified": "Love 你"
+    },
+    {
+      "category": "mixed",
+      "input": "ABC",
+      "lyricsTraditional": "ABC",
+      "searchTraditional": "ABC",
+      "searchSimplified": "ABC"
+    },
+    {
+      "category": "mixed",
+      "input": "",
+      "lyricsTraditional": "",
+      "searchTraditional": "",
+      "searchSimplified": ""
+    },
+    {
+      "category": "mixed",
+      "input": "   ",
+      "lyricsTraditional": "   ",
+      "searchTraditional": "   ",
+      "searchSimplified": "   "
+    },
+    {
+      "category": "mixed",
+      "input": "123",
+      "lyricsTraditional": "123",
+      "searchTraditional": "123",
+      "searchSimplified": "123"
+    },
+    {
+      "category": "mixed",
+      "input": "《晴天》Live",
+      "lyricsTraditional": "《晴天》Live",
+      "searchTraditional": "《晴天》Live",
+      "searchSimplified": "《晴天》Live"
+    },
+    {
+      "category": "mixed",
+      "input": "OK 繃",
+      "lyricsTraditional": "OK 繃",
+      "searchTraditional": "OK 繃",
+      "searchSimplified": "OK 绷"
+    },
+    {
+      "category": "mixed",
+      "input": "Kiss Goodbye",
+      "lyricsTraditional": "Kiss Goodbye",
+      "searchTraditional": "Kiss Goodbye",
+      "searchSimplified": "Kiss Goodbye"
+    },
+    {
+      "category": "mixed",
+      "input": "愛 love 爱",
+      "lyricsTraditional": "愛 love 愛",
+      "searchTraditional": "愛 love 愛",
+      "searchSimplified": "爱 love 爱"
+    }
+  ]
+}
