@@ -945,6 +945,53 @@ pub async fn track_details_read_image(app: AppHandle, path: String) -> Result<Re
     Ok(Response::new(bytes))
 }
 
+/// Default name for an exported cover: `Cover <title>.<ext>`, with the title the library list shows (title tag, or the
+/// file name without one) and Windows-invalid file name characters replaced by `_`.
+fn cover_export_file_name(title: Option<&str>, file_name: Option<&str>, extension: &str) -> String {
+    match player_core::display_track_title(title, file_name) {
+        Some(name) => {
+            let safe: String = name
+                .chars()
+                .map(|character| match character {
+                    '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                    other if other.is_control() => '_',
+                    other => other,
+                })
+                .collect();
+            format!("Cover {safe}.{extension}")
+        }
+        None => format!("Cover.{extension}"),
+    }
+}
+
+fn cover_export_title(state: &AppState, track_id: &str) -> (Option<String>, Option<String>) {
+    let summary = player_core::TrackId::parse(track_id).ok().and_then(|id| {
+        state
+            .database
+            .as_ref()
+            .and_then(|database| database.get_track_summary(id).ok().flatten())
+    });
+    summary.map_or((None, None), |summary| (summary.title, summary.file_name))
+}
+
+#[cfg(test)]
+mod cover_export_name_tests {
+    use super::cover_export_file_name;
+
+    #[test]
+    fn uses_the_list_title_and_replaces_invalid_characters() {
+        assert_eq!(
+            cover_export_file_name(Some(r#"A/B\C:D*E?F"G<H>I|J"#), Some("file"), "png"),
+            "Cover A_B_C_D_E_F_G_H_I_J.png"
+        );
+        assert_eq!(
+            cover_export_file_name(Some("  "), Some("夜に駆ける"), "jpg"),
+            "Cover 夜に駆ける.jpg"
+        );
+        assert_eq!(cover_export_file_name(None, None, "webp"), "Cover.webp");
+    }
+}
+
 /// Export the embedded front cover through a save dialog. Returns the saved path.
 #[tauri::command]
 pub async fn track_details_export_cover(
@@ -954,6 +1001,7 @@ pub async fn track_details_export_cover(
     track_id: String,
 ) -> Result<Option<String>, String> {
     let source = track_source(&state, &track_id)?;
+    let (title, file_name) = cover_export_title(&state, &track_id);
     let reader = app.clone();
     let cover = blocking(move || {
         with_readable(&reader, &source, player_tags::tags::read_cover).map(|(cover, _, _)| cover)
@@ -977,7 +1025,11 @@ pub async fn track_details_export_cover(
             .file()
             .set_parent(&window)
             .set_title("匯出封面")
-            .set_file_name(format!("cover.{extension}"))
+            .set_file_name(cover_export_file_name(
+                title.as_deref(),
+                file_name.as_deref(),
+                extension,
+            ))
             .add_filter("圖片", &[extension])
             .blocking_save_file();
         let Some(selected) = selected else {
@@ -1004,7 +1056,10 @@ pub async fn track_details_export_cover(
         return blocking(move || {
             let Some(uri) = app
                 .media_index()
-                .pick_create_document(&format!("cover.{extension}"), &mime)
+                .pick_create_document(
+                    &cover_export_file_name(title.as_deref(), file_name.as_deref(), extension),
+                    &mime,
+                )
                 .map_err(|error| error.to_string())?
             else {
                 return Ok(None);
