@@ -49,3 +49,11 @@ test('the details page resets the delay after saving imported lyrics and the pla
   const view = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
   assert.match(view, /listen<[^>]*>\(LYRICS_TIMING_OFFSET_EVENT[^]*?timingOffsetSec = loadLyricsTimingOffsetSec\(shown\)/);
 });
+
+test('the import button is always enabled', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const dialog = await readFile(new URL('../src/lib/TrackDetailsDialog.svelte', import.meta.url), 'utf8');
+  const button = dialog.match(/<button[^>]*onclick={importOnlineLyrics}[^>]*>/);
+  assert.ok(button, 'import button found');
+  assert.doesNotMatch(button[0], /disabled/);
+});
