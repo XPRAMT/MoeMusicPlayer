@@ -23,7 +23,10 @@ object DsdBridge {
     /** Length in bytes of the virtual WAV file, or -1 for an unknown handle. */
     @JvmStatic external fun nativeLength(handle: Long): Long
 
-    /** Copies up to [length] bytes starting at [position] into [buffer]; 0 is the end, -1 an error. */
+    /**
+     * Copies up to [length] bytes starting at [position] into [buffer]; 0 is the end, -1 an error, -2 a remote track
+     * whose server could not be reached (the Rust stream retried for minutes and gave up).
+     */
     @JvmStatic external fun nativeRead(handle: Long, position: Long, buffer: ByteArray, offset: Int, length: Int): Int
 
     @JvmStatic external fun nativeClose(handle: Long)
@@ -33,6 +36,28 @@ object DsdBridge {
 }
 
 const val DSD_URI_SCHEME = "moedsd"
+
+/** Message shown when a remote track stopped because its server could not be reached (Rust `REMOTE_LINK_LOST`). */
+const val REMOTE_LINK_LOST_MESSAGE = "伺服器無法連線"
+
+/**
+ * A remote track's server could not be reached and the Rust stream already retried for minutes (ADR 0026). A subclass of
+ * [java.io.FileNotFoundException] because Media3's default load error policy does not retry those: playback stops with
+ * this error instead of trying again for minutes per retry, and nothing moves on to the next track.
+ */
+class RemoteLinkLostException(message: String) : java.io.FileNotFoundException(message)
+
+/** The "server could not be reached" message if [error] (or one of its causes) is a [RemoteLinkLostException]. */
+fun remoteLinkLostMessage(error: Throwable?): String? {
+    var cause = error
+    var depth = 0
+    while (cause != null && depth < 10) {
+        if (cause is RemoteLinkLostException) return cause.message
+        cause = cause.cause
+        depth++
+    }
+    return null
+}
 
 /** Scheme of a WavPack (`.wv`) track: `moewv:///path/to/file.wv`, served by the same data source as DSD. */
 const val WAVPACK_URI_SCHEME = "moewv"
@@ -93,6 +118,7 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
         val wanted = minOf(length.toLong(), bytesRemaining).toInt()
         val read = DsdBridge.nativeRead(handle, position, buffer, offset, wanted)
+        if (read == -2) throw RemoteLinkLostException(REMOTE_LINK_LOST_MESSAGE)
         if (read < 0) throw IOException("DSD read failed")
         if (read == 0) return C.RESULT_END_OF_INPUT
         position += read

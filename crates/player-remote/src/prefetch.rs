@@ -5,11 +5,18 @@
 //! round trip or more that is heard as a gap. This reader fetches the file in chunks ahead of the position on its own
 //! thread, so a sequential reader always finds its bytes already here; only a seek to a place that is not buffered waits
 //! (and the audio output is expected to be paused or buffering around a seek anyway).
+//!
+//! When the link is lost (a [`RemoteError::Network`] failure) the thread does not give up: it keeps what it has, waits
+//! ([`RETRY_BACKOFF`]) and fetches the same place again (the file underneath reopens itself and the file system
+//! connects again), until it works or [`RETRY_GIVE_UP`] has passed since the outage began. Only then does a read fail,
+//! with a message starting with [`player_core::REMOTE_LINK_LOST`], which the players take as "stop here" rather than
+//! "the track ended". Any other error (the file changed, it was released, the server refused) fails at once. A seek
+//! cuts the wait short.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::fs::{RemoteError, RemoteFile};
 
@@ -19,6 +26,54 @@ pub const PREFETCH_CHUNK: usize = 1024 * 1024;
 pub const PREFETCH_AHEAD: u64 = 16 * 1024 * 1024;
 /// Bytes kept behind the reader, so a decoder that steps back a little (re-reading a frame header) does not refetch.
 const HISTORY: u64 = 2 * 1024 * 1024;
+/// Waits before fetching again after the link was lost; the last one repeats. The first retry is at once (a dropped
+/// connection on a working network is back within one connect); later ones back off so a phone without a network does
+/// not spin, capped so a link that returns is used within ten seconds.
+pub const RETRY_BACKOFF: [Duration; 6] = [
+    Duration::ZERO,
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    Duration::from_secs(10),
+];
+/// How long after an outage began the thread stops retrying (a router or server restart is back well within this).
+pub const RETRY_GIVE_UP: Duration = Duration::from_secs(180);
+/// A reader never waits longer than this for one read, whatever the fetch thread does: the give-up time, plus one
+/// read that may run its full limit, plus a margin.
+const READER_LIMIT: Duration = Duration::from_secs(180 + 120 + 60);
+
+/// When to retry after the link is lost and when to give up.
+#[derive(Clone, Debug)]
+pub struct RetryPolicy {
+    pub backoff: Vec<Duration>,
+    pub give_up_after: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            backoff: RETRY_BACKOFF.to_vec(),
+            give_up_after: RETRY_GIVE_UP,
+        }
+    }
+}
+
+impl RetryPolicy {
+    fn delay(&self, attempt: usize) -> Duration {
+        self.backoff
+            .get(attempt)
+            .or(self.backoff.last())
+            .copied()
+            .unwrap_or(Duration::ZERO)
+    }
+}
+
+/// The link was lost while fetching: since when, and how many retries so far.
+struct Outage {
+    since: Instant,
+    attempts: usize,
+}
 
 struct State {
     /// Contiguous chunks; the first starts at `start`, together they end at `end`.
@@ -30,6 +85,9 @@ struct State {
     /// Incremented whenever the buffer is thrown away for a seek, so a fetch that was in flight is discarded.
     generation: u64,
     error: Option<RemoteError>,
+    /// Retrying stopped: the message the reader fails with (starts with `REMOTE_LINK_LOST`).
+    gave_up: Option<String>,
+    outage: Option<Outage>,
     stopped: bool,
 }
 
@@ -44,6 +102,7 @@ struct Shared {
     /// a request. Read by a stalled reader to say what the fetch thread is doing.
     in_flight_since_ms: std::sync::atomic::AtomicU64,
     born: std::time::Instant,
+    reader_limit: Duration,
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -61,7 +120,16 @@ impl PrefetchReader {
     }
 
     pub fn with_geometry(file: Box<dyn RemoteFile>, chunk: usize, ahead: u64) -> Self {
+        Self::with_policy(file, chunk, ahead, RetryPolicy::default())
+    }
+
+    pub fn with_policy(file: Box<dyn RemoteFile>, chunk: usize, ahead: u64, policy: RetryPolicy) -> Self {
         let len = file.len();
+        let reader_limit = if policy.give_up_after >= RETRY_GIVE_UP {
+            READER_LIMIT
+        } else {
+            policy.give_up_after + Duration::from_secs(5)
+        };
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 chunks: VecDeque::new(),
@@ -70,6 +138,8 @@ impl PrefetchReader {
                 reader_position: 0,
                 generation: 0,
                 error: None,
+                gave_up: None,
+                outage: None,
                 stopped: false,
             }),
             worker: Condvar::new(),
@@ -77,12 +147,13 @@ impl PrefetchReader {
             len,
             in_flight_since_ms: std::sync::atomic::AtomicU64::new(0),
             born: std::time::Instant::now(),
+            reader_limit,
         });
         let thread_shared = Arc::clone(&shared);
         // Detached: it ends by itself once the reader is dropped (after the request in flight returns).
         let _ = std::thread::Builder::new()
             .name("moe-remote-prefetch".to_owned())
-            .spawn(move || fetch_loop(thread_shared, file, chunk.max(1), ahead.max(1)));
+            .spawn(move || fetch_loop(thread_shared, file, chunk.max(1), ahead.max(1), policy));
         Self {
             shared,
             position: 0,
@@ -105,7 +176,13 @@ impl Drop for PrefetchReader {
     }
 }
 
-fn fetch_loop(shared: Arc<Shared>, mut file: Box<dyn RemoteFile>, chunk: usize, ahead: u64) {
+fn fetch_loop(
+    shared: Arc<Shared>,
+    mut file: Box<dyn RemoteFile>,
+    chunk: usize,
+    ahead: u64,
+    policy: RetryPolicy,
+) {
     loop {
         // Wait until there is something to fetch.
         let (offset, generation) = {
@@ -115,6 +192,7 @@ fn fetch_loop(shared: Arc<Shared>, mut file: Box<dyn RemoteFile>, chunk: usize, 
                     return;
                 }
                 let wanted = state.error.is_none()
+                    && state.gave_up.is_none()
                     && state.end < shared.len
                     && state.end.saturating_sub(state.reader_position) < ahead;
                 if wanted {
@@ -166,8 +244,63 @@ fn fetch_loop(shared: Arc<Shared>, mut file: Box<dyn RemoteFile>, chunk: usize, 
             state.end += filled as u64;
             state.chunks.push_back(buffer);
         }
-        if let Some(error) = failure {
-            state.error = Some(error);
+        match failure {
+            None => {
+                if let Some(outage) = state.outage.take() {
+                    eprintln!(
+                        "[remote] link back after {} ms and {} retr{}; reading on at {}",
+                        outage.since.elapsed().as_millis(),
+                        outage.attempts,
+                        if outage.attempts == 1 { "y" } else { "ies" },
+                        offset
+                    );
+                }
+            }
+            Some(error @ RemoteError::Network(_)) => {
+                let outage = state.outage.get_or_insert_with(|| Outage {
+                    since: Instant::now(),
+                    attempts: 0,
+                });
+                let lasted = outage.since.elapsed();
+                if lasted >= policy.give_up_after {
+                    eprintln!(
+                        "[remote] giving up at {offset} after {} s and {} retries: {error}",
+                        lasted.as_secs(),
+                        outage.attempts
+                    );
+                    state.gave_up = Some(format!(
+                        "{}（{} 秒內重試 {} 次都失敗：{error}）",
+                        player_core::REMOTE_LINK_LOST,
+                        lasted.as_secs(),
+                        outage.attempts
+                    ));
+                } else {
+                    let delay = policy.delay(outage.attempts);
+                    outage.attempts += 1;
+                    eprintln!(
+                        "[remote] read at {offset} failed ({error}); retry {} in {} ms",
+                        outage.attempts,
+                        delay.as_millis()
+                    );
+                    // Wait, unless the reader is dropped or seeks (a seek retries at once, at the new place).
+                    let deadline = Instant::now() + delay;
+                    loop {
+                        if state.stopped {
+                            return;
+                        }
+                        let now = Instant::now();
+                        if state.generation != generation || now >= deadline {
+                            break;
+                        }
+                        state = shared
+                            .worker
+                            .wait_timeout(state, deadline - now)
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .0;
+                    }
+                }
+            }
+            Some(error) => state.error = Some(error),
         }
         shared.reader.notify_all();
     }
@@ -215,6 +348,10 @@ impl State {
         self.end = position;
         self.generation += 1;
         self.error = None;
+        // A seek after giving up tries again, with a fresh allowance.
+        if self.gave_up.take().is_some() {
+            self.outage = None;
+        }
     }
 }
 
@@ -245,6 +382,9 @@ impl Read for PrefetchReader {
             if let Some(error) = state.error.clone() {
                 return Err(error.into());
             }
+            if let Some(message) = state.gave_up.clone() {
+                return Err(io::Error::new(io::ErrorKind::ConnectionAborted, message));
+            }
             let waited = waiting_since.elapsed();
             if waited >= next_report {
                 let in_flight = self.shared.in_flight_since_ms.load(std::sync::atomic::Ordering::Relaxed);
@@ -254,13 +394,14 @@ impl Read for PrefetchReader {
                     Some((self.shared.born.elapsed().as_millis() as u64 + 1).saturating_sub(in_flight))
                 };
                 eprintln!(
-                    "[remote] prefetch stall: waited {} ms at {} of {}; buffered {}..{}; request in flight for {:?} ms",
+                    "[remote] prefetch stall: waited {} ms at {} of {}; buffered {}..{}; request in flight for {:?} ms; retries {:?}",
                     waited.as_millis(),
                     self.position,
                     self.shared.len,
                     state.start,
                     state.end,
                     in_flight_for,
+                    state.outage.as_ref().map(|outage| outage.attempts),
                 );
                 next_report += Duration::from_secs(3);
                 // Nothing is being fetched although the reader waits: wake the fetch thread (a lost wake-up would
@@ -269,10 +410,15 @@ impl Read for PrefetchReader {
                     self.shared.worker.notify_all();
                 }
             }
-            if waited >= Duration::from_secs(45) {
+            // Normally the fetch thread gives up first (and says why); this only guards against a thread that is gone.
+            if waited >= self.shared.reader_limit {
                 return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "the server did not deliver the next part of the file",
+                    io::ErrorKind::ConnectionAborted,
+                    format!(
+                        "{}（{} 秒沒有收到檔案的下一段）",
+                        player_core::REMOTE_LINK_LOST,
+                        waited.as_secs()
+                    ),
                 ));
             }
             state = self
@@ -316,7 +462,8 @@ mod tests {
         len: u64,
         latency: Duration,
         requests: Arc<AtomicU64>,
-        fail_after: Option<u64>,
+        /// Given the request number (from 0), the error that request fails with, if any.
+        fail: Box<dyn Fn(u64) -> Option<RemoteError> + Send>,
     }
 
     impl RemoteFile for SlowFile {
@@ -327,8 +474,8 @@ mod tests {
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
             let count = self.requests.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(self.latency);
-            if self.fail_after.is_some_and(|limit| count >= limit) {
-                return Err(RemoteError::Network("link dropped".to_owned()));
+            if let Some(error) = (self.fail)(count) {
+                return Err(error);
             }
             if offset >= self.len {
                 return Ok(0);
@@ -352,17 +499,46 @@ mod tests {
         latency_ms: u64,
         fail_after: Option<u64>,
     ) -> (PrefetchReader, Arc<AtomicU64>) {
+        failing_reader(
+            len,
+            latency_ms,
+            move |count| {
+                fail_after
+                    .is_some_and(|limit| count >= limit)
+                    .then(|| RemoteError::Network("link dropped".to_owned()))
+            },
+            RetryPolicy::default(),
+        )
+    }
+
+    fn failing_reader(
+        len: u64,
+        latency_ms: u64,
+        fail: impl Fn(u64) -> Option<RemoteError> + Send + 'static,
+        policy: RetryPolicy,
+    ) -> (PrefetchReader, Arc<AtomicU64>) {
         let requests = Arc::new(AtomicU64::new(0));
         let file = SlowFile {
             len,
             latency: Duration::from_millis(latency_ms),
             requests: Arc::clone(&requests),
-            fail_after,
+            fail: Box::new(fail),
         };
         (
-            PrefetchReader::with_geometry(Box::new(file), 64 * 1024, 512 * 1024),
+            PrefetchReader::with_policy(Box::new(file), 64 * 1024, 512 * 1024, policy),
             requests,
         )
+    }
+
+    fn quick_policy(backoff_ms: &[u64], give_up_ms: u64) -> RetryPolicy {
+        RetryPolicy {
+            backoff: backoff_ms.iter().map(|&ms| Duration::from_millis(ms)).collect(),
+            give_up_after: Duration::from_millis(give_up_ms),
+        }
+    }
+
+    fn network() -> Option<RemoteError> {
+        Some(RemoteError::Network("link dropped".to_owned()))
     }
 
     #[test]
@@ -431,13 +607,107 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_fetch_is_an_error_after_the_buffered_bytes() {
-        // The 4th request fails: three chunks (192 KiB) are readable, then the error.
-        let (mut reader, _) = reader(10_000_000, 0, Some(3));
+    fn a_link_that_stays_lost_is_an_error_after_the_buffered_bytes_and_the_retries() {
+        // From the 4th request on every one fails: three chunks (192 KiB) are readable, then (after retrying for the
+        // allowed time) the "link lost" error.
+        let started = Instant::now();
+        let (mut reader, requests) = failing_reader(
+            10_000_000,
+            0,
+            |count| if count >= 3 { network() } else { None },
+            quick_policy(&[0, 20, 40], 400),
+        );
         let mut all = Vec::new();
         let error = reader.read_to_end(&mut all).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+        assert!(player_core::is_remote_link_lost(&error.to_string()), "{error}");
         assert_eq!(all.len(), 3 * 64 * 1024);
         assert_eq!(all, expected(0, all.len()));
+        assert!(started.elapsed() >= Duration::from_millis(400), "{:?}", started.elapsed());
+        // 0, 20, 40, 40, … ms apart over 400 ms: several retries, not one and not hundreds.
+        let tries = requests.load(Ordering::SeqCst) - 3;
+        assert!((5..=30).contains(&tries), "{tries} tries");
+    }
+
+    #[test]
+    fn a_link_that_comes_back_is_read_on_without_a_gap_or_a_repeat() {
+        // Requests 5 to 9 fail (an outage of five tries), then the server answers again.
+        let (mut reader, requests) = failing_reader(
+            3_000_000,
+            1,
+            |count| if (5..10).contains(&count) { network() } else { None },
+            quick_policy(&[0, 10, 20, 40], 10_000),
+        );
+        let mut all = Vec::new();
+        reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all.len(), 3_000_000);
+        assert_eq!(all, expected(0, all.len()));
+        assert!(requests.load(Ordering::SeqCst) >= 10);
+    }
+
+    #[test]
+    fn the_retries_wait_longer_each_time_up_to_the_last_step() {
+        let policy = quick_policy(&[0, 1000, 2000, 4000, 8000, 10_000], 1);
+        let waits: Vec<u64> = (0..8).map(|attempt| policy.delay(attempt).as_millis() as u64).collect();
+        assert_eq!(waits, [0, 1000, 2000, 4000, 8000, 10_000, 10_000, 10_000]);
+        assert_eq!(RetryPolicy::default().backoff, RETRY_BACKOFF.to_vec());
+        assert_eq!(RetryPolicy::default().give_up_after, Duration::from_secs(180));
+    }
+
+    #[test]
+    fn an_error_that_is_not_the_network_fails_at_once() {
+        let started = Instant::now();
+        let (mut reader, requests) = failing_reader(
+            10_000_000,
+            0,
+            |count| (count >= 2).then_some(RemoteError::Changed),
+            quick_policy(&[1000], 60_000),
+        );
+        let mut all = Vec::new();
+        let error = reader.read_to_end(&mut all).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!player_core::is_remote_link_lost(&error.to_string()));
+        assert_eq!(all.len(), 2 * 64 * 1024);
+        assert!(started.elapsed() < Duration::from_millis(900));
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn a_seek_cuts_the_wait_between_retries_short() {
+        // Request 2 fails and the next try would only come after 30 s; the reader seeks away meanwhile.
+        let (mut reader, _) = failing_reader(
+            10_000_000,
+            0,
+            |count| if count == 2 { network() } else { None },
+            quick_policy(&[30_000], 120_000),
+        );
+        let mut buffer = vec![0_u8; 64 * 1024];
+        reader.read_exact(&mut buffer).unwrap();
+        // Let the failure happen and the thread start waiting.
+        std::thread::sleep(Duration::from_millis(200));
+        let started = Instant::now();
+        reader.seek(SeekFrom::Start(5_000_000)).unwrap();
+        reader.read_exact(&mut buffer).unwrap();
+        assert_eq!(buffer, expected(5_000_000, buffer.len()));
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_seek_after_giving_up_tries_again() {
+        let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = Arc::clone(&fail);
+        let (mut reader, _) = failing_reader(
+            1_000_000,
+            0,
+            move |count| (count >= 1 && flag.load(Ordering::SeqCst)).then(|| RemoteError::Network("down".into())),
+            quick_policy(&[0, 10], 100),
+        );
+        let mut all = Vec::new();
+        assert!(reader.read_to_end(&mut all).is_err());
+        fail.store(false, Ordering::SeqCst);
+        reader.seek(SeekFrom::Start(500_000)).unwrap();
+        let mut buffer = vec![0_u8; 1000];
+        reader.read_exact(&mut buffer).unwrap();
+        assert_eq!(buffer, expected(500_000, 1000));
     }
 }

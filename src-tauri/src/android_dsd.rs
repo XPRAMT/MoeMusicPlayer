@@ -404,6 +404,10 @@ mod jni_exports {
             Ok(count) => count,
             Err(error) => {
                 eprintln!("[dsd] read failed: {error}");
+                // The remote stream retried and gave up (ADR 0026, "link lost"): -2 tells Kotlin to stop, not retry.
+                if player_core::is_remote_link_lost(&error) {
+                    return -2;
+                }
                 return -1;
             }
         };

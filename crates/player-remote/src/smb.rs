@@ -171,8 +171,17 @@ pub fn list_shares_with_guest_access(
 
 /// How long a request that asks the server something (list, stat, open) may take before it is given up.
 const OPERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// How long one read of file data may take. Longer than an ordinary request because a read can be a megabyte.
-const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// The longest one read of file data (a megabyte) may take while data keeps arriving; a link on which nothing arrives
+/// is given up much sooner (see [`STALL_DETECT`]). 1 MiB at 0.1 Mbit/s is about 84 s.
+const READ_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+/// While a request waits, this long without a single byte from the server makes the client ask whether it is still
+/// there (a small request standing in for an SMB2 ECHO, see [`Link::ping`]).
+pub(crate) const STALL_DETECT: std::time::Duration = std::time::Duration::from_secs(1);
+/// How long the server then has to send anything (the echo's answer or the data) before the link counts as dead and is
+/// cut, failing every request on it so the caller connects again.
+pub(crate) const ECHO_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+/// How often a waiting request looks at the link.
+const WATCH_TICK: std::time::Duration = std::time::Duration::from_millis(100);
 /// How long one write of file data (up to [`WRITE_CHUNK`]) may take.
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// How long connecting (negotiating and signing in) may take.
@@ -204,6 +213,113 @@ fn bounded<T: Send + 'static>(
     }
 }
 
+/// What a waiting request should do about its link, decided from when the last byte arrived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Watch {
+    Wait,
+    /// Nothing arrived for [`STALL_DETECT`]: ask the server (see [`Link::ping`]).
+    SendEcho,
+    /// Nothing arrived for [`ECHO_WAIT`] after asking either: the link is dead.
+    Dead,
+}
+
+/// Tells a slow link (bytes keep coming, however few) from a dead one (none at all) for one request.
+pub(crate) struct Watchdog {
+    started: std::time::Instant,
+    echo_sent: Option<std::time::Instant>,
+    stall: std::time::Duration,
+    echo_wait: std::time::Duration,
+}
+
+impl Watchdog {
+    pub(crate) fn new(started: std::time::Instant, stall: std::time::Duration, echo_wait: std::time::Duration) -> Self {
+        Self {
+            started,
+            echo_sent: None,
+            stall,
+            echo_wait,
+        }
+    }
+
+    /// `last_received`: when the link's last byte arrived (any request's, the echo's answer included).
+    pub(crate) fn check(
+        &mut self,
+        now: std::time::Instant,
+        last_received: Option<std::time::Instant>,
+    ) -> Watch {
+        // Bytes from before this request do not count: the link may have been idle for minutes.
+        let quiet_since = last_received.map_or(self.started, |at| at.max(self.started));
+        if let Some(sent) = self.echo_sent {
+            if quiet_since > sent {
+                // Something arrived after asking: alive. Start over.
+                self.echo_sent = None;
+            } else if now.saturating_duration_since(sent) >= self.echo_wait {
+                return Watch::Dead;
+            } else {
+                return Watch::Wait;
+            }
+        }
+        if now.saturating_duration_since(quiet_since) >= self.stall {
+            self.echo_sent = Some(now);
+            return Watch::SendEcho;
+        }
+        Watch::Wait
+    }
+}
+
+/// Run `work` on its own thread against `link` and wait for it as long as the link is alive: data arriving (however
+/// slowly) keeps the wait going up to `limit`; nothing at all for [`STALL_DETECT`] asks the server ([`Link::ping`]), and nothing for
+/// [`ECHO_WAIT`] after that cuts the link ([`LinkHealth::kill`](crate::smb_transport::LinkHealth::kill)), which fails
+/// every request on it, and reports a network failure (the caller connects again).
+fn bounded_on<T: Send + 'static>(
+    link: &std::sync::Arc<Link>,
+    limit: std::time::Duration,
+    work: impl FnOnce() -> Result<T, RemoteError> + Send + 'static,
+) -> Result<T, RemoteError> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("moe-smb-call".to_owned())
+        .spawn(move || {
+            let _ = sender.send(work());
+        });
+    if spawned.is_err() {
+        return Err(RemoteError::Network("could not start a worker for the request".to_owned()));
+    }
+    let started = std::time::Instant::now();
+    let mut watchdog = Watchdog::new(started, STALL_DETECT, ECHO_WAIT);
+    loop {
+        match receiver.recv_timeout(WATCH_TICK) {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(RemoteError::Network("the request's worker ended without an answer".to_owned()))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        let now = std::time::Instant::now();
+        if now.saturating_duration_since(started) >= limit {
+            return Err(RemoteError::Network(format!(
+                "the server did not finish within {} s",
+                limit.as_secs()
+            )));
+        }
+        match watchdog.check(now, link.health.last_received()) {
+            Watch::Wait => {}
+            Watch::SendEcho => link.ping(),
+            Watch::Dead => {
+                eprintln!(
+                    "[remote] smb link dead: no data for {} ms (echo unanswered); reconnecting",
+                    now.saturating_duration_since(
+                        link.health.last_received().map_or(started, |at| at.max(started))
+                    )
+                    .as_millis()
+                );
+                link.health.kill();
+                return Err(RemoteError::Network("the server stopped answering".to_owned()));
+            }
+        }
+    }
+}
+
 /// One signed-in connection to one share: the connection (over [`NoDelayTransport`]), its session and the tree.
 /// `smb::Client` would do the same but always builds its own transport, which stalls every request (see
 /// [`crate::smb_transport`]); the calls this file makes need only `create_file`.
@@ -211,6 +327,9 @@ pub struct Link {
     connection: std::sync::Arc<smb::Connection>,
     session: smb::Session,
     tree: smb::Tree,
+    health: std::sync::Arc<crate::smb_transport::LinkHealth>,
+    /// An echo is on its way (one at a time per link).
+    echo_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Link {
@@ -223,7 +342,9 @@ impl Link {
             .map_err(|error| smb::Error::InvalidArgument(error.to_string()))?
             .next()
             .ok_or_else(|| smb::Error::InvalidArgument("the server name has no address".to_owned()))?;
-        let mut transport = crate::smb_transport::NoDelayTransport::new(CONNECT_TIMEOUT);
+        let health = crate::smb_transport::LinkHealth::new();
+        let mut transport =
+            crate::smb_transport::NoDelayTransport::with_health(CONNECT_TIMEOUT, std::sync::Arc::clone(&health));
         smb::transport::SmbTransport::connect(&mut transport, &settings.host, address)?;
         let connection = smb::Connection::from_transport(
             Box::new(transport),
@@ -249,7 +370,41 @@ impl Link {
             connection: std::sync::Arc::new(connection),
             session,
             tree,
+            health,
+            echo_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
+    }
+
+    /// Ask the server something small on its own thread, as an SMB2 ECHO would (the `smb` crate 0.12 keeps its
+    /// message handlers private, so an ECHO cannot be sent through it, and a hand-made one would bypass its message ids,
+    /// credits and signing): open the share's root for its attributes and close it. Its answer is not looked at: any
+    /// byte it brings back counts as the link being alive (see [`bounded_on`]).
+    fn ping(self: &std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        if self.echo_in_flight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let link = std::sync::Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("moe-smb-echo".to_owned())
+            .spawn(move || {
+                let args = FileCreateArgs::make_open_existing(
+                    FileAccessMask::new().with_file_read_attributes(true),
+                );
+                match link.tree.create("", &args) {
+                    Ok(Resource::File(file)) => {
+                        let _ = file.close();
+                    }
+                    Ok(Resource::Directory(dir)) => {
+                        let _ = dir.close();
+                    }
+                    _ => {}
+                }
+                link.echo_in_flight.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.echo_in_flight.store(false, Ordering::SeqCst);
+        }
     }
 
     fn create_file(&self, path: &UncPath, args: &FileCreateArgs) -> Result<Resource, smb::Error> {
@@ -310,11 +465,19 @@ impl SmbFs {
         let operation = std::sync::Arc::new(operation);
         let attempt = |client: std::sync::Arc<Link>| {
             let operation = std::sync::Arc::clone(&operation);
-            bounded(OPERATION_TIMEOUT, move || {
-                operation(&client).map_err(|error| classify(&error))
+            let worker_client = std::sync::Arc::clone(&client);
+            bounded_on(&client, OPERATION_TIMEOUT, move || {
+                operation(&worker_client).map_err(|error| classify(&error))
             })
         };
-        match attempt(self.client()) {
+        let current = self.client();
+        // A link already found dead is not tried again.
+        let first = if current.health.is_killed() {
+            Err(RemoteError::Network("the link was cut".to_owned()))
+        } else {
+            attempt(current)
+        };
+        match first {
             Err(RemoteError::Network(_)) => {
                 let fresh = std::sync::Arc::new(Self::new_client_bounded(&self.settings)?);
                 *self.client.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -599,6 +762,7 @@ impl RemoteFs for SmbFs {
         Ok(Box::new(SmbFile {
             file: std::sync::Arc::new(Mutex::new(file)),
             len,
+            link: self.client(),
         }))
     }
 }
@@ -609,6 +773,8 @@ pub struct SmbFile {
     /// Shared with the worker thread of the read in flight (see [`bounded`]).
     file: std::sync::Arc<Mutex<smb::File>>,
     len: u64,
+    /// The connection the file was opened on, watched while a read waits.
+    link: std::sync::Arc<Link>,
 }
 
 impl RemoteFile for SmbFile {
@@ -622,7 +788,7 @@ impl RemoteFile for SmbFile {
         }
         let wanted = ((self.len - offset).min(buf.len() as u64)) as usize;
         let file = std::sync::Arc::clone(&self.file);
-        let data = bounded(READ_TIMEOUT, move || {
+        let data = bounded_on(&self.link, READ_LIMIT, move || {
             let file = file.lock().unwrap_or_else(PoisonError::into_inner);
             let mut data = vec![0_u8; wanted];
             let mut done = 0;
@@ -655,6 +821,29 @@ impl Drop for SmbFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_watchdog_asks_after_a_second_of_silence_and_gives_up_a_second_later() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut watchdog = Watchdog::new(start, STALL_DETECT, ECHO_WAIT);
+        // Bytes from long before the request do not make it look silent from the start.
+        assert_eq!(watchdog.check(at(500), None), Watch::Wait);
+        assert_eq!(watchdog.check(at(1000), None), Watch::SendEcho);
+        assert_eq!(watchdog.check(at(1500), None), Watch::Wait);
+        // An answer (any byte) after asking: alive, the count starts over from that byte.
+        assert_eq!(watchdog.check(at(1600), Some(at(1550))), Watch::Wait);
+        assert_eq!(watchdog.check(at(2500), Some(at(1550))), Watch::Wait);
+        assert_eq!(watchdog.check(at(2550), Some(at(1550))), Watch::SendEcho);
+        assert_eq!(watchdog.check(at(3500), Some(at(1550))), Watch::Wait);
+        assert_eq!(watchdog.check(at(3550), Some(at(1550))), Watch::Dead);
+        // A link idle before the request began starts counting at the request.
+        let mut fresh = Watchdog::new(at(10_000), STALL_DETECT, ECHO_WAIT);
+        assert_eq!(fresh.check(at(10_500), Some(at(0))), Watch::Wait);
+        assert_eq!(STALL_DETECT, Duration::from_secs(1));
+        assert_eq!(ECHO_WAIT, Duration::from_secs(1));
+    }
 
     #[test]
     fn paths_become_windows_paths_and_cannot_escape() {

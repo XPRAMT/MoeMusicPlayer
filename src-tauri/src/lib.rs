@@ -2244,6 +2244,7 @@ fn playback_audio_error_message(error: &AudioError) -> String {
         AudioError::BackendUnavailable => "音訊輸出裝置目前無法使用。".to_owned(),
         AudioError::NoTrackLoaded => "尚未載入曲目。".to_owned(),
         AudioError::InvalidVolume => "音量設定值無效。".to_owned(),
+        AudioError::RemoteLinkLost(message) => message.clone(),
     }
 }
 

@@ -448,6 +448,9 @@ pub enum AudioError {
     BackendUnavailable,
     NoTrackLoaded,
     InvalidVolume,
+    /// A remote track stopped because its server could not be reached for longer than the stream retries (the
+    /// message starts with `player_core::REMOTE_LINK_LOST`). Playing again reloads the track where it stopped.
+    RemoteLinkLost(String),
 }
 
 impl fmt::Display for AudioError {
@@ -473,6 +476,7 @@ impl fmt::Display for AudioError {
             Self::BackendUnavailable => f.write_str("the audio backend is unavailable"),
             Self::NoTrackLoaded => f.write_str("no track is loaded"),
             Self::InvalidVolume => f.write_str("volume must be a finite value between 0.0 and 1.0"),
+            Self::RemoteLinkLost(message) => f.write_str(message),
         }
     }
 }
@@ -1698,8 +1702,12 @@ fn handle_command(
                 set_error(snapshot, events, error.clone());
                 return Err(error);
             };
-            let state = read_snapshot(snapshot).state;
-            if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) {
+            let current = read_snapshot(snapshot);
+            let state = current.state;
+            // Stopped because the server was gone: the decoder has ended, so load the track again where it stopped.
+            let lost_at = matches!(current.last_error, Some(AudioError::RemoteLinkLost(_)))
+                .then_some(current.position);
+            if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) || lost_at.is_some() {
                 match backend.load(path) {
                     Ok(duration) => update_snapshot(snapshot, events, |state| {
                         state.position = Duration::ZERO;
@@ -1708,6 +1716,15 @@ fn handle_command(
                     Err(error) => {
                         set_error(snapshot, events, error.clone());
                         return Err(error);
+                    }
+                }
+                if let Some(position) = lost_at.filter(|position| !position.is_zero()) {
+                    match backend.seek(position) {
+                        Ok(actual) => update_snapshot(snapshot, events, |state| state.position = actual),
+                        Err(error) => {
+                            set_error(snapshot, events, error.clone());
+                            return Err(error);
+                        }
                     }
                 }
             }
@@ -1763,8 +1780,10 @@ fn handle_command(
                 set_error(snapshot, events, error.clone());
                 return Err(error);
             }
-            let state = read_snapshot(snapshot).state;
-            if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) {
+            let current = read_snapshot(snapshot);
+            let state = current.state;
+            let lost = matches!(current.last_error, Some(AudioError::RemoteLinkLost(_)));
+            if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) || lost {
                 let path = current_path.as_deref().expect("checked above");
                 match backend.load(path) {
                     Ok(duration) => update_snapshot(snapshot, events, |snapshot| {
@@ -1931,7 +1950,25 @@ fn update_position(
         meter.reset_anchor(current.state, backend.position());
         return;
     }
-    if backend.is_empty() {
+    if backend.is_empty() && crate::remote_input::link_lost_pending() {
+        // The remote stream gave up because the server could not be reached: stop here (paused, with the message)
+        // instead of ending the track, so the queue does not run on through tracks that cannot be read either.
+        let message = crate::remote_input::take_link_lost().unwrap_or_default();
+        let position = backend.position();
+        let _ = backend.pause();
+        meter.observe(current.state, position, current.duration, Instant::now());
+        eprintln!("[remote] playback paused at {} ms: {message}", position.as_millis());
+        update_snapshot(snapshot, events, |state| {
+            state.position = state
+                .duration
+                .map_or(position, |duration| position.min(duration));
+            state.state = PlaybackState::Paused;
+            state.last_error = Some(AudioError::RemoteLinkLost(message.clone()));
+        });
+        let _ = events.try_send(AudioEvent::Error(AudioError::RemoteLinkLost(message)));
+        meter.request_flush();
+        meter.reset_anchor(PlaybackState::Paused, position);
+    } else if backend.is_empty() {
         let position = current.duration.unwrap_or_else(|| backend.position());
         meter.observe(current.state, position, current.duration, Instant::now());
         update_snapshot(snapshot, events, |state| {

@@ -25,12 +25,34 @@ pub fn is_remote(path: &Path) -> bool {
         .is_some_and(|text| text.starts_with("moeremote://"))
 }
 
+/// The message of the last read that failed because the server could not be reached (the stream retried and gave
+/// up). A decoder ends its track on any read error; the worker asks this when the track ends, to stop there with the
+/// message instead of moving on (ADR 0026, "link lost").
+static LINK_LOST: Mutex<Option<String>> = Mutex::new(None);
+
+/// Take the "server could not be reached" failure of the playing remote track, if its stream reported one.
+pub(crate) fn take_link_lost() -> Option<String> {
+    LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).take()
+}
+
+/// Whether the playing remote track's stream reported "server could not be reached" (not taken).
+pub(crate) fn link_lost_pending() -> bool {
+    LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+}
+
 /// A shared remote stream as the engine's `Read + Seek + Send`.
 struct Stream(Box<dyn player_core::RemoteStream>);
 
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
+        let result = self.0.read(buf);
+        if let Err(error) = &result {
+            let message = error.to_string();
+            if player_core::is_remote_link_lost(&message) {
+                *LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
+            }
+        }
+        result
     }
 }
 
@@ -58,6 +80,8 @@ pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
     let main = content
         .open_streaming(source_id, &relative)
         .map_err(|error| failed(error.to_string()))?;
+    // A new track starts without the failure of an earlier one.
+    LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).take();
     // A hybrid WavPack file is lossless with its `.wvc` correction file next to it.
     let correction = if relative.to_ascii_lowercase().ends_with(".wv") {
         content

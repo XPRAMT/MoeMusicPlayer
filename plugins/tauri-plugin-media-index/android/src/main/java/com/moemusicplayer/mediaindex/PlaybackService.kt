@@ -627,7 +627,7 @@ class PlaybackService : MediaSessionService() {
             positionMs = current.currentPosition.coerceAtLeast(0L),
             durationMs = current.duration.takeIf { it >= 0L },
             volume = current.volume.toDouble(),
-            error = current.playerError?.message,
+            error = current.playerError?.let { remoteLinkLostMessage(it) ?: it.message },
         )
     }
 

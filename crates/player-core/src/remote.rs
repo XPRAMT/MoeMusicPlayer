@@ -12,6 +12,16 @@ use crate::SourceId;
 pub trait RemoteStream: Read + Seek + Send {}
 impl<T: Read + Seek + Send> RemoteStream for T {}
 
+/// How the message of a read error starts when a remote stream gave up because the server could not be reached for
+/// longer than the retries allow (ADR 0026, "link lost"). The players stop on it instead of moving on to the next track.
+pub const REMOTE_LINK_LOST: &str = "伺服器無法連線";
+
+/// Whether a read error (its message, possibly wrapped by a converter) means the server could not be reached and the
+/// stream gave up.
+pub fn is_remote_link_lost(message: &str) -> bool {
+    message.contains(REMOTE_LINK_LOST)
+}
+
 /// An open remote file.
 pub struct RemoteFileHandle {
     pub reader: Box<dyn RemoteStream>,
