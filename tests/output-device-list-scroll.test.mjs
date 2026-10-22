@@ -17,7 +17,7 @@ test('the output device list scrolls inside at most half the window', () => {
   assert.match(list, /max-height:\s*50dvh;/);
   assert.ok(list.indexOf('50vh') < list.indexOf('50dvh'), 'the dvh value comes last and wins where supported');
   assert.match(list, /overflow-y:\s*auto;/);
-  // At its top or bottom the wheel and touch scroll chain on to the settings page / drawer: no overscroll-behavior.
+  // No overscroll-behavior: touch chains natively; the wheel is handed on by the scroll-chain action.
   assert.doesNotMatch(list, /overscroll-behavior\s*:/);
   assert.match(list, /align-content:\s*start;/);
   assert.match(component, /<div class="output-device-list" role="list"/);
@@ -46,13 +46,35 @@ test('a device name too long for the channel-map matrix scrolls with the play do
   const styles = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
   assert.match(styles, /\.dock-marquee-text\.is-overflowing \{[^}]*animation: dock-marquee-scroll/);
 });
-test('the device list does not swallow wheel or touch scrolling', () => {
+test('the device list hands the wheel on to the page at its ends (scroll-chain action), and only there', () => {
   const markup = component.slice(component.indexOf('<div class="output-device-list"'));
   const list = markup.slice(0, markup.indexOf('>'));
-  assert.doesNotMatch(list, /on(wheel|touchmove|touchstart)/, 'no handlers that could preventDefault or stopPropagation');
+  assert.match(list, /use:scrollChain/);
+  assert.match(component, /import \{ scrollChain \} from '\.\/scroll-chain\.js';/);
+  assert.doesNotMatch(list, /on(wheel|touchmove|touchstart)/, 'no other handlers on the list');
   assert.doesNotMatch(component, /stopPropagation\(\)[^\n]*(wheel|touch)|(wheel|touch)[^\n]*stopPropagation\(\)/);
+  const chain = readFileSync(new URL('../src/lib/scroll-chain.js', import.meta.url), 'utf8');
+  assert.match(chain, /if \(event\.defaultPrevented \|\| event\.ctrlKey\) return;/, 'value wheels and zoom are left alone');
+  assert.match(chain, /Math\.abs\(event\.deltaX\) > Math\.abs\(event\.deltaY\)\) return;/, 'horizontal wheels are left alone');
+  assert.match(chain, /addEventListener\('wheel', onWheel, \{ passive: false \}\)/);
+  assert.doesNotMatch(chain, /touch(start|move)/, 'touch keeps native chaining');
   // The outer containers really scroll, so the chained scroll has somewhere to go.
   const styles = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
   assert.match(styles, /\.page-scroll \{[^}]*overflow: auto;/);
   assert.match(styles, /\.quick-settings-drawer-scroll \{[^}]*overflow: auto;/);
+});
+
+test('a wheel step is split between the list and the outer scroller', async () => {
+  const { splitWheelDelta, wheelDeltaPx, WHEEL_LINE_PX } = await import('../src/lib/scroll-chain.js');
+  const box = (scrollTop) => ({ scrollTop, scrollHeight: 1000, clientHeight: 400 });
+  assert.deepEqual(splitWheelDelta(100, box(200)), { inner: 100, outer: 0 }, 'room left: the list scrolls natively');
+  assert.deepEqual(splitWheelDelta(100, box(560)), { inner: 40, outer: 60 }, 'the rest of the list first, the excess outside');
+  assert.deepEqual(splitWheelDelta(100, box(600)), { inner: 0, outer: 100 }, 'at the bottom all goes outside');
+  assert.deepEqual(splitWheelDelta(-100, box(30)), { inner: -30, outer: -70 });
+  assert.deepEqual(splitWheelDelta(-100, box(0)), { inner: 0, outer: -100 }, 'at the top, upwards');
+  assert.deepEqual(splitWheelDelta(50, { scrollTop: 0, scrollHeight: 300, clientHeight: 300 }), { inner: 0, outer: 50 }, 'a list that fits');
+  assert.equal(wheelDeltaPx(3, 1, 400), 3 * WHEEL_LINE_PX, 'line mode');
+  assert.equal(wheelDeltaPx(1, 2, 400), 400, 'page mode uses the visible height');
+  assert.equal(wheelDeltaPx(57, 0, 400), 57);
+  assert.equal(wheelDeltaPx(Number.NaN, 0, 400), 0);
 });

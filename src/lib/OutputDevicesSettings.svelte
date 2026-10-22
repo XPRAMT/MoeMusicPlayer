@@ -41,6 +41,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { appTooltip } from './app-tooltip.js';
   import { dockMarquee } from './dock-marquee.js';
+  import { scrollChain } from './scroll-chain.js';
   import { getErrorText, invokeCommand } from './ipc';
   import { tr } from './i18n.js';
   import type { DeviceVolumeChanged, PlaybackOutputFormat } from './ipc';
@@ -628,7 +629,7 @@
 
 {#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
 
-<div class="output-device-list" role="list" aria-busy={s.loading}>
+<div class="output-device-list" role="list" aria-busy={s.loading} use:scrollChain>
   {#each rows as row, index (row.key)}
     {@const playing = rowEnabled(rows, index)}
     {@const lastPlaying = isLastPlaying(rows, index)}
