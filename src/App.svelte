@@ -1769,16 +1769,23 @@
     return () => { disposed = true; unlisten?.(); };
   });
 
-  /** Saving tags rewrote the file: rescan the library, then reload the playing track (summary, cover, lyrics). */
-  async function reloadAfterTrackDetailsSaved(): Promise<void> {
-    await syncLibrary();
+  /** Saving tags rewrote one file. The save already read that file's tags back into the library (no library sync,
+   * ADR 0013 2026-10-22), so only that track is refreshed: list and album rows (the revision also re-keys the album
+   * cover caches), the queue and playback snapshot, and, when it is the playing track, its cover and lyrics (the
+   * taskbar lyrics follow the shell's controller). */
+  async function reloadAfterTrackDetailsSaved(savedTrackId: string | null): Promise<void> {
+    libraryListRevision += 1;
+    if (libraryReady) void loadPlaylists(undefined, true);
     try {
+      // Refreshes the playing track's summary (when it is this one), bumps the queue revision and tells the windows.
       await invokeCommand('playback_refresh_current_track', {});
     } catch (error) {
       playbackError = getErrorText(error);
     }
-    artworkController.reload();
-    void lyricsController.reload();
+    if (savedTrackId !== null && playback?.currentTrack?.id === savedTrackId) {
+      artworkController.reload();
+      void lyricsController.reload();
+    }
     void loadPlaybackSnapshot(false);
   }
 
@@ -5085,7 +5092,7 @@
         </div>
       </div>
       {#if trackDetailsTrackId}
-        <TrackDetailsDialog trackId={trackDetailsTrackId} onClose={() => { trackDetailsTrackId = null; }} onSaved={() => void reloadAfterTrackDetailsSaved()} onOpenSpectrogram={(id) => void openSpectrogram(id)} />
+        <TrackDetailsDialog trackId={trackDetailsTrackId} onClose={() => { trackDetailsTrackId = null; }} onSaved={() => void reloadAfterTrackDetailsSaved(trackDetailsTrackId)} onOpenSpectrogram={(id) => void openSpectrogram(id)} />
       {/if}
       {#if androidSpectrogramTrackId}
         <SpectrogramView trackId={androidSpectrogramTrackId} onClose={() => { androidSpectrogramTrackId = null; }} />

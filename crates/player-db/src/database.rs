@@ -4966,6 +4966,23 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// Store one track's freshly read tags (the song details page just wrote the file), the same way a sync stores a
+    /// changed file: the track row and its embedded lyrics. Mappings, fingerprints and the sources' sync state are left
+    /// alone, so the next sync still sees the new modification time and reads the file once more (ADR 0013, 2026-10-22).
+    pub fn refresh_track_metadata(
+        &self,
+        track_id: TrackId,
+        metadata: &TrackMetadata,
+        locator: &MediaLocator,
+    ) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let file_name = player_core::locator_display_file_stem(locator);
+        persist_metadata(&tx, track_id, Some(metadata), file_name.as_deref())?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// The lyrics the sync read from the song's tags: `None` when the tags were never read since this was kept (the caller
     /// opens the file as before), `Some(None)` when they were read and hold no lyrics.
     pub fn track_embedded_lyrics(&self, track_id: TrackId) -> Result<Option<Option<String>>, DatabaseError> {

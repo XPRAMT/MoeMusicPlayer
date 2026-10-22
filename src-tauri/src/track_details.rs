@@ -723,6 +723,7 @@ pub async fn track_details_save(
 ) -> Result<player_tags::TrackDetails, String> {
     let source = track_source(&state, &track_id)?;
     let lyrics_changed = request.lyrics_changed;
+    let app_for_reread = app.clone();
     let details = blocking(move || {
         let replace_cover = match &request.replace_cover_path {
             Some(image) => Some(read_image_source(&app, image)?),
@@ -757,12 +758,83 @@ pub async fn track_details_save(
         }
     })
     .await?;
+    let id = player_core::TrackId::parse(&track_id).map_err(|error| error.to_string())?;
+    // Only this file is read again (no library sync): its tags go into the library the way a sync stores them.
+    reread_saved_track(&app_for_reread, &state, &track_id, id).await?;
     if lyrics_changed {
-        let id = player_core::TrackId::parse(&track_id).map_err(|error| error.to_string())?;
         let database = super::lyrics_database_for_track(&state, id)?;
         crate::lyrics_service::link_embedded_lyrics(database.as_database(), id, super::now_utc_epoch_ms()?)?;
     }
     Ok(details)
+}
+
+/// Read the saved file's tags with the reader the sync uses and store them for the track (the library database, or the
+/// temporary one of a file opened from outside the library). The page then refreshes that one track everywhere.
+async fn reread_saved_track(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    track_id: &str,
+    id: player_core::TrackId,
+) -> Result<(), String> {
+    use player_core::{FileFingerprint, MediaLocator, MediaTrackRecord, SourceId, TrackIdentity};
+    let locator = match track_source(state, track_id)? {
+        TrackSource::File(path) => MediaLocator::FileSystem(path),
+        #[cfg(target_os = "android")]
+        TrackSource::Content(uri) => MediaLocator::ContentUri(uri),
+        TrackSource::Remote { .. } => return Ok(()),
+    };
+    let record = MediaTrackRecord {
+        identity: TrackIdentity {
+            source_id: SourceId::new(),
+            source_item_id: String::new(),
+            locator_key: None,
+        },
+        locator: locator.clone(),
+        fingerprint: FileFingerprint {
+            size_bytes: 0,
+            modified_at_utc_ms: None,
+            created_at_utc_ms: None,
+        },
+        metadata: None,
+    };
+    let reader_app = app.clone();
+    let metadata = blocking(move || read_track_record_metadata(&reader_app, &record)).await?;
+    let database = super::lyrics_database_for_track(state, id)?;
+    database
+        .as_database()
+        .refresh_track_metadata(id, &metadata, &locator)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn read_track_record_metadata(
+    _app: &AppHandle,
+    record: &player_core::MediaTrackRecord,
+) -> Result<player_core::TrackMetadata, String> {
+    use player_core::MetadataReader;
+    // The reader the folder sync parses files with.
+    player_platform_windows::WindowsMediaIndex::new()
+        .read(record)
+        .map_err(|error| error.message)
+}
+
+#[cfg(target_os = "android")]
+fn read_track_record_metadata(
+    app: &AppHandle,
+    record: &player_core::MediaTrackRecord,
+) -> Result<player_core::TrackMetadata, String> {
+    use tauri_plugin_media_index::MediaIndexExt;
+    app.media_index()
+        .read_metadata(record)
+        .map_err(|error| error.message)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+fn read_track_record_metadata(
+    _app: &AppHandle,
+    _record: &player_core::MediaTrackRecord,
+) -> Result<player_core::TrackMetadata, String> {
+    Err("此平台不支援讀取標籤".to_owned())
 }
 
 /// How Save would write the staged cover (size, JPG or PNG, re-encoded or original bytes), for the

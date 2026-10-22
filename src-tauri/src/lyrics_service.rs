@@ -3390,6 +3390,28 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn refreshing_one_track_stores_its_new_tags_and_embedded_lyrics() {
+        let fixture = EmbeddedFixture::new(Some("[00:01.00]舊的內嵌"));
+        let mut metadata = fixture.record.metadata.clone().expect("fixture metadata");
+        metadata.title = Some("改過的曲名".to_owned());
+        metadata.embedded_lyrics = Some("[00:01.00]剛寫入的內嵌".to_owned());
+        fixture
+            .database
+            .refresh_track_metadata(fixture.track_id, &metadata, &fixture.record.locator)
+            .expect("refresh one track");
+        let summary = fixture
+            .database
+            .get_track_summary(fixture.track_id)
+            .expect("read track")
+            .expect("track exists");
+        assert_eq!(summary.title.as_deref(), Some("改過的曲名"));
+        assert_eq!(
+            fixture.database.track_embedded_lyrics(fixture.track_id).expect("embedded lyrics"),
+            Some(Some("[00:01.00]剛寫入的內嵌".to_owned()))
+        );
+    }
+
     #[test]
     fn legacy_cached_lrc_rows_with_shared_timestamps_are_folded_on_read() {
         use player_core::{LyricLine, TrackLyrics};
