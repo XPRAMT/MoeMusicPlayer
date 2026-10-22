@@ -5082,8 +5082,9 @@ mod missing_playlist_entry_tests {
     }
 }
 
-/// Remove a file that no longer exists from a local playlist file (sync summary button, ADR 0033). Same rewrite as the
-/// favorite button's unfavorite, including the `.bak` backup. The caller synchronizes again afterwards.
+/// Remove a file that no longer exists from a playlist file (sync summary button, ADR 0033). Same rewrite as the
+/// favorite button's unfavorite, including the `.bak` backup; a playlist on a server goes through the remote favorite
+/// job after the server confirmed the file is gone. The caller synchronizes again afterwards.
 #[tauri::command]
 async fn sync_remove_missing_playlist_entry(
     app: AppHandle,
@@ -5093,6 +5094,25 @@ async fn sync_remove_missing_playlist_entry(
 ) -> Result<bool, String> {
     let source_id =
         SourceId::parse(&source_id).map_err(|_| "播放清單來源識別碼無效。".to_owned())?;
+    let is_remote = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .sources
+        .iter()
+        .any(|source| {
+            source.id == source_id
+                && matches!(
+                    source.kind,
+                    SourceEntryKind::PlaylistFile {
+                        remote_account: Some(_),
+                        ..
+                    }
+                )
+        });
+    if is_remote {
+        return remove_missing_remote_playlist_entry(&state, source_id, item_key).await;
+    }
     let path = missing_item_path(&item_key).ok_or_else(|| "無法辨識遺失檔案的路徑。".to_owned())?;
     if path.exists() {
         return Err("這個檔案又找得到了，不需要移除；請重新同步。".to_owned());
@@ -5136,6 +5156,66 @@ async fn sync_remove_missing_playlist_entry(
         std::slice::from_ref(&locator),
         false,
     )
+}
+
+/// The remote half of `sync_remove_missing_playlist_entry`: `item_key` is the song's path from the account root, as
+/// the playlist names it. The server is asked first; the line is removed only when it answers that the file is gone.
+async fn remove_missing_remote_playlist_entry(
+    state: &State<'_, AppState>,
+    source_id: SourceId,
+    item_key: String,
+) -> Result<bool, String> {
+    let server_path = item_key.trim_matches('/').to_owned();
+    if server_path.is_empty() {
+        return Err("無法辨識遺失檔案的路徑。".to_owned());
+    }
+    let database_work = enter_database_work(state)?;
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let source = settings
+        .sources
+        .iter()
+        .find(|source| source.id == source_id && source.enabled)
+        .cloned()
+        .ok_or_else(|| "找不到已啟用的播放清單來源。".to_owned())?;
+    let job = remote_favorites::Job {
+        database_path: state.database_path.clone().ok_or_else(|| {
+            state
+                .database_error
+                .clone()
+                .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+        })?,
+        resolver: state
+            .remote_connections
+            .resolver(user_data_directory(state)?, &settings),
+        settings: settings.clone(),
+        source,
+        server_path,
+        title: None,
+        duration_ms: None,
+        selected: false,
+        synced_at_utc_ms: now_utc_epoch_ms()?,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let _database_work = database_work;
+        let resolved = job
+            .resolver
+            .resolve(job.source.id)
+            .map_err(|error| format!("無法連上伺服器，未移除：{error}"))?;
+        match resolved
+            .fs
+            .stat(&player_remote::index::join_path(&resolved.base_path, &job.server_path))
+        {
+            Ok(_) => return Err("這個檔案又找得到了，不需要移除；請重新同步。".to_owned()),
+            Err(player_remote::fs::RemoteError::NotFound) => {}
+            Err(error) => return Err(format!("無法確認伺服器上的檔案，未移除：{error}")),
+        }
+        remote_favorites::run(job).map(|()| true)
+    })
+    .await
+    .map_err(|error| format!("移除工作失敗：{error}"))?
 }
 
 #[tauri::command]

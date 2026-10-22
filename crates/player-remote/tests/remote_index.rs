@@ -151,6 +151,27 @@ fn looking_songs_up_by_path_reports_how_far_it_got_and_ends_complete() {
 }
 
 #[test]
+fn a_song_gone_from_a_reachable_server_is_missing_but_an_unreachable_top_folder_is_offline() {
+    use player_core::MediaSourceErrorKind;
+    let tree = make_tree("missing-vs-offline");
+    let index = index_over(Arc::new(DirFs::new(&tree)), "");
+    let wanted: Vec<String> = ["Other/f32.wv", "Gone/away.wv"].iter().map(|path| (*path).to_owned()).collect();
+    let scan = index.scan_paths(SourceId::new(), &wanted);
+    assert_eq!(scan.tracks.len(), 1);
+    assert_eq!(scan.errors.len(), 1);
+    assert_eq!(scan.errors[0].kind, MediaSourceErrorKind::MissingFile);
+    assert_eq!(scan.state, SourceScanState::Complete, "only missing files: the playlist scan is complete");
+
+    // The whole share is gone (or unplugged): the same not-found answers say nothing about the songs.
+    let _ = fs::remove_dir_all(&tree);
+    let scan = index.scan_paths(SourceId::new(), &wanted);
+    assert!(scan.tracks.is_empty());
+    assert!(!scan.errors.is_empty());
+    assert!(scan.errors.iter().all(|error| error.kind == MediaSourceErrorKind::Other), "{:?}", scan.errors);
+    assert!(matches!(scan.state, SourceScanState::Incomplete { .. }));
+}
+
+#[test]
 fn a_source_rooted_in_a_folder_lists_paths_relative_to_it() {
     let tree = make_tree("base");
     let mut index = index_over(Arc::new(DirFs::new(&tree)), "Artist");

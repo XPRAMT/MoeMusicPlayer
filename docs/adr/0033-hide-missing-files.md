@@ -38,3 +38,15 @@ such tracks hidden everywhere but restorable: if a later sync finds the file aga
 - Moved or renamed folder files leave a hidden mapping behind (the new path is a new track).
 - Files under a newly excluded subfolder become hidden rather than removed.
 - Hidden rows keep growing until the source is removed; there is no purge yet.
+## Amendment (2026-10-23): remote sources
+
+- Remote playlist scans: a song that answers not-found counts as missing only when the account's top folder (the SMB
+  share or the WebDAV root, `list("")`) is reachable; otherwise the error is an ordinary one and nothing changes
+  (offline). A scan whose only errors are missing files is Complete, so those entries are hidden like local ones.
+- Remote folder sources keep their mappings too (`keeps_missing_files` includes `Remote`): files not seen by a
+  Complete scan are hidden and come back when found again. An unreachable server never produces a Complete scan.
+  There is deliberately no guard against hiding many files at once.
+- "Remove from playlist" also works for a playlist on a server: the server is asked first (the file exists: refused;
+  any error other than not-found: refused with that error), then the same remote favorite job as the unfavorite
+  button rewrites the server file (keeping `<name>.bak`) and synchronizes the source. The item key is the song's
+  path from the account root, as the playlist names it.

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use player_core::{
     FileFingerprint, LibraryRoot, LyricSidecar, MediaIndex, MediaLocator, MediaScanProgress,
-    MediaScanProgressUnit, MediaSourceError, MediaTrackRecord, MetadataReader, SourceId,
+    MediaScanProgressUnit, MediaSourceError, MediaSourceErrorKind, MediaTrackRecord, MetadataReader, SourceId,
     SourceScan, SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata,
     TrackMetadataError,
 };
@@ -185,6 +185,12 @@ impl RemoteMediaIndex {
         });
         report(total);
         let results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
+        // "Not found" means the file is gone only while the account's top folder (the SMB share, the WebDAV root) still
+        // answers; a share that is gone also says "not found" (ADR 0033). Asked once, and only when needed.
+        let top_reachable = results
+            .iter()
+            .any(|outcome| matches!(outcome, Some(Err(RemoteError::NotFound))))
+            && resolved.fs.list("").is_ok();
         let mut seen = std::collections::HashSet::new();
         for (path, outcome) in wanted.into_iter().zip(results) {
             if !seen.insert(path.clone()) {
@@ -213,15 +219,24 @@ impl RemoteMediaIndex {
                 }),
                 Some(Ok(_)) => {}
                 Some(Err(error)) => scan.errors.push(MediaSourceError {
-                    kind: Default::default(),
+                    kind: if top_reachable && matches!(error, RemoteError::NotFound) {
+                        MediaSourceErrorKind::MissingFile
+                    } else {
+                        MediaSourceErrorKind::Other
+                    },
                     source_item_id: Some(path.clone()),
                     message: error.to_string(),
                 }),
                 None => {}
             }
         }
-        // A file that could not be reached may only be a bad moment on the link: nothing is removed for it.
-        scan.state = if scan.errors.is_empty() {
+        // A file that could not be reached may only be a bad moment on the link: nothing is removed for it. Files that
+        // are gone from a reachable server do not hold the rest back; they are hidden (ADR 0033).
+        scan.state = if scan
+            .errors
+            .iter()
+            .all(|error| error.kind == MediaSourceErrorKind::MissingFile)
+        {
             SourceScanState::Complete
         } else {
             SourceScanState::Incomplete {

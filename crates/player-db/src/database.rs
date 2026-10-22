@@ -7290,7 +7290,8 @@ fn effective_sort_title(
 const MARK_MAPPING_MISSING_SQL: &str = "UPDATE source_mappings SET missing_since_utc_ms=?3
      WHERE source_id=?1 AND source_item_id=?2 AND missing_since_utc_ms IS NULL";
 
-/// Folder sources keep (and hide) the mappings of files that disappeared instead of deleting them (ADR 0033).
+/// Folder sources, local and remote, keep (and hide) the mappings of files that disappeared instead of deleting them
+/// (ADR 0033).
 /// Playlist sources still drop entries removed from the playlist; their missing files arrive as `MissingFile` errors.
 fn keeps_missing_files(kind: MediaSourceKind) -> bool {
     matches!(
@@ -7300,6 +7301,7 @@ fn keeps_missing_files(kind: MediaSourceKind) -> bool {
             | MediaSourceKind::AndroidFilesystem
             | MediaSourceKind::AndroidMediaStore
             | MediaSourceKind::AndroidSaf
+            | MediaSourceKind::Remote
     )
 }
 
@@ -13440,17 +13442,24 @@ mod tests {
     }
 
     #[test]
-    fn remote_folders_still_remove_files_that_disappear() {
+    fn remote_folders_hide_files_that_disappear_and_show_them_again() {
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::Remote, "server");
         let kept = record(&root, "kept", "kept-key", "kept", 10, 1_800_000_000_001);
         let gone = record(&root, "gone", "gone-key", "gone", 11, 1_800_000_000_002);
         apply(&mut db, &root, SourceScanState::Complete, &[kept.clone(), gone.clone()], &[kept.clone(), gone.clone()], 1);
+        // An unreachable server changes nothing.
+        let offline = SourceScanState::Unavailable { reason: "offline".to_owned() };
+        db.apply_source_scan(&root, &offline, &[], &[], &[], 2).expect("offline");
+        assert_eq!(mapping_missing_since(&db, &root, "gone"), Some(None));
         let stats = db
-            .apply_source_scan(&root, &SourceScanState::Complete, std::slice::from_ref(&kept), &[], &[], 2)
+            .apply_source_scan(&root, &SourceScanState::Complete, std::slice::from_ref(&kept), &[], &[], 3)
             .expect("file deleted on the server");
-        assert_eq!(stats.removed_source_mappings, 1);
-        assert_eq!(mapping_missing_since(&db, &root, "gone"), None);
+        assert_eq!(stats.removed_source_mappings, 0);
+        assert_eq!(stats.hidden_missing_mappings, 1);
+        assert_eq!(mapping_missing_since(&db, &root, "gone"), Some(Some(3)));
+        apply(&mut db, &root, SourceScanState::Complete, &[kept.clone(), gone.clone()], &[kept, gone], 4);
+        assert_eq!(mapping_missing_since(&db, &root, "gone"), Some(None));
     }
 
     #[test]
