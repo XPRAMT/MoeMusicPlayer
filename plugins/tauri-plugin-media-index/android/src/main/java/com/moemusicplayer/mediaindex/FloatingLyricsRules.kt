@@ -32,8 +32,11 @@ object FloatingLyricsRules {
         return x.coerceIn(0, maxX)
     }
 
-    /** The continuous strip always anchors by the right edge (`LYRICS_STRIP_ALIGN`), whatever the alignment setting. */
-    const val STRIP_ALIGN = "right"
+    /** The continuous strip anchors a line by its LEFT edge (`LYRICS_STRIP_ALIGN`) ... */
+    const val STRIP_ALIGN = "left"
+
+    /** ... on the lyric area's horizontal CENTRE (`LYRICS_STRIP_TARGET`), whatever the alignment setting and panel width. */
+    const val STRIP_TARGET = "center"
 
     /**
      * Continuous animation (ADR 0032, port of lyrics-strip.js): cells of the strip, each as wide as the wider of its
@@ -93,10 +96,11 @@ object FloatingLyricsRules {
         align: String,
         lyricsMs: Long,
         viewWidth: Float,
+        targetAlign: String = align,
     ): Float {
         val count = minOf(startTimesMs.size, cellStarts.size)
         if (count == 0) return 0f
-        val target = when (align) {
+        val target = when (targetAlign) {
             "right" -> viewWidth
             "center" -> viewWidth / 2f
             else -> 0f

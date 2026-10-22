@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   LYRICS_STRIP_ALIGN,
+  LYRICS_STRIP_TARGET,
   LYRICS_STRIP_SEPARATOR,
   buildLyricsStripLines,
   layoutLyricsStrip,
@@ -19,7 +20,8 @@ test('the animation setting falls back to none', () => {
   assert.equal(normalizeLyricsAnimation(undefined), 'none');
   assert.equal(LYRICS_STRIP_SEPARATOR, '\u3000');
   // Continuous always anchors right, whatever the text alignment setting.
-  assert.equal(LYRICS_STRIP_ALIGN, 'right');
+  assert.equal(LYRICS_STRIP_ALIGN, 'left');
+  assert.equal(LYRICS_STRIP_TARGET, 'center');
 });
 
 test('strip lines skip empty lines and drop translations when hidden', () => {
@@ -76,13 +78,13 @@ test('the next break is the next line start', () => {
   assert.equal(nextLyricsStripBreak([1000], 0), 1000);
 });
 
-test('the views anchor the continuous strip on the right whatever the alignment setting', async () => {
+test('the views anchor the continuous strip on the lyric area centre whatever the alignment setting', async () => {
   const { readFileSync } = await import('node:fs');
   const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
-  assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,/g)?.length, 2);
+  assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,[^)]*LYRICS_STRIP_TARGET\)/g)?.length, 2);
   assert.doesNotMatch(view, /lyricsStripOffset\([^)]*settings\.align/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
-  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN, lyricsMs/);
+  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN, lyricsMs, [\s\S]{0,40}FloatingLyricsRules\.STRIP_TARGET\)/);
 });
 
 test('the strip holds only the lines near the lyric area, never the whole song', () => {
@@ -99,4 +101,19 @@ test('the view draws the strip window at layout offsets, measured off-screen', a
   assert.match(source, /#each stripCells as cell/);
   assert.doesNotMatch(source, /#each stripLines as/);
   assert.match(source, /measureText/);
+});
+
+test('a line starts with its left edge on the lyric area centre and slides left to the next line', () => {
+  // Cells 100 wide, 20 apart; the lyric area is 300 wide (any panel width), so the centre is 150.
+  const layout = layoutLyricsStrip([100, 100, 100], [], 20);
+  const starts = [1000, 3000, 5000];
+  const at = (ms, view = 300) => lyricsStripOffset(starts, layout, LYRICS_STRIP_ALIGN, ms, view, LYRICS_STRIP_TARGET);
+  assert.equal(at(1000), 150);
+  assert.equal(at(3000), 150 - 120);
+  assert.equal(at(2000), 150 - 60);
+  assert.equal(at(5000), 150 - 240);
+  // Independent of the panel width: only the centre moves.
+  assert.equal(at(3000, 500), 250 - 120);
+  // The left edge of the line at its start is exactly the centre.
+  assert.equal(layout.starts[1] + at(3000), 150);
 });

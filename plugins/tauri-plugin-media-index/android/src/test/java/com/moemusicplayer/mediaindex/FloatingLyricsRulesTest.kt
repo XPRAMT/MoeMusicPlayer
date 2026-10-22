@@ -33,7 +33,8 @@ class FloatingLyricsRulesTest {
         assertEquals(300f, at("right", 1_000), 0.001f)
         assertEquals(0f, at("left", 0), 0.001f)
         assertEquals(-240f, at("left", 9_000), 0.001f)
-        assertEquals("right", FloatingLyricsRules.STRIP_ALIGN)
+        assertEquals("left", FloatingLyricsRules.STRIP_ALIGN)
+        assertEquals("center", FloatingLyricsRules.STRIP_TARGET)
         assertEquals(0f, FloatingLyricsRules.stripOffset(longArrayOf(), even, evenWidths, "left", 0, 400f), 0.001f)
     }
 
@@ -118,6 +119,20 @@ class FloatingLyricsRulesTest {
         assertEquals(0.5f, FloatingLyricsRules.scrollProgress(450, 1_000), 0.0001f)
         assertEquals(1f, FloatingLyricsRules.scrollProgress(950, 1_000), 0.0001f)
         assertEquals(0f, FloatingLyricsRules.scrollProgress(-5, 1_000), 0.0001f)
+    }
+
+    @Test
+    fun lineStartsWithItsLeftEdgeOnTheLyricAreaCentre() {
+        val (cells, widths) = FloatingLyricsRules.stripLayout(floatArrayOf(100f, 100f, 100f), floatArrayOf(), 20f)
+        val times = longArrayOf(1_000, 3_000, 5_000)
+        val at = { ms: Long, view: Float -> FloatingLyricsRules.stripOffset(times, cells, widths, FloatingLyricsRules.STRIP_ALIGN, ms, view, FloatingLyricsRules.STRIP_TARGET) }
+        assertEquals(150f, at(1_000, 300f), 0.001f)
+        assertEquals(30f, at(3_000, 300f), 0.001f)
+        assertEquals(90f, at(2_000, 300f), 0.001f)
+        assertEquals(-90f, at(5_000, 300f), 0.001f)
+        // The panel width only moves the centre.
+        assertEquals(130f, at(3_000, 500f), 0.001f)
+        assertEquals(150f, cells[1] + at(3_000, 300f), 0.001f)
     }
 
     @Test

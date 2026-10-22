@@ -5,8 +5,10 @@
 /** The separator between lines (one em wide). */
 export const LYRICS_STRIP_SEPARATOR = '\u3000';
 export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
-/** The continuous strip always anchors the current line by its right edge, whatever the text alignment setting. */
-export const LYRICS_STRIP_ALIGN = 'right';
+/** The continuous strip anchors a line by its LEFT edge ... */
+export const LYRICS_STRIP_ALIGN = 'left';
+/** ... on the lyric area's horizontal CENTRE, whatever the text alignment setting and the panel width. */
+export const LYRICS_STRIP_TARGET = 'center';
 
 /** @param {unknown} value @returns {'none' | 'continuous'} */
 export function normalizeLyricsAnimation(value) {
@@ -66,11 +68,12 @@ export function lyricsStripAnchor(layout, index, align) {
  * @param {'left'|'center'|'right'} align
  * @param {number} positionMs lyrics time (playback position plus the display offset)
  * @param {number} viewWidthPx
+ * @param {'left'|'center'|'right'} [targetAlign] the point of the window the anchor sits on (default: the same as `align`)
  */
-export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewWidthPx) {
+export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign = align) {
   const count = Math.min(startTimesMs.length, layout.starts.length);
   if (count === 0) return 0;
-  const target = align === 'right' ? viewWidthPx : align === 'center' ? viewWidthPx / 2 : 0;
+  const target = targetAlign === 'right' ? viewWidthPx : targetAlign === 'center' ? viewWidthPx / 2 : 0;
   let index = -1;
   for (let i = 0; i < count && startTimesMs[i] <= positionMs; i += 1) index = i;
   let anchor;

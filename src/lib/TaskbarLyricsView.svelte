@@ -28,6 +28,7 @@
   import type { TaskbarLyricsData } from './taskbar-lyrics-data.js';
   import {
     LYRICS_STRIP_ALIGN,
+    LYRICS_STRIP_TARGET,
     buildLyricsStripLines,
     layoutLyricsStrip,
     lyricsStripOffset,
@@ -160,11 +161,11 @@
   let stripLayout = $derived(layoutLyricsStrip(stripMainWidths, stripTranslationWidths, fontPx));
   let stripRun = $derived.by(() => {
     const at = positionMs + timingOffsetMs;
-    const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth);
+    const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth, LYRICS_STRIP_TARGET);
     const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at) : null;
     const wait = next === null ? null : msUntilPlaybackPosition(clock, performance.now(), next - timingOffsetMs);
     if (next === null || wait === null || wait <= 0) return { from, to: from, ms: null as number | null };
-    return { from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth), ms: wait };
+    return { from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth, LYRICS_STRIP_TARGET), ms: wait };
   });
   let stripName = $state('taskbar-lyrics-strip-a');
   $effect(() => {
@@ -425,12 +426,12 @@
     width: 100%;
   }
 
-  /* The strip is always right-anchored (LYRICS_STRIP_ALIGN); the text alignment setting does not apply to it. */
+  /* A line's left edge sits on the lyric area's centre (LYRICS_STRIP_ALIGN / _TARGET); the text alignment setting does not apply. */
   /* Only a window of lines is drawn (lyricsStripWindow); each cell is placed at its layout offset, one U+3000 apart. */
   .taskbar-lyrics-strip {
     display: block;
     position: relative;
-    text-align: right;
+    text-align: left;
     width: 0;
     white-space: nowrap;
     will-change: transform;
@@ -439,7 +440,7 @@
   .taskbar-lyrics-strip-cell {
     position: absolute;
     top: 0;
-    text-align: right;
+    text-align: left;
   }
 
   .taskbar-lyrics-translation {
