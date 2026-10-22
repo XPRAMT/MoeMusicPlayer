@@ -358,7 +358,7 @@
   .album-detail-artists,
   .album-detail-stats,
   .album-detail-stats > span { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:8px; }
-  .album-detail-stats { gap:18px; }
+  .album-detail-stats { column-gap:15px; row-gap:10px; }
   .album-detail-summary .album-detail-label { color:var(--muted); font-size:var(--font-caption); }
   .album-detail-summary .album-detail-value { color:var(--text-soft); font-size:var(--font-body); }
   .album-detail-summary .album-detail-error,
