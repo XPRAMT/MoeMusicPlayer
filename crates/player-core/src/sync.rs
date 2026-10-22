@@ -27,6 +27,8 @@ pub struct TrackSyncState {
 pub struct SyncApplyStats {
     pub inserted_or_updated: u64,
     pub removed_source_mappings: u64,
+    /// Mappings newly hidden because their file is gone (ADR 0033).
+    pub hidden_missing_mappings: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -405,6 +407,7 @@ impl SyncEngine {
             }
             if track.identity.source_id != root.id {
                 report.source_errors.push(MediaSourceError {
+                    kind: Default::default(),
                     source_item_id: Some(track.identity.source_item_id.clone()),
                     message: "track identity does not match configured library root".to_owned(),
                 });
@@ -417,6 +420,7 @@ impl SyncEngine {
             }
             if !seen_item_ids.insert(track.identity.source_item_id.clone()) {
                 report.source_errors.push(MediaSourceError {
+                    kind: Default::default(),
                     source_item_id: Some(track.identity.source_item_id.clone()),
                     message: "adapter returned the same source item more than once".to_owned(),
                 });
@@ -652,6 +656,7 @@ impl SyncEngine {
                 .metadata_errors
                 .iter()
                 .map(|(item, error)| MediaSourceError {
+                    kind: Default::default(),
                     source_item_id: Some(item.clone()),
                     message: error.message.clone(),
                 }),
@@ -1199,6 +1204,7 @@ mod tests {
             Ok(SyncApplyStats {
                 inserted_or_updated: changed.len() as u64,
                 removed_source_mappings: 0,
+                hidden_missing_mappings: 0,
             })
         }
 

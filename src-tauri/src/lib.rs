@@ -2731,6 +2731,7 @@ mod playback_queue_ipc_tests {
             ..SyncReport::default()
         };
         report.source_errors.push(MediaSourceError {
+            kind: Default::default(),
             source_item_id: None,
             message: "無法列舉來源資料夾".to_owned(),
         });
@@ -2771,10 +2772,12 @@ mod playback_queue_ipc_tests {
             ..SyncReport::default()
         };
         report.source_errors.push(MediaSourceError {
+            kind: Default::default(),
             source_item_id: Some("content://provider/document/track".to_owned()),
             message: "URI source error".to_owned(),
         });
         report.source_errors.push(MediaSourceError {
+            kind: Default::default(),
             source_item_id: Some("windows-u16-v1:d800".to_owned()),
             message: "invalid UTF-16 key".to_owned(),
         });
@@ -2811,6 +2814,7 @@ mod playback_queue_ipc_tests {
         };
         for index in 0..101 {
             report.source_errors.push(MediaSourceError {
+                kind: Default::default(),
                 source_item_id: Some(format!("item-{index}")),
                 message: "source item error".to_owned(),
             });

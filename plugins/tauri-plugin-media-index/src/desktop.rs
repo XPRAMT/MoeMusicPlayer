@@ -28,6 +28,7 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             },
             tracks: Vec::new(),
             errors: vec![MediaSourceError {
+                kind: Default::default(),
                 source_item_id: None,
                 message: "Android MediaStore and SAF adapters are available only on Android".into(),
             }],

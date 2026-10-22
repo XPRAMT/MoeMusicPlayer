@@ -240,10 +240,104 @@ impl SourceScanState {
     }
 }
 
+/// What a per-item scan error means for the library (ADR 0033).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MediaSourceErrorKind {
+    #[default]
+    Other,
+    /// The item's file does not exist while the volume or share that holds it is reachable: the file was deleted,
+    /// moved or renamed. Its mapping is kept but hidden until a later sync finds the file again. A file on a drive or
+    /// share that cannot be reached is `Other` (offline), and stays as it was.
+    MissingFile,
+}
+
+impl MediaSourceErrorKind {
+    /// Classify a file that could not be opened: `MissingFile` only when the error is "not found" and the volume or
+    /// share that should hold it can be reached; an unplugged drive or an offline share is `Other`.
+    pub fn for_unopenable_file(path: &std::path::Path, error: &std::io::Error) -> Self {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Self::Other;
+        }
+        match volume_root(path) {
+            Some(root) if std::fs::metadata(&root).is_ok_and(|metadata| metadata.is_dir()) => Self::MissingFile,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// The volume or share a path lives on: `C:\`, `\\server\share\` (verbatim forms included) on Windows; on Android the
+/// storage volume (`/storage/emulated/0`, `/storage/XXXX-XXXX`, `/mnt/media_rw/XXXX-XXXX`), otherwise `/`.
+/// `None` for a relative path.
+pub fn volume_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut components = path.components();
+    let mut root = std::path::PathBuf::new();
+    if let Some(Component::Prefix(prefix)) = path.components().next() {
+        root.push(prefix.as_os_str());
+        root.push(std::path::MAIN_SEPARATOR_STR);
+        return Some(root);
+    }
+    let names = components
+        .by_ref()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let take = match (
+        names.first().and_then(|name| name.to_str()),
+        names.get(1).and_then(|name| name.to_str()),
+    ) {
+        (Some("storage"), Some("emulated")) => 3,
+        (Some("storage"), _) => 2,
+        (Some("mnt"), Some("media_rw")) => 3,
+        _ => 0,
+    };
+    root.push("/");
+    for name in names.iter().take(take) {
+        root.push(name);
+    }
+    Some(root)
+}
+
+#[cfg(test)]
+mod volume_root_tests {
+    use std::path::{Path, PathBuf};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_use_the_drive_or_share() {
+        assert_eq!(super::volume_root(Path::new(r"D:\Music\a.flac")), Some(PathBuf::from(r"D:\")));
+        assert_eq!(
+            super::volume_root(Path::new(r"\\nas\music\a\b.flac")),
+            Some(PathBuf::from(r"\\nas\music\"))
+        );
+        assert_eq!(super::volume_root(Path::new(r"Music\a.flac")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn android_paths_use_the_storage_volume() {
+        assert_eq!(
+            super::volume_root(Path::new("/storage/emulated/0/Music/a.flac")),
+            Some(PathBuf::from("/storage/emulated/0"))
+        );
+        assert_eq!(
+            super::volume_root(Path::new("/storage/1234-ABCD/Music/a.flac")),
+            Some(PathBuf::from("/storage/1234-ABCD"))
+        );
+        assert_eq!(super::volume_root(Path::new("/data/a.flac")), Some(PathBuf::from("/")));
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MediaSourceError {
     pub source_item_id: Option<String>,
     pub message: String,
+    pub kind: MediaSourceErrorKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

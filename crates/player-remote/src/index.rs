@@ -213,6 +213,7 @@ impl RemoteMediaIndex {
                 }),
                 Some(Ok(_)) => {}
                 Some(Err(error)) => scan.errors.push(MediaSourceError {
+                    kind: Default::default(),
                     source_item_id: Some(path.clone()),
                     message: error.to_string(),
                 }),
@@ -588,6 +589,7 @@ fn list_worker(
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(MediaSourceError {
+                        kind: Default::default(),
                         source_item_id: Some(directory.clone()),
                         message: error.to_string(),
                     });

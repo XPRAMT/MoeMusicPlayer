@@ -19,11 +19,11 @@ pub use library::{
     read_lyric_sidecar, LyricSidecar, LyricSidecarRead, LyricSidecarState, LyricSidecarWrite,
     display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
     recording_date_year, remote_locator_uri, FileFingerprint, LibraryRoot, ListTracksQuery,
-    MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit, MediaSourceError,
+    MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit, MediaSourceError, MediaSourceErrorKind,
     MediaSourceKind, MediaTrackRecord, MetadataReader, Page, SourceId, SourceScan, SourceScanState,
     SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
     TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
-    UserMetadataField, TRACK_METADATA_VERSION,
+    UserMetadataField, TRACK_METADATA_VERSION, volume_root,
 };
 pub use lyrics::{
     auto_lyric_candidate, merge_lrc_auxiliary, merge_same_timestamp_lines, parse_lrc, parse_yrc, preserve_qrc, rank_lyric_candidates,

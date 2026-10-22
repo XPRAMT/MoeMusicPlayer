@@ -174,6 +174,7 @@ pub fn scan_directory(
             Err(error) => {
                 complete = false;
                 scan.errors.push(MediaSourceError {
+                    kind: Default::default(),
                     source_item_id: Some(unix_path_key(&directory)),
                     message: format!("could not enumerate a subdirectory: {error}"),
                 });
@@ -196,6 +197,7 @@ pub fn scan_directory(
                 Err(error) => {
                     complete = false;
                     scan.errors.push(MediaSourceError {
+                        kind: Default::default(),
                         source_item_id: Some(unix_path_key(&directory)),
                         message: format!("could not read a directory entry: {error}"),
                     });
@@ -244,6 +246,7 @@ pub fn scan_directory(
                 Err(error) => {
                     complete = false;
                     scan.errors.push(MediaSourceError {
+                        kind: Default::default(),
                         source_item_id: Some(unix_path_key(&path)),
                         message: format!("could not inspect audio file: {error}"),
                     });
@@ -307,6 +310,7 @@ pub fn scan_paths_with_progress(
             Ok(path) => path,
             Err(error) => {
                 scan.errors.push(MediaSourceError {
+                    kind: player_core::MediaSourceErrorKind::for_unopenable_file(path, &error),
                     source_item_id: Some(item_id),
                     message: format!("playlist media file is unavailable: {error}"),
                 });
@@ -319,6 +323,7 @@ pub fn scan_paths_with_progress(
             }
             Ok(_) => {}
             Err(error) => scan.errors.push(MediaSourceError {
+                kind: player_core::MediaSourceErrorKind::for_unopenable_file(path, &error),
                 source_item_id: Some(item_id),
                 message: format!("could not inspect playlist media file: {error}"),
             }),

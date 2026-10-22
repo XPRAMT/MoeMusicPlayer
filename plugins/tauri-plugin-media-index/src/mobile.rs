@@ -679,6 +679,7 @@ fn unavailable_scan(root: &LibraryRoot, reason: &str) -> SourceScan {
         },
         tracks: Vec::new(),
         errors: vec![MediaSourceError {
+            kind: Default::default(),
             source_item_id: None,
             message: reason.to_owned(),
         }],

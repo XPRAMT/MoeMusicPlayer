@@ -107,6 +107,7 @@ impl WindowsMediaIndex {
                 Ok(path) => path,
                 Err(error) => {
                     scan.errors.push(MediaSourceError {
+                        kind: player_core::MediaSourceErrorKind::for_unopenable_file(path, &error),
                         source_item_id: Some(item_id),
                         message: format!("playlist media file is unavailable: {error}"),
                     });
@@ -121,6 +122,7 @@ impl WindowsMediaIndex {
                 Ok(_) => continue,
                 Err(error) => {
                     scan.errors.push(MediaSourceError {
+                        kind: player_core::MediaSourceErrorKind::for_unopenable_file(path, &error),
                         source_item_id: Some(item_id),
                         message: format!("could not inspect playlist media file: {error}"),
                     });
@@ -135,6 +137,7 @@ impl WindowsMediaIndex {
                     Some(value) => Some(value),
                     None => {
                         scan.errors.push(MediaSourceError {
+                            kind: Default::default(),
                             source_item_id: Some(item_id.clone()),
                             message: "playlist media modification time is outside the supported UTC epoch range".to_owned(),
                         });
@@ -143,6 +146,7 @@ impl WindowsMediaIndex {
                 },
                 Err(error) => {
                     scan.errors.push(MediaSourceError {
+                        kind: Default::default(),
                         source_item_id: Some(item_id.clone()),
                         message: format!(
                             "could not read playlist media modification time: {error}"
@@ -329,6 +333,7 @@ impl MediaIndex for WindowsMediaIndex {
                     reason: "filesystem scan cancelled before traversal completed".to_owned(),
                 };
                 scan.errors.push(MediaSourceError {
+                    kind: Default::default(),
                     source_item_id: None,
                     message: "filesystem scan cancelled".to_owned(),
                 });
@@ -351,6 +356,7 @@ impl MediaIndex for WindowsMediaIndex {
                 Err(error) => {
                     complete = false;
                     scan.errors.push(MediaSourceError {
+                        kind: Default::default(),
                         source_item_id: Some(windows_locator_key(&directory)),
                         message: format!("could not enumerate a subdirectory: {error}"),
                     });
@@ -370,6 +376,7 @@ impl MediaIndex for WindowsMediaIndex {
                         reason: "filesystem scan cancelled before traversal completed".to_owned(),
                     };
                     scan.errors.push(MediaSourceError {
+                        kind: Default::default(),
                         source_item_id: None,
                         message: "filesystem scan cancelled".to_owned(),
                     });
@@ -381,6 +388,7 @@ impl MediaIndex for WindowsMediaIndex {
                     Err(error) => {
                         complete = false;
                         scan.errors.push(MediaSourceError {
+                            kind: Default::default(),
                             source_item_id: Some(windows_locator_key(&directory)),
                             message: format!("could not read a directory entry: {error}"),
                         });
@@ -394,6 +402,7 @@ impl MediaIndex for WindowsMediaIndex {
                     Err(error) => {
                         complete = false;
                         scan.errors.push(MediaSourceError {
+                            kind: Default::default(),
                             source_item_id: Some(windows_locator_key(&entry_path)),
                             message: format!("could not inspect a filesystem entry: {error}"),
                         });
@@ -439,6 +448,7 @@ impl MediaIndex for WindowsMediaIndex {
                     Err(error) => {
                         complete = false;
                         scan.errors.push(MediaSourceError {
+                            kind: Default::default(),
                             source_item_id: Some(windows_locator_key(&entry_path)),
                             message: format!("could not inspect audio file: {error}"),
                         });
@@ -451,6 +461,7 @@ impl MediaIndex for WindowsMediaIndex {
                         None => {
                             complete = false;
                             scan.errors.push(MediaSourceError {
+                                kind: Default::default(),
                                 source_item_id: Some(windows_locator_key(&entry_path)),
                                 message: "file modification time is outside the supported UTC epoch range".to_owned(),
                             });
@@ -460,6 +471,7 @@ impl MediaIndex for WindowsMediaIndex {
                     Err(error) => {
                         complete = false;
                         scan.errors.push(MediaSourceError {
+                            kind: Default::default(),
                             source_item_id: Some(windows_locator_key(&entry_path)),
                             message: format!("could not read file modification time: {error}"),
                         });
@@ -997,7 +1009,9 @@ mod tests {
         let after_delete = player_core::SyncEngine::sync(&root, &mut index, &mut db, 3)
             .expect("complete scan after delete");
         assert_eq!(after_delete.state, Some(SourceScanState::Complete));
-        assert_eq!(after_delete.applied.removed_source_mappings, 1);
+        // Folder files that vanish are hidden, not removed.
+        assert_eq!(after_delete.applied.removed_source_mappings, 0);
+        assert_eq!(after_delete.applied.hidden_missing_mappings, 1);
         assert_eq!(after_delete.metadata_reads, 1);
         assert!(after_delete.metadata_errors.is_empty());
         let remaining = db
