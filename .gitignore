@@ -37,3 +37,5 @@ Thumbs.db
 
 # Gradle caches of the Android plugin build
 /plugins/*/android/.gradle/
+# Tauri ACL manifest regenerated per build platform
+/src-tauri/gen/schemas/acl-manifests.json
