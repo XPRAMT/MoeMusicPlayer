@@ -8989,6 +8989,8 @@ fn unavailable_source_summary(root: &LibraryRoot, reason: impl Into<String>) -> 
         errors: vec![SourceSyncError {
             item: None,
             message: reason.into(),
+            missing_file: false,
+            item_key: None,
         }],
         errors_truncated: false,
     }
