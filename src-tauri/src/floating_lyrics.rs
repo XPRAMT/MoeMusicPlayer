@@ -27,13 +27,8 @@ pub const SETTINGS_EVENT: &str = "floating-lyrics-settings";
 pub const HOVER_EVENT: &str = "floating-lyrics-hover";
 
 /// Keep in step with `FLOATING_LYRICS_LAYOUT` in `src/lib/floating-lyrics-settings.js`.
-pub const PADDING_CSS_PX: f64 = 8.0;
-/// Room for the lock button (32 px plus its inset above and below) when the text is smaller.
-pub const MIN_HEIGHT_CSS_PX: f64 = 44.0;
 /// Height of one drawn line in em: the text's own height (1.25 em) with a 10% buffer.
 pub const LINE_HEIGHT: f64 = 1.375;
-pub const BUTTON_CSS_PX: f64 = 32.0;
-pub const BUTTON_INSET_CSS_PX: f64 = 6.0;
 
 const POLL_STEP: Duration = Duration::from_millis(100);
 /// Every this many polls the window is checked against the monitors again (unplugged monitor, resolution change).
@@ -78,7 +73,22 @@ impl Rect {
     }
 }
 
-/// Window height in CSS px: the main line plus the translation line when one is drawn, with padding.
+/// The lock button (and the transparent gutter right of the lyric area that holds it) in CSS px: as tall as the main
+/// line, so it scales with the font and never props the window open.
+pub fn lock_css(settings: &FloatingLyricsSettings) -> f64 {
+    (f64::from(settings.font_size_px) * LINE_HEIGHT).ceil().max(1.0)
+}
+
+/// Lyric area width in CSS px: the chosen width, narrowed so area plus lock gutter fit a monitor `monitor_css` wide.
+pub fn lyric_width_css(settings: &FloatingLyricsSettings, monitor_css: Option<f64>) -> f64 {
+    let chosen = f64::from(settings.width_px);
+    match monitor_css {
+        Some(width) if width > 0.0 => chosen.min((width - lock_css(settings)).max(1.0)),
+        _ => chosen,
+    }
+}
+
+/// Window height in CSS px: the main line plus the translation line when one is drawn (text height x 1.1, no padding).
 pub fn window_height_css(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 {
     let font = f64::from(settings.font_size_px);
     let translation = if settings.show_translation && has_translation {
@@ -86,24 +96,27 @@ pub fn window_height_css(settings: &FloatingLyricsSettings, has_translation: boo
     } else {
         0.0
     };
-    ((font + translation) * LINE_HEIGHT)
-        .ceil()
-        .max(0.0)
-        .max(MIN_HEIGHT_CSS_PX - 2.0 * PADDING_CSS_PX)
-        + 2.0 * PADDING_CSS_PX
+    ((font + translation) * LINE_HEIGHT).ceil().max(1.0)
 }
 
-/// The lock/unlock button in physical pixels: square, inset from the right edge, vertically centred (the page draws
-/// it at the same place).
-pub fn unlock_button_rect(window: Rect, scale: f64) -> Rect {
-    let scale = if scale.is_finite() && scale > 0.0 {
+fn valid_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
         scale
     } else {
         1.0
-    };
-    let size = (BUTTON_CSS_PX * scale).round() as i32;
-    let inset = (BUTTON_INSET_CSS_PX * scale).round() as i32;
-    let right = window.right - inset;
+    }
+}
+
+/// The lock gutter in physical px.
+pub fn gutter_px(settings: &FloatingLyricsSettings, scale: f64) -> i32 {
+    (lock_css(settings) * valid_scale(scale)).round() as i32
+}
+
+/// The lock/unlock button in physical pixels: `lock_css` square at the right edge, vertically centred (the page draws
+/// it at the same place).
+pub fn unlock_button_rect(window: Rect, scale: f64, lock_css: f64) -> Rect {
+    let size = (lock_css * valid_scale(scale)).round() as i32;
+    let right = window.right;
     let top = window.top + (window.height() - size) / 2;
     Rect {
         left: right - size,
@@ -118,6 +131,7 @@ pub fn unlock_button_rect(window: Rect, scale: f64) -> Rect {
 pub fn place_on_monitors(
     position: Option<FloatingLyricsPosition>,
     size: (i32, i32),
+    gutter: i32,
     work_areas: &[Rect],
 ) -> FloatingLyricsPosition {
     let (width, height) = size;
@@ -144,23 +158,25 @@ pub fn place_on_monitors(
             return clamp_into(best, saved.x, saved.y);
         }
     }
-    let centre = centre_on(primary, size);
+    let centre = centre_on(primary, size, gutter);
     clamp_into(primary, centre.x, centre.y)
 }
 
-/// The position that puts a window of `size` at the exact centre of `bounds`.
-pub fn centre_on(bounds: Rect, size: (i32, i32)) -> FloatingLyricsPosition {
+/// The position that puts the lyric area of a window of `size` (the window less its `gutter` px lock gutter on the
+/// right) at the exact centre of `bounds`.
+pub fn centre_on(bounds: Rect, size: (i32, i32), gutter: i32) -> FloatingLyricsPosition {
+    let lyric = (size.0 - gutter.max(0)).max(0);
     FloatingLyricsPosition {
-        x: bounds.left + (bounds.width() - size.0) / 2,
+        x: bounds.left + (bounds.width() - lyric) / 2,
         y: bounds.top + (bounds.height() - size.1) / 2,
     }
 }
 
 /// 「水平置中」 / 「垂直置中」: centre the window on one axis of the monitor that holds its centre point (the first
 /// monitor when none does), keeping the other coordinate.
-pub fn centre_axis(window: Rect, monitors: &[Rect], horizontal: bool) -> FloatingLyricsPosition {
+pub fn centre_axis(window: Rect, monitors: &[Rect], horizontal: bool, gutter: i32) -> FloatingLyricsPosition {
     let (cx, cy) = (
-        window.left + window.width() / 2,
+        window.left + (window.width() - gutter.max(0)) / 2,
         window.top + window.height() / 2,
     );
     let holds = |area: &&Rect| cx >= area.left && cx < area.right && cy >= area.top && cy < area.bottom;
@@ -170,7 +186,7 @@ pub fn centre_axis(window: Rect, monitors: &[Rect], horizontal: bool) -> Floatin
             y: window.top,
         };
     };
-    let centre = centre_on(*monitor, (window.width(), window.height()));
+    let centre = centre_on(*monitor, (window.width(), window.height()), gutter);
     if horizontal {
         FloatingLyricsPosition {
             x: centre.x,
@@ -203,7 +219,18 @@ pub fn centre_window_axis(app: &AppHandle, horizontal: bool) {
             bottom: monitor.position().y + monitor.size().height as i32,
         })
         .collect();
-    place(&window, Some(centre_axis(rect, &monitors, horizontal)));
+    let gutter = current().map_or(0, |settings| gutter_px(&settings, window.scale_factor().unwrap_or(1.0)));
+    place(&window, Some(centre_axis(rect, &monitors, horizontal, gutter)));
+}
+
+/// Width in CSS px of the monitor holding the window (the primary one when closed): the width slider's maximum.
+pub fn screen_width_css(app: &AppHandle) -> Option<f64> {
+    let monitor = match app.get_webview_window(WINDOW_LABEL) {
+        Some(window) => window.current_monitor().ok().flatten(),
+        None => None,
+    }
+    .or_else(|| app.primary_monitor().ok().flatten())?;
+    Some(f64::from(monitor.size().width) / valid_scale(monitor.scale_factor()))
 }
 
 pub fn is_window_label(label: &str) -> bool {
@@ -229,7 +256,7 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
         None => open_window(app)?,
     };
     window
-        .set_size(window_size(settings))
+        .set_size(window_size(&window, settings))
         .map_err(|error| error.to_string())?;
     place(&window, settings.position);
     window
@@ -243,9 +270,15 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     Ok(())
 }
 
-fn window_size(settings: &FloatingLyricsSettings) -> LogicalSize<f64> {
+/// Lyric area (narrowed to the monitor) plus the lock gutter, by the lines drawn.
+fn window_size(window: &WebviewWindow, settings: &FloatingLyricsSettings) -> LogicalSize<f64> {
+    let monitor_css = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| f64::from(monitor.size().width) / valid_scale(monitor.scale_factor()));
     LogicalSize::new(
-        f64::from(settings.width_px),
+        lyric_width_css(settings, monitor_css) + lock_css(settings),
         window_height_css(settings, HAS_TRANSLATION.load(Ordering::SeqCst)),
     )
 }
@@ -259,7 +292,7 @@ pub fn fit_lines(app: &AppHandle, has_translation: bool) {
     let (Some(settings), Some(window)) = (current(), app.get_webview_window(WINDOW_LABEL)) else {
         return;
     };
-    if settings.enabled && window.set_size(window_size(&settings)).is_ok() {
+    if settings.enabled && window.set_size(window_size(&window, &settings)).is_ok() {
         if let Some(rect) = window_rect(&window) {
             place(
                 &window,
@@ -350,7 +383,7 @@ fn open_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     .visible(false)
     .inner_size(
         f64::from(crate::settings::FloatingLyricsSettings::DEFAULT_WIDTH_PX),
-        MIN_HEIGHT_CSS_PX,
+        44.0,
     )
     .build()
     .map_err(|error| format!("無法開啟浮動歌詞視窗：{error}"))?;
@@ -402,6 +435,7 @@ fn place(window: &WebviewWindow, wanted: Option<FloatingLyricsPosition>) {
         return;
     };
     let size = (rect.width(), rect.height());
+    let gutter = current().map_or(0, |settings| gutter_px(&settings, window.scale_factor().unwrap_or(1.0)));
     // No saved position (first open, or 重設位置): the exact centre of the primary monitor.
     let wanted = wanted.or_else(|| {
         let monitor = window.primary_monitor().ok().flatten()?;
@@ -411,9 +445,9 @@ fn place(window: &WebviewWindow, wanted: Option<FloatingLyricsPosition>) {
             right: monitor.position().x + monitor.size().width as i32,
             bottom: monitor.position().y + monitor.size().height as i32,
         };
-        (bounds.width() > 0 && bounds.height() > 0).then(|| centre_on(bounds, size))
+        (bounds.width() > 0 && bounds.height() > 0).then(|| centre_on(bounds, size, gutter))
     });
-    let target = place_on_monitors(wanted, size, &work_areas(window));
+    let target = place_on_monitors(wanted, size, gutter, &work_areas(window));
     if target.x != rect.left || target.y != rect.top {
         let _ = window.set_position(PhysicalPosition::new(target.x, target.y));
     }
@@ -473,7 +507,7 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
         let (inside, over_button) = match app.cursor_position() {
             Ok(cursor) => (
                 rect.contains(cursor.x, cursor.y),
-                unlock_button_rect(rect, scale).contains(cursor.x, cursor.y),
+                unlock_button_rect(rect, scale, lock_css(&settings)).contains(cursor.x, cursor.y),
             ),
             Err(_) => (false, false),
         };
@@ -517,26 +551,40 @@ mod tests {
             show_translation: true,
             ..Default::default()
         };
-        // (30 + 15) * 1.375 = 61.875 -> 62; 30 * 1.375 = 41.25 -> 42.
-        assert_eq!(window_height_css(&settings, true), 62.0 + 16.0);
-        assert_eq!(window_height_css(&settings, false), 42.0 + 16.0, "no translation on this line: shrink");
+        // (30 + 15) * 1.375 = 61.875 -> 62; 30 * 1.375 = 41.25 -> 42. Only the text: no padding, no lock minimum.
+        assert_eq!(window_height_css(&settings, true), 62.0);
+        assert_eq!(window_height_css(&settings, false), 42.0, "no translation on this line: shrink");
         settings.show_translation = false;
-        assert_eq!(window_height_css(&settings, true), 42.0 + 16.0);
-        settings.font_size_px = 1;
-        assert_eq!(window_height_css(&settings, true), MIN_HEIGHT_CSS_PX);
+        assert_eq!(window_height_css(&settings, true), 42.0);
+        settings.font_size_px = 8;
+        assert_eq!(window_height_css(&settings, true), 11.0, "small text: a small panel");
+        assert_eq!(lock_css(&settings), 11.0, "the lock follows the main line");
     }
 
     #[test]
-    fn unlock_button_scales_with_dpi() {
+    fn lyric_width_leaves_room_for_the_lock_gutter() {
+        let settings = FloatingLyricsSettings {
+            font_size_px: 32,
+            width_px: 3000,
+            ..Default::default()
+        };
+        assert_eq!(lock_css(&settings), 44.0);
+        assert_eq!(lyric_width_css(&settings, Some(1920.0)), 1920.0 - 44.0);
+        assert_eq!(lyric_width_css(&settings, None), 3000.0);
+        assert_eq!(gutter_px(&settings, 1.5), 66);
+    }
+
+    #[test]
+    fn unlock_button_scales_with_the_font_and_dpi() {
         let window = rect(1000, 500, 2600, 620);
-        assert_eq!(unlock_button_rect(window, 1.0), rect(2562, 544, 2594, 576));
-        let big = unlock_button_rect(window, 2.5);
+        assert_eq!(unlock_button_rect(window, 1.0, 32.0), rect(2568, 544, 2600, 576));
+        let big = unlock_button_rect(window, 2.5, 32.0);
         assert_eq!((big.width(), big.height()), (80, 80));
-        assert_eq!(big.right, 2600 - 15);
+        assert_eq!(big.right, 2600);
         assert_eq!(big.top, 500 + (120 - 80) / 2);
         assert_eq!(
-            unlock_button_rect(window, f64::NAN),
-            unlock_button_rect(window, 1.0)
+            unlock_button_rect(window, f64::NAN, 32.0),
+            unlock_button_rect(window, 1.0, 32.0)
         );
     }
 
@@ -546,16 +594,21 @@ mod tests {
         // Centre point (2420, 150) is on the second monitor.
         let window = rect(2020, 100, 2820, 200);
         assert_eq!(
-            centre_axis(window, &monitors, true),
+            centre_axis(window, &monitors, true, 0),
             FloatingLyricsPosition { x: 1920 + (2560 - 800) / 2, y: 100 }
         );
+        // With a 40 px lock gutter only the 760 px lyric area is centred.
         assert_eq!(
-            centre_axis(window, &monitors, false),
+            centre_axis(window, &monitors, true, 40),
+            FloatingLyricsPosition { x: 1920 + (2560 - 760) / 2, y: 100 }
+        );
+        assert_eq!(
+            centre_axis(window, &monitors, false, 40),
             FloatingLyricsPosition { x: 2020, y: (1440 - 100) / 2 }
         );
         // Off every monitor: the first one.
         assert_eq!(
-            centre_axis(rect(-5000, 10, -4800, 60), &monitors, true),
+            centre_axis(rect(-5000, 10, -4800, 60), &monitors, true, 0),
             FloatingLyricsPosition { x: (1920 - 200) / 2, y: 10 }
         );
     }
@@ -566,7 +619,12 @@ mod tests {
         let right = rect(3840, 712, 6400, 2112);
         let areas = [primary, right];
         let size = (1600, 120);
-        let default = place_on_monitors(None, size, &areas);
+        let default = place_on_monitors(None, size, 0, &areas);
+        assert_eq!(
+            place_on_monitors(None, size, 100, &areas).x,
+            (3840 - 1500) / 2,
+            "first use: the lyric area at the centre"
+        );
         assert_eq!(
             default,
             FloatingLyricsPosition {
@@ -575,27 +633,27 @@ mod tests {
             }
         );
         assert_eq!(
-            centre_on(rect(0, 0, 2560, 1440), size),
+            centre_on(rect(0, 0, 2560, 1440), size, 0),
             FloatingLyricsPosition { x: 480, y: 660 }
         );
         assert_eq!(
-            centre_on(rect(-1920, 0, 0, 1080), (200, 100)),
+            centre_on(rect(-1920, 0, 0, 1080), (200, 100), 0),
             FloatingLyricsPosition { x: -1060, y: 490 }
         );
         let inside = FloatingLyricsPosition { x: 4000, y: 1000 };
-        assert_eq!(place_on_monitors(Some(inside), size, &areas), inside);
+        assert_eq!(place_on_monitors(Some(inside), size, 0, &areas), inside);
         let hanging = FloatingLyricsPosition { x: 5500, y: 2050 };
         assert_eq!(
-            place_on_monitors(Some(hanging), size, &areas),
+            place_on_monitors(Some(hanging), size, 0, &areas),
             FloatingLyricsPosition { x: 4800, y: 1992 }
         );
         let gone = FloatingLyricsPosition { x: -5000, y: 200 };
-        assert_eq!(place_on_monitors(Some(gone), size, &areas), default);
+        assert_eq!(place_on_monitors(Some(gone), size, 0, &areas), default);
         let straddling = FloatingLyricsPosition { x: 3000, y: 800 };
         assert_eq!(
-            place_on_monitors(Some(straddling), size, &areas),
+            place_on_monitors(Some(straddling), size, 0, &areas),
             FloatingLyricsPosition { x: 2240, y: 800 }
         );
-        assert_eq!(place_on_monitors(Some(inside), size, &[]), inside);
+        assert_eq!(place_on_monitors(Some(inside), size, 0, &[]), inside);
     }
 }

@@ -8,9 +8,10 @@
   import TaskbarLyricsView from './TaskbarLyricsView.svelte';
   import { invokeCommand } from './ipc';
   import { tr } from './i18n.js';
-  import { FLOATING_LYRICS_LAYOUT, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
+  import { floatingLyricsLockPx, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
 
   let locked = $state(false);
+  let fontSizePx = $state(32);
   let hover = $state(false);
   let fixedHover = $state(false);
   let busy = false;
@@ -37,10 +38,10 @@
 
   onMount(() => {
     void invokeCommand('settings_get_floating_lyrics', {}).then((stored) => {
-      locked = normalizeFloatingLyricsSettings(stored).locked;
+      ({ locked, fontSizePx } = normalizeFloatingLyricsSettings(stored));
     });
     void listen<unknown>('floating-lyrics-settings', (event) => {
-      locked = normalizeFloatingLyricsSettings(event.payload).locked;
+      ({ locked, fontSizePx } = normalizeFloatingLyricsSettings(event.payload));
     }).then((unlisten) => unlisteners.push(unlisten));
     void listen<boolean>('floating-lyrics-hover', (event) => {
       fixedHover = event.payload === true;
@@ -52,6 +53,8 @@
   });
 
   let showButton = $derived(locked ? fixedHover : hover);
+  // The lock gutter on the right (floating_lyrics.rs `lock_css`); only the lyric area left of it gets a background.
+  let lockPx = $derived(floatingLyricsLockPx(fontSizePx));
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -62,9 +65,9 @@
   onpointerdown={startDrag}
   onpointerenter={() => { hover = true; }}
   onpointerleave={() => { hover = false; }}
-  style:--floating-button-size={`${FLOATING_LYRICS_LAYOUT.buttonPx}px`}
-  style:--floating-button-inset={`${FLOATING_LYRICS_LAYOUT.buttonInsetPx}px`}
+  style:--floating-button-size={`${lockPx}px`}
 >
+  <div class="floating-lyrics-area"></div>
   <TaskbarLyricsView variant="floating" />
   {#if showButton}
     <button
@@ -74,7 +77,7 @@
       aria-label={locked ? tr('解除鎖定（可移動）') : tr('鎖定位置（滑鼠穿透）')}
       onclick={toggleLock}
     >
-      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="62%" height="62%" aria-hidden="true">
         <rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor" />
         {#if locked}
           <path d="M8 11V8a4 4 0 0 1 7.6-1.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -90,22 +93,29 @@
   .floating-lyrics {
     position: fixed;
     inset: 0;
-    border-radius: 10px;
-    transition: background-color 120ms ease;
   }
 
   .floating-lyrics.movable {
     cursor: move;
   }
 
-  .floating-lyrics.movable.highlight {
+  /* The lyric area only: the lock gutter on the right stays transparent. */
+  .floating-lyrics-area {
+    position: absolute;
+    inset: 0 var(--floating-button-size) 0 0;
+    border-radius: 10px;
+    transition: background-color 120ms ease;
+  }
+
+  .floating-lyrics.movable.highlight .floating-lyrics-area {
     background: rgba(0, 0, 0, 0.28);
   }
 
   .floating-lyrics-lock {
     position: absolute;
     top: 50%;
-    right: var(--floating-button-inset);
+    right: 0;
+    box-sizing: border-box;
     width: var(--floating-button-size);
     height: var(--floating-button-size);
     margin-top: calc(var(--floating-button-size) / -2);

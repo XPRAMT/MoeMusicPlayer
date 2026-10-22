@@ -7450,6 +7450,19 @@ fn floating_lyrics_centre_axis(app: AppHandle, horizontal: bool) {
     let _ = (app, horizontal);
 }
 
+/// Width in CSS px of the monitor holding the floating window (the primary one when closed): the width slider's
+/// maximum. None off Windows.
+#[tauri::command]
+fn floating_lyrics_screen_width(app: AppHandle) -> Option<f64> {
+    #[cfg(target_os = "windows")]
+    return floating_lyrics::screen_width_css(&app);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        None
+    }
+}
+
 /// The 面板 arrows (↑ ↓ ← →): move the floating window 1 px.
 #[tauri::command]
 fn floating_lyrics_nudge(app: AppHandle, dx: i32, dy: i32) {
@@ -12446,6 +12459,7 @@ pub fn run() {
             settings_set_floating_lyrics,
             floating_lyrics_set_locked,
             floating_lyrics_reset_position,
+            floating_lyrics_screen_width,
             floating_lyrics_fit,
             floating_lyrics_nudge,
             floating_lyrics_centre_axis,

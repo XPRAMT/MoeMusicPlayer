@@ -96,3 +96,27 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   saved for the current orientation. `floatingLyricsStatus`
   returns `statusBar` for the current orientation; the page refreshes it on rotation. Width stays the per-orientation
   width setting.
+
+## Amendment (2026-10-23): lock gutter, no padding, width 100–screen, D-pad repeat, smooth Android scroll
+
+- No padding and no minimum height: the panel is only the lines (text height × 1.1, line-height 1.375 em). The lock
+  button is as tall as the main line (`ceil(font × 1.375)`; the status bar height in 狀態列 mode), so it scales with
+  the font and DPI and never props the panel open.
+- No left gutter. The lyric area, which alone carries the move-mode background, starts at the panel's left edge; the
+  lock sits in a transparent gutter on the right, as wide as the lock. `widthPx` / `landscapeWidthPx` are the
+  **lyric area** width; the panel is that width plus the gutter. 水平置中, 重設位置 and first use centre the lyric
+  area (not the panel) on the monitor / screen, per orientation on Android.
+- Width range 100–8192 stored (CSS px / dp); on screen the lyric area is narrowed so it and the gutter fit the
+  current monitor (Windows: the one holding the panel, `floating_lyrics_screen_width`) or the current orientation's
+  screen width (Android `floatingLyricsStatus.screenWidthDp`). The slider's maximum is that screen width.
+- 面板 layout: 「移動到狀態列」 on its own row (Android only); then the D-pad (lock toggle in the centre) with a vertical
+  stack 水平置中 / 垂直置中 / 重設位置 to its right; then the width slider. D-pad: a tap moves 1 px; held past 300 ms it
+  repeats 1 px every 100 ms until pointer up / leave / cancel (`pressFloatingLyricsNudge`); the position is saved once
+  on release (Android `nudgeX/nudgeY` with `save: false`, then `savePosition: true`).
+- Android scroll fps: measured with `dumpsys gfxinfo` while playing on a 120 Hz display, the overlay (already
+  hardware accelerated) drew ~7 frames/s at ~5 ms each with no jank, so it was not render bound. Root cause:
+  `PlaybackService.overlaySample()` returns ExoPlayer `currentPosition`, which only advances in coarse steps, and
+  `LyricLineView` only invalidates when the progress changes, so the line moved only at those steps. Fix: the
+  overlay carries the position on from the last report by the elapsed `uptimeMillis` while playing
+  (`FloatingLyricsRules.smoothPositionMs`; a report slightly behind is held so the text never steps back, a jump of
+  more than 250 ms resyncs), so every Choreographer frame has new progress and is drawn.

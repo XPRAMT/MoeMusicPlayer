@@ -31,6 +31,19 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
+    fun positionIsCarriedOnBetweenCoarseReports() {
+        // Paused: the report as is.
+        assertEquals(1_000L, FloatingLyricsRules.smoothPositionMs(900L, 1_000L, 0L, 500L, playing = false))
+        // Playing: the last report plus the time since it.
+        assertEquals(1_016L, FloatingLyricsRules.smoothPositionMs(null, 1_000L, 100L, 116L, playing = true))
+        // A fresh report slightly behind the carried-on value: hold, never step back.
+        assertEquals(1_120L, FloatingLyricsRules.smoothPositionMs(1_120L, 1_100L, 200L, 210L, playing = true))
+        // A seek back: follow it.
+        assertEquals(5_010L, FloatingLyricsRules.smoothPositionMs(1_120L, 5_000L, 200L, 210L, playing = true))
+        assertEquals(110L, FloatingLyricsRules.smoothPositionMs(9_000L, 100L, 200L, 210L, playing = true))
+    }
+
+    @Test
     fun widthAndLineHeight() {
         // Status bar 88 px, text 1.17 em: 88 / (1.17 * 1.1) = 68.4 -> 68.
         assertEquals(68f, FloatingLyricsRules.fontForLineHeight(88, 1.17f), 0.001f)
@@ -42,10 +55,13 @@ class FloatingLyricsRulesTest {
         assertEquals(490, FloatingLyricsRules.statusBarX(1_080, 300, Pair(800, 880), 10))
         assertEquals("portrait", FloatingLyricsRules.orientationKey(false))
         assertEquals("landscape", FloatingLyricsRules.orientationKey(true))
-        assertEquals(200, FloatingLyricsRules.widthDp(10))
-        assertEquals(4000, FloatingLyricsRules.widthDp(9_999))
-        assertEquals(900, FloatingLyricsRules.overlayWidth(900, 1_080))
-        assertEquals(1_080, FloatingLyricsRules.overlayWidth(3_000, 1_080))
+        assertEquals(100, FloatingLyricsRules.widthDp(10))
+        assertEquals(8192, FloatingLyricsRules.widthDp(9_999))
+        // Lyric area plus a 60 px lock gutter; the area shrinks so both fit the screen.
+        assertEquals(960, FloatingLyricsRules.overlayWidth(900, 1_080, 60))
+        assertEquals(1_080, FloatingLyricsRules.overlayWidth(3_000, 1_080, 60))
+        // Only the 900 px lyric area is centred: (1080 - 900) / 2.
+        assertEquals(90, FloatingLyricsRules.lyricCentredStart(1_080, 960, 60))
         // 40 px of text plus 10%.
         assertEquals(44, FloatingLyricsRules.lineHeightPx(-30f, 10f))
         // The status bar area (y = 0) is reachable.

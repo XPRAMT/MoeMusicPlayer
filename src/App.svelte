@@ -210,6 +210,8 @@
     DEFAULT_FLOATING_LYRICS_SETTINGS,
     FLOATING_LYRICS_WIDTH_PX,
     floatingLyricsWidthField,
+    floatingLyricsWidthMax,
+    pressFloatingLyricsNudge,
     LYRICS_SETTINGS_TAB_STORAGE_KEY,
     buildFloatingLyricsNativeData,
     normalizeFloatingLyricsSettings,
@@ -624,6 +626,9 @@
   let floatingLyricsQueue: Promise<void> = Promise.resolve();
   /** Android only: the overlay permission and the lock state the phone keeps. */
   let floatingLyricsAndroidStatus = $state<FloatingLyricsAndroidStatus | null>(null);
+  // Width in px (Windows: CSS px of the monitor holding the panel; Android: dp in the current orientation).
+  let floatingLyricsScreenWidth = $state<number | null>(null);
+  let floatingLyricsWidthMaxPx = $derived(floatingLyricsWidthMax(floatingLyricsScreenWidth ?? undefined));
   /** Bumped when the per-track lyrics delay changes, so the Android overlay gets the new offset. */
   let lyricsDelayRevision = $state(0);
   let lyricsSettingsTab = $state<'general' | 'taskbar' | 'floating'>(
@@ -2543,10 +2548,12 @@
   }
 
   async function refreshFloatingLyricsAndroidStatus(): Promise<void> {
+    if (isTauri() && capabilities?.platform === 'windows') return refreshFloatingLyricsScreenWidth();
     if (!isTauri() || capabilities?.platform !== 'android') return;
     try {
       const status = await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsStatus' }) as Partial<FloatingLyricsAndroidStatus> | null;
-      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true, statusBar: status?.statusBar === true };
+      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true, statusBar: status?.statusBar === true, screenWidthDp: typeof status?.screenWidthDp === 'number' ? status.screenWidthDp : undefined };
+      if (typeof status?.screenWidthDp === 'number') floatingLyricsScreenWidth = status.screenWidthDp;
     } catch (error) {
       floatingLyricsError = getErrorText(error);
     }
@@ -2573,7 +2580,7 @@
     }
   }
 
-  async function sendFloatingLyricsAndroid(payload: { statusBar?: boolean; nudgeX?: number; nudgeY?: number; centreAxis?: 'horizontal' | 'vertical' }): Promise<void> {
+  async function sendFloatingLyricsAndroid(payload: { statusBar?: boolean; nudgeX?: number; nudgeY?: number; save?: boolean; savePosition?: boolean; centreAxis?: 'horizontal' | 'vertical' }): Promise<void> {
     try {
       await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload });
     } catch (error) {
@@ -2584,13 +2591,61 @@
 
   /** ← / → of 面板: 1 px sideways (Android: the current orientation's saved position). */
   async function nudgeFloatingLyrics(dx: number, dy: number): Promise<void> {
-    if (capabilities?.platform === 'android') return sendFloatingLyricsAndroid({ nudgeX: dx, nudgeY: dy });
+    if (capabilities?.platform === 'android') return sendFloatingLyricsAndroid({ nudgeX: dx, nudgeY: dy, save: false });
     try {
       await invokeCommand('floating_lyrics_nudge', { dx, dy });
     } catch (error) {
       floatingLyricsError = getErrorText(error);
     }
   }
+
+  /** Windows: the monitor holding the panel; Android: the status carries it. */
+  async function refreshFloatingLyricsScreenWidth(): Promise<void> {
+    if (!isTauri()) return;
+    if (capabilities?.platform === 'android') return refreshFloatingLyricsAndroidStatus();
+    try {
+      const width = await invokeCommand('floating_lyrics_screen_width', {});
+      if (typeof width === 'number' && width > 0) floatingLyricsScreenWidth = width;
+    } catch {
+      // Keep the last known maximum.
+    }
+  }
+
+  // D-pad: a tap moves 1 px; held, it repeats (FLOATING_LYRICS_NUDGE_REPEAT). The position is saved on release
+  // (Android: one save; Windows: the move event already waits until moving stops).
+  let releaseNudge: (() => void) | null = null;
+  function stopNudge(): void {
+    const release = releaseNudge;
+    releaseNudge = null;
+    release?.();
+  }
+  function nudgeHandlers(dx: number, dy: number) {
+    return {
+      onpointerdown: (event: PointerEvent) => {
+        if (event.button !== 0) return;
+        stopNudge();
+        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+        releaseNudge = pressFloatingLyricsNudge(
+          () => void nudgeFloatingLyrics(dx, dy),
+          () => {
+            if (capabilities?.platform === 'android') void sendFloatingLyricsAndroid({ savePosition: true });
+            else void refreshFloatingLyricsScreenWidth();
+          },
+        );
+      },
+      onpointerup: stopNudge,
+      onpointerleave: stopNudge,
+      onpointercancel: stopNudge,
+      onlostpointercapture: stopNudge,
+      // Keyboard (Enter / Space): one step, saved at once.
+      onclick: (event: MouseEvent) => {
+        if (event.detail === 0) pressFloatingLyricsNudge(() => void nudgeFloatingLyrics(dx, dy), () => {
+          if (capabilities?.platform === 'android') void sendFloatingLyricsAndroid({ savePosition: true });
+        })();
+      },
+    };
+  }
+
 
   async function openOverlayPermissionSettings(): Promise<void> {
     try {
@@ -4601,11 +4656,12 @@
                             disabled={!floatingLyricsSettings.enabled}
                             title={tr("字體與高度剛好放進狀態列，並移到狀態列（避開鏡頭）；直向與橫向分開保存")}
                             onclick={() => void sendFloatingLyricsAndroid({ statusBar: floatingLyricsAndroidStatus?.statusBar !== true })}
-                          >{tr("狀態列")}</button>
+                          >{tr("移動到狀態列")}</button>
                         {/if}
+                        <div class="floating-lyrics-move-row">
                         <div class="floating-lyrics-dpad" role="group" aria-label={tr("移動面板")}>
-                          <button type="button" class="dpad-up" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向上移動 1 像素")} title={tr("向上移動 1 像素")} onclick={() => void nudgeFloatingLyrics(0, -1)}><IconChevronUp size={18} aria-hidden="true" /></button>
-                          <button type="button" class="dpad-left" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向左移動 1 像素")} title={tr("向左移動 1 像素")} onclick={() => void nudgeFloatingLyrics(-1, 0)}><IconChevronLeft size={18} aria-hidden="true" /></button>
+                          <button type="button" class="dpad-up" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向上移動 1 像素")} title={tr("向上移動 1 像素")} {...nudgeHandlers(0, -1)}><IconChevronUp size={18} aria-hidden="true" /></button>
+                          <button type="button" class="dpad-left" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向左移動 1 像素")} title={tr("向左移動 1 像素")} {...nudgeHandlers(-1, 0)}><IconChevronLeft size={18} aria-hidden="true" /></button>
                           <button
                             type="button"
                             class="dpad-lock"
@@ -4617,23 +4673,27 @@
                           >
                             {#if floatingLyricsLocked}<IconLock size={18} aria-hidden="true" />{:else}<IconLockOpen size={18} aria-hidden="true" />{/if}
                           </button>
-                          <button type="button" class="dpad-right" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向右移動 1 像素")} title={tr("向右移動 1 像素")} onclick={() => void nudgeFloatingLyrics(1, 0)}><IconChevronRight size={18} aria-hidden="true" /></button>
-                          <button type="button" class="dpad-down" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向下移動 1 像素")} title={tr("向下移動 1 像素")} onclick={() => void nudgeFloatingLyrics(0, 1)}><IconChevronDown size={18} aria-hidden="true" /></button>
+                          <button type="button" class="dpad-right" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向右移動 1 像素")} title={tr("向右移動 1 像素")} {...nudgeHandlers(1, 0)}><IconChevronRight size={18} aria-hidden="true" /></button>
+                          <button type="button" class="dpad-down" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向下移動 1 像素")} title={tr("向下移動 1 像素")} {...nudgeHandlers(0, 1)}><IconChevronDown size={18} aria-hidden="true" /></button>
                         </div>
+                        <div class="floating-lyrics-centre-stack">
                         <button type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void centreFloatingLyrics(true)}>{tr("水平置中")}</button>
                         <button type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void centreFloatingLyrics(false)}>{tr("垂直置中")}</button>
                         <button class="floating-lyrics-reset" type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void resetFloatingLyricsPosition()}>{tr("重設位置")}</button>
+                        </div>
+                        </div>
                       </div>
                       <label class="lyrics-preference-range">
                         <span><strong>{capabilities?.platform === 'android'
                           ? (screenIsLandscape ? tr("寬度（橫向）") : tr("寬度（直向）"))
-                          : tr("寬度")}</strong><output>{floatingLyricsSettings[widthField]}</output></span>
+                          : tr("寬度")}</strong><output>{Math.min(floatingLyricsSettings[widthField], floatingLyricsWidthMaxPx)}</output></span>
                         <input
                           type="range"
                           min={FLOATING_LYRICS_WIDTH_PX.min}
-                          max={FLOATING_LYRICS_WIDTH_PX.max}
+                          max={floatingLyricsWidthMaxPx}
                           step={FLOATING_LYRICS_WIDTH_PX.step}
-                          value={floatingLyricsSettings[widthField]}
+                          value={Math.min(floatingLyricsSettings[widthField], floatingLyricsWidthMaxPx)}
+                          onpointerdown={() => void refreshFloatingLyricsScreenWidth()}
                           aria-label={tr("浮動歌詞寬度")}
                           oninput={(event) => setFloatingLyricsSettings({ [widthField]: Number(event.currentTarget.value) })}
                         />

@@ -1,6 +1,10 @@
 ﻿import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  FLOATING_LYRICS_NUDGE_REPEAT,
+  floatingLyricsLockPx,
+  floatingLyricsWidthMax,
+  pressFloatingLyricsNudge,
   floatingLyricsWidthField,
   DEFAULT_FLOATING_LYRICS_SETTINGS,
   buildFloatingLyricsNativeData,
@@ -28,13 +32,13 @@ test('floating lyrics settings repair field by field with their own defaults', (
   assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 1 }).opacityPercent, 1);
   assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 0 }).opacityPercent, 1);
   assert.equal(normalizeFloatingLyricsSettings({}).widthPx, 800);
-  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 50 }).widthPx, 200);
-  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 99999 }).widthPx, 4000);
+  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 50 }).widthPx, 100);
+  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 99999 }).widthPx, 8192);
   assert.equal(normalizeFloatingLyricsSettings({ widthPx: 1234.4 }).widthPx, 1234);
   assert.equal(normalizeFloatingLyricsSettings({ widthPx: 'wide' }).widthPx, 800);
   assert.deepEqual(
     (({ widthPx, landscapeWidthPx }) => ({ widthPx, landscapeWidthPx }))(normalizeFloatingLyricsSettings({ widthPx: 600, landscapeWidthPx: 9999 })),
-    { widthPx: 600, landscapeWidthPx: 4000 },
+    { widthPx: 600, landscapeWidthPx: 8192 },
   );
   assert.equal(floatingLyricsWidthField(true, true), 'landscapeWidthPx');
   assert.equal(floatingLyricsWidthField(true, false), 'widthPx');
@@ -78,4 +82,52 @@ test('the lyrics settings tab falls back to general where it does not exist', ()
   assert.equal(normalizeLyricsSettingsTab('taskbar', false), 'general');
   assert.equal(normalizeLyricsSettingsTab('floating', false), 'floating');
   assert.equal(normalizeLyricsSettingsTab('nope', true), 'general');
+});
+test('floating lyrics lock follows the main line height and the width slider stops at the screen width', () => {
+  assert.equal(floatingLyricsLockPx(16), 22);
+  assert.equal(floatingLyricsLockPx(40), 55);
+  assert.equal(floatingLyricsLockPx(0), 2);
+  assert.equal(floatingLyricsWidthMax(1920), 1920);
+  assert.equal(floatingLyricsWidthMax(1366.6), 1366);
+  assert.equal(floatingLyricsWidthMax(50), 100);
+  assert.equal(floatingLyricsWidthMax(null), 8192);
+});
+
+test('floating lyrics D-pad taps once, repeats when held and saves once on release', () => {
+  const queue = [];
+  let now = 0;
+  const timers = {
+    setTimeout: (fn, ms) => { const t = { fn, at: now + ms, every: 0 }; queue.push(t); return t; },
+    clearTimeout: (t) => { t.cancelled = true; },
+    setInterval: (fn, ms) => { const t = { fn, at: now + ms, every: ms }; queue.push(t); return t; },
+    clearInterval: (t) => { t.cancelled = true; },
+  };
+  const advance = (ms) => {
+    const end = now + ms;
+    for (;;) {
+      const due = queue.filter((t) => !t.cancelled && t.at <= end).sort((a, b) => a.at - b.at)[0];
+      if (!due) break;
+      now = due.at;
+      if (due.every) due.at += due.every; else due.cancelled = true;
+      due.fn();
+    }
+    now = end;
+  };
+  let steps = 0;
+  let saves = 0;
+  const tap = pressFloatingLyricsNudge(() => steps++, () => saves++, timers);
+  advance(FLOATING_LYRICS_NUDGE_REPEAT.delayMs - 1);
+  tap();
+  tap();
+  assert.deepEqual([steps, saves], [1, 1]);
+  advance(1000);
+  assert.equal(steps, 1);
+
+  steps = 0;
+  const hold = pressFloatingLyricsNudge(() => steps++, () => saves++, timers);
+  advance(300 + 350);
+  assert.equal(steps, 1 + 3);
+  hold();
+  advance(1000);
+  assert.deepEqual([steps, saves], [4, 2]);
 });

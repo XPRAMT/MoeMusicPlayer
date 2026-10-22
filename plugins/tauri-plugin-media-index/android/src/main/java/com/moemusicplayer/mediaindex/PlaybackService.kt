@@ -212,7 +212,8 @@ class PlaybackService : MediaSessionService() {
         val active = state == androidx.media3.common.Player.STATE_READY ||
             state == androidx.media3.common.Player.STATE_BUFFERING
         val duration = player.duration.takeIf { it > 0 }
-        return FloatingLyricsOverlay.Sample(item.mediaId, player.currentPosition, duration, active)
+        // `playing` lets the overlay carry the coarse position on per frame (FloatingLyricsRules.smoothPositionMs).
+        return FloatingLyricsOverlay.Sample(item.mediaId, player.currentPosition, duration, active, player.isPlaying)
     }
 
     override fun onDestroy() {

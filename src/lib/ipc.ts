@@ -258,6 +258,8 @@ export interface FloatingLyricsAndroidStatus {
   locked: boolean;
   /** 狀態列 for the current orientation. */
   statusBar: boolean;
+  /** Screen width in dp in the current orientation: the width slider's maximum. */
+  screenWidthDp?: number;
 }
 
 /** A connected monitor for the taskbar-lyrics monitor choice (ADR 0031). */
@@ -1008,6 +1010,10 @@ interface IpcContract {
   floating_lyrics_centre_axis: {
     args: { horizontal: boolean };
     result: null;
+  };
+  floating_lyrics_screen_width: {
+    args: Record<string, never>;
+    result: number | null;
   };
   floating_lyrics_nudge: {
     args: { dx: number; dy: number };

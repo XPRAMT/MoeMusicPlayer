@@ -3084,12 +3084,31 @@ input:focus-visible {
 }
 
 /* Floating lyrics 面板 (ADR 0032): 狀態列 (Android), the D-pad (centre: lock), 重設位置, side by side. */
+/* 面板: 「移動到狀態列」 on its own row (Android), then the D-pad with the centre / reset buttons stacked beside it. */
 .layout-choice-row.lyrics-text-effect-row.floating-lyrics-panel-row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.floating-lyrics-move-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.floating-lyrics-centre-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.floating-lyrics-dpad button {
+  touch-action: none;
+  user-select: none;
 }
 
 .floating-lyrics-dpad {

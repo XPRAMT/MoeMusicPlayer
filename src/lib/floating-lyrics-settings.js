@@ -13,9 +13,52 @@ import {
  * Keep in step with floating_lyrics.rs (padding, line box, lock button). The window is as tall as the lines it draws:
  * each line box is the text's own height (1.25 em) with a 10% buffer.
  */
-export const FLOATING_LYRICS_LAYOUT = Object.freeze({ paddingPx: 8, minHeightPx: 44, lineHeight: 1.375, buttonPx: 32, buttonInsetPx: 6 });
-/** Panel width: CSS px on Windows, dp on Android (settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX`). */
-export const FLOATING_LYRICS_WIDTH_PX = Object.freeze({ min: 200, max: 4000, step: 10, default: 800 });
+export const FLOATING_LYRICS_LAYOUT = Object.freeze({ lineHeight: 1.375 });
+/**
+ * Lyric area width (the panel is this plus the lock gutter on its right): CSS px on Windows, dp on Android. Stored
+ * within settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX`; the slider's maximum is the current screen's width.
+ */
+export const FLOATING_LYRICS_WIDTH_PX = Object.freeze({ min: 100, max: 8192, step: 10, default: 800 });
+
+/** The lock button and its transparent gutter (CSS px): as tall as the main line, so it scales with the font. */
+/** @param {unknown} fontSizePx */
+export function floatingLyricsLockPx(fontSizePx) {
+  const font = typeof fontSizePx === 'number' && Number.isFinite(fontSizePx) && fontSizePx > 0 ? fontSizePx : 1;
+  return Math.max(1, Math.ceil(font * FLOATING_LYRICS_LAYOUT.lineHeight));
+}
+
+/** The width slider's maximum: the current screen's width (Windows: the monitor holding the panel), never below min. */
+/** @param {unknown} screenWidth */
+export function floatingLyricsWidthMax(screenWidth) {
+  if (typeof screenWidth !== 'number' || !Number.isFinite(screenWidth) || screenWidth <= 0) return FLOATING_LYRICS_WIDTH_PX.max;
+  return Math.max(FLOATING_LYRICS_WIDTH_PX.min, Math.min(FLOATING_LYRICS_WIDTH_PX.max, Math.floor(screenWidth)));
+}
+
+/** D-pad timing: a tap moves 1 px; held past `delayMs` it repeats every `intervalMs` until released. */
+export const FLOATING_LYRICS_NUDGE_REPEAT = Object.freeze({ delayMs: 300, intervalMs: 100 });
+
+/**
+ * Press a D-pad arrow: `step()` at once, then again every intervalMs once held past delayMs. Returns `release`, which
+ * stops the repeat and calls `done()` once (where the position is saved).
+ * @param {() => void} step @param {() => void} done
+ * @param {{ setTimeout: (fn: () => void, ms: number) => any, clearTimeout: (id: any) => void, setInterval: (fn: () => void, ms: number) => any, clearInterval: (id: any) => void }} [timers]
+ */
+export function pressFloatingLyricsNudge(step, done, timers = globalThis) {
+  /** @type {any} */
+  let interval = null;
+  let released = false;
+  step();
+  const delay = timers.setTimeout(() => {
+    if (!released) interval = timers.setInterval(step, FLOATING_LYRICS_NUDGE_REPEAT.intervalMs);
+  }, FLOATING_LYRICS_NUDGE_REPEAT.delayMs);
+  return () => {
+    if (released) return;
+    released = true;
+    timers.clearTimeout(delay);
+    if (interval !== null) timers.clearInterval(interval);
+    done();
+  };
+}
 export const FLOATING_LYRICS_POSITION_LIMIT = 1_000_000;
 
 /** @typedef {import('./ipc').FloatingLyricsSettings} FloatingLyricsSettings */

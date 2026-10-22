@@ -1043,7 +1043,8 @@ impl FloatingLyricsSettings {
     pub const DEFAULT_FONT_SIZE_PX: u8 = 28;
     pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 80;
     pub const DEFAULT_WIDTH_PX: u16 = 800;
-    pub const WIDTH_RANGE_PX: (u16, u16) = (200, 4000);
+    /// Stored range; the page and the window also keep the lyric area within the current screen's width.
+    pub const WIDTH_RANGE_PX: (u16, u16) = (100, 8192);
     /// Far outside any real desktop; such a position is dropped.
     pub const POSITION_LIMIT: i32 = 1_000_000;
 
@@ -3526,11 +3527,11 @@ mod tests {
         assert_eq!(lenient_floating_lyrics(None).opacity_percent, 100);
         assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent, 3);
         assert_eq!(lenient_floating_lyrics(None).width_px, 800);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 50}))).width_px, 200);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 99999}))).width_px, 4000);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 50}))).width_px, 100);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 99999}))).width_px, 8192);
         assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 1234}))).width_px, 1234);
         let both = lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 600, "landscapeWidthPx": 50})));
-        assert_eq!((both.width_px, both.landscape_width_px), (600, 200), "saved apart");
+        assert_eq!((both.width_px, both.landscape_width_px), (600, 100), "saved apart");
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!(7))), defaults);
         assert_eq!(lenient_taskbar_lyrics(None), defaults);
 

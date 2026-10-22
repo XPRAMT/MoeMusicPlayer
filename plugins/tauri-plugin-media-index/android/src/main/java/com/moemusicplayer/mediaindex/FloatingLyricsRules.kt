@@ -13,7 +13,8 @@ object FloatingLyricsRules {
     fun opacityPercent(value: Int): Int = value.coerceIn(1, 100)
 
     /** Same range as settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX` (dp here). */
-    fun widthDp(value: Int): Int = value.coerceIn(200, 4000)
+    /** Stored lyric area width (dp); on screen it is also kept within the screen (`overlayWidth`). */
+    fun widthDp(value: Int): Int = value.coerceIn(100, 8192)
 
     /** Font px whose line (text height × 1.1, text height = `emHeight` × px) is at most `lineHeight` px. */
     fun fontForLineHeight(lineHeight: Int, emHeight: Float): Float =
@@ -34,8 +35,39 @@ object FloatingLyricsRules {
     /** Suffix of the saved position keys: portrait and landscape are saved apart. */
     fun orientationKey(landscape: Boolean): String = if (landscape) "landscape" else "portrait"
 
-    /** Overlay width in px: the chosen width, narrowed to the screen. */
-    fun overlayWidth(chosenPx: Int, screenWidth: Int): Int = maxOf(1, minOf(chosenPx, screenWidth))
+    /**
+     * Overlay width in px: the lyric area (the chosen width, narrowed so it and the lock gutter fit the screen) plus
+     * the `gutterPx` lock gutter on its right.
+     */
+    fun overlayWidth(chosenPx: Int, screenWidth: Int, gutterPx: Int): Int {
+        val gutter = maxOf(0, gutterPx)
+        return maxOf(1, minOf(chosenPx, screenWidth - gutter)) + gutter
+    }
+
+    /** Left edge that puts the lyric area (the overlay less its lock gutter) at the centre of `available`. */
+    fun lyricCentredStart(available: Int, overlayWidth: Int, gutterPx: Int): Int =
+        centredStart(available, maxOf(0, overlayWidth - maxOf(0, gutterPx)))
+
+    /**
+     * The playback position for this display frame. ExoPlayer's reported position only advances in coarse steps (it
+     * is refreshed when the playback thread does work, every ~100-200 ms for audio), so while playing it is carried on
+     * from the last report by the time since then. A report a little behind the carried-on value does not pull the
+     * text back (no jitter); a jump (seek, a new track, a stall) of more than `resyncMs` is taken as is.
+     */
+    fun smoothPositionMs(
+        previousMs: Long?,
+        reportedMs: Long,
+        reportedAtMs: Long,
+        nowMs: Long,
+        playing: Boolean,
+        resyncMs: Long = 250,
+    ): Long {
+        if (!playing) return reportedMs
+        val carried = reportedMs + maxOf(0L, nowMs - reportedAtMs)
+        if (previousMs == null) return carried
+        val drift = carried - previousMs
+        return if (drift < 0 && drift > -resyncMs) previousMs else carried
+    }
 
     /** Height of one drawn line: the text's own height (ascent to descent) with a 10% buffer. */
     fun lineHeightPx(ascent: Float, descent: Float): Int = Math.ceil(((descent - ascent) * 1.1f).toDouble()).toInt()

@@ -16,7 +16,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ## 目前工作狀態
 
-浮動歌詞（ADR 0032）已實作（2026-10-23）：Windows 置頂透明視窗與 Android 系統懸浮窗，移動／固定模式；待使用者實機驗收。多螢幕工作列歌詞（ADR 0031）已實作並建置（2026-10-23）：每條工作列各一個視窗、`displayMode`（all／playerMonitor／custom）與螢幕多選。待使用者實機確認第二螢幕（2560×1440、200%）的位置與字級、Windows「識別」編號是否與按鈕 1／2 一致、熱插拔與 Explorer 重啟後的重建。
+浮動歌詞（ADR 0032）已實作（2026-10-23）：Windows 置頂透明視窗與 Android 系統懸浮窗，移動／固定模式；待使用者實機驗收。多螢幕工作列歌詞（ADR 0031）已實作並建置（2026-10-23）：每條工作列各一個視窗、`displayMode`（all／playerMonitor／custom）與螢幕多選。待使用者實機確認第二螢幕（2560×1440、200%）的位置與字級、Windows「識別」編號是否與按鈕 1／2 一致、熱插拔與 Explorer 重啟後的重建。2026-10-23 修訂：`widthPx` 為**歌詞區**寬，面板＝歌詞區＋右側透明鎖頭欄（鎖頭邊長＝主行行高，狀態列模式＝狀態列高）；無內距、無最小高度；移動模式背景只在歌詞區；水平置中／重設／首次使用以歌詞區置中。面板：「移動到狀態列」獨立一列（僅 Android），下一列左為十字鍵、右為直排 水平置中／垂直置中／重設位置，其後寬度滑桿；十字鍵單擊 1 px，按住 300 ms 後每 100 ms 1 px，放開才存檔。Android 捲動低 fps 根因：ExoPlayer `currentPosition` 粗步進＋只在進度改變時 invalidate；改以 `FloatingLyricsRules.smoothPositionMs` 依經過時間外推。
 
 頻譜圖的色階上限固定為 0 dB，不再提供上限輸入；舊 localStorage 的 `dbCeiling` 會在正規化時忽略，繪圖請求同樣固定送出 0。dB 下限仍可調整。
 

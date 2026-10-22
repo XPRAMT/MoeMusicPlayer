@@ -34,15 +34,19 @@ import org.json.JSONObject
  */
 object FloatingLyricsOverlay {
     /** What the playback service reports for the overlay. */
-    data class Sample(val trackId: String, val positionMs: Long, val durationMs: Long?, val active: Boolean)
+    data class Sample(
+        val trackId: String,
+        val positionMs: Long,
+        val durationMs: Long?,
+        val active: Boolean,
+        val playing: Boolean = active,
+    )
 
     private class Line(val startMs: Long, val text: String, val translation: String)
 
     private const val PREFS = "moe_floating_lyrics"
     private const val TICK_MS = 100L
 
-    private const val BUTTON_DP = 32
-    private const val PADDING_DP = 8
 
     private val main = Handler(Looper.getMainLooper())
     private var appContext: Context? = null
@@ -59,6 +63,11 @@ object FloatingLyricsOverlay {
     private var widthDp = 800
     private var landscapeWidthDp = 800
     private var rotationWatch: android.content.ComponentCallbacks? = null
+    // The position carried on between ExoPlayer's coarse reports (FloatingLyricsRules.smoothPositionMs).
+    private var smoothedMs: Long? = null
+    private var lastReportedMs = Long.MIN_VALUE
+    private var lastReportedAt = 0L
+    private var lastReportedTrack: String? = null
     private var shownLandscape: Boolean? = null
 
     private var trackId: String? = null
@@ -113,6 +122,7 @@ object FloatingLyricsOverlay {
         .put("canDrawOverlays", canDrawOverlays(context))
         .put("locked", isLocked(context))
         .put("statusBar", isStatusBarMode(context))
+        .put("screenWidthDp", Math.round(screenSize(context).first / context.resources.displayMetrics.density))
 
     /** `{ settings?, data?, setLocked?, resetPosition? }` from the page. */
     fun update(context: Context, args: JSONObject) {
@@ -129,8 +139,10 @@ object FloatingLyricsOverlay {
             centreAxis(context, args.optString("centreAxis") == "horizontal")
         }
         if (args.has("nudgeX") || args.has("nudgeY")) {
-            nudge(context, args.optInt("nudgeX", 0), args.optInt("nudgeY", 0))
+            // A held D-pad arrow repeats with save = false and sends savePosition once released.
+            nudge(context, args.optInt("nudgeX", 0), args.optInt("nudgeY", 0), args.optBoolean("save", true))
         }
+        if (args.optBoolean("savePosition", false)) params?.let { savePosition(context, it) }
         if (args.optBoolean("resetPosition", false)) {
             // Only the current orientation's position; the other one keeps its own.
             val (keyX, keyY) = positionKeys(context)
@@ -147,7 +159,8 @@ object FloatingLyricsOverlay {
         val context = appContext ?: return
         val (screenWidth, screenHeight) = screenSize(context)
         val height = if (view.height > 0) view.height else view.measuredHeight
-        layout.x = FloatingLyricsRules.centredStart(screenWidth, layout.width)
+        // The lyric area (not the lock gutter) at the centre.
+        layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context))
         layout.y = FloatingLyricsRules.centredStart(screenHeight, height)
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
@@ -250,7 +263,7 @@ object FloatingLyricsOverlay {
     }
 
     /** The 面板 arrows: one px in any direction, saved for the current orientation (status bar area included). */
-    private fun nudge(context: Context, dx: Int, dy: Int) {
+    private fun nudge(context: Context, dx: Int, dy: Int, save: Boolean) {
         val view = root ?: return
         val layout = params ?: return
         if (dx == 0 && dy == 0) return
@@ -260,7 +273,7 @@ object FloatingLyricsOverlay {
         )
         layout.x = x
         layout.y = y
-        savePosition(context, layout)
+        if (save) savePosition(context, layout)
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
         } catch (_: Exception) {
@@ -272,7 +285,7 @@ object FloatingLyricsOverlay {
         val view = root ?: return
         val layout = params ?: return
         val (screenWidth, screenHeight) = screenSize(context)
-        if (horizontal) layout.x = FloatingLyricsRules.centredStart(screenWidth, layout.width)
+        if (horizontal) layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context))
         else layout.y = FloatingLyricsRules.centredStart(screenHeight, view.height)
         savePosition(context, layout)
         try {
@@ -297,10 +310,31 @@ object FloatingLyricsOverlay {
         return Pair("x_$suffix", "y_$suffix")
     }
 
+    /** The lyric area (narrowed to the screen) plus the lock gutter. */
     private fun overlayWidth(context: Context): Int = FloatingLyricsRules.overlayWidth(
         dp(context, if (isLandscape(context)) landscapeWidthDp else widthDp),
         screenSize(context).first,
+        lockPx(context),
     )
+
+    /** Main line font size in px (狀態列: fitted to the bar). */
+    private fun mainFontPx(context: Context): Float {
+        if (isStatusBarMode(context)) {
+            val probe = android.graphics.Paint().apply { textSize = 100f }.fontMetrics
+            return FloatingLyricsRules.fontForLineHeight(statusBarHeight(context), (probe.descent - probe.ascent) / 100f)
+        }
+        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx.toFloat(), context.resources.displayMetrics)
+    }
+
+    /**
+     * The lock button, and the transparent gutter right of the lyric area that holds it: as tall as the main line
+     * (the status bar in 狀態列), so it scales with the font and never props the overlay open.
+     */
+    private fun lockPx(context: Context): Int {
+        if (isStatusBarMode(context)) return maxOf(1, statusBarHeight(context))
+        val metrics = android.graphics.Paint().apply { textSize = mainFontPx(context) }.fontMetrics
+        return maxOf(1, FloatingLyricsRules.lineHeightPx(metrics.ascent, metrics.descent))
+    }
 
     /** After a rotation: that orientation's width and saved position, or the centre when it has none. */
     private fun applyOrientation() {
@@ -335,9 +369,8 @@ object FloatingLyricsOverlay {
     private fun create(context: Context) {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val (screenWidth, screenHeight) = screenSize(context)
-        val padding = dp(context, PADDING_DP)
-        val button = dp(context, BUTTON_DP)
-        val frame = FrameLayout(context).apply { setPadding(padding, padding, padding, padding) }
+        val button = lockPx(context)
+        val frame = FrameLayout(context)
         val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         fun line(): LyricLineView = LyricLineView(context)
         val first = line()
@@ -346,8 +379,8 @@ object FloatingLyricsOverlay {
         column.addView(first, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(second, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         frame.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL).apply {
-            marginStart = button + padding
-            marginEnd = button + padding
+            marginStart = 0
+            marginEnd = button
         })
         val lock = ImageButton(context).apply {
             setImageResource(android.R.drawable.ic_lock_lock)
@@ -374,7 +407,7 @@ object FloatingLyricsOverlay {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
-            x = prefs.getInt(positionKeys(context).first, (screenWidth - width) / 2)
+            x = prefs.getInt(positionKeys(context).first, FloatingLyricsRules.lyricCentredStart(screenWidth, width, button))
             y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt())
         }
         frame.setOnTouchListener(DragListener(context))
@@ -451,16 +484,19 @@ object FloatingLyricsOverlay {
         // height × 1.1) is the status bar height.
         val statusBar = isStatusBarMode(context)
         val barHeight = statusBarHeight(context)
-        val padding = if (statusBar) 0 else dp(context, PADDING_DP)
-        val button = if (statusBar) barHeight else dp(context, BUTTON_DP)
-        root?.setPadding(padding, padding, padding, padding)
+        // No padding: the overlay is only the lines (text height × 1.1). The lyric area starts at the left edge; the
+        // lock gutter on the right is as wide as the main line is tall (the bar in 狀態列) and stays transparent.
+        val button = lockPx(context)
         lockButton?.let { lock ->
+            val inset = maxOf(0, button / 6)
+            lock.setPadding(inset, inset, inset, inset)
+            lock.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             (lock.layoutParams as? FrameLayout.LayoutParams)?.let { it.width = button; it.height = button; lock.layoutParams = it }
         }
         (mainText?.parent as? View)?.let { column ->
             (column.layoutParams as? FrameLayout.LayoutParams)?.let {
-                it.marginStart = button + padding
-                it.marginEnd = button + padding
+                it.marginStart = 0
+                it.marginEnd = button
                 column.layoutParams = it
             }
         }
@@ -497,7 +533,9 @@ object FloatingLyricsOverlay {
             null
         }
         layout.alpha = FloatingLyricsRules.windowAlpha(opacityPercent, systemLimit)
-        view.background = if (locked) null else GradientDrawable().apply {
+        // Move mode: only the lyric area gets the background, never the lock gutter.
+        view.background = null
+        (mainText?.parent as? View)?.background = if (locked) null else GradientDrawable().apply {
             cornerRadius = dp(context, 10).toFloat()
             setColor(0x47000000)
         }
@@ -512,7 +550,18 @@ object FloatingLyricsOverlay {
     private fun render(): Boolean {
         val view = root ?: return false
         val context = appContext ?: return false
-        val sample = PlaybackService.floatingLyricsSample()
+        val sample = PlaybackService.floatingLyricsSample()?.let { reported ->
+            val now = android.os.SystemClock.uptimeMillis()
+            if (reported.trackId != lastReportedTrack || reported.positionMs != lastReportedMs) {
+                if (reported.trackId != lastReportedTrack) smoothedMs = null
+                lastReportedTrack = reported.trackId
+                lastReportedMs = reported.positionMs
+                lastReportedAt = now
+            }
+            val smoothed = FloatingLyricsRules.smoothPositionMs(smoothedMs, reported.positionMs, lastReportedAt, now, reported.playing)
+            smoothedMs = smoothed
+            reported.copy(positionMs = smoothed)
+        }
         val index = if (sample != null && sample.active && sample.trackId == trackId) {
             FloatingLyricsRules.activeIndex(starts, sample.positionMs, offsetMs)
         } else {
@@ -531,6 +580,7 @@ object FloatingLyricsOverlay {
         } else {
             0f
         }
+
         var sliding = false
         mainText?.let {
             it.setLine(shown, progress)

@@ -15,7 +15,7 @@
     type TaskbarLyricsPlayback,
   } from './playback-clock';
   import type { LyricsLookSettings, PlaybackSnapshot } from './ipc';
-  import { FLOATING_LYRICS_LAYOUT, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
+  import { FLOATING_LYRICS_LAYOUT, floatingLyricsLockPx, normalizeFloatingLyricsSettings } from './floating-lyrics-settings.js';
   import { getDisplayActiveLyricIndex } from './lyrics-preferences.js';
   import { buildTimedLyricTimeline, findActiveLyricIndex } from './lyrics-window.js';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
@@ -40,10 +40,12 @@
   let { variant = 'taskbar' }: { variant?: 'taskbar' | 'floating' } = $props();
   const floating = untrack(() => variant) === 'floating';
   const normalizeSettings = (value: unknown): LyricsLookSettings => (floating ? normalizeFloatingLyricsSettings(value) : normalizeTaskbarLyricsSettings(value));
-  const reservedHeight = floating ? FLOATING_LYRICS_LAYOUT.paddingPx * 2 : 0;
-  const sidePadding = floating ? FLOATING_LYRICS_LAYOUT.buttonPx + FLOATING_LYRICS_LAYOUT.buttonInsetPx * 2 : 4;
+  // Floating: the window is only the lines (no padding); the lyric area starts at the left edge and the lock gutter
+  // (as wide as the main line is tall) is on the right.
+  const reservedHeight = 0;
 
   let settings = $state<LyricsLookSettings>(normalizeSettings(floating ? {} : DEFAULT_TASKBAR_LYRICS_SETTINGS));
+  let sidePadding = $derived(floating ? `0 ${floatingLyricsLockPx(settings.fontSizePx)}px 0 0` : '0 4px');
   let taskbarIsLight = $state(false);
   let data = $state<TaskbarLyricsData | null>(null);
   let playbackState = $state<PlaybackSnapshot['state']>('stopped');
@@ -219,7 +221,7 @@
   style:--taskbar-lyrics-size={`${fontPx}px`}
   style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}
   style:opacity={(settings.opacityPercent ?? 100) / 100}
-  style:padding={`${reservedHeight / 2}px ${sidePadding}px`}
+  style:padding={sidePadding}
   style:line-height={lineHeight}
 >
   {#key activeIndex}
