@@ -1,6 +1,7 @@
 <script lang="ts">
   import { formatDetailsBitrate, formatDetailsDuration, formatDetailsSampleRate } from './track-details-format.js';
   import { tr } from './i18n.js';
+  import { originalForPastedCover, pixelFingerprint, rememberCopiedCover } from './cover-clipboard.js';
   import { formatAudioFormat } from './track-columns.js';
   // 歌曲詳細資訊面板（ADR 0013 Phase 1）：單曲標籤檢視／暫存編輯，按「儲存」才寫檔。
   import { onDestroy, onMount } from 'svelte';
@@ -215,10 +216,27 @@
     return btoa(binary);
   }
 
+  /** Fingerprint of an image's decoded pixels (see cover-clipboard.js); null when it cannot be decoded. */
+  async function imageFingerprint(blob: Blob): Promise<string | null> {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width; canvas.height = bitmap.height;
+      const context = canvas.getContext('2d', { willReadFrequently: true })!;
+      context.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      return await pixelFingerprint(canvas.width, canvas.height, context.getImageData(0, 0, canvas.width, canvas.height).data);
+    } catch {
+      return null;
+    }
+  }
+
   async function pasteCover() {
     let blob: Blob | null;
     try { blob = clipboardImage ?? await readClipboardImage(); } catch (cause) { error = String(cause); return; }
     if (!blob) { error = tr('剪貼簿中沒有圖片'); return; }
+    // A cover copied in this app comes back as its original bytes (no JPG re-encode on Save).
+    blob = originalForPastedCover(await imageFingerprint(blob)) ?? blob;
     pendingCoverBase64 = await blobToBase64(blob);
     revoke(pendingCoverUrl);
     pendingCoverUrl = URL.createObjectURL(blob);
@@ -227,13 +245,18 @@
     removeCover = false;
   }
 
-  /** Clipboard images must be PNG: re-encode the current cover through a canvas. */
+  /** Clipboard images must be PNG: re-encode the current cover through a canvas (the original bytes are remembered for 貼上). */
   async function copyCover() {
     if (isAndroid) {
       // WebView's navigator.clipboard.write() resolves for images without reaching the system
       // clipboard; the native side shares the cover as a content URI instead.
       try {
+        const original = await invoke<ArrayBuffer>('track_details_cover', { trackId });
         await invoke('track_details_copy_cover', { trackId });
+        if (original && original.byteLength > 0) {
+          const blob = new Blob([original]);
+          rememberCopiedCover(await imageFingerprint(blob), blob);
+        }
         notice = tr('已複製封面');
         void refreshClipboard();
       } catch (cause) {
@@ -249,6 +272,8 @@
       canvas.width = bitmap.width; canvas.height = bitmap.height;
       canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
       bitmap.close();
+      const original = new Blob([bytes]);
+      rememberCopiedCover(await pixelFingerprint(canvas.width, canvas.height, canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data), original);
       const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(tr('PNG 轉換失敗'))), 'image/png'));
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
       notice = tr('已複製封面');
