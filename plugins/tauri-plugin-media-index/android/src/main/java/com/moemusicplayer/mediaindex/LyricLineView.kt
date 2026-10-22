@@ -54,7 +54,7 @@ internal class LyricLineView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val metrics = paint.fontMetrics
-        val height = Math.ceil((metrics.bottom - metrics.top + shadowRadius).toDouble()).toInt() + paddingTop + paddingBottom
+        val height = FloatingLyricsRules.lineHeightPx(metrics.ascent, metrics.descent) + paddingTop + paddingBottom
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(height, heightMeasureSpec))
     }
 
@@ -64,7 +64,7 @@ internal class LyricLineView(context: Context) : View(context) {
         val textWidth = paint.measureText(text)
         val x = FloatingLyricsRules.lineStartX(available, textWidth, align, progress) + paddingLeft
         val metrics = paint.fontMetrics
-        val baseline = (height - (metrics.bottom - metrics.top)) / 2f - metrics.top
+        val baseline = (height - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
         canvas.save()
         canvas.clipRect(0, 0, width, height)
         canvas.drawText(text, x, baseline, paint)

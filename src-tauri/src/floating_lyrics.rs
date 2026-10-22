@@ -27,10 +27,11 @@ pub const SETTINGS_EVENT: &str = "floating-lyrics-settings";
 pub const HOVER_EVENT: &str = "floating-lyrics-hover";
 
 /// Keep in step with `FLOATING_LYRICS_LAYOUT` in `src/lib/floating-lyrics-settings.js`.
-pub const WIDTH_CSS_PX: f64 = 800.0;
 pub const PADDING_CSS_PX: f64 = 8.0;
-pub const MIN_HEIGHT_CSS_PX: f64 = 48.0;
-pub const LINE_HEIGHT: f64 = 1.4;
+/// Room for the lock button (32 px plus its inset above and below) when the text is smaller.
+pub const MIN_HEIGHT_CSS_PX: f64 = 44.0;
+/// Height of one drawn line in em: the text's own height (1.25 em) with a 10% buffer.
+pub const LINE_HEIGHT: f64 = 1.375;
 pub const BUTTON_CSS_PX: f64 = 32.0;
 pub const BUTTON_INSET_CSS_PX: f64 = 6.0;
 
@@ -42,6 +43,8 @@ const SAVE_DELAY: Duration = Duration::from_millis(700);
 static CURRENT: Mutex<Option<FloatingLyricsSettings>> = Mutex::new(None);
 static STOP: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Whether the line on screen has a translation; the window is only as tall as the lines it draws.
+static HAS_TRANSLATION: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct Rect {
@@ -75,10 +78,10 @@ impl Rect {
     }
 }
 
-/// Window height in CSS px: the main line plus the translation line when shown, with padding.
-pub fn window_height_css(settings: &FloatingLyricsSettings) -> f64 {
+/// Window height in CSS px: the main line plus the translation line when one is drawn, with padding.
+pub fn window_height_css(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 {
     let font = f64::from(settings.font_size_px);
-    let translation = if settings.show_translation {
+    let translation = if settings.show_translation && has_translation {
         font * f64::from(settings.translation_scale_percent) / 100.0
     } else {
         0.0
@@ -153,6 +156,56 @@ pub fn centre_on(bounds: Rect, size: (i32, i32)) -> FloatingLyricsPosition {
     }
 }
 
+/// 「水平置中」 / 「垂直置中」: centre the window on one axis of the monitor that holds its centre point (the first
+/// monitor when none does), keeping the other coordinate.
+pub fn centre_axis(window: Rect, monitors: &[Rect], horizontal: bool) -> FloatingLyricsPosition {
+    let (cx, cy) = (
+        window.left + window.width() / 2,
+        window.top + window.height() / 2,
+    );
+    let holds = |area: &&Rect| cx >= area.left && cx < area.right && cy >= area.top && cy < area.bottom;
+    let Some(monitor) = monitors.iter().find(holds).or(monitors.first()) else {
+        return FloatingLyricsPosition {
+            x: window.left,
+            y: window.top,
+        };
+    };
+    let centre = centre_on(*monitor, (window.width(), window.height()));
+    if horizontal {
+        FloatingLyricsPosition {
+            x: centre.x,
+            y: window.top,
+        }
+    } else {
+        FloatingLyricsPosition {
+            x: window.left,
+            y: centre.y,
+        }
+    }
+}
+
+/// Centre the open window on one axis (see `centre_axis`); the move event saves the position.
+pub fn centre_window_axis(app: &AppHandle, horizontal: bool) {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return;
+    };
+    let Some(rect) = window_rect(&window) else {
+        return;
+    };
+    let monitors: Vec<Rect> = window
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|monitor| Rect {
+            left: monitor.position().x,
+            top: monitor.position().y,
+            right: monitor.position().x + monitor.size().width as i32,
+            bottom: monitor.position().y + monitor.size().height as i32,
+        })
+        .collect();
+    place(&window, Some(centre_axis(rect, &monitors, horizontal)));
+}
+
 pub fn is_window_label(label: &str) -> bool {
     label == WINDOW_LABEL
 }
@@ -176,7 +229,7 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
         None => open_window(app)?,
     };
     window
-        .set_size(LogicalSize::new(WIDTH_CSS_PX, window_height_css(settings)))
+        .set_size(window_size(settings))
         .map_err(|error| error.to_string())?;
     place(&window, settings.position);
     window
@@ -188,6 +241,51 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     window.show().map_err(|error| error.to_string())?;
     start_watcher(app);
     Ok(())
+}
+
+fn window_size(settings: &FloatingLyricsSettings) -> LogicalSize<f64> {
+    LogicalSize::new(
+        f64::from(settings.width_px),
+        window_height_css(settings, HAS_TRANSLATION.load(Ordering::SeqCst)),
+    )
+}
+
+/// The page says whether the line it draws has a translation: grow or shrink the window to the lines (top-left kept,
+/// then kept on screen).
+pub fn fit_lines(app: &AppHandle, has_translation: bool) {
+    if HAS_TRANSLATION.swap(has_translation, Ordering::SeqCst) == has_translation {
+        return;
+    }
+    let (Some(settings), Some(window)) = (current(), app.get_webview_window(WINDOW_LABEL)) else {
+        return;
+    };
+    if settings.enabled && window.set_size(window_size(&settings)).is_ok() {
+        if let Some(rect) = window_rect(&window) {
+            place(
+                &window,
+                Some(FloatingLyricsPosition {
+                    x: rect.left,
+                    y: rect.top,
+                }),
+            );
+        }
+    }
+}
+
+/// The 面板 arrows in the settings: one physical px in any direction, kept on the work area (the move event saves the position).
+pub fn nudge(app: &AppHandle, dx: i32, dy: i32) {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return;
+    };
+    if let Some(rect) = window_rect(&window) {
+        place(
+            &window,
+            Some(FloatingLyricsPosition {
+                x: rect.left + dx.clamp(-1, 1),
+                y: rect.top + dy.clamp(-1, 1),
+            }),
+        );
+    }
 }
 
 /// Stop the watcher and close the window.
@@ -250,7 +348,10 @@ fn open_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     .resizable(false)
     .focusable(false)
     .visible(false)
-    .inner_size(WIDTH_CSS_PX, MIN_HEIGHT_CSS_PX)
+    .inner_size(
+        f64::from(crate::settings::FloatingLyricsSettings::DEFAULT_WIDTH_PX),
+        MIN_HEIGHT_CSS_PX,
+    )
     .build()
     .map_err(|error| format!("無法開啟浮動歌詞視窗：{error}"))?;
     if let Ok(hwnd) = window.hwnd() {
@@ -416,11 +517,13 @@ mod tests {
             show_translation: true,
             ..Default::default()
         };
-        assert_eq!(window_height_css(&settings), 63.0 + 16.0);
+        // (30 + 15) * 1.375 = 61.875 -> 62; 30 * 1.375 = 41.25 -> 42.
+        assert_eq!(window_height_css(&settings, true), 62.0 + 16.0);
+        assert_eq!(window_height_css(&settings, false), 42.0 + 16.0, "no translation on this line: shrink");
         settings.show_translation = false;
-        assert_eq!(window_height_css(&settings), 42.0 + 16.0);
+        assert_eq!(window_height_css(&settings, true), 42.0 + 16.0);
         settings.font_size_px = 1;
-        assert_eq!(window_height_css(&settings), MIN_HEIGHT_CSS_PX);
+        assert_eq!(window_height_css(&settings, true), MIN_HEIGHT_CSS_PX);
     }
 
     #[test]
@@ -434,6 +537,26 @@ mod tests {
         assert_eq!(
             unlock_button_rect(window, f64::NAN),
             unlock_button_rect(window, 1.0)
+        );
+    }
+
+    #[test]
+    fn centring_one_axis_uses_the_monitor_under_the_window_centre() {
+        let monitors = [rect(0, 0, 1920, 1080), rect(1920, 0, 4480, 1440)];
+        // Centre point (2420, 150) is on the second monitor.
+        let window = rect(2020, 100, 2820, 200);
+        assert_eq!(
+            centre_axis(window, &monitors, true),
+            FloatingLyricsPosition { x: 1920 + (2560 - 800) / 2, y: 100 }
+        );
+        assert_eq!(
+            centre_axis(window, &monitors, false),
+            FloatingLyricsPosition { x: 2020, y: (1440 - 100) / 2 }
+        );
+        // Off every monitor: the first one.
+        assert_eq!(
+            centre_axis(rect(-5000, 10, -4800, 60), &monitors, true),
+            FloatingLyricsPosition { x: (1920 - 200) / 2, y: 10 }
         );
     }
 

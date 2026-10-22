@@ -116,7 +116,13 @@
   let activeLine = $derived(activeIndex >= 0 ? timeline[activeIndex]?.line : undefined);
   let text = $derived(activeLine?.text?.trim() ?? '');
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
-  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight - reservedHeight, translation !== '' ? settings.translationScalePercent : 0));
+  const lineHeight = floating ? FLOATING_LYRICS_LAYOUT.lineHeight : 1.4;
+  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, viewportHeight - reservedHeight, translation !== '' ? settings.translationScalePercent : 0, lineHeight));
+  // The floating window is only as tall as the lines it draws: tell it when the translation line comes or goes.
+  let hasTranslation = $derived(translation !== '');
+  $effect(() => {
+    if (floating) void invokeCommand('floating_lyrics_fit', { hasTranslation }).catch(() => {});
+  });
   let color = $derived(getTaskbarLyricsColor(settings, taskbarIsLight));
   let effectRgb = $derived(getTaskbarLyricsEffectRgb(settings, taskbarIsLight));
   let alignItems = $derived(settings.align === 'center' ? 'center' : settings.align === 'right' ? 'flex-end' : 'flex-start');
@@ -214,6 +220,7 @@
   style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}
   style:opacity={(settings.opacityPercent ?? 100) / 100}
   style:padding={`${reservedHeight / 2}px ${sidePadding}px`}
+  style:line-height={lineHeight}
 >
   {#key activeIndex}
     {#if text}

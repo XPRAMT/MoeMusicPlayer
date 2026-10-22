@@ -7432,6 +7432,33 @@ async fn floating_lyrics_set_locked(
     Ok(saved)
 }
 
+/// The floating window's page tells whether its line has a translation, so the window fits the lines it draws.
+#[tauri::command]
+fn floating_lyrics_fit(app: AppHandle, has_translation: bool) {
+    #[cfg(target_os = "windows")]
+    floating_lyrics::fit_lines(&app, has_translation);
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, has_translation);
+}
+
+/// 「水平置中」 / 「垂直置中」 of 面板: centre on one axis of the monitor under the window's centre.
+#[tauri::command]
+fn floating_lyrics_centre_axis(app: AppHandle, horizontal: bool) {
+    #[cfg(target_os = "windows")]
+    floating_lyrics::centre_window_axis(&app, horizontal);
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, horizontal);
+}
+
+/// The 面板 arrows (↑ ↓ ← →): move the floating window 1 px.
+#[tauri::command]
+fn floating_lyrics_nudge(app: AppHandle, dx: i32, dy: i32) {
+    #[cfg(target_os = "windows")]
+    floating_lyrics::nudge(&app, dx, dy);
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, dx, dy);
+}
+
 /// Forget the saved position: the window goes back to its default place on the primary monitor.
 #[tauri::command]
 async fn floating_lyrics_reset_position(
@@ -12419,6 +12446,9 @@ pub fn run() {
             settings_set_floating_lyrics,
             floating_lyrics_set_locked,
             floating_lyrics_reset_position,
+            floating_lyrics_fit,
+            floating_lyrics_nudge,
+            floating_lyrics_centre_axis,
             floating_lyrics_android,
             taskbar_lyrics_theme,
             taskbar_lyrics_monitors,

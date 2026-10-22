@@ -12,6 +12,7 @@
     fontAriaLabel,
     colorAriaLabel,
     autoColorHint,
+    alignLabel,
   }: {
     settings: LyricsLookSettings;
     onChange: (patch: Partial<LyricsLookSettings>) => void;
@@ -19,11 +20,13 @@
     fontAriaLabel: string;
     colorAriaLabel: string;
     autoColorHint: string;
+    /** Label of the alignment row (floating lyrics: 「文字排版」, the text inside the panel). */
+    alignLabel?: string;
   } = $props();
 </script>
 
 <div class="cover-corner-setting" role="group" aria-labelledby="{idPrefix}-align-label">
-  <span id="{idPrefix}-align-label" class="cover-corner-setting-label"><strong>{tr("對齊")}</strong></span>
+  <span id="{idPrefix}-align-label" class="cover-corner-setting-label"><strong>{alignLabel ?? tr("對齊")}</strong></span>
   <div class="layout-choice-row lyrics-text-effect-row">
     {#each [['left', tr('靠左')], ['center', tr('置中')], ['right', tr('靠右')]] as [value, label] (value)}
       <button
@@ -33,6 +36,7 @@
         onclick={() => onChange({ align: value as LyricsLookSettings['align'] })}
       >{label}</button>
     {/each}
+
   </div>
 </div>
 <label class="lyrics-preference-range">

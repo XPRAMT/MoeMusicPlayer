@@ -21,7 +21,8 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 0 }).fontSizePx, 1, 'the font starts at 1 px');
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 50 }).fontSizePx, 50);
   assert.equal(normalizeTaskbarLyricsSettings({}).opacityPercent, 100);
-  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 0 }).opacityPercent, 10);
+  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 0 }).opacityPercent, 1);
+  assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 1 }).opacityPercent, 1);
   assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 64.6 }).opacityPercent, 65);
   assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 500 }).opacityPercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ opacityPercent: 'x' }).opacityPercent, 100);

@@ -50,7 +50,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   without a saved position is centred too. The mode buttons and "Reset position" share one row on both platforms.
 - The translation line is no longer faded: the 80% opacity of `.taskbar-lyrics-translation` (shared by the taskbar
   and Windows floating lyrics) and the `alpha = 0.8` of the Android translation view were removed.
-- `opacityPercent` (10–100, default 100) is saved separately in `taskbarLyrics` and `floatingLyrics` and applies to
+- `opacityPercent` (1–100, default 100) is saved separately in `taskbarLyrics` and `floatingLyrics` and applies to
   the main line and the translation alike (Windows: opacity of the lyric container; Android: window alpha). It
   replaces the fixed 80% of Android fixed mode. Android 12+ still blocks touches through an overlay above the
   system's maximum obscuring opacity (normally 0.8), so in fixed mode the window alpha is the setting capped at that
@@ -59,3 +59,40 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   put short centred or right-aligned lines outside the view, so nothing was shown). A line that fits follows the
   alignment; a longer one slides with a fractional offset updated every display frame (`Choreographer`) while it
   slides during playback, otherwise every 100 ms.
+
+## Amendment (2026-10-23): width, fitted height, status bar, 1–100% opacity
+
+- `widthPx` (200–4000, default 800) is saved in `floatingLyrics`: CSS px on Windows, dp on Android, narrowed to the
+  screen. A slider 「寬度」 on the floating tab sets it.
+- The height is not a setting. Each line box is the text's own height with a 10% buffer (Windows: line-height
+  1.375 em = 1.25 em × 1.1; Android `LyricLineView`: (descent − ascent) × 1.1). The window holds the main line plus
+  the translation line only while the current line has one: the floating page calls `floating_lyrics_fit
+  { hasTranslation }` and `floating_lyrics::fit_lines` resizes (top-left kept, then kept on the work area); the
+  Android window wraps its content. The floor is the lock button (44 CSS px).
+- Android: `FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS` and cutout mode SHORT_EDGES; clamping and centring use
+  the real display size, so the overlay can be dragged over the status bar. Windows still clamps to the work area.
+- `opacityPercent` for taskbar and floating lyrics is 1–100 (Rust `OPACITY_RANGE_PERCENT`, JS `LYRICS_OPACITY_PERCENT`,
+  Kotlin `FloatingLyricsRules.opacityPercent`). Android fixed mode is still capped at the system limit (~0.8).
+- Android keeps portrait and landscape apart: `widthPx` is the portrait width and `landscapeWidthPx` the landscape
+  one (the slider, labelled 「寬度（直向）／（橫向）」, edits the current orientation); the position is saved under
+  `x_portrait`/`y_portrait` and `x_landscape`/`y_landscape` in `moe_floating_lyrics`. A rotation
+  (`ComponentCallbacks.onConfigurationChanged`) applies that orientation's width and saved position; with none it is
+  centred. Reset clears only the current orientation. Windows has one width (`widthPx`); with no saved position the
+  window is centred on the primary monitor, as an Android orientation without one is centred on the screen.
+- Settings layout: the floating tab's 「對齊」 row is labelled 「文字排版」 (text alignment inside the panel,
+  `LyricsLookSettings` `alignLabel`). The 「模式」 row is gone. A 「面板」 item, the same on both
+  platforms except that 「狀態列」 is Android only, holds 「狀態列」, a D-pad (↑ ↓ ← →, 1 px per tap, saved per
+  orientation on Android) whose centre is the lock toggle (lock icon only: locked = 固定模式, unlocked = 移動模式),
+  「水平置中」 / 「垂直置中」 (one axis only, the other kept; Windows: the monitor holding the panel's centre point,
+  `floating_lyrics_centre_axis { horizontal }` / `centre_axis`; Android: the screen, `floatingLyricsUpdate
+  { centreAxis }`, saved for the current orientation), 「重設位置」 (Windows: still the primary monitor's centre) and
+  the width slider. Windows arrows call `floating_lyrics_nudge { dx, dy }` (1 physical px, kept on the
+  work area; the move event saves the position); Android sends `floatingLyricsUpdate { nudgeX, nudgeY }`.
+- Android 「狀態列」 toggles a
+  per-orientation mode (`statusbar_portrait` / `statusbar_landscape`): no padding, lock button as tall as the status bar
+  (`status_bar_height`), main line only, font sized so its line (text height × 1.1) equals the status bar height
+  (`FloatingLyricsRules.fontForLineHeight`), and the panel moved to y = 0 beside the top cutout on the roomier side
+  (`statusBarX`; centred with no cutout); the position is saved for that orientation. The D-pad moves the panel 1 px,
+  saved for the current orientation. `floatingLyricsStatus`
+  returns `statusBar` for the current orientation; the page refreshes it on rotation. Width stays the per-orientation
+  width setting.

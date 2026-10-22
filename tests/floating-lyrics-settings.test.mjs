@@ -1,6 +1,7 @@
 ﻿import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  floatingLyricsWidthField,
   DEFAULT_FLOATING_LYRICS_SETTINGS,
   buildFloatingLyricsNativeData,
   normalizeFloatingLyricsSettings,
@@ -24,7 +25,20 @@ test('floating lyrics settings repair field by field with their own defaults', (
   assert.equal(repaired.translationScalePercent, 100);
   assert.equal(repaired.opacityPercent, 100, 'missing opacity is fully opaque');
   assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 40 }).opacityPercent, 40);
-  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 1 }).opacityPercent, 10);
+  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 1 }).opacityPercent, 1);
+  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 0 }).opacityPercent, 1);
+  assert.equal(normalizeFloatingLyricsSettings({}).widthPx, 800);
+  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 50 }).widthPx, 200);
+  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 99999 }).widthPx, 4000);
+  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 1234.4 }).widthPx, 1234);
+  assert.equal(normalizeFloatingLyricsSettings({ widthPx: 'wide' }).widthPx, 800);
+  assert.deepEqual(
+    (({ widthPx, landscapeWidthPx }) => ({ widthPx, landscapeWidthPx }))(normalizeFloatingLyricsSettings({ widthPx: 600, landscapeWidthPx: 9999 })),
+    { widthPx: 600, landscapeWidthPx: 4000 },
+  );
+  assert.equal(floatingLyricsWidthField(true, true), 'landscapeWidthPx');
+  assert.equal(floatingLyricsWidthField(true, false), 'widthPx');
+  assert.equal(floatingLyricsWidthField(false, true), 'widthPx');
   assert.equal(repaired.customColor, '#abcdef');
   assert.equal(repaired.align, 'center');
   assert.equal(repaired.textEffect, 'stroke');

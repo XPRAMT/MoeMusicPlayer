@@ -43,6 +43,11 @@
     IconVolume4,
     IconVolumeOff,
     IconX,
+    IconLock,
+    IconChevronUp,
+    IconChevronDown,
+    IconChevronLeft,
+    IconLockOpen,
   } from '@tabler/icons-svelte-runes';
   import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { isTauri } from '@tauri-apps/api/core';
@@ -203,6 +208,8 @@
   import type { FloatingLyricsAndroidStatus, FloatingLyricsSettings } from './lib/ipc';
   import {
     DEFAULT_FLOATING_LYRICS_SETTINGS,
+    FLOATING_LYRICS_WIDTH_PX,
+    floatingLyricsWidthField,
     LYRICS_SETTINGS_TAB_STORAGE_KEY,
     buildFloatingLyricsNativeData,
     normalizeFloatingLyricsSettings,
@@ -604,6 +611,14 @@
   let taskbarLyricsQueue: Promise<void> = Promise.resolve();
   /** Floating lyrics (ADR 0032): saved apart from the taskbar lyrics, with the same look options. */
   let floatingLyricsSettings = $state<FloatingLyricsSettings>({ ...DEFAULT_FLOATING_LYRICS_SETTINGS });
+  // Android keeps a portrait and a landscape width for the floating lyrics: the slider edits the current one.
+  const landscapeQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(orientation: landscape)') : null;
+  let screenIsLandscape = $state(landscapeQuery?.matches ?? false);
+  landscapeQuery?.addEventListener('change', (event) => {
+    screenIsLandscape = event.matches;
+    // 狀態列 is saved per orientation on the phone.
+    void refreshFloatingLyricsAndroidStatus();
+  });
   let floatingLyricsError = $state<string | null>(null);
   let floatingLyricsRevision = 0;
   let floatingLyricsQueue: Promise<void> = Promise.resolve();
@@ -662,6 +677,8 @@
   let settingsRecoveryWarning = $state<string | null>(null);
   let settingsSourceRegistryAuthoritative = $state(true);
   let capabilities = $state<RuntimeCapabilities | null>(null);
+  let floatingLyricsLocked = $derived(capabilities?.platform === 'android' ? floatingLyricsAndroidStatus?.locked === true : floatingLyricsSettings.locked);
+  let widthField = $derived(floatingLyricsWidthField(capabilities?.platform === 'android', screenIsLandscape));
   // Android converts DSD to 176.4 kHz only (AudioTrack tops out at 192 kHz).
   let dsdEffectiveRateHz = $derived(capabilities?.platform === 'android' ? 176_400 : dsdSettings.outputRateHz);
   const showCustomTitlebar = $derived(capabilities?.platform === 'windows');
@@ -2529,7 +2546,7 @@
     if (!isTauri() || capabilities?.platform !== 'android') return;
     try {
       const status = await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsStatus' }) as Partial<FloatingLyricsAndroidStatus> | null;
-      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true };
+      floatingLyricsAndroidStatus = { canDrawOverlays: status?.canDrawOverlays === true, locked: status?.locked === true, statusBar: status?.statusBar === true };
     } catch (error) {
       floatingLyricsError = getErrorText(error);
     }
@@ -2543,6 +2560,36 @@
       floatingLyricsError = getErrorText(error);
     }
     await refreshFloatingLyricsAndroidStatus();
+  }
+
+  /** Android: 狀態列 on/off or a 1 px nudge, both for the current orientation (the phone keeps them). */
+  /** 「水平置中」 / 「垂直置中」 (Windows: the monitor under the panel; Android: the screen, this orientation). */
+  async function centreFloatingLyrics(horizontal: boolean): Promise<void> {
+    if (capabilities?.platform === 'android') return sendFloatingLyricsAndroid({ centreAxis: horizontal ? 'horizontal' : 'vertical' });
+    try {
+      await invokeCommand('floating_lyrics_centre_axis', { horizontal });
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+  }
+
+  async function sendFloatingLyricsAndroid(payload: { statusBar?: boolean; nudgeX?: number; nudgeY?: number; centreAxis?: 'horizontal' | 'vertical' }): Promise<void> {
+    try {
+      await invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload });
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
+    if (payload.statusBar !== undefined) await refreshFloatingLyricsAndroidStatus();
+  }
+
+  /** ← / → of 面板: 1 px sideways (Android: the current orientation's saved position). */
+  async function nudgeFloatingLyrics(dx: number, dy: number): Promise<void> {
+    if (capabilities?.platform === 'android') return sendFloatingLyricsAndroid({ nudgeX: dx, nudgeY: dy });
+    try {
+      await invokeCommand('floating_lyrics_nudge', { dx, dy });
+    } catch (error) {
+      floatingLyricsError = getErrorText(error);
+    }
   }
 
   async function openOverlayPermissionSettings(): Promise<void> {
@@ -4542,20 +4589,55 @@
                         {/if}
                       </div>
                     {/if}
-                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}floating-lyrics-mode-label">
-                      <span id="{scope}floating-lyrics-mode-label" class="cover-corner-setting-label"><strong>{tr("模式")}</strong></span>
-                      <div class="layout-choice-row lyrics-text-effect-row">
-                        {#each [[false, tr('移動模式')], [true, tr('固定模式')]] as [value, label] (String(value))}
-                          {@const current = capabilities?.platform === 'android' ? floatingLyricsAndroidStatus?.locked === true : floatingLyricsSettings.locked}
+
+                    <div class="cover-corner-setting" role="group" aria-labelledby="{scope}floating-lyrics-panel-label">
+                      <span id="{scope}floating-lyrics-panel-label" class="cover-corner-setting-label"><strong>{tr("面板")}</strong></span>
+                      <div class="layout-choice-row lyrics-text-effect-row floating-lyrics-panel-row">
+                        {#if capabilities?.platform === 'android'}
                           <button
                             type="button"
-                            aria-pressed={current === value}
-                            class:chosen={current === value}
-                            onclick={() => void setFloatingLyricsLocked(value as boolean)}
-                          >{label}</button>
-                        {/each}
+                            aria-pressed={floatingLyricsAndroidStatus?.statusBar === true}
+                            class:chosen={floatingLyricsAndroidStatus?.statusBar === true}
+                            disabled={!floatingLyricsSettings.enabled}
+                            title={tr("字體與高度剛好放進狀態列，並移到狀態列（避開鏡頭）；直向與橫向分開保存")}
+                            onclick={() => void sendFloatingLyricsAndroid({ statusBar: floatingLyricsAndroidStatus?.statusBar !== true })}
+                          >{tr("狀態列")}</button>
+                        {/if}
+                        <div class="floating-lyrics-dpad" role="group" aria-label={tr("移動面板")}>
+                          <button type="button" class="dpad-up" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向上移動 1 像素")} title={tr("向上移動 1 像素")} onclick={() => void nudgeFloatingLyrics(0, -1)}><IconChevronUp size={18} aria-hidden="true" /></button>
+                          <button type="button" class="dpad-left" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向左移動 1 像素")} title={tr("向左移動 1 像素")} onclick={() => void nudgeFloatingLyrics(-1, 0)}><IconChevronLeft size={18} aria-hidden="true" /></button>
+                          <button
+                            type="button"
+                            class="dpad-lock"
+                            class:chosen={floatingLyricsLocked}
+                            aria-pressed={floatingLyricsLocked}
+                            aria-label={floatingLyricsLocked ? tr("固定模式（點一下解鎖）") : tr("移動模式（點一下鎖定）")}
+                            title={floatingLyricsLocked ? tr("固定模式（點一下解鎖）") : tr("移動模式（點一下鎖定）")}
+                            onclick={() => void setFloatingLyricsLocked(!floatingLyricsLocked)}
+                          >
+                            {#if floatingLyricsLocked}<IconLock size={18} aria-hidden="true" />{:else}<IconLockOpen size={18} aria-hidden="true" />{/if}
+                          </button>
+                          <button type="button" class="dpad-right" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向右移動 1 像素")} title={tr("向右移動 1 像素")} onclick={() => void nudgeFloatingLyrics(1, 0)}><IconChevronRight size={18} aria-hidden="true" /></button>
+                          <button type="button" class="dpad-down" disabled={!floatingLyricsSettings.enabled} aria-label={tr("向下移動 1 像素")} title={tr("向下移動 1 像素")} onclick={() => void nudgeFloatingLyrics(0, 1)}><IconChevronDown size={18} aria-hidden="true" /></button>
+                        </div>
+                        <button type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void centreFloatingLyrics(true)}>{tr("水平置中")}</button>
+                        <button type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void centreFloatingLyrics(false)}>{tr("垂直置中")}</button>
                         <button class="floating-lyrics-reset" type="button" disabled={!floatingLyricsSettings.enabled} onclick={() => void resetFloatingLyricsPosition()}>{tr("重設位置")}</button>
                       </div>
+                      <label class="lyrics-preference-range">
+                        <span><strong>{capabilities?.platform === 'android'
+                          ? (screenIsLandscape ? tr("寬度（橫向）") : tr("寬度（直向）"))
+                          : tr("寬度")}</strong><output>{floatingLyricsSettings[widthField]}</output></span>
+                        <input
+                          type="range"
+                          min={FLOATING_LYRICS_WIDTH_PX.min}
+                          max={FLOATING_LYRICS_WIDTH_PX.max}
+                          step={FLOATING_LYRICS_WIDTH_PX.step}
+                          value={floatingLyricsSettings[widthField]}
+                          aria-label={tr("浮動歌詞寬度")}
+                          oninput={(event) => setFloatingLyricsSettings({ [widthField]: Number(event.currentTarget.value) })}
+                        />
+                      </label>
                     </div>
                     <LyricsLookSettings
                       settings={floatingLyricsSettings}
@@ -4564,6 +4646,7 @@
                       fontAriaLabel={tr("浮動歌詞字體大小")}
                       colorAriaLabel={tr("浮動歌詞顏色")}
                       autoColorHint={tr("關閉時使用白色")}
+                      alignLabel={tr("文字排版")}
                     />
                     {#if floatingLyricsError}
                       <p class="settings-preference-status" role="status">{floatingLyricsError}</p>

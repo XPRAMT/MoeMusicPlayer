@@ -5,7 +5,7 @@ export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, defa
 /** The translation line as a percentage of the main line (100 = the same size). */
 export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
 /** Opacity of the whole lyric (main line and translation alike); never fully invisible. */
-export const LYRICS_OPACITY_PERCENT = Object.freeze({ min: 10, max: 100, default: 100 });
+export const LYRICS_OPACITY_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
 export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right']);
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#00e1ff';
 
@@ -134,11 +134,12 @@ export function getTaskbarLyricsEffectRgb(settings, taskbarIsLight) {
  * Font size that fits the window: the chosen size, but never so large that one line (or a line plus the translation
  * line at `translationScalePercent` of its size) does not fit the window height.
  * @param {number} fontSizePx @param {number} heightPx @param {number} translationScalePercent 0 when there is no translation line
+ * @param {number} [lineHeight] line box in em (taskbar 1.4; floating lyrics 1.375)
  */
-export function fitTaskbarLyricsFontSize(fontSizePx, heightPx, translationScalePercent) {
+export function fitTaskbarLyricsFontSize(fontSizePx, heightPx, translationScalePercent, lineHeight = 1.4) {
   if (!(heightPx > 0)) return fontSizePx;
   // Line box = 1.4 em (the font's content box is 1.33 em, so descenders are not clipped).
-  const lines = 1.4 * (1 + Math.max(0, translationScalePercent) / 100);
+  const lines = lineHeight * (1 + Math.max(0, translationScalePercent) / 100);
   return Math.max(1, Math.min(fontSizePx, Math.floor(heightPx / lines)));
 }
 

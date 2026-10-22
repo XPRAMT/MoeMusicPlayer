@@ -9,8 +9,13 @@ import {
   normalizeTaskbarLyricsSettings,
 } from './taskbar-lyrics-settings.js';
 
-/** Keep in step with floating_lyrics.rs (window width, padding, lock button). */
-export const FLOATING_LYRICS_LAYOUT = Object.freeze({ widthPx: 800, paddingPx: 8, minHeightPx: 48, buttonPx: 32, buttonInsetPx: 6 });
+/**
+ * Keep in step with floating_lyrics.rs (padding, line box, lock button). The window is as tall as the lines it draws:
+ * each line box is the text's own height (1.25 em) with a 10% buffer.
+ */
+export const FLOATING_LYRICS_LAYOUT = Object.freeze({ paddingPx: 8, minHeightPx: 44, lineHeight: 1.375, buttonPx: 32, buttonInsetPx: 6 });
+/** Panel width: CSS px on Windows, dp on Android (settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX`). */
+export const FLOATING_LYRICS_WIDTH_PX = Object.freeze({ min: 200, max: 4000, step: 10, default: 800 });
 export const FLOATING_LYRICS_POSITION_LIMIT = 1_000_000;
 
 /** @typedef {import('./ipc').FloatingLyricsSettings} FloatingLyricsSettings */
@@ -22,6 +27,8 @@ export const DEFAULT_FLOATING_LYRICS_SETTINGS = Object.freeze({
   fontSizePx: 28,
   translationScalePercent: 80,
   opacityPercent: 100,
+  widthPx: FLOATING_LYRICS_WIDTH_PX.default,
+  landscapeWidthPx: FLOATING_LYRICS_WIDTH_PX.default,
   useCustomColor: false,
   customColor: TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR,
   showTranslation: true,
@@ -29,6 +36,21 @@ export const DEFAULT_FLOATING_LYRICS_SETTINGS = Object.freeze({
   locked: false,
   position: null,
 });
+
+/** @param {unknown} value @returns {number} */
+export function normalizeFloatingLyricsWidth(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return FLOATING_LYRICS_WIDTH_PX.default;
+  return Math.max(FLOATING_LYRICS_WIDTH_PX.min, Math.min(FLOATING_LYRICS_WIDTH_PX.max, Math.round(value)));
+}
+
+/**
+ * Which width field the slider edits: Android keeps portrait (`widthPx`) and landscape (`landscapeWidthPx`) apart;
+ * Windows has one.
+ * @param {boolean} isAndroid @param {boolean} landscape @returns {'widthPx' | 'landscapeWidthPx'}
+ */
+export function floatingLyricsWidthField(isAndroid, landscape) {
+  return isAndroid && landscape ? 'landscapeWidthPx' : 'widthPx';
+}
 
 /** @param {unknown} value @returns {{ x: number, y: number } | null} */
 export function normalizeFloatingLyricsPosition(value) {
@@ -68,6 +90,8 @@ export function normalizeFloatingLyricsSettings(value) {
     fontSizePx: look.fontSizePx,
     translationScalePercent: look.translationScalePercent,
     opacityPercent: look.opacityPercent,
+    widthPx: normalizeFloatingLyricsWidth(source.widthPx),
+    landscapeWidthPx: normalizeFloatingLyricsWidth(source.landscapeWidthPx),
     useCustomColor: look.useCustomColor,
     customColor: look.customColor,
     showTranslation: look.showTranslation,

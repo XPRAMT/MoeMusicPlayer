@@ -3083,6 +3083,33 @@ input:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+/* Floating lyrics 面板 (ADR 0032): 狀態列 (Android), the D-pad (centre: lock), 重設位置, side by side. */
+.layout-choice-row.lyrics-text-effect-row.floating-lyrics-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.floating-lyrics-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  grid-template-rows: repeat(3, 40px);
+  gap: 4px;
+}
+
+.layout-choice-row.lyrics-text-effect-row .floating-lyrics-dpad button {
+  min-height: 0;
+  padding: 0;
+}
+
+.floating-lyrics-dpad .dpad-up { grid-area: 1 / 2; }
+.floating-lyrics-dpad .dpad-left { grid-area: 2 / 1; }
+.floating-lyrics-dpad .dpad-lock { grid-area: 2 / 2; }
+.floating-lyrics-dpad .dpad-right { grid-area: 2 / 3; }
+.floating-lyrics-dpad .dpad-down { grid-area: 3 / 2; }
+
 .resampling-stack {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

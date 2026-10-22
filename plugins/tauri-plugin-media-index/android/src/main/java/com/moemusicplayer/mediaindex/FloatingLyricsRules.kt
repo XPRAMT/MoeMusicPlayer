@@ -10,7 +10,35 @@ object FloatingLyricsRules {
     const val LAST_LINE_FALLBACK_MS = 5_000L
 
     /** Same range as settings.rs `OPACITY_RANGE_PERCENT`. */
-    fun opacityPercent(value: Int): Int = value.coerceIn(10, 100)
+    fun opacityPercent(value: Int): Int = value.coerceIn(1, 100)
+
+    /** Same range as settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX` (dp here). */
+    fun widthDp(value: Int): Int = value.coerceIn(200, 4000)
+
+    /** Font px whose line (text height × 1.1, text height = `emHeight` × px) is at most `lineHeight` px. */
+    fun fontForLineHeight(lineHeight: Int, emHeight: Float): Float =
+        maxOf(1f, Math.floor((lineHeight / (emHeight * 1.1f)).toDouble()).toFloat())
+
+    /**
+     * Left edge in the status bar strip: centred when there is no top cutout; otherwise beside the camera, on the
+     * side with more room (`gap` px away), kept on the screen.
+     */
+    fun statusBarX(screenWidth: Int, width: Int, cutout: Pair<Int, Int>?, gap: Int): Int {
+        val maxX = maxOf(0, screenWidth - width)
+        if (cutout == null) return centredStart(screenWidth, width)
+        val (left, right) = cutout
+        val x = if (screenWidth - right >= left) right + gap else left - gap - width
+        return x.coerceIn(0, maxX)
+    }
+
+    /** Suffix of the saved position keys: portrait and landscape are saved apart. */
+    fun orientationKey(landscape: Boolean): String = if (landscape) "landscape" else "portrait"
+
+    /** Overlay width in px: the chosen width, narrowed to the screen. */
+    fun overlayWidth(chosenPx: Int, screenWidth: Int): Int = maxOf(1, minOf(chosenPx, screenWidth))
+
+    /** Height of one drawn line: the text's own height (ascent to descent) with a 10% buffer. */
+    fun lineHeightPx(ascent: Float, descent: Float): Int = Math.ceil(((descent - ascent) * 1.1f).toDouble()).toInt()
 
     /** Window alpha from the opacity setting, capped by the system's touch-through limit when there is one. */
     fun windowAlpha(opacityPercent: Int, systemLimit: Float?): Float {
@@ -78,7 +106,10 @@ object FloatingLyricsRules {
         return value.substring(1).toIntOrNull(16)
     }
 
-    /** Keep the overlay fully on the screen (sizes in px; a view larger than the screen sticks to the top-left). */
+    /**
+     * Keep the overlay fully on the whole display, status bar area included (sizes in px; a view larger than the
+     * screen sticks to the top-left).
+     */
     fun clampPosition(x: Int, y: Int, width: Int, height: Int, screenWidth: Int, screenHeight: Int): Pair<Int, Int> =
         Pair(x.coerceIn(0, maxOf(0, screenWidth - width)), y.coerceIn(0, maxOf(0, screenHeight - height)))
 }

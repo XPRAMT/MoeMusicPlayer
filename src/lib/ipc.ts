@@ -244,6 +244,10 @@ export interface FloatingLyricsSettings extends LyricsLookSettings {
   enabled: boolean;
   /** Fixed mode (click-through); false: move mode. Android keeps its own lock state on the phone. */
   locked: boolean;
+  /** Panel width, 200–4000: CSS px on Windows, dp on Android; narrowed to the screen. The height follows the lines. */
+  widthPx: number;
+  /** Android only: the width while landscape (`widthPx` is portrait there). */
+  landscapeWidthPx: number;
   /** Physical pixels of the virtual desktop (Windows); null: the default place. */
   position: { x: number; y: number } | null;
 }
@@ -252,6 +256,8 @@ export interface FloatingLyricsSettings extends LyricsLookSettings {
 export interface FloatingLyricsAndroidStatus {
   canDrawOverlays: boolean;
   locked: boolean;
+  /** 狀態列 for the current orientation. */
+  statusBar: boolean;
 }
 
 /** A connected monitor for the taskbar-lyrics monitor choice (ADR 0031). */
@@ -998,6 +1004,18 @@ interface IpcContract {
   floating_lyrics_reset_position: {
     args: Record<string, never>;
     result: FloatingLyricsSettings;
+  };
+  floating_lyrics_centre_axis: {
+    args: { horizontal: boolean };
+    result: null;
+  };
+  floating_lyrics_nudge: {
+    args: { dx: number; dy: number };
+    result: null;
+  };
+  floating_lyrics_fit: {
+    args: { hasTranslation: boolean };
+    result: null;
   };
   floating_lyrics_android: {
     args: { command: 'floatingLyricsUpdate' | 'floatingLyricsStatus' | 'openOverlayPermissionSettings'; payload?: unknown };

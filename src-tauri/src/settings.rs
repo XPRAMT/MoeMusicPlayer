@@ -926,13 +926,17 @@ pub struct TaskbarLyricsSettings {
     /// Stable monitor ids (`DisplayMonitor::id`) chosen in `Custom` mode; kept while a monitor is unplugged.
     #[serde(default)]
     pub custom_monitors: Vec<String>,
-    /// Opacity of the lyrics (main line and translation alike), 10–100. Older files without it are fully opaque.
+    /// Opacity of the lyrics (main line and translation alike), 1–100. Older files without it are fully opaque.
     #[serde(default = "default_lyrics_opacity_percent")]
     pub opacity_percent: u8,
 }
 
 fn default_lyrics_opacity_percent() -> u8 {
     100
+}
+
+fn default_floating_lyrics_width_px() -> u16 {
+    FloatingLyricsSettings::DEFAULT_WIDTH_PX
 }
 
 impl TaskbarLyricsSettings {
@@ -942,7 +946,7 @@ impl TaskbarLyricsSettings {
     pub const TRANSLATION_SCALE_RANGE_PERCENT: (u8, u8) = (1, 100);
     pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 100;
     pub const DEFAULT_CUSTOM_COLOR: &'static str = "#00e1ff";
-    pub const OPACITY_RANGE_PERCENT: (u8, u8) = (10, 100);
+    pub const OPACITY_RANGE_PERCENT: (u8, u8) = (1, 100);
 
     pub fn normalized(mut self) -> Self {
         self.font_size_px = self
@@ -1020,9 +1024,15 @@ pub struct FloatingLyricsSettings {
     pub custom_color: String,
     pub show_translation: bool,
     pub text_effect: LyricsTextEffect,
-    /// Opacity of the lyrics (main line and translation alike), 10–100; saved apart from the taskbar lyrics'.
+    /// Opacity of the lyrics (main line and translation alike), 1–100; saved apart from the taskbar lyrics'.
     #[serde(default = "default_lyrics_opacity_percent")]
     pub opacity_percent: u8,
+    /// Panel width: CSS px on Windows, dp on Android; narrowed to the screen when wider.
+    #[serde(default = "default_floating_lyrics_width_px")]
+    pub width_px: u16,
+    /// Android only: the width while the phone is landscape (`width_px` is the portrait one there).
+    #[serde(default = "default_floating_lyrics_width_px")]
+    pub landscape_width_px: u16,
     /// Fixed mode: click-through, only the unlock button reacts. False: move mode (draggable).
     pub locked: bool,
     /// None: the default place on the primary monitor.
@@ -1032,6 +1042,8 @@ pub struct FloatingLyricsSettings {
 impl FloatingLyricsSettings {
     pub const DEFAULT_FONT_SIZE_PX: u8 = 28;
     pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 80;
+    pub const DEFAULT_WIDTH_PX: u16 = 800;
+    pub const WIDTH_RANGE_PX: (u16, u16) = (200, 4000);
     /// Far outside any real desktop; such a position is dropped.
     pub const POSITION_LIMIT: i32 = 1_000_000;
 
@@ -1046,6 +1058,12 @@ impl FloatingLyricsSettings {
         .normalized();
         self.font_size_px = look.font_size_px;
         self.opacity_percent = look.opacity_percent;
+        self.width_px = self
+            .width_px
+            .clamp(Self::WIDTH_RANGE_PX.0, Self::WIDTH_RANGE_PX.1);
+        self.landscape_width_px = self
+            .landscape_width_px
+            .clamp(Self::WIDTH_RANGE_PX.0, Self::WIDTH_RANGE_PX.1);
         self.translation_scale_percent = look.translation_scale_percent;
         self.custom_color = look.custom_color;
         if self.position.is_some_and(|position| {
@@ -1069,6 +1087,8 @@ impl Default for FloatingLyricsSettings {
             show_translation: true,
             text_effect: LyricsTextEffect::Shadow,
             opacity_percent: default_lyrics_opacity_percent(),
+            width_px: Self::DEFAULT_WIDTH_PX,
+            landscape_width_px: Self::DEFAULT_WIDTH_PX,
             locked: false,
             position: None,
         }
@@ -1104,6 +1124,12 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.text_effect),
         opacity_percent: byte("opacityPercent", defaults.opacity_percent),
+        width_px: field("widthPx")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.width_px, |value| value.min(u64::from(u16::MAX)) as u16),
+        landscape_width_px: field("landscapeWidthPx")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.landscape_width_px, |value| value.min(u64::from(u16::MAX)) as u16),
         locked: flag("locked", defaults.locked),
         position: field("position").and_then(|value| serde_json::from_value(value).ok()),
     }
@@ -3492,13 +3518,19 @@ mod tests {
         assert_eq!(big.translation_scale_percent, 100);
         assert_eq!(defaults.opacity_percent, 100, "fully opaque until changed");
         let faint = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 0})));
-        assert_eq!(faint.opacity_percent, 10, "never invisible");
+        assert_eq!(faint.opacity_percent, 1, "never fully invisible");
         let over = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 300})));
         assert_eq!(over.opacity_percent, 100);
         let floating = lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 55})));
         assert_eq!(floating.opacity_percent, 55);
         assert_eq!(lenient_floating_lyrics(None).opacity_percent, 100);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent, 10);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent, 3);
+        assert_eq!(lenient_floating_lyrics(None).width_px, 800);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 50}))).width_px, 200);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 99999}))).width_px, 4000);
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 1234}))).width_px, 1234);
+        let both = lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 600, "landscapeWidthPx": 50})));
+        assert_eq!((both.width_px, both.landscape_width_px), (600, 200), "saved apart");
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!(7))), defaults);
         assert_eq!(lenient_taskbar_lyrics(None), defaults);
 
