@@ -641,7 +641,7 @@ object FloatingLyricsOverlay {
         if (sample == null || !sample.active || sample.trackId != trackId) return false
         val current = stripFor(main, translationText) ?: return false
         val lyricsMs = sample.positionMs + offsetMs
-        val offset = FloatingLyricsRules.stripOffset(current.starts, current.cells, current.widths, align, lyricsMs, main.availableWidth())
+        val offset = FloatingLyricsRules.stripOffset(current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN, lyricsMs, main.availableWidth())
         view.visibility = View.VISIBLE
         main.setStrip(current.texts, current.cells, current.widths, offset)
         translationText?.let {

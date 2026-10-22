@@ -27,6 +27,7 @@
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
   import type { TaskbarLyricsData } from './taskbar-lyrics-data.js';
   import {
+    LYRICS_STRIP_ALIGN,
     LYRICS_STRIP_SEPARATOR,
     buildLyricsStripLines,
     layoutLyricsStrip,
@@ -136,7 +137,7 @@
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
 
   // Continuous animation (ADR 0032): every line joined into one strip (U+3000 between lines) that scrolls with the
-  // playback clock, so the current line sits at the chosen alignment and glides to the next line until it starts. The
+  // playback clock, so the current line's right edge sits on the lyric area's right edge (always, whatever the alignment setting) and glides to the next line until it starts. The
   // translation strip uses the same cells, so each translation stays under its line. The glide runs as a linear CSS
   // animation to the next line's place, re-planned at each line start and on every clock correction (seek, pause).
   let continuous = $derived(settings.animation === 'continuous');
@@ -159,11 +160,11 @@
   let stripLayout = $derived(layoutLyricsStrip(stripMainWidths, stripTranslationWidths, fontPx));
   let stripRun = $derived.by(() => {
     const at = positionMs + timingOffsetMs;
-    const from = lyricsStripOffset(stripStarts, stripLayout, settings.align, at, stripViewWidth);
+    const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth);
     const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at) : null;
     const wait = next === null ? null : msUntilPlaybackPosition(clock, performance.now(), next - timingOffsetMs);
     if (next === null || wait === null || wait <= 0) return { from, to: from, ms: null as number | null };
-    return { from, to: lyricsStripOffset(stripStarts, stripLayout, settings.align, next, stripViewWidth), ms: wait };
+    return { from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth), ms: wait };
   });
   let stripName = $state('taskbar-lyrics-strip-a');
   $effect(() => {
@@ -410,8 +411,10 @@
     width: 100%;
   }
 
+  /* The strip is always right-anchored (LYRICS_STRIP_ALIGN); the text alignment setting does not apply to it. */
   .taskbar-lyrics-strip {
     display: flex;
+    text-align: right;
     width: max-content;
     white-space: nowrap;
     will-change: transform;

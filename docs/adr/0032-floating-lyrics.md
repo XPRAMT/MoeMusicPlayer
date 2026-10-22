@@ -145,7 +145,9 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   into a second strip with the same cells (a cell is as wide as the wider of its line and its translation; the text is
   aligned inside it), so each translation stays under its line. The strip is shifted so the current line's anchor
   (left edge / middle / right edge for left / centre / right) sits on the same point of the lyric area, gliding
-  linearly to the next line's anchor until that line starts; before the first line it rests on the first, after the
+  linearly to the next line's anchor until that line starts. Amended: the strip always uses the right anchor
+  (`LYRICS_STRIP_ALIGN` / `FloatingLyricsRules.STRIP_ALIGN` = right; cells' text right-aligned too), whatever the
+  文字排版 setting, whose buttons stay enabled and apply to 「無」; before the first line it rests on the first, after the
   last on the last (`lyrics-strip.js` `lyricsStripOffset`, Kotlin `FloatingLyricsRules.stripOffset`). The shift is
   a pure function of the lyrics time (position + offsets), so seek and pause follow the playback clock at once.
   Windows runs each glide as a linear CSS animation re-planned at every line start and clock correction; Android

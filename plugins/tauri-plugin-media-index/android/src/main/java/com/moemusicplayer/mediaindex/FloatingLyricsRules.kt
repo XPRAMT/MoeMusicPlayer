@@ -32,6 +32,9 @@ object FloatingLyricsRules {
         return x.coerceIn(0, maxX)
     }
 
+    /** The continuous strip always anchors by the right edge (`LYRICS_STRIP_ALIGN`), whatever the alignment setting. */
+    const val STRIP_ALIGN = "right"
+
     /**
      * Continuous animation (ADR 0032, port of lyrics-strip.js): cells of the strip, each as wide as the wider of its
      * main text and translation, `gapPx` (one U+3000 of the main line) apart. Returns the cells' left edges and widths.

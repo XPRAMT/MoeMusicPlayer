@@ -5,6 +5,8 @@
 /** The separator between lines (one em wide). */
 export const LYRICS_STRIP_SEPARATOR = '\u3000';
 export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
+/** The continuous strip always anchors the current line by its right edge, whatever the text alignment setting. */
+export const LYRICS_STRIP_ALIGN = 'right';
 
 /** @param {unknown} value @returns {'none' | 'continuous'} */
 export function normalizeLyricsAnimation(value) {

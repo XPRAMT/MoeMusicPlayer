@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  LYRICS_STRIP_ALIGN,
   LYRICS_STRIP_SEPARATOR,
   buildLyricsStripLines,
   layoutLyricsStrip,
@@ -16,6 +17,8 @@ test('the animation setting falls back to none', () => {
   assert.equal(normalizeLyricsAnimation('bounce'), 'none');
   assert.equal(normalizeLyricsAnimation(undefined), 'none');
   assert.equal(LYRICS_STRIP_SEPARATOR, '\u3000');
+  // Continuous always anchors right, whatever the text alignment setting.
+  assert.equal(LYRICS_STRIP_ALIGN, 'right');
 });
 
 test('strip lines skip empty lines and drop translations when hidden', () => {
@@ -70,4 +73,13 @@ test('the next break is the next line start', () => {
   assert.equal(nextLyricsStripBreak([1000, 3000], 3000), null);
   assert.equal(nextLyricsStripBreak([], 0), null);
   assert.equal(nextLyricsStripBreak([1000], 0), 1000);
+});
+
+test('the views anchor the continuous strip on the right whatever the alignment setting', async () => {
+  const { readFileSync } = await import('node:fs');
+  const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
+  assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,/g)?.length, 2);
+  assert.doesNotMatch(view, /lyricsStripOffset\([^)]*settings\.align/);
+  const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
+  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN, lyricsMs/);
 });

@@ -117,7 +117,7 @@ internal class LyricLineView(context: Context) : View(context) {
             val cellWidth = stripWidths.getOrElse(index) { 0f }
             if (cell > width || cell + cellWidth < 0f) continue
             val textWidth = paint.measureText(value)
-            canvas.drawText(value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, align, 0f), baseline, paint)
+            canvas.drawText(value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, paint)
         }
         canvas.restore()
     }

@@ -32,6 +32,7 @@ class FloatingLyricsRulesTest {
         assertEquals(300f, at("right", 1_000), 0.001f)
         assertEquals(0f, at("left", 0), 0.001f)
         assertEquals(-240f, at("left", 9_000), 0.001f)
+        assertEquals("right", FloatingLyricsRules.STRIP_ALIGN)
         assertEquals(0f, FloatingLyricsRules.stripOffset(longArrayOf(), even, evenWidths, "left", 0, 400f), 0.001f)
     }
 
