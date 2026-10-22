@@ -10,9 +10,8 @@ use std::{
 };
 
 use player_core::{
-    auto_lyric_candidate, explain_lyric_candidate_match, merge_lrc_auxiliary,
-    merge_same_timestamp_lines, parse_lrc, parse_yrc, preserve_qrc, rank_lyric_candidates,
-    with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
+    auto_lyric_candidate, merge_lrc_auxiliary, merge_same_timestamp_lines, parse_lrc, parse_yrc,
+    preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
     LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics, TrackSummary,
 };
 use player_db::Database;
@@ -881,8 +880,7 @@ fn provider_error_message(_error: &ProviderError) -> String {
     "線上歌詞來源目前無法使用，請稍後再試。".to_owned()
 }
 
-fn candidate_dto(metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> LyricsCandidateDto {
-    let reasons = explain_lyric_candidate_match(metadata, candidate);
+fn candidate_dto(_metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> LyricsCandidateDto {
     let confidence = if candidate.score >= HIGH_CONFIDENCE_SCORE {
         LyricsConfidenceDto::High
     } else if candidate.score >= 0.72 {
@@ -890,7 +888,9 @@ fn candidate_dto(metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> 
     } else {
         LyricsConfidenceDto::Low
     };
-    let mut reasons = reasons;
+    // Only notes about the candidate itself; the title / artist / length / album comparison is not
+    // listed (user decision 2026-10-22: the picker no longer shows a match-explanation line).
+    let mut reasons = Vec::new();
     if candidate.lyrics.format == LyricFormat::Qrc && candidate.lyrics.lines.is_empty() {
         reasons.push("僅保留未解碼的 QRC 原始資料，沒有可顯示的歌詞文字".to_owned());
     } else if !candidate.lyrics.synced {
@@ -2576,6 +2576,8 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("沒有可顯示的歌詞文字")));
+        // No match-explanation line (title / artist / length / album) is listed any more.
+        assert_eq!(qrc_candidate.reasons.len(), 1);
     }
 
     #[tokio::test]

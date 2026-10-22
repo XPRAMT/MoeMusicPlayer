@@ -395,46 +395,6 @@ pub fn score_lyric_candidate(
     }
 }
 
-/// Human-readable factors behind the same normalized comparisons used for candidate scoring.
-pub fn explain_lyric_candidate_match(
-    local: &LyricsTrackMetadata,
-    candidate: &LyricCandidate,
-) -> Vec<String> {
-    let mut reasons = Vec::with_capacity(4);
-    match (&local.title, &candidate.title) {
-        (Some(local), Some(remote)) if text_similarity(local, remote) >= 0.88 => {
-            reasons.push("標題相符（高權重）".to_owned());
-        }
-        (Some(_), Some(_)) => reasons.push("標題或版本資訊有差異（高權重）".to_owned()),
-        _ => reasons.push("缺少標題，無法充分比較".to_owned()),
-    }
-    match (&local.artist, &candidate.artist) {
-        (Some(local), Some(remote)) if text_similarity(local, remote) >= 0.88 => {
-            reasons.push("演出者相符（高權重）".to_owned());
-        }
-        (Some(_), Some(_)) => reasons.push("演出者有差異（高權重）".to_owned()),
-        _ => reasons.push("缺少演出者資料".to_owned()),
-    }
-    match (local.duration_ms, candidate.duration_ms) {
-        (Some(local), Some(remote)) if local.abs_diff(remote) <= 2_000 => {
-            reasons.push("長度相差不超過 2 秒".to_owned());
-        }
-        (Some(local), Some(remote)) if local.abs_diff(remote) > 5_000 => {
-            reasons.push("長度差異超過 5 秒".to_owned());
-        }
-        (Some(_), Some(_)) => reasons.push("長度有小幅差異".to_owned()),
-        _ => reasons.push("缺少曲目長度，無法比較".to_owned()),
-    }
-    if let (Some(local), Some(remote)) = (&local.album, &candidate.album) {
-        if text_similarity(local, remote) >= 0.88 {
-            reasons.push("專輯相符（低權重）".to_owned());
-        } else {
-            reasons.push("專輯不同（低權重）".to_owned());
-        }
-    }
-    reasons
-}
-
 fn check_payload_size(input: &str) -> Result<(), LyricsParseError> {
     if input.len() > MAX_LYRIC_PAYLOAD_BYTES {
         Err(LyricsParseError::PayloadTooLarge)
@@ -1004,24 +964,6 @@ mod tests {
             ),
             0.05
         );
-    }
-
-    #[test]
-    fn match_explanations_name_title_artist_duration_and_weak_album_factors() {
-        let local = LyricsTrackMetadata {
-            title: Some("Song".into()),
-            artist: Some("Artist".into()),
-            album: Some("Original Album".into()),
-            duration_ms: Some(180_000),
-        };
-        let candidate = candidate("same", "Song", "Artist", Some("Other Album"), Some(187_000));
-        let reasons = explain_lyric_candidate_match(&local, &candidate);
-        assert!(reasons.iter().any(|reason| reason.contains("標題相符")));
-        assert!(reasons.iter().any(|reason| reason.contains("演出者相符")));
-        assert!(reasons.iter().any(|reason| reason.contains("超過 5 秒")));
-        assert!(reasons
-            .iter()
-            .any(|reason| reason.contains("專輯不同（低權重）")));
     }
 
     fn gate_local() -> LyricsTrackMetadata {
