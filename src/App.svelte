@@ -773,7 +773,9 @@
   let playlistError = $state<string | null>(null);
   let query = $state('');
   let libraryFieldFilter = $state<TrackFieldFilter | null>(null);
-  let selectedTrackId = $state<string | null>(null);
+  // The now-playing highlight in the library, artist and album lists follows the player (like the playlist page),
+  // so it moves with every track change, not only with a click.
+  let currentTrackId = $derived(playback?.currentTrack?.id ?? null);
   let isSyncing = $state(false);
   let isLoadingSources = $state(false);
   let isUpdatingSource = $state(false);
@@ -3115,7 +3117,6 @@
 
   async function playQueueEntry(entry: PlaybackQueuePageItem): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
-    selectedTrackId = entry.trackId;
     const queueSource: PlaybackQueueSource = {
       kind: 'queue',
       traversalPosition: entry.traversalPosition,
@@ -3293,7 +3294,6 @@
   async function playTrack(track: TrackSummary): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     const searchQuery = query.trim();
-    selectedTrackId = track.id;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
       query: searchQuery || null,
@@ -3541,7 +3541,6 @@
 
   async function playArtistTrack(track: TrackSummary): Promise<void> {
     if (!selectedArtist || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
-    selectedTrackId = track.id;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
       query: null,
@@ -3556,7 +3555,6 @@
 
   async function playAlbumTrack(track: TrackSummary, order: AlbumTrackOrder): Promise<void> {
     if (!selectedAlbum || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
-    selectedTrackId = track.id;
     // The queue is built by the album page's own query and ordering (not the library list sort).
     const queueSource: PlaybackQueueSource = {
       kind: 'album',
@@ -5053,7 +5051,7 @@
                 query={query}
                 fieldFilter={libraryFieldFilter}
                 resetKey={libraryListRevision}
-                selectedTrackId={selectedTrackId}
+                selectedTrackId={currentTrackId}
                 playbackReady={playbackReady}
                 isSendingPlaybackCommand={isSendingPlaybackCommand}
                 columns={trackColumnPreferences}
@@ -5098,7 +5096,7 @@
                 <TrackList
                   query=""
                   resetKey={`${selectedArtist.key}:${libraryListRevision}`}
-                  selectedTrackId={selectedTrackId}
+                  selectedTrackId={currentTrackId}
                   playbackReady={playbackReady}
                   isSendingPlaybackCommand={isSendingPlaybackCommand}
                   columns={trackColumnPreferences}
@@ -5149,7 +5147,7 @@
                 <AlbumDetail
                   album={selectedAlbum}
                   initialCoverSources={selectedAlbumInitialCoverSources}
-                  selectedTrackId={selectedTrackId}
+                  selectedTrackId={currentTrackId}
                   playbackReady={playbackReady}
                   isSendingPlaybackCommand={isSendingPlaybackCommand}
                   columns={trackColumnPreferences}
