@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tr } from './i18n.js';
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { defaultLyricsApi, type LyricsApi } from './lyrics-api';
   import type {
@@ -13,7 +13,15 @@
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
   import { convertTrackLyrics } from './lyrics-traditional.js';
-  import { estimatePlaybackPosition, msUntilPlaybackPosition, nextCuePosition, type PlaybackClock } from './playback-clock';
+  import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
+  import {
+    LYRIC_CUE_LEAD_MS,
+    cueAnimationMs,
+    displayCuePositions,
+    easeOutCubic,
+    findDisplayCueIndex,
+    nextDisplayCuePosition,
+  } from './lyrics-cue-timing';
   import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
@@ -164,7 +172,39 @@
   let layoutRevision = $state(0);
   let previousTrackId: string | null | undefined;
   let previousPlainLayout: ReturnType<typeof buildLyricsLayout> | null = null;
-  let previousTimedNavigation: { trackId: string | null; generation: number; index: number; viewport: HTMLDivElement; height: number } | null = null;
+  let previousTimedNavigation: {
+    trackId: string | null;
+    generation: number;
+    index: number;
+    viewport: HTMLDivElement;
+    height: number;
+    jumpId: number | null;
+    clockPlaying: boolean | null;
+  } | null = null;
+  // Cue scroll tween (ADR 0029): fixed length (the cue animation), ease-out, requestAnimationFrame only while it runs.
+  // It replaces the browser's smooth scrollTo, whose length the browser picks, so the scroll can end on the line start.
+  let cueScrollFrame = 0;
+  function stopCueScroll(): void {
+    if (cueScrollFrame) cancelAnimationFrame(cueScrollFrame);
+    cueScrollFrame = 0;
+    timedSmoothScrolling = false;
+  }
+  function startCueScroll(element: HTMLDivElement, targetTop: number, durationMs: number): void {
+    if (cueScrollFrame) cancelAnimationFrame(cueScrollFrame);
+    const fromTop = element.scrollTop;
+    const startedAt = performance.now();
+    timedSmoothScrolling = true;
+    const step = (now: number) => {
+      if (timedUserScrolling) { stopCueScroll(); return; }
+      const progress = Math.min(1, (now - startedAt) / durationMs);
+      element.scrollTop = fromTop + (targetTop - fromTop) * easeOutCubic(progress);
+      if (progress < 1) { cueScrollFrame = requestAnimationFrame(step); return; }
+      cueScrollFrame = 0;
+      timedSmoothScrolling = false;
+      correctTimedCenter();
+    };
+    cueScrollFrame = requestAnimationFrame(step);
+  }
   let timedSmoothScrolling = false;
   let timedUserScrolling = false;
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
@@ -237,22 +277,31 @@
     cueTick;
     return playbackClock ? estimatePlaybackPosition(playbackClock, performance.now()) : positionMs;
   });
+  let timedStartTimes = $derived(timedLines.map((entry) => entry.startMs));
+  // While playing, a line is shown LYRIC_CUE_LEAD_MS early (shorter when the gap is) so its change animation ends on
+  // the line start (ADR 0029). Paused, a line is shown at its own start.
+  let cueLeading = $derived(isPlaying && effectivePlaybackState === 'playing');
+  let timedDisplayPositions = $derived(displayCuePositions(timedStartTimes, timedOffsetMs, cueLeading));
   $effect(() => {
     const clock = playbackClock;
-    const starts = timedLines.map((entry) => entry.startMs);
-    const offset = timedOffsetMs;
+    const shown = timedDisplayPositions;
     cueTick;
-    if (!clock || !clock.playing || starts.length === 0) return;
+    if (!clock || !clock.playing || shown.length === 0) return;
     const now = performance.now();
-    const next = nextCuePosition(starts, offset, estimatePlaybackPosition(clock, now));
+    const next = nextDisplayCuePosition(shown, estimatePlaybackPosition(clock, now));
     const wait = next === null ? null : msUntilPlaybackPosition(clock, now, next);
     if (wait === null) return;
     const timer = setTimeout(() => { cueTick += 1; }, wait + 2);
     return () => clearTimeout(timer);
   });
+  /** The line that is really playing (by its own start time); play counts and the like never lead. */
   let activeTimedIndex = $derived(findActiveLyricIndex(timedLines, cuePositionMs, timedOffsetMs));
+  /** The line drawn as current: it leads activeTimedIndex by the cue animation. */
+  let displayTimedIndex = $derived(findDisplayCueIndex(timedDisplayPositions, cuePositionMs));
+  /** How long the change to the line now shown animates (the time left until it really starts). */
+  let cueAnimationDurationMs = $derived(cueAnimationMs(timedStartTimes, timedOffsetMs, displayTimedIndex, cuePositionMs));
   let displayActiveTimedIndex = $derived(
-    getDisplayActiveLyricIndex(activeTimedIndex, effectivePlaybackState),
+    getDisplayActiveLyricIndex(displayTimedIndex, effectivePlaybackState),
   );
   let layoutPreferences = $derived({ ...preferences, primaryLineHeight: inkLineHeights.primary, auxiliaryLineHeight: inkLineHeights.auxiliary });
   let timedLayout = $derived(buildLyricsLayout(timedLines, layoutPreferences, preferences.lineGapPx, layoutWidth));
@@ -268,7 +317,7 @@
   let plainTotalHeight = $derived.by(() => { layoutRevision; return plainLayout.totalHeight; });
   let timedWindow = $derived.by(() => {
     layoutRevision;
-    return getTimedLyricWindow(timedLayout, activeTimedIndex);
+    return getTimedLyricWindow(timedLayout, displayTimedIndex);
   });
   let timedRenderedRows = $derived(timedWindow.rows.filter((index) => timedLayout.heights[index] > 0));
   let plainWindow = $derived.by(() => {
@@ -469,7 +518,10 @@
 
   $effect(() => {
     const element = timedViewport;
-    const activeIndex = activeTimedIndex;
+    const activeIndex = displayTimedIndex;
+    const animationMs = untrack(() => cueAnimationDurationMs);
+    const jumpId = playbackClock?.jumpId ?? null;
+    const clockPlaying = playbackClock?.playing ?? null;
     const layout = timedLayout;
     const currentTrackId = trackId;
     const currentlyPlaying = isPlaying && effectivePlaybackState === 'playing';
@@ -483,16 +535,26 @@
       && previous?.index === activeIndex
       && previous.viewport === element
       && previous.height === viewportHeight
-    ) return;
-    const isNormalCueAdvance = Boolean(currentlyPlaying && sameTrackAndLayout && previous?.index >= 0 && activeIndex === previous.index + 1);
-    previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight };
+    ) {
+      // Same line: remember the clock state so a later normal advance is not mistaken for a seek.
+      previous.jumpId = jumpId;
+      previous.clockPlaying = clockPlaying;
+      return;
+    }
+    // A seek while playing (the clock jumped without a play/pause change) lands at once, like a track change.
+    const seeked = previous !== null && previous.jumpId !== jumpId && previous.clockPlaying === clockPlaying;
+    const isNormalCueAdvance = Boolean(currentlyPlaying && sameTrackAndLayout && !seeked && previous?.index >= 0 && activeIndex === previous.index + 1);
+    previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight, jumpId, clockPlaying };
 
     const frame = requestAnimationFrame(() => {
       const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-      const behavior: ScrollBehavior = isNormalCueAdvance && !reducedMotion ? 'smooth' : 'instant';
       const targetTop = timedCueScrollTop(layout, activeIndex, viewportHeight, element.clientHeight);
-      timedSmoothScrolling = behavior === 'smooth' && Math.abs(element.scrollTop - targetTop) > 1;
-      element.scrollTo({ top: targetTop, behavior });
+      if (isNormalCueAdvance && !reducedMotion && animationMs >= 16 && Math.abs(element.scrollTop - targetTop) > 1) {
+        startCueScroll(element, targetTop, animationMs);
+      } else {
+        stopCueScroll();
+        element.scrollTo({ top: targetTop, behavior: 'instant' });
+      }
     });
     return () => cancelAnimationFrame(frame);
   });
@@ -501,6 +563,7 @@
     const element = timedViewport;
     if (!element) return;
     const onScrollEnd = () => {
+      if (cueScrollFrame) return; // the cue tween's own frames; it corrects the center when it ends
       const shouldCorrectCenter = timedSmoothScrolling && !timedUserScrolling;
       timedSmoothScrolling = false;
       timedUserScrolling = false;
@@ -509,7 +572,7 @@
       if (shouldCorrectCenter) correctTimedCenter();
     };
     const onUserScroll = () => {
-      timedSmoothScrolling = false;
+      stopCueScroll();
       timedUserScrolling = true;
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
       userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; }, 300);
@@ -548,7 +611,7 @@
     };
   });
 
-  onDestroy(() => { onStatusChange?.(null); if (!sharedController) controller.dispose(); rowObserver?.disconnect(); });
+  onDestroy(() => { stopCueScroll(); onStatusChange?.(null); if (!sharedController) controller.dispose(); rowObserver?.disconnect(); });
 
   function sourceLabel(source: TrackLyrics['source']): string {
     switch (source) {
@@ -659,9 +722,10 @@
   data-playback-state={effectivePlaybackState}
   data-line-gap={preferences.lineGapPx}
   data-text-effect={preferences.textEffect}
-  data-active-cue-index={activeTimedIndex}
+  data-active-cue-index={displayTimedIndex}
+  data-current-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
-  style={`--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
+  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">{tr("播放歌曲後會在此顯示歌詞。")}</p>
@@ -919,7 +983,7 @@
     margin-bottom: var(--lyric-gap-after, 0px);
     border-bottom: 0;
     color: var(--muted);
-    transition: color 140ms ease;
+    transition: color var(--lyric-cue-ms) ease;
   }
 
   .lyric-line.active {
@@ -996,7 +1060,7 @@
     text-overflow: ellipsis;
     text-align: center;
     opacity: var(--lyric-text-opacity, 1);
-    transition: opacity 140ms ease;
+    transition: opacity var(--lyric-cue-ms) ease;
   }
 
   .lyric-translation,
@@ -1017,7 +1081,7 @@
     text-overflow: clip;
     text-align: center;
     opacity: var(--lyric-text-opacity, 1);
-    transition: opacity 140ms ease;
+    transition: opacity var(--lyric-cue-ms) ease;
   }
 
   .lyrics-message {

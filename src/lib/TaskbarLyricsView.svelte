@@ -4,7 +4,6 @@
   // 這個頁面只輪詢播放位置，並畫出目前這一行，所以不會和播放頁的歌詞不一致。
   import { onDestroy, onMount, untrack } from 'svelte';
   import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { fade } from 'svelte/transition';
   import { followLanguageChange } from './language-sync.js';
   import { invokeCommand } from './ipc';
   import {
@@ -189,7 +188,7 @@
 >
   {#key activeIndex}
     {#if text}
-      <div class="taskbar-lyrics-line" in:fade={{ duration: 120 }}>
+      <div class="taskbar-lyrics-line">
         <span class="taskbar-lyrics-main" bind:this={mainClip}>
           <span class="taskbar-lyrics-track" bind:this={mainTrack} style={scrollStyle(mainOverflow)}>{text}</span>
         </span>

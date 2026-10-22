@@ -148,44 +148,43 @@
     return active && Math.abs((active.getBoundingClientRect().top + active.getBoundingClientRect().height / 2)
       - (viewport.getBoundingClientRect().top + viewport.clientHeight / 2)) < 2;
   });
-  await page.evaluate(() => {
-    const viewport = document.querySelector('[data-testid="timed-lyrics"]');
-    const nativeScrollTo = viewport.scrollTo.bind(viewport);
-    window.__lyricsScrollCalls = [];
-    viewport.scrollTo = (options) => { window.__lyricsScrollCalls.push(options); nativeScrollTo(options); };
-  });
-  const scrollStart = await page.evaluate(() => document.querySelector('[data-testid="timed-lyrics"]').scrollTop);
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(91_000));
-  await page.waitForFunction(() => window.__lyricsScrollCalls?.length === 1);
-  await page.waitForTimeout(35);
-  const midflight = await page.evaluate(() => ({
-    scrollTop: document.querySelector('[data-testid="timed-lyrics"]').scrollTop,
-    target: window.__lyricsScrollCalls?.[0]?.top,
-  }));
-  assert.ok(midflight.scrollTop > scrollStart + 1 && midflight.scrollTop < midflight.target - 1, 'normal cue navigation has a visible in-flight scroll position');
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(91_250));
-  await page.waitForTimeout(250);
-  assert.deepEqual(await page.evaluate(() => window.__lyricsScrollCalls?.map((options) => options.behavior)), ['smooth'], '250ms same-cue playback snapshots do not restart or interrupt the normal cue animation');
-  await page.evaluate(() => window.lyricsViewHarness.setPosition(92_000));
-  await page.waitForFunction(() => window.__lyricsScrollCalls?.length === 2);
-  await page.waitForFunction(() => {
+  const centered = () => {
     const viewport = document.querySelector('[data-testid="timed-lyrics"]');
     const active = viewport?.querySelector('[aria-current="true"]');
     return active && Math.abs((active.getBoundingClientRect().top + active.getBoundingClientRect().height / 2)
       - (viewport.getBoundingClientRect().top + viewport.clientHeight / 2)) < 2;
+  };
+  const cueState = () => page.evaluate(() => {
+    const view = document.querySelector('[data-testid="lyrics-view"]');
+    return {
+      shown: Number(view?.dataset.activeCueIndex),
+      current: Number(view?.dataset.currentCueIndex),
+      cueMs: view?.style.getPropertyValue('--lyric-cue-ms'),
+      scrollTop: document.querySelector('[data-testid="timed-lyrics"]').scrollTop,
+    };
   });
-  const latestNavigation = await page.evaluate(() => ({
-    behaviors: window.__lyricsScrollCalls?.map((options) => options.behavior),
-    cue: Number(document.querySelector('[data-testid="lyrics-view"]')?.dataset.activeCueIndex),
-  }));
-  assert.equal(latestNavigation.cue, 92, 'the latest cue wins after rapid updates');
-  assert.deepEqual(latestNavigation.behaviors?.slice(0, 2), ['smooth', 'smooth'], 'rapid adjacent cues retarget instead of queueing');
-  assert.ok((latestNavigation.behaviors?.length ?? 0) <= 3, 'at most one post-animation measured center correction is issued');
+  // Cue lead (ADR 0029): line 91 starts at 91 000 ms, so it is shown — and its 300 ms scroll starts — at 90 700 ms.
+  const scrollStart = await page.evaluate(() => document.querySelector('[data-testid="timed-lyrics"]').scrollTop);
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_699));
+  assert.equal((await cueState()).shown, 90, 'the next line is not shown before its lead');
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_700));
+  await page.waitForTimeout(80);
+  const midflight = await cueState();
+  assert.equal(midflight.shown, 91, 'the next line is shown LYRIC_CUE_LEAD_MS early');
+  assert.equal(midflight.current, 90, 'the line really playing is still the previous one');
+  assert.equal(midflight.cueMs, '300ms', 'the CSS transitions share the cue animation length');
+  assert.ok(midflight.scrollTop > scrollStart + 1, 'normal cue navigation has a visible in-flight scroll position');
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(90_950));
+  await page.waitForTimeout(300);
+  await page.waitForFunction(centered);
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(91_700));
+  await page.waitForFunction(centered);
+  assert.equal((await cueState()).shown, 92, 'the latest cue wins after rapid updates');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  const reducedMotionCallCount = latestNavigation.behaviors?.length ?? 0;
+  await page.evaluate(() => window.lyricsViewHarness.setPosition(92_700));
+  await page.waitForTimeout(50);
+  assert.ok(await page.evaluate(centered), 'reduced-motion preference disables cue animation');
   await page.evaluate(() => window.lyricsViewHarness.setPosition(93_000));
-  await page.waitForFunction((previousCount) => (window.__lyricsScrollCalls?.length ?? 0) > previousCount, reducedMotionCallCount);
-  assert.equal(await page.evaluate(() => window.__lyricsScrollCalls?.at(-1)?.behavior), 'instant', 'reduced-motion preference disables cue animation');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
 
   await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 14, auxiliaryFontSizePx: 10 }));
