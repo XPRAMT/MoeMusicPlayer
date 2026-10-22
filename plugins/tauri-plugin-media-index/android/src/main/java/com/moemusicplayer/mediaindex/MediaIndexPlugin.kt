@@ -681,6 +681,53 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         )
     }
 
+    /** Floating lyrics (ADR 0032): look settings, the current track's lines, or the lock state from the page. */
+    @Command
+    fun floatingLyricsUpdate(invoke: Invoke) {
+        val args = JSONObject(invoke.getArgs().toString())
+        activity.runOnUiThread {
+            try {
+                FloatingLyricsOverlay.update(activity, args)
+                invoke.resolve(JSObject(FloatingLyricsOverlay.status(activity).toString()))
+            } catch (error: Exception) {
+                invoke.reject("Could not update the floating lyrics: ${error.message}")
+            }
+        }
+    }
+
+    /** Overlay permission and lock state; also shows the overlay when the permission was just granted. */
+    @Command
+    fun floatingLyricsStatus(invoke: Invoke) {
+        activity.runOnUiThread {
+            try {
+                FloatingLyricsOverlay.refresh()
+            } catch (error: Exception) {
+                Log.w("MoeFloatingLyrics", "refresh failed", error)
+            }
+            invoke.resolve(JSObject(FloatingLyricsOverlay.status(activity).toString()))
+        }
+    }
+
+    /** Open the system "display over other apps" page; the user grants it there (never granted by the app). */
+    @Command
+    fun openOverlayPermissionSettings(invoke: Invoke) {
+        activity.runOnUiThread {
+            try {
+                try {
+                    activity.startActivity(
+                        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                            .setData(Uri.parse("package:${activity.packageName}")),
+                    )
+                } catch (_: Exception) {
+                    activity.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                }
+                invoke.resolve(JSObject().put("launched", true))
+            } catch (error: Exception) {
+                invoke.reject("Could not open the overlay permission settings: ${error.message}")
+            }
+        }
+    }
+
     /** Open the system "All files access" page for this app; the user toggles it there. */
     @Command
     fun requestAllFilesAccess(invoke: Invoke) {

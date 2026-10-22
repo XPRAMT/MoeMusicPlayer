@@ -96,6 +96,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         System.loadLibrary("moemusicplayer_lib")
         serviceGeneration = SERVICE_GENERATIONS.incrementAndGet()
 
@@ -203,7 +204,19 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /** Main thread (the player's looper): what the floating lyrics overlay needs (ADR 0032). */
+    internal fun overlaySample(): FloatingLyricsOverlay.Sample? {
+        val player = exoPlayer ?: return null
+        val item = player.currentMediaItem ?: return null
+        val state = player.playbackState
+        val active = state == androidx.media3.common.Player.STATE_READY ||
+            state == androidx.media3.common.Player.STATE_BUFFERING
+        val duration = player.duration.takeIf { it > 0 }
+        return FloatingLyricsOverlay.Sample(item.mediaId, player.currentPosition, duration, active)
+    }
+
     override fun onDestroy() {
+        if (activeInstance === this) activeInstance = null
         serviceDestroyed = true
         playbackActive = false
         mainHandler.removeCallbacks(loadAckTimeout)
@@ -760,6 +773,11 @@ class PlaybackService : MediaSessionService() {
         optString(key).takeIf { it.isNotBlank() && it != "null" }
 
     companion object {
+        @Volatile private var activeInstance: PlaybackService? = null
+
+        /** Main thread only. Null while no playback service is running. */
+        fun floatingLyricsSample(): FloatingLyricsOverlay.Sample? = activeInstance?.overlaySample()
+
         private const val ACTIVE_POLL_INTERVAL_MS = 50L
         private const val IDLE_POLL_INTERVAL_MS = 250L
         private const val SNAPSHOT_SAMPLE_INTERVAL_MS = 250L
