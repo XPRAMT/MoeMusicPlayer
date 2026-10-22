@@ -133,10 +133,11 @@ test('floating lyrics D-pad taps once, repeats when held and saves once on relea
   steps = 0;
   const hold = pressFloatingLyricsNudge(() => steps++, () => saves++, timers);
   advance(300 + 350);
-  assert.equal(steps, 1 + 3);
+  assert.ok(Math.abs(FLOATING_LYRICS_NUDGE_REPEAT.intervalMs - 100 / 3) < 1e-9, 'one pixel per 33.3 ms');
+  assert.equal(steps, 1 + 10);
   hold();
   advance(1000);
-  assert.deepEqual([steps, saves], [4, 2]);
+  assert.deepEqual([steps, saves], [11, 2]);
 });
 
 test('floating animation is saved apart and repaired to none', async () => {

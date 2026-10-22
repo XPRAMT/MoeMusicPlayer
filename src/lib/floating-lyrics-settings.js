@@ -55,7 +55,7 @@ export function floatingLyricsWidthMax(screenWidth, fontSizePx) {
 }
 
 /** D-pad timing: a tap moves 1 px; held past `delayMs` it repeats every `intervalMs` until released. */
-export const FLOATING_LYRICS_NUDGE_REPEAT = Object.freeze({ delayMs: 300, intervalMs: 100 });
+export const FLOATING_LYRICS_NUDGE_REPEAT = Object.freeze({ delayMs: 300, intervalMs: 100 / 3 });
 
 /**
  * Press a D-pad arrow: `step()` at once, then again every intervalMs once held past delayMs. Returns `release`, which

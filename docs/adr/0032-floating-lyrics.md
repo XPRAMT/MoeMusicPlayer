@@ -111,7 +111,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   screen width (Android `floatingLyricsStatus.screenWidthDp`). The slider's maximum is that screen width.
 - 面板 layout: 「移動到狀態列」 on its own row (Android only); then the D-pad (lock toggle in the centre) with a vertical
   stack 水平置中 / 垂直置中 / 重設位置 to its right; then the width slider. D-pad: a tap moves 1 px; held past 300 ms it
-  repeats 1 px every 100 ms until pointer up / leave / cancel (`pressFloatingLyricsNudge`); the position is saved once
+  repeats 1 px every 33.3 ms (30 px/s; the hold delay stays 300 ms) until pointer up / leave / cancel (`pressFloatingLyricsNudge`); the position is saved once
   on release (Android `nudgeX/nudgeY` with `save: false`, then `savePosition: true`).
 - Android scroll fps: measured with `dumpsys gfxinfo` while playing on a 120 Hz display, the overlay (already
   hardware accelerated) drew ~7 frames/s at ~5 ms each with no jank, so it was not render bound. Root cause:
