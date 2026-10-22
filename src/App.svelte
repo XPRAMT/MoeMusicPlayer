@@ -5498,18 +5498,9 @@
     </section>
   {/if}
 
-  {#if isQuickSettingsOpen}
-    <button
-      type="button"
-      class="now-playing-quick-settings-dock-dismiss"
-      tabindex="-1"
-      aria-label={tr("關閉快速設定")}
-      onclick={() => void closeQuickSettings()}
-    ></button>
-  {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label={tr("播放控制")} inert={isQuickSettingsOpen} onclick={toggleNowPlayingFromDock}>
+  <footer class="player-dock" data-timeline-style={nowPlayingAppearancePreferences.timelineStyle} aria-label={tr("播放控制")} onclick={toggleNowPlayingFromDock}>
     <div class="dock-track" class:dock-track-dismiss={isNowPlayingOpen}>
       {#if isNowPlayingOpen}
         <button

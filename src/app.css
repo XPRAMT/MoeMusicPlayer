@@ -586,19 +586,6 @@ input:focus-visible {
   cursor: default;
 }
 
-.now-playing-quick-settings-dock-dismiss {
-  position: fixed;
-  z-index: 30;
-  right: var(--android-safe-right, 0px);
-  bottom: var(--android-safe-bottom, 0px);
-  left: var(--android-safe-left, 0px);
-  height: var(--dock-height);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
 /* The playback overlay clips (overflow: hidden) at the status-bar inset, which hid the drawer's
    negative top. While the drawer is open, let it paint under the status bar (Android). */
 .now-playing-overlay:has(> .now-playing-quick-settings-drawer) {

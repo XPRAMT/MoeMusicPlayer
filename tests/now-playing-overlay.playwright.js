@@ -243,8 +243,8 @@ async page => {
   assert.equal(await quickSettings.locator('input[aria-label="快速設定面板透明度"]').inputValue(), '70', 'drawer shares the playback opacity control at 70%');
   assert.equal(await quickSettings.locator('input[aria-label="快速設定面板模糊程度"]').inputValue(), '12', 'drawer shares the playback blur control at 12px');
   assert.equal(await page.locator('.now-playing-overlay-body').evaluate((element) => element.inert), true, 'quick settings modal makes the covered playback view inert');
-  assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), true, 'modal drawer keeps dock controls inert while open');
-  assert.equal(await page.locator('.now-playing-quick-settings-dock-dismiss').count(), 1, 'dock dismiss layer covers the playback bar while quick settings is open');
+  assert.equal(await page.locator('.player-dock').evaluate((element) => element.inert), false, 'the playback bar stays operable while the drawer is open (not inert)');
+  assert.equal(await page.locator('.now-playing-quick-settings-dock-dismiss').count(), 0, 'no layer covers the playback bar while quick settings is open');
   assert.equal(await quickSettings.locator('input[aria-label="元件底色透明度"]').count(), 0, 'surface transparency is not configurable');
   const drawerGeometry = await page.evaluate(() => {
     const rect = (element) => {
@@ -469,13 +469,23 @@ async page => {
   await page.waitForTimeout(50);
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   await page.waitForFunction(() => document.querySelector('[data-testid="now-playing-quick-settings"]'));
-  const playingBeforeDockDismiss = await page.evaluate(() => window.__volumeHarness.snapshot().isPlaying);
-  await page.locator('.now-playing-quick-settings-dock-dismiss').click({ position: { x: 24, y: 36 } });
+  // The playback bar is not part of the close area: its controls work with the drawer open, and the drawer stays open.
+  const playingBeforeDock = await page.evaluate(() => window.__volumeHarness.snapshot().isPlaying);
+  const dockPlay = await page.evaluate(() => {
+    const rect = document.querySelector('.player-dock .play-button').getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return Boolean(hit?.closest('.play-button'));
+  });
+  assert.equal(dockPlay, true, 'nothing covers the dock play button while quick settings is open');
+  await page.locator('.player-dock .play-button').click();
+  await page.waitForFunction((before) => window.__volumeHarness.snapshot().isPlaying !== before, playingBeforeDock);
+  assert.equal(await page.locator('[data-testid="now-playing-quick-settings"]').count(), 1, 'using the playback bar keeps quick settings open');
+  await page.locator('.player-dock .play-button').click();
+  await page.waitForFunction((before) => window.__volumeHarness.snapshot().isPlaying === before, playingBeforeDock);
+  await page.locator('.now-playing-quick-settings-scrim').click({ position: { x: 12, y: 360 } });
   await page.waitForFunction(() => !document.querySelector('[data-testid="now-playing-quick-settings"]'));
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), '開啟快速設定', 'dock click closes quick settings and restores trigger focus');
-  assert.equal(await page.evaluate(() => window.__volumeHarness.snapshot().isPlaying), playingBeforeDockDismiss, 'dock dismiss of quick settings does not change playback');
-  assert.equal(await page.locator('[data-testid="now-playing-overlay"]').evaluate((element) => element.classList.contains('is-open')), true, 'dock dismiss of quick settings keeps Now Playing open');
-  assert.equal(await page.locator('.now-playing-quick-settings-dock-dismiss').count(), 0, 'dock dismiss layer is removed after closing quick settings');
+  assert.equal(await page.locator('[data-testid="now-playing-overlay"]').evaluate((element) => element.classList.contains('is-open')), true, 'closing quick settings from outside keeps Now Playing open');
+  assert.equal(await page.locator('.now-playing-quick-settings-dock-dismiss').count(), 0, 'there is no dock dismiss layer');
   await page.getByRole('button', { name: '開啟快速設定' }).click();
   await page.getByRole('dialog', { name: '快速設定' }).getByRole('tab', { name: '歌詞', exact: true }).click();
   await page.locator('.now-playing-quick-settings-drawer input[aria-label="歌詞句間距"]').evaluate((input) => {
