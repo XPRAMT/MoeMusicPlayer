@@ -909,5 +909,8 @@
   "鎖定位置（滑鼠穿透）": "Lock position (click-through)",
   "關閉時使用白色": "White when off",
   "顯示在其他應用程式上層": "Display over other apps",
-  "顯示浮動歌詞": "Show floating lyrics"
+  "顯示浮動歌詞": "Show floating lyrics",
+  "從播放清單移除": "Remove from playlist",
+  "正在移除…": "Removing…",
+  "無法從播放清單移除：{0}": "Could not remove from the playlist: {0}"
 }

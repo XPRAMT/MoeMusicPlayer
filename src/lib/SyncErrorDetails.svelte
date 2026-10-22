@@ -1,8 +1,35 @@
 ﻿<script lang="ts">
   import { tr } from './i18n.js';
-  import type { LibrarySource, SourceSyncResult } from './ipc';
+  import { invokeCommand, type LibrarySource, type SourceSyncResult } from './ipc';
 
-  let { results, sources }: { results: SourceSyncResult[]; sources: LibrarySource[] } = $props();
+  let {
+    results,
+    sources,
+    onResync,
+  }: {
+    results: SourceSyncResult[];
+    sources: LibrarySource[];
+    /** Synchronize again after a missing file was removed from its playlist. */
+    onResync?: () => unknown;
+  } = $props();
+
+  let removingKey = $state<string | null>(null);
+  let removeError = $state<string | null>(null);
+
+  async function removeFromPlaylist(sourceId: string, itemKey: string): Promise<void> {
+    if (removingKey) return;
+    removingKey = itemKey;
+    removeError = null;
+    try {
+      // Same rewrite as the playback page's unfavorite, keeping `<name>.bak` (ADR 0033).
+      await invokeCommand('sync_remove_missing_playlist_entry', { sourceId, itemKey });
+      await onResync?.();
+    } catch (error) {
+      removeError = error instanceof Error ? error.message : String(error);
+    } finally {
+      removingKey = null;
+    }
+  }
 
   const resultsWithErrors = $derived(results.filter((result) => result.errorCount > 0));
   const currentErrorDetails = $derived(
@@ -36,11 +63,25 @@
               <li>
                 <code>{error.item ?? tr('來源層級')}</code>
                 <span>{error.message}</span>
+                {#if error.missingFile && error.itemKey}
+                  {@const itemKey = error.itemKey}
+                  <button
+                    type="button"
+                    class="sync-error-remove"
+                    disabled={removingKey !== null}
+                    onclick={() => removeFromPlaylist(entry.result.sourceId, itemKey)}
+                  >
+                    {removingKey === itemKey ? tr("正在移除…") : tr("從播放清單移除")}
+                  </button>
+                {/if}
               </li>
             {/each}
           </ul>
         {:else}
           <p class="sync-error-note">{tr("本次同步回報了 {0} 個錯誤，但沒有可用的逐項明細。", [entry.result.errorCount.toLocaleString()])}</p>
+        {/if}
+        {#if removeError}
+          <p class="sync-error-note" role="alert">{tr("無法從播放清單移除：{0}", [removeError])}</p>
         {/if}
         {#if entry.result.errorsTruncated ?? false}
           <p class="sync-error-note">
@@ -134,6 +175,22 @@
 
   .sync-error-group li > span {
     display: block;
+  }
+
+  .sync-error-remove {
+    margin-top: 4px;
+    padding: 2px 10px;
+    border: 1px solid rgba(var(--text-rgb), 0.18);
+    border-radius: 6px;
+    color: var(--accent-text);
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .sync-error-remove:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
   .sync-error-note,

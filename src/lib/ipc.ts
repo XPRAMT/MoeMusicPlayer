@@ -312,6 +312,10 @@ export interface SourceSyncResult {
 export interface SourceSyncError {
   item: string | null;
   message: string;
+  /** The file is gone from a reachable volume (ADR 0033). */
+  missingFile?: boolean;
+  /** Raw item key for `sync_remove_missing_playlist_entry`, missing files only. */
+  itemKey?: string | null;
 }
 
 export interface LibrarySyncResult {
@@ -1255,6 +1259,10 @@ interface IpcContract {
   favorites_get_playlists: {
     args: { trackId: string };
     result: FavoritePlaylists;
+  };
+  sync_remove_missing_playlist_entry: {
+    args: { sourceId: string; itemKey: string };
+    result: boolean;
   };
   favorites_set_membership: {
     args: { sourceId: string; trackId: string; selected: boolean };

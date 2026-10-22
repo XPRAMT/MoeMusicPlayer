@@ -28,6 +28,11 @@ such tracks hidden everywhere but restorable: if a later sync finds the file aga
 - Any later scan that observes the file clears the mark (`persist_mapping` sets it to NULL).
 - `SyncApplyStats.hidden_missing_mappings` counts newly hidden mappings.
 
+- The sync summary (Settings, manage music sources) shows a "Remove from playlist" button next to each missing-file
+  error. `sync_remove_missing_playlist_entry` reuses the favorite button's unfavorite rewrite
+  (`rewrite_local_playlist_membership`, keeping `<name>.bak`), only for local playlist files and only while the file
+  is still missing; the page then synchronizes again. This is the only way a playlist file is edited for a missing file.
+
 ## Consequences
 
 - Moved or renamed folder files leave a hidden mapping behind (the new path is a new track).

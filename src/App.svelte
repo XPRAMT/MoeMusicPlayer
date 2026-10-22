@@ -4658,7 +4658,7 @@
                   </ul>
                 {/if}
                 {#if !syncProgress.active}
-                  <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+                  <SyncErrorDetails results={sourceSyncResults} sources={sources} onResync={syncLibrary} />
                 {/if}
               </section>
             {/if}
@@ -4672,7 +4672,7 @@
                 <div class="source-result-message" role="status">{sourceSyncSummary}</div>
               {/if}
               {#if !syncProgress}
-                <SyncErrorDetails results={sourceSyncResults} sources={sources} />
+                <SyncErrorDetails results={sourceSyncResults} sources={sources} onResync={syncLibrary} />
               {/if}
               <SourceSections
                 folders={localFolderSources}

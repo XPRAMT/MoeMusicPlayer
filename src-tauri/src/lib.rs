@@ -2310,6 +2310,10 @@ struct ExcludedFolder {
 struct SourceSyncError {
     item: Option<String>,
     message: String,
+    /// The file is gone from a reachable volume (ADR 0033); the sync summary offers to remove it from the playlist.
+    missing_file: bool,
+    /// Raw source item key, only for missing files (passed back to `sync_remove_missing_playlist_entry`).
+    item_key: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -4942,66 +4946,196 @@ async fn favorites_set_membership(
             .await
             .map_err(|error| format!("收藏工作失敗：{error}"))?;
         }
-        let target_locator = target_locators
-            .first()
-            .cloned()
-            .ok_or_else(|| "此曲目沒有可用的原生路徑。".to_owned())?;
-        let (file_path, bytes) = read_favorite_source(&app, source)?;
-        let parse_path = file_path
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new(&source.display_name));
-        let mut playlist = playlist_exchange::read_playlist_bytes(&bytes, parse_path)?;
-        playlist.id = *playlist_id;
-        resolve_favorite_entry_ids(&app, database, source, &mut playlist)?;
+        rewrite_local_playlist_membership(
+            &app,
+            database,
+            source,
+            *playlist_id,
+            track_id,
+            &target_locators,
+            selected,
+        )?;
+    }
+    Ok(())
+}
+
+/// Rewrite a local playlist file so `track_id` (matched also by any of `target_locators`) is in it or not, keeping the
+/// previous version as `<name>.bak` and saving the database projection. Shared by the playback page's favorite button
+/// and the sync summary's "remove from playlist" button. Returns whether the file changed.
+fn rewrite_local_playlist_membership(
+    app: &AppHandle,
+    database: &Database,
+    source: &SourceEntry,
+    playlist_id: PlaylistId,
+    track_id: TrackId,
+    target_locators: &[MediaLocator],
+    selected: bool,
+) -> Result<bool, String> {    let target_locator = target_locators
+        .first()
+        .cloned()
+        .ok_or_else(|| "此曲目沒有可用的原生路徑。".to_owned())?;
+    let (file_path, bytes) = read_favorite_source(app, source)?;
+    let parse_path = file_path
+        .as_deref()
+        .unwrap_or_else(|| std::path::Path::new(&source.display_name));
+    let mut playlist = playlist_exchange::read_playlist_bytes(&bytes, parse_path)?;
+    playlist.id = playlist_id;
+    resolve_favorite_entry_ids(app, database, source, &mut playlist)?;
+    for entry in &mut playlist.entries {
+        if target_locators
+            .iter()
+            .any(|locator| same_favorite_locator(locator, &entry.locator))
+        {
+            entry.track_id = Some(track_id);
+        }
+    }
+    let changed =
+        favorites::set_playlist_membership(&mut playlist, track_id, target_locator, selected);
+    if changed {
+        // Temporary file-open tracks are not persisted in the main library database. Their
+        // locator stays in M3U while the ephemeral TrackId must not leak into the main DB.
         for entry in &mut playlist.entries {
-            if target_locators
+            if !target_locators
                 .iter()
                 .any(|locator| same_favorite_locator(locator, &entry.locator))
             {
-                entry.track_id = Some(track_id);
+                continue;
+            }
+            if database
+                .get_track_summary(track_id)
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                entry.track_id = None;
             }
         }
-        let changed =
-            favorites::set_playlist_membership(&mut playlist, track_id, target_locator, selected);
-        if changed {
-            // Temporary file-open tracks are not persisted in the main library database. Their
-            // locator stays in M3U while the ephemeral TrackId must not leak into the main DB.
-            for entry in &mut playlist.entries {
-                if !target_locators
-                    .iter()
-                    .any(|locator| same_favorite_locator(locator, &entry.locator))
-                {
-                    continue;
-                }
-                if database
-                    .get_track_summary(track_id)
-                    .map_err(|error| error.to_string())?
-                    .is_none()
-                {
-                    entry.track_id = None;
-                }
-            }
-            let output = if source.display_name.to_ascii_lowercase().ends_with(".m3u") {
-                player_core::write_m3u(
-                    &playlist,
-                    parse_path,
-                    &player_core::M3uExportOptions::default(),
-                )
-            } else {
-                player_core::write_m3u8(
-                    &playlist,
-                    parse_path,
-                    &player_core::M3uExportOptions::default(),
-                )
-            }
-            .map_err(|error| error.to_string())?;
-            write_favorite_source(&app, source, file_path.as_deref(), &bytes, &output)?;
-            database
-                .save_playlist(&playlist)
-                .map_err(|error| format!("播放清單檔已更新，但資料庫投影保存失敗：{error}"))?;
+        let output = if source.display_name.to_ascii_lowercase().ends_with(".m3u") {
+            player_core::write_m3u(
+                &playlist,
+                parse_path,
+                &player_core::M3uExportOptions::default(),
+            )
+        } else {
+            player_core::write_m3u8(
+                &playlist,
+                parse_path,
+                &player_core::M3uExportOptions::default(),
+            )
         }
+        .map_err(|error| error.to_string())?;
+        write_favorite_source(app, source, file_path.as_deref(), &bytes, &output)?;
+        database
+            .save_playlist(&playlist)
+            .map_err(|error| format!("播放清單檔已更新，但資料庫投影保存失敗：{error}"))?;
     }
-    Ok(())
+    Ok(changed)
+}
+
+/// Path of a missing playlist entry from its source item key (Windows locator key or `unix-path-v1:`).
+fn missing_item_path(key: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    if let Some(path) = decode_windows_locator_key(key) {
+        return Some(path.into());
+    }
+    player_core::unix_path_from_key(key).map(std::path::PathBuf::from)
+}
+
+#[cfg(test)]
+mod missing_playlist_entry_tests {
+    use super::*;
+
+    #[test]
+    fn missing_file_errors_carry_their_raw_key_and_others_do_not() {
+        let missing = MediaSourceError {
+            source_item_id: Some("unix-path-v1:/storage/emulated/0/Music/a.flac".to_owned()),
+            message: "gone".to_owned(),
+            kind: player_core::MediaSourceErrorKind::MissingFile,
+        };
+        let other = MediaSourceError {
+            source_item_id: Some("unix-path-v1:/storage/ABCD-1234/b.flac".to_owned()),
+            message: "offline".to_owned(),
+            kind: Default::default(),
+        };
+        let details = source_sync_error_details(&[missing, other], &[]);
+        assert!(details[0].missing_file);
+        assert_eq!(
+            details[0].item_key.as_deref(),
+            Some("unix-path-v1:/storage/emulated/0/Music/a.flac")
+        );
+        assert!(!details[1].missing_file);
+        assert_eq!(details[1].item_key, None);
+        assert_eq!(
+            missing_item_path("unix-path-v1:/storage/emulated/0/Music/a.flac"),
+            Some(std::path::PathBuf::from("/storage/emulated/0/Music/a.flac"))
+        );
+        assert_eq!(missing_item_path("nonsense"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_locator_keys_decode_to_their_path() {
+        let path = std::path::Path::new(r"D:\音樂\歌.flac");
+        assert_eq!(
+            missing_item_path(&windows_locator_key(path)),
+            Some(path.to_path_buf())
+        );
+    }
+}
+
+/// Remove a file that no longer exists from a local playlist file (sync summary button, ADR 0033). Same rewrite as the
+/// favorite button's unfavorite, including the `.bak` backup. The caller synchronizes again afterwards.
+#[tauri::command]
+async fn sync_remove_missing_playlist_entry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+    item_key: String,
+) -> Result<bool, String> {
+    let source_id =
+        SourceId::parse(&source_id).map_err(|_| "播放清單來源識別碼無效。".to_owned())?;
+    let path = missing_item_path(&item_key).ok_or_else(|| "無法辨識遺失檔案的路徑。".to_owned())?;
+    if path.exists() {
+        return Err("這個檔案又找得到了，不需要移除；請重新同步。".to_owned());
+    }
+    let _database_work = enter_database_work(&state)?;
+    let database = state.database.as_ref().ok_or_else(|| {
+        state
+            .database_error
+            .clone()
+            .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
+    })?;
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    let source = settings
+        .sources
+        .iter()
+        .find(|source| source.id == source_id && source.enabled)
+        .ok_or_else(|| "找不到已啟用的播放清單來源。".to_owned())?;
+    let SourceEntryKind::PlaylistFile {
+        playlist_id,
+        remote_account: None,
+        ..
+    } = &source.kind
+    else {
+        return Err("只能從本機播放清單檔案移除。".to_owned());
+    };
+    let locator = MediaLocator::FileSystem(path);
+    // The hidden mapping usually still resolves; otherwise a placeholder id only marks the matching lines.
+    let track_id = database
+        .resolve_track_id_for_locator(&locator)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(TrackId::new);
+    rewrite_local_playlist_membership(
+        &app,
+        database,
+        source,
+        *playlist_id,
+        track_id,
+        std::slice::from_ref(&locator),
+        false,
+    )
 }
 
 #[tauri::command]
@@ -8789,6 +8923,10 @@ fn source_sync_error_details(
                 .as_deref()
                 .map(display_source_sync_item),
             message: error.message.clone(),
+            missing_file: matches!(error.kind, player_core::MediaSourceErrorKind::MissingFile),
+            item_key: (matches!(error.kind, player_core::MediaSourceErrorKind::MissingFile))
+                .then(|| error.source_item_id.clone())
+                .flatten(),
         });
     }
     for (item, error) in metadata_errors {
@@ -8798,6 +8936,8 @@ fn source_sync_error_details(
         details.push(SourceSyncError {
             item: Some(display_source_sync_item(item)),
             message: error.message.clone(),
+            missing_file: false,
+            item_key: None,
         });
     }
     details
@@ -12241,6 +12381,7 @@ pub fn run() {
             playlist_export_m3u,
             favorites_get_playlists,
             favorites_set_membership,
+            sync_remove_missing_playlist_entry,
             favorites_create_my_love,
             favorites_create_playlist,
             library_list_sources,
