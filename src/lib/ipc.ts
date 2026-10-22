@@ -353,7 +353,6 @@ export interface TrackPage {
 
 export interface TrackPageRequest {
   query: string | null;
-  queryAlternates?: string[];
   fieldFilter?: TrackFieldFilter | null;
   sort?: LibraryListSort | null;
   offset: number;
@@ -543,6 +542,7 @@ export interface FavoritePlaylists {
 export type RepeatMode = 'off' | 'one' | 'all';
 
 export type PlaybackQueueSource =
+  // queryAlternates: only in queue sources saved before ADR 0030; the backend now derives 繁簡 terms itself.
   | { kind: 'library'; query: string | null; queryAlternates?: string[]; fieldFilter?: TrackFieldFilter | null; sort?: LibraryListSort | null }
   | { kind: 'playlist'; playlistId: string; entryPosition: number }
   /** Album detail page: the same arguments as `library_get_album_page`, so the queue follows the page order. */
@@ -618,6 +618,10 @@ export interface LyricLine {
   text: string;
   translation: string | null;
   romanization: string | null;
+  /** `text` in Taiwan Traditional glyphs, only when that differs (ADR 0030). */
+  textTraditional?: string;
+  /** `translation` in Taiwan Traditional glyphs, only when that differs. */
+  translationTraditional?: string;
 }
 
 export type LyricsSource = 'local' | 'embedded' | 'netease' | 'qqmusic' | 'manual';
@@ -693,7 +697,7 @@ export interface NowPlayingAppearancePreferences {
 
 interface IpcContract {
   library_get_quick_index_for_tracks: {
-    args: { query: string | null; queryAlternates: string[]; fieldFilter: TrackFieldFilter | null; sort: LibraryListSort };
+    args: { query: string | null; fieldFilter: TrackFieldFilter | null; sort: LibraryListSort };
     result: { labels: string[]; groups: { label: string; beforeIndex: number }[]; totalCount: number };
   };
   library_get_quick_index_for_artists: {
@@ -1046,7 +1050,6 @@ interface IpcContract {
   library_get_track_position: {
     args: {
       query: string | null;
-      queryAlternates: string[];
       fieldFilter: TrackFieldFilter | null;
       sort: LibraryListSort;
       trackId: string;
@@ -1118,7 +1121,7 @@ interface IpcContract {
     result: void;
   };
   library_get_artist_page: {
-    args: { query: string | null; queryAlternates: string[]; sort: LibraryListSort; offset: number; limit: number; artistNames: string[] };
+    args: { query: string | null; sort: LibraryListSort; offset: number; limit: number; artistNames: string[] };
     result: TrackPage;
   };
   settings_get_library_source_scope: {
@@ -1272,7 +1275,7 @@ interface IpcContract {
     result: LyricsTrackResult;
   };
   lyrics_search: {
-    args: { trackId: string; requestId: string; manual?: boolean; query?: string; queryAlternates?: string[] };
+    args: { trackId: string; requestId: string; manual?: boolean; query?: string };
     result: LyricsTrackResult;
   };
   lyrics_load_more: {

@@ -1154,7 +1154,7 @@ mod tests {
         let credits = credits();
         assert!(credits
             .iter()
-            .any(|credit| credit.name == "opencc-js" && credit.license == "MIT AND Apache-2.0"));
+            .any(|credit| credit.name == "OpenCC" && credit.license == "Apache-2.0"));
         assert!(credits
             .iter()
             .any(|credit| credit.name == "AndroidX Media3"));

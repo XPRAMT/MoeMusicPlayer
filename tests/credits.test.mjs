@@ -5,7 +5,7 @@ import test from 'node:test';
 const credits = JSON.parse((await readFile(new URL('../licenses/credits.json', import.meta.url), 'utf8')).replace(/^﻿/, ''));
 
 test('credits list names the notable shipped libraries', () => {
-  const required = ['Tauri', 'Svelte', 'libwavpack', 'libopus', 'SQLite', 'Lofty', 'Symphonia', 'rubato', 'smb', 'sspi', 'Media3', 'wasapi', 'rustls', 'ring', 'Rodio', 'CPAL', 'opencc-js', 'ICU4X', 'Tabler', 'image', 'zip', 'RustCrypto', 'Kotlin'];
+  const required = ['Tauri', 'Svelte', 'libwavpack', 'libopus', 'SQLite', 'Lofty', 'Symphonia', 'rubato', 'smb', 'sspi', 'Media3', 'wasapi', 'rustls', 'ring', 'Rodio', 'CPAL', 'OpenCC', 'ICU4X', 'Tabler', 'image', 'zip', 'RustCrypto', 'Kotlin'];
   for (const name of required) {
     assert.ok(credits.some((c) => c.name.toLowerCase().includes(name.toLowerCase())), `missing credit: ${name}`);
   }

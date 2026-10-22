@@ -3,7 +3,7 @@
   import { displayUnknown } from './lib/unknown-label.js';
   import { createLyricsController } from './lib/lyrics-controller.js';
   import { defaultLyricsApi } from './lib/lyrics-api';
-  import { convertTrackLyrics } from './lib/lyrics-traditional.js';
+  import { lyricsForDisplay } from './lib/lyrics-traditional.js';
   import { buildTaskbarLyricsData, type TaskbarLyricsData } from './lib/taskbar-lyrics-data.js';
   import { adoptSavedLanguage, changeLanguage, followLanguageChange } from './lib/language-sync.js';
   import { onDestroy, onMount, setContext, tick, untrack } from 'svelte';
@@ -162,7 +162,6 @@
   import ArtistIndex from './lib/ArtistIndex.svelte';
   import AlbumIndex from './lib/AlbumIndex.svelte';
   import AlbumDetail from './lib/AlbumDetail.svelte';
-  import { getSearchVariants } from './lib/search-variants.js';
   import PlaylistEntryList from './lib/PlaylistEntryList.svelte';
   import PlaylistTree from './lib/PlaylistTree.svelte';
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
@@ -1736,29 +1735,14 @@
     const wanted = isNowPlayingMounted || (capabilities?.platform === 'windows' && taskbarLyricsSettings.enabled);
     const track = playback?.currentTrack ?? null;
     const id = wanted && track ? track.id : null;
-    const title = track?.title ?? null;
-    const artist = track?.artist ?? null;
-    untrack(() => void lyricsController.setTrack(id, { title, artist }));
+    untrack(() => void lyricsController.setTrack(id));
   });
 
   // The lyrics as the page shows them (Simplified-to-Traditional applied), reduced for the taskbar window.
   $effect(() => {
     const lyrics = lyricsState.lyrics;
-    const trackId = lyricsState.trackId;
-    const convert = lyricsPreferences.simplifiedToTraditional;
-    let cancelled = false;
-    void (async () => {
-      let shown = lyrics;
-      if (lyrics && convert) {
-        try {
-          shown = { ...lyrics, lines: (await convertTrackLyrics(lyrics)).lines };
-        } catch {
-          shown = lyrics;
-        }
-      }
-      if (!cancelled) taskbarLyricsData = buildTaskbarLyricsData(trackId, shown);
-    })();
-    return () => { cancelled = true; };
+    const shown = lyrics ? lyricsForDisplay(lyrics, lyricsPreferences.simplifiedToTraditional) : lyrics;
+    taskbarLyricsData = buildTaskbarLyricsData(lyricsState.trackId, shown);
   });
 
   // Send them to the taskbar window whenever they change, and when the window opens and asks. (`capabilities` is
@@ -2999,18 +2983,10 @@
   async function playTrack(track: TrackSummary): Promise<void> {
     if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     const searchQuery = query.trim();
-    let queryAlternates: string[] = [];
-    try {
-      queryAlternates = (await getSearchVariants(searchQuery)).slice(1);
-    } catch {
-      // Search conversion must never prevent playback of an already selected track.
-    }
-    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
     selectedTrackId = track.id;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
       query: searchQuery || null,
-      queryAlternates,
       fieldFilter: libraryFieldFilter ?? undefined,
       sort: librarySort,
     };
@@ -3244,7 +3220,6 @@
     }
     const page = await invokeCommand('library_get_artist_page', {
       query: request.query,
-      queryAlternates: request.queryAlternates ?? [],
       sort: request.sort ?? librarySort,
       offset: request.offset,
       limit: request.limit,
@@ -3260,7 +3235,6 @@
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
       query: null,
-      queryAlternates: [],
       fieldFilter: { field: 'artist', value: selectedArtist.artistNames.join('|') },
       sort: librarySort,
     };
@@ -5090,8 +5064,6 @@
               {#snippet lyrics()}
                 <LyricsView
                   trackId={playback?.currentTrack?.id ?? null}
-                  trackTitle={playback?.currentTrack?.title ?? null}
-                  trackArtist={playback?.currentTrack?.artist ?? null}
                   positionMs={playback?.positionMs ?? 0}
                   {playbackClock}
                   isPlaying={playback?.isPlaying ?? false}

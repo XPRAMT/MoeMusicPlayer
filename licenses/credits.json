@@ -21,18 +21,11 @@
     "purpose": "介面圖示"
   },
   {
-    "name": "ferrous-opencc",
-    "version": "0.4.0",
-    "license": "Apache-2.0",
-    "repositoryUrl": "https://github.com/apoint123/ferrous-opencc",
-    "purpose": "SQLite 演出者與專輯簡繁身份正規化"
-  },
-  {
-    "name": "opencc-js",
+    "name": "OpenCC",
     "version": "1.4.2",
-    "license": "MIT AND Apache-2.0",
-    "repositoryUrl": "https://github.com/nk2028/opencc-js",
-    "purpose": "歌詞簡體轉繁體字典"
+    "license": "Apache-2.0",
+    "repositoryUrl": "https://github.com/BYVoid/OpenCC",
+    "purpose": "簡繁字形轉換字典（歌詞顯示、歌詞與曲庫搜尋、演出者與專輯身份）"
   },
   {
     "name": "Rodio",

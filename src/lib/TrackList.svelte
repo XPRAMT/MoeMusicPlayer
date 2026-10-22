@@ -36,7 +36,6 @@
   import PagedVirtualList from './PagedVirtualList.svelte';
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
-  import { getSearchVariants } from './search-variants.js';
   import { cacheQuickIndex, getCachedQuickIndex, getQuickIndexBuildKey } from './quick-index.js';
 
   interface Props {
@@ -153,7 +152,6 @@
       };
       const request: TrackPageRequest = {
         query: requestScope.query,
-        queryAlternates: (await getSearchVariants(requestScope.query)).slice(1),
         fieldFilter: requestScope.fieldFilter,
         sort: requestScope.sort,
         offset,
@@ -225,7 +223,6 @@
             : null
         : await invokeCommand('library_get_quick_index_for_tracks', {
           query: currentQuery,
-          queryAlternates: (await getSearchVariants(currentQuery)).slice(1),
           fieldFilter: currentFieldFilter,
           sort: currentSort,
         });
@@ -281,7 +278,6 @@
       const currentQuery = query.trim() || null;
       const index = await invokeCommand('library_get_track_position', {
         query: currentQuery,
-        queryAlternates: (await getSearchVariants(currentQuery)).slice(1),
         fieldFilter: fieldFilter ?? null,
         sort: normalizedSort,
         trackId: locateTrackId,

@@ -12,7 +12,7 @@
     TrackLyrics,
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
-  import { convertTrackLyrics } from './lyrics-traditional.js';
+  import { lyricsForDisplay } from './lyrics-traditional.js';
   import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
   import {
     LYRIC_CUE_LEAD_MS,
@@ -82,8 +82,6 @@
 
   interface Props {
     trackId: string | null;
-    trackTitle?: string | null;
-    trackArtist?: string | null;
     positionMs: number;
     /** The shell's playback clock. When given, the active line follows it: the view wakes once when the next line
      *  starts (and again when the clock is corrected), instead of recomputing on every position sample. */
@@ -103,8 +101,6 @@
 
   let {
     trackId,
-    trackTitle = null,
-    trackArtist = null,
     positionMs = 0,
     playbackClock = null,
     isPlaying = false,
@@ -230,8 +226,6 @@
     },
   });
 
-  let traditionalLines = $state<LyricLine[] | null>(null);
-  let traditionalTrackId = $state<string | null>(null);
   let preferences = $derived(normalizeLyricsPreferences(lyricsPreferences));
 
   $effect(() => {
@@ -239,32 +233,9 @@
     onLyricsRemovedChange?.(viewState.lyricsRemoved && !selectionUiOpen);
   });
 
-  $effect(() => {
-    const lyrics = viewState.lyrics;
-    const enabled = preferences.simplifiedToTraditional;
-    if (!enabled || !lyrics) {
-      traditionalLines = null;
-      traditionalTrackId = null;
-      return;
-    }
-    let cancelled = false;
-    const trackId = lyrics.trackId;
-    void convertTrackLyrics(lyrics).then((converted) => {
-      if (cancelled) return;
-      traditionalTrackId = trackId;
-      traditionalLines = converted.lines;
-    });
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  let lines = $derived(
-    preferences.simplifiedToTraditional
-      && traditionalLines
-      && traditionalTrackId === viewState.lyrics?.trackId
-      ? traditionalLines
-      : (viewState.lyrics?.lines ?? []),
+  // The Traditional spelling arrives with the lines (ADR 0030), so it can never belong to another track.
+  let lines = $derived<LyricLine[]>(
+    viewState.lyrics ? lyricsForDisplay(viewState.lyrics, preferences.simplifiedToTraditional).lines : [],
   );
   let effectivePlaybackState = $derived(playbackState ?? (isPlaying ? 'playing' : 'paused'));
   let timedLines = $derived(
@@ -492,7 +463,7 @@
     candidateQuery = '';
     submittedQuery = '';
     timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
-    if (!sharedController) void controller.setTrack(nextTrackId, { title: trackTitle, artist: trackArtist });
+    if (!sharedController) void controller.setTrack(nextTrackId);
   });
 
   $effect(() => {

@@ -1,6 +1,5 @@
 /** @typedef {import('./ipc').LyricsTrackResult} LyricsTrackResult */
 /** @typedef {import('./ipc').TrackLyrics} TrackLyrics */
-import { getAutomaticSearchVariants, getSearchVariants } from './search-variants.js';
 
 import { tr } from './i18n.js';
 let requestSequence = 0;
@@ -70,7 +69,7 @@ function stateFromResult(trackId, result, failedStage, options = {}) {
  * @param {{
  *   api: {
  *     getTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
- *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string, queryAlternates?:string[]}) => Promise<LyricsTrackResult>,
+ *     search: (args: {trackId:string, requestId:string, manual?:boolean, query?:string}) => Promise<LyricsTrackResult>,
  *     selectCandidate: (args: {trackId:string, candidateId:string}) => Promise<TrackLyrics>,
      *     clearTrack: (args: {trackId:string}) => Promise<LyricsTrackResult>,
      *     loadMore: (args: {trackId:string}) => Promise<LyricsTrackResult>,
@@ -85,8 +84,6 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
   let state = emptyState(null);
   /** @type {string | null} */
   let activeTrackId = null;
-  /** @type {{title?: string|null, artist?: string|null}} */
-  let activeTrackMetadata = {};
   /** @type {string | null} */
   let activeRequestId = null;
   let generation = 0;
@@ -124,7 +121,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       && generation === requestGeneration;
   }
 
-  /** @param {string} trackId @param {number} requestGeneration @param {{manual?: boolean, query?: string, automaticQueries?: string[]}} [options] */
+  /** @param {string} trackId @param {number} requestGeneration @param {{manual?: boolean, query?: string}} [options] */
   async function startSearch(trackId, requestGeneration, options = {}) {
     if (!isCurrent(trackId, requestGeneration)) return;
 
@@ -142,24 +139,11 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
     });
 
     try {
-      /** @type {{trackId:string, requestId:string, manual?:boolean, query?:string, queryAlternates?:string[]}} */
+      // The backend converts the query (or the track's tags) to Simplified before searching (ADR 0030).
+      /** @type {{trackId:string, requestId:string, manual?:boolean, query?:string}} */
       const args = { trackId, requestId };
       if (manual) args.manual = true;
       if (query) args.query = query;
-      if (query) {
-        try {
-          const variants = await getSearchVariants(query);
-          if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
-          const alternates = variants.slice(1);
-          if (alternates.length > 0) args.queryAlternates = alternates;
-        } catch {
-          // Keep the literal query working if the optional script converter cannot load.
-        }
-      } else if (Array.isArray(options.automaticQueries) && options.automaticQueries.length > 1) {
-        args.query = options.automaticQueries[0];
-        args.queryAlternates = options.automaticQueries.slice(1);
-      }
-      if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       const result = await api.search(args);
       if (!isCurrent(trackId, requestGeneration) || activeRequestId !== requestId) return;
       activeRequestId = null;
@@ -183,22 +167,15 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
     }
   }
 
-  /** @param {string} trackId @param {number} requestGeneration @param {{title?: string|null, artist?: string|null}} [trackMetadata] */
-  async function loadTrack(trackId, requestGeneration, trackMetadata = {}) {
+  /** @param {string} trackId @param {number} requestGeneration */
+  async function loadTrack(trackId, requestGeneration) {
     try {
       const result = await api.getTrack({ trackId });
       if (!isCurrent(trackId, requestGeneration)) return;
       update(stateFromResult(trackId, result, 'load'));
       // Cleared means the user removed lyrics; do not auto-search or auto-apply again.
       if (!result.lyrics && result.status !== 'error' && result.status !== 'cleared') {
-        let automaticQueries;
-        try {
-          automaticQueries = await getAutomaticSearchVariants(trackMetadata.title, trackMetadata.artist);
-        } catch {
-          // Script conversion is an enhancement; automatic search still works without it.
-        }
-        if (!isCurrent(trackId, requestGeneration)) return;
-        await startSearch(trackId, requestGeneration, { automaticQueries });
+        await startSearch(trackId, requestGeneration);
       }
     } catch (error) {
       if (!isCurrent(trackId, requestGeneration)) return;
@@ -237,15 +214,14 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       return state;
     },
 
-    /** @param {string | null} trackId @param {{title?: string|null, artist?: string|null}} [trackMetadata] */
-    async setTrack(trackId, trackMetadata = {}) {
+    /** @param {string | null} trackId */
+    async setTrack(trackId) {
       if (disposed || trackId === activeTrackId) return;
       generation += 1;
       activeTrackId = trackId;
-      activeTrackMetadata = trackMetadata;
       cancelActiveRequest();
       update(emptyState(trackId));
-      if (trackId) await loadTrack(trackId, generation, trackMetadata);
+      if (trackId) await loadTrack(trackId, generation);
     },
 
     /** Load the current track's lyrics again (embedded lyrics were edited), keeping what is shown until then. */
@@ -253,7 +229,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       if (disposed || !activeTrackId) return;
       generation += 1;
       cancelActiveRequest();
-      await loadTrack(activeTrackId, generation, activeTrackMetadata);
+      await loadTrack(activeTrackId, generation);
     },
 
     async retry() {
@@ -266,7 +242,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       cancelActiveRequest();
       const trackId = activeTrackId;
       update(emptyState(trackId));
-      await loadTrack(trackId, generation, activeTrackMetadata);
+      await loadTrack(trackId, generation);
     },
 
     async loadMore() {

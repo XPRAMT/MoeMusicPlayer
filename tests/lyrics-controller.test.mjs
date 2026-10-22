@@ -549,7 +549,7 @@ test('searchAgain forwards optional query to lyrics_search', async () => {
   controller.dispose();
 });
 
-test('automatic track-change search sends Traditional then Simplified title and artist queries', async () => {
+test('automatic track-change search leaves the Simplified query to the backend', async () => {
   const calls = [];
   const controller = createLyricsController({
     api: {
@@ -562,18 +562,14 @@ test('automatic track-change search sends Traditional then Simplified title and 
     createRequestId: () => 'request-auto-variants',
   });
 
-  await controller.setTrack('track-auto', { title: '苹果头发', artist: '演出者' });
+  await controller.setTrack('track-auto');
 
-  assert.deepEqual(calls, [{
-    trackId: 'track-auto',
-    requestId: 'request-auto-variants',
-    query: '蘋果頭髮 演出者',
-    queryAlternates: ['苹果头发 演出者'],
-  }]);
+  // ADR 0030: lyrics_search converts the track's title and artist to Simplified itself.
+  assert.deepEqual(calls, [{ trackId: 'track-auto', requestId: 'request-auto-variants' }]);
   controller.dispose();
 });
 
-test('automatic Japanese title stays intact while Chinese artist is converted both ways', async () => {
+test('a manual Chinese query is sent as typed, without script alternates', async () => {
   const calls = [];
   const controller = createLyricsController({
     api: {
@@ -583,17 +579,14 @@ test('automatic Japanese title stays intact while Chinese artist is converted bo
       cancelSearch: async () => {},
     },
     onChange() {},
-    createRequestId: () => 'request-auto-japanese',
+    createRequestId: () => 'request-manual-zh',
   });
-
-  await controller.setTrack('track-auto-ja', { title: 'さよならスーヴェニア', artist: '汉字歌手' });
-
-  assert.deepEqual(calls, [{
-    trackId: 'track-auto-ja',
-    requestId: 'request-auto-japanese',
-    query: 'さよならスーヴェニア 漢字歌手',
-    queryAlternates: ['さよならスーヴェニア 汉字歌手'],
-  }]);
+  void controller.setTrack('track-manual-zh');
+  await Promise.resolve();
+  await Promise.resolve();
+  calls.length = 0;
+  await controller.searchAgain({ query: '蘋果頭髮' });
+  assert.deepEqual(calls, [{ trackId: 'track-manual-zh', requestId: 'request-manual-zh', manual: true, query: '蘋果頭髮' }]);
   controller.dispose();
 });
 
