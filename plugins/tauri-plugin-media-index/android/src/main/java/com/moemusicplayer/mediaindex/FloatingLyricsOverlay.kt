@@ -59,6 +59,18 @@ object FloatingLyricsOverlay {
     private var customColor = "#00e1ff"
     private var showTranslation = true
     private var textEffect = "shadow"
+    /** "none": one line at a time; "continuous": all lines in one strip that scrolls with playback (ADR 0032). */
+    private var animation = "none"
+    // The strip of the continuous animation, rebuilt when the lyrics or the look change (see stripFor).
+    private class Strip(
+        val key: List<Any?>,
+        val starts: LongArray,
+        val texts: List<String>,
+        val translations: List<String>,
+        val cells: FloatArray,
+        val widths: FloatArray,
+    )
+    private var strip: Strip? = null
     private var opacityPercent = 100
     private var widthDp = 800
     private var landscapeWidthDp = 800
@@ -189,6 +201,7 @@ object FloatingLyricsOverlay {
         customColor = settings.optString("customColor", "#00e1ff")
         showTranslation = settings.optBoolean("showTranslation", true)
         textEffect = settings.optString("textEffect", "shadow")
+        animation = if (settings.optString("animation", "none") == "continuous") "continuous" else "none"
         opacityPercent = FloatingLyricsRules.opacityPercent(settings.optInt("opacityPercent", 100))
         widthDp = FloatingLyricsRules.widthDp(settings.optInt("widthPx", 800))
         landscapeWidthDp = FloatingLyricsRules.widthDp(settings.optInt("landscapeWidthPx", 800))
@@ -570,6 +583,9 @@ object FloatingLyricsOverlay {
         } else {
             -1
         }
+        if (animation == "continuous" && renderStrip(view, sample)) {
+            return sample?.playing == true && view.visibility == View.VISIBLE
+        }
         val line = lines.getOrNull(index)
         val text = line?.text?.trim().orEmpty()
         val translation = if (showTranslation) line?.translation?.trim().orEmpty() else ""
@@ -594,6 +610,46 @@ object FloatingLyricsOverlay {
             if (translation.isNotEmpty() && it.overflows()) sliding = true
         }
         return sliding && sample?.active == true && view.visibility == View.VISIBLE
+    }
+
+    /**
+     * The strip for the current lyrics and look: lines with some text (main or translation), the translation strip
+     * using the same cells (each cell as wide as the wider text, one U+3000 of the main line apart).
+     */
+    private fun stripFor(main: LyricLineView, second: LyricLineView?): Strip? {
+        val key = listOf(lines, showTranslation, main.textWidth("\u3000"), second?.textWidth("\u3000"))
+        strip?.let { if (it.key == key) return it }
+        val kept = lines.mapNotNull { line ->
+            val text = line.text.trim()
+            val translation = if (showTranslation) line.translation.trim() else ""
+            if (text.isEmpty() && translation.isEmpty()) null else Triple(line.startMs, text, translation)
+        }
+        if (kept.isEmpty()) return null
+        val texts = kept.map { it.second }
+        val translations = kept.map { it.third }
+        val (cells, widths) = FloatingLyricsRules.stripLayout(
+            FloatArray(kept.size) { main.textWidth(texts[it]) },
+            FloatArray(kept.size) { second?.textWidth(translations[it]) ?: 0f },
+            main.textWidth("\u3000"),
+        )
+        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths).also { strip = it }
+    }
+
+    /** Continuous animation: draw both strips at the current place; false when there is nothing to draw as a strip. */
+    private fun renderStrip(view: View, sample: Sample?): Boolean {
+        val main = mainText ?: return false
+        if (sample == null || !sample.active || sample.trackId != trackId) return false
+        val current = stripFor(main, translationText) ?: return false
+        val lyricsMs = sample.positionMs + offsetMs
+        val offset = FloatingLyricsRules.stripOffset(current.starts, current.cells, current.widths, align, lyricsMs, main.availableWidth())
+        view.visibility = View.VISIBLE
+        main.setStrip(current.texts, current.cells, current.widths, offset)
+        translationText?.let {
+            val any = current.translations.any { text -> text.isNotEmpty() }
+            it.visibility = if (any) View.VISIBLE else View.GONE
+            if (any) it.setStrip(current.translations, current.cells, current.widths, offset)
+        }
+        return true
     }
 
     private class DragListener(private val context: Context) : View.OnTouchListener {

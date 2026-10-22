@@ -32,6 +32,69 @@ object FloatingLyricsRules {
         return x.coerceIn(0, maxX)
     }
 
+    /**
+     * Continuous animation (ADR 0032, port of lyrics-strip.js): cells of the strip, each as wide as the wider of its
+     * main text and translation, `gapPx` (one U+3000 of the main line) apart. Returns the cells' left edges and widths.
+     */
+    fun stripLayout(mainWidths: FloatArray, translationWidths: FloatArray, gapPx: Float): Pair<FloatArray, FloatArray> {
+        val starts = FloatArray(mainWidths.size)
+        val widths = FloatArray(mainWidths.size)
+        var x = 0f
+        for (index in mainWidths.indices) {
+            val width = maxOf(0f, mainWidths[index], translationWidths.getOrElse(index) { 0f })
+            starts[index] = x
+            widths[index] = width
+            x += width + maxOf(0f, gapPx)
+        }
+        return Pair(starts, widths)
+    }
+
+    /** The point of a cell that sits on the view's alignment point. */
+    fun stripAnchor(cellStarts: FloatArray, cellWidths: FloatArray, index: Int, align: String): Float {
+        val start = cellStarts.getOrElse(index) { 0f }
+        val width = cellWidths.getOrElse(index) { 0f }
+        return when (align) {
+            "right" -> start + width
+            "center" -> start + width / 2f
+            else -> start
+        }
+    }
+
+    /**
+     * Shift of the strip (px) at lyrics time `lyricsMs` (position + offset): the current line's anchor on the alignment
+     * point, gliding linearly to the next line's anchor until that line starts; rests on the first line before it and on
+     * the last one after it.
+     */
+    fun stripOffset(
+        startTimesMs: LongArray,
+        cellStarts: FloatArray,
+        cellWidths: FloatArray,
+        align: String,
+        lyricsMs: Long,
+        viewWidth: Float,
+    ): Float {
+        val count = minOf(startTimesMs.size, cellStarts.size)
+        if (count == 0) return 0f
+        val target = when (align) {
+            "right" -> viewWidth
+            "center" -> viewWidth / 2f
+            else -> 0f
+        }
+        var index = -1
+        while (index + 1 < count && startTimesMs[index + 1] <= lyricsMs) index++
+        val anchor = when {
+            index < 0 -> stripAnchor(cellStarts, cellWidths, 0, align)
+            index >= count - 1 -> stripAnchor(cellStarts, cellWidths, count - 1, align)
+            else -> {
+                val span = startTimesMs[index + 1] - startTimesMs[index]
+                val fraction = if (span > 0) ((lyricsMs - startTimesMs[index]).toFloat() / span).coerceIn(0f, 1f) else 1f
+                val from = stripAnchor(cellStarts, cellWidths, index, align)
+                from + (stripAnchor(cellStarts, cellWidths, index + 1, align) - from) * fraction
+            }
+        }
+        return target - anchor
+    }
+
     /** Suffix of the saved position keys: portrait and landscape are saved apart. */
     fun orientationKey(landscape: Boolean): String = if (landscape) "landscape" else "portrait"
 

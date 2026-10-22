@@ -14,7 +14,7 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.deepEqual(normalizeTaskbarLyricsSettings(null), DEFAULT_TASKBAR_LYRICS_SETTINGS);
   assert.deepEqual(normalizeTaskbarLyricsSettings({
     enabled: true, align: 'center', fontSizePx: 20.4, translationScalePercent: 60.4, useCustomColor: true, customColor: '#ABCDEF', showTranslation: true,
-  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow', displayMode: 'all', customMonitors: [], opacityPercent: 100 });
+  }), { enabled: true, align: 'center', fontSizePx: 20, translationScalePercent: 60, useCustomColor: true, customColor: '#abcdef', showTranslation: true, textEffect: 'shadow', displayMode: 'all', customMonitors: [], opacityPercent: 100, animation: 'none' });
   const repaired = normalizeTaskbarLyricsSettings({ enabled: 'yes', area: 'up', align: 3, fontSizePx: 99, customColor: 'red', showTranslation: 1 });
   assert.deepEqual(repaired, { ...DEFAULT_TASKBAR_LYRICS_SETTINGS, fontSizePx: 50 });
   assert.equal(normalizeTaskbarLyricsSettings({ fontSizePx: 1 }).fontSizePx, 1);
@@ -85,4 +85,10 @@ test('the text effect is one of shadow, stroke and none (default shadow), and it
   const custom = (customColor) => ({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS, useCustomColor: true, customColor });
   assert.equal(getTaskbarLyricsEffectRgb(custom('#ffee88'), true), '0, 0, 0', 'a light custom colour gets a dark effect');
   assert.equal(getTaskbarLyricsEffectRgb(custom('#223366'), false), '255, 255, 255', 'a dark custom colour gets a light effect');
+});
+
+test('taskbar animation is none unless continuous is chosen', () => {
+  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.animation, 'none');
+  assert.equal(normalizeTaskbarLyricsSettings({ animation: 'continuous' }).animation, 'continuous');
+  assert.equal(normalizeTaskbarLyricsSettings({ animation: 'wave' }).animation, 'none');
 });

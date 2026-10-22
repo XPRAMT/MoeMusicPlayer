@@ -77,6 +77,21 @@
     {/each}
   </div>
 </div>
+<div class="cover-corner-setting" role="group" aria-labelledby="{idPrefix}-animation-label">
+  <span id="{idPrefix}-animation-label" class="cover-corner-setting-label"><strong>{tr("動畫")}</strong></span>
+  <div class="layout-choice-row lyrics-text-effect-row">
+    {#each [['none', tr('無'), tr('一次顯示一行，換行時直接切換')], ['continuous', tr('連續'), tr('所有歌詞接成一行，隨播放進度連續捲動')]] as [value, label, description] (value)}
+      <button
+        type="button"
+        aria-label={description}
+        title={description}
+        aria-pressed={settings.animation === value}
+        class:chosen={settings.animation === value}
+        onclick={() => onChange({ animation: value as LyricsLookSettings['animation'] })}
+      >{label}</button>
+    {/each}
+  </div>
+</div>
 <label class="lyrics-preference-toggle">
   <input type="checkbox" checked={settings.showTranslation} onchange={(event) => onChange({ showTranslation: event.currentTarget.checked })} />
   <span><strong>{tr("顯示譯文")}</strong><small>{tr("歌詞有翻譯時，在原文下方多顯示一行較小的譯文")}</small></span>

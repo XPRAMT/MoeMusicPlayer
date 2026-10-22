@@ -139,3 +139,14 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   (`centredOnBar`, may be above the screen top), x as before beside the cutout (`statusBarX`). It depends only on
   the current size, so every tap lands the same; the position is saved for the current orientation. The old
   `statusbar_<orientation>` preference and `floatingLyricsStatus.statusBar` are gone.
+- 「動畫」 setting (taskbar and floating lyrics, saved apart as `animation`: `none` default / `continuous`; older
+  files and unknown values read as `none`). `none` is the one-line-at-a-time look above. `continuous` joins every
+  timed line with some text into one strip, lines separated by U+3000 (one em of the main line), and the translations
+  into a second strip with the same cells (a cell is as wide as the wider of its line and its translation; the text is
+  aligned inside it), so each translation stays under its line. The strip is shifted so the current line's anchor
+  (left edge / middle / right edge for left / centre / right) sits on the same point of the lyric area, gliding
+  linearly to the next line's anchor until that line starts; before the first line it rests on the first, after the
+  last on the last (`lyrics-strip.js` `lyricsStripOffset`, Kotlin `FloatingLyricsRules.stripOffset`). The shift is
+  a pure function of the lyrics time (position + offsets), so seek and pause follow the playback clock at once.
+  Windows runs each glide as a linear CSS animation re-planned at every line start and clock correction; Android
+  redraws the strip in `LyricLineView` every display frame while playing. The strip is cut at the lyric area's sides.

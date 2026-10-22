@@ -927,5 +927,10 @@
   "水平置中": "Centre horizontally",
   "垂直置中": "Centre vertically",
   "移動到狀態列": "Move to status bar",
-  "移到狀態列：歌詞區的垂直中心對齊狀態列（避開鏡頭），字級與面板大小不變；直向與橫向分開儲存": "Move to the status bar: the lyric area is vertically centred on the status bar (avoiding the camera cutout); font size and panel size stay as set. Saved separately for portrait and landscape"
+  "移到狀態列：歌詞區的垂直中心對齊狀態列（避開鏡頭），字級與面板大小不變；直向與橫向分開儲存": "Move to the status bar: the lyric area is vertically centred on the status bar (avoiding the camera cutout); font size and panel size stay as set. Saved separately for portrait and landscape",
+  "動畫": "Animation",
+  "無": "None",
+  "連續": "Continuous",
+  "一次顯示一行，換行時直接切換": "One line at a time, switching straight to the next",
+  "所有歌詞接成一行，隨播放進度連續捲動": "All lines joined into one strip that scrolls smoothly with playback"
 }

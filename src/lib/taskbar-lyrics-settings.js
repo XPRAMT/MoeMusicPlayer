@@ -1,5 +1,6 @@
 // Settings of the lyrics drawn on the Windows taskbar (ADR 0018). The backend (settings.rs `TaskbarLyricsSettings`)
 // enforces the same ranges.
+import { normalizeLyricsAnimation } from './lyrics-strip.js';
 
 export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, default: 20 });
 /** The translation line as a percentage of the main line (100 = the same size). */
@@ -15,7 +16,7 @@ export const TASKBAR_LYRICS_DISPLAY_MODES = Object.freeze(['all', 'playerMonitor
 /** Same cap as settings.rs `MAX_CUSTOM_MONITORS`. */
 export const TASKBAR_LYRICS_MAX_CUSTOM_MONITORS = 32;
 
-/** @typedef {{ enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], opacityPercent: number }} TaskbarLyricsSettings */
+/** @typedef {{ animation: 'none'|'continuous', enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], opacityPercent: number }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
@@ -30,6 +31,7 @@ export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   displayMode: 'all',
   customMonitors: /** @type {string[]} */ (/** @type {unknown} */ (Object.freeze([]))),
   opacityPercent: LYRICS_OPACITY_PERCENT.default,
+  animation: 'none',
 });
 
 /**
@@ -100,6 +102,7 @@ export function normalizeTaskbarLyricsSettings(value) {
       : defaults.displayMode,
     customMonitors: normalizeTaskbarLyricsMonitorIds(source.customMonitors),
     opacityPercent: opacity,
+    animation: normalizeLyricsAnimation(source.animation),
   };
 }
 

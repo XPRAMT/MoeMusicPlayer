@@ -17,6 +17,25 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
+    fun continuousStripMatchesTheWebRule() {
+        val (cells, widths) = FloatingLyricsRules.stripLayout(floatArrayOf(100f, 50f, 80f), floatArrayOf(60f, 90f), 20f)
+        assertEquals(listOf(0f, 120f, 230f), cells.toList())
+        assertEquals(listOf(100f, 90f, 80f), widths.toList())
+        assertEquals(165f, FloatingLyricsRules.stripAnchor(cells, widths, 1, "center"), 0.001f)
+        val (even, evenWidths) = FloatingLyricsRules.stripLayout(floatArrayOf(100f, 100f, 100f), floatArrayOf(), 20f)
+        val times = longArrayOf(1_000, 3_000, 5_000)
+        val at = { align: String, ms: Long -> FloatingLyricsRules.stripOffset(times, even, evenWidths, align, ms, 400f) }
+        assertEquals(0f, at("left", 1_000), 0.001f)
+        assertEquals(-60f, at("left", 2_000), 0.001f)
+        assertEquals(-120f, at("left", 3_000), 0.001f)
+        assertEquals(30f, at("center", 3_000), 0.001f)
+        assertEquals(300f, at("right", 1_000), 0.001f)
+        assertEquals(0f, at("left", 0), 0.001f)
+        assertEquals(-240f, at("left", 9_000), 0.001f)
+        assertEquals(0f, FloatingLyricsRules.stripOffset(longArrayOf(), even, evenWidths, "left", 0, 400f), 0.001f)
+    }
+
+    @Test
     fun opacityAndCentre() {
         assertEquals(1f, FloatingLyricsRules.windowAlpha(100, null), 0.0001f)
         assertEquals(0.5f, FloatingLyricsRules.windowAlpha(50, null), 0.0001f)

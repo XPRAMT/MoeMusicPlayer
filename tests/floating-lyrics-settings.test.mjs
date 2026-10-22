@@ -138,3 +138,10 @@ test('floating lyrics D-pad taps once, repeats when held and saves once on relea
   advance(1000);
   assert.deepEqual([steps, saves], [4, 2]);
 });
+
+test('floating animation is saved apart and repaired to none', async () => {
+  const { normalizeFloatingLyricsSettings: normalize, DEFAULT_FLOATING_LYRICS_SETTINGS: defaults } = await import('../src/lib/floating-lyrics-settings.js');
+  assert.equal(defaults.animation, 'none');
+  assert.equal(normalize({ animation: 'continuous' }).animation, 'continuous');
+  assert.equal(normalize({ animation: 1 }).animation, 'none');
+});

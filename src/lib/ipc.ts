@@ -233,11 +233,15 @@ export interface TaskbarLyricsSettings {
   customMonitors: string[];
   /** Opacity of the main line and translation alike (10 to 100); saved apart for the floating lyrics. */
   opacityPercent: number;
+  /** none: one line at a time; continuous: all lines in one strip that scrolls with playback (ADR 0032). */
+  animation: LyricsAnimation;
 }
+
+export type LyricsAnimation = 'none' | 'continuous';
 
 /** The look options shared by the taskbar and floating lyrics. */
 export type LyricsLookSettings = Pick<TaskbarLyricsSettings,
-  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'opacityPercent'>;
+  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'opacityPercent' | 'animation'>;
 
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
 export interface FloatingLyricsSettings extends LyricsLookSettings {

@@ -96,6 +96,7 @@ export const DEFAULT_FLOATING_LYRICS_SETTINGS = Object.freeze({
   customColor: TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR,
   showTranslation: true,
   textEffect: 'shadow',
+  animation: 'none',
   locked: false,
   position: null,
 });
@@ -146,6 +147,7 @@ export function normalizeFloatingLyricsSettings(value) {
     customColor: pick('customColor', isHexColor),
     showTranslation: pick('showTranslation', bool),
     textEffect: pick('textEffect', (item) => TASKBAR_LYRICS_TEXT_EFFECTS.includes(/** @type {string} */ (item))),
+    animation: source.animation,
   });
   return {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : defaults.enabled,
@@ -159,6 +161,7 @@ export function normalizeFloatingLyricsSettings(value) {
     customColor: look.customColor,
     showTranslation: look.showTranslation,
     textEffect: look.textEffect,
+    animation: look.animation,
     locked: typeof source.locked === 'boolean' ? source.locked : defaults.locked,
     position: normalizeFloatingLyricsPosition(source.position),
   };

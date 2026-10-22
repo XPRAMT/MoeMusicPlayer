@@ -32,7 +32,36 @@ internal class LyricLineView(context: Context) : View(context) {
         invalidate()
     }
 
+    // Continuous animation (ADR 0032): every line in one strip; `stripTexts` null means one line at a time.
+    private var stripTexts: List<String>? = null
+    private var stripCells = FloatArray(0)
+    private var stripWidths = FloatArray(0)
+    private var stripOffset = 0f
+
+    /** Width of `value` in this line's font (for the strip layout). */
+    fun textWidth(value: String): Float = if (value.isEmpty()) 0f else paint.measureText(value)
+
+    /** Usable width (the alignment point is measured in it). */
+    fun availableWidth(): Float = (width - paddingLeft - paddingRight).toFloat()
+
+    /** Draw the whole strip: each text aligned in its cell (`cells` left edges, `widths`), all shifted by `offset`. */
+    fun setStrip(texts: List<String>, cells: FloatArray, widths: FloatArray, offset: Float) {
+        val changed = texts !== stripTexts || !cells.contentEquals(stripCells) || !widths.contentEquals(stripWidths)
+        if (changed || offset != stripOffset) {
+            stripTexts = texts
+            stripCells = cells
+            stripWidths = widths
+            stripOffset = offset
+            text = ""
+            invalidate()
+        }
+    }
+
     fun setLine(value: String, progress: Float) {
+        if (stripTexts != null) {
+            stripTexts = null
+            text = ""
+        }
         val fraction = progress.coerceIn(0f, 1f)
         if (value != text) {
             text = value
@@ -59,6 +88,7 @@ internal class LyricLineView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
+        stripTexts?.let { drawStrip(canvas, it); return }
         if (text.isEmpty()) return
         val available = (width - paddingLeft - paddingRight).toFloat()
         val textWidth = paint.measureText(text)
@@ -71,6 +101,24 @@ internal class LyricLineView(context: Context) : View(context) {
         val sides = if (textWidth > available) 0 else width
         canvas.clipRect(-sides, -height, width + sides, 2 * height)
         canvas.drawText(text, x, baseline, paint)
+        canvas.restore()
+    }
+
+    private fun drawStrip(canvas: Canvas, texts: List<String>) {
+        val metrics = paint.fontMetrics
+        val baseline = (height - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
+        canvas.save()
+        // The strip is cut at the area's sides; above and below the shadow may reach into the panel's room.
+        canvas.clipRect(0, -height, width, 2 * height)
+        for (index in texts.indices) {
+            val value = texts[index]
+            if (value.isEmpty()) continue
+            val cell = stripCells.getOrElse(index) { 0f } + stripOffset + paddingLeft
+            val cellWidth = stripWidths.getOrElse(index) { 0f }
+            if (cell > width || cell + cellWidth < 0f) continue
+            val textWidth = paint.measureText(value)
+            canvas.drawText(value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, align, 0f), baseline, paint)
+        }
         canvas.restore()
     }
 }

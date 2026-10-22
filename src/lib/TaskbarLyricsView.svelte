@@ -27,6 +27,13 @@
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
   import type { TaskbarLyricsData } from './taskbar-lyrics-data.js';
   import {
+    LYRICS_STRIP_SEPARATOR,
+    buildLyricsStripLines,
+    layoutLyricsStrip,
+    lyricsStripOffset,
+    nextLyricsStripBreak,
+  } from './lyrics-strip.js';
+  import {
     DEFAULT_TASKBAR_LYRICS_SETTINGS,
     fitTaskbarLyricsFontSize,
     getLyricScrollProgress,
@@ -127,11 +134,65 @@
   let activeLine = $derived(activeIndex >= 0 ? timeline[activeIndex]?.line : undefined);
   let text = $derived(activeLine?.text?.trim() ?? '');
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
+
+  // Continuous animation (ADR 0032): every line joined into one strip (U+3000 between lines) that scrolls with the
+  // playback clock, so the current line sits at the chosen alignment and glides to the next line until it starts. The
+  // translation strip uses the same cells, so each translation stays under its line. The glide runs as a linear CSS
+  // animation to the next line's place, re-planned at each line start and on every clock correction (seek, pause).
+  let continuous = $derived(settings.animation === 'continuous');
+  let stripLines = $derived(continuous ? buildLyricsStripLines(timeline, settings.showTranslation) : []);
+  let stripStarts = $derived(stripLines.map((line) => line.startMs));
+  let stripHasTranslation = $derived(stripLines.some((line) => line.translation !== ''));
+  let stripVisible = $derived(stripLines.length > 0 && (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'buffering'));
+  let stripMainWidths = $state<number[]>([]);
+  let stripTranslationWidths = $state<number[]>([]);
+  let stripViewWidth = $state(0);
+  let stripMain = $state<HTMLElement | null>(null);
+  let stripTranslation = $state<HTMLElement | null>(null);
+
   const lineHeight = floating ? FLOATING_LYRICS_LAYOUT.lineHeight : 1.4;
   let fitHeight = $derived(floating ? viewportHeight * FLOATING_LYRICS_AREA_SHARE : viewportHeight);
-  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, fitHeight, translation !== '' ? settings.translationScalePercent : 0, lineHeight));
   // The floating window is only as tall as the lines it draws: tell it when the translation line comes or goes.
-  let hasTranslation = $derived(translation !== '');
+  let hasTranslation = $derived(continuous ? stripHasTranslation : translation !== '');
+  let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, fitHeight, hasTranslation ? settings.translationScalePercent : 0, lineHeight));
+  // One U+3000 is one em of the main line; the translation strip leaves the same gap so the cells line up.
+  let stripLayout = $derived(layoutLyricsStrip(stripMainWidths, stripTranslationWidths, fontPx));
+  let stripRun = $derived.by(() => {
+    const at = positionMs + timingOffsetMs;
+    const from = lyricsStripOffset(stripStarts, stripLayout, settings.align, at, stripViewWidth);
+    const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at) : null;
+    const wait = next === null ? null : msUntilPlaybackPosition(clock, performance.now(), next - timingOffsetMs);
+    if (next === null || wait === null || wait <= 0) return { from, to: from, ms: null as number | null };
+    return { from, to: lyricsStripOffset(stripStarts, stripLayout, settings.align, next, stripViewWidth), ms: wait };
+  });
+  let stripName = $state('taskbar-lyrics-strip-a');
+  $effect(() => {
+    stripRun;
+    stripName = untrack(() => stripName) === 'taskbar-lyrics-strip-a' ? 'taskbar-lyrics-strip-b' : 'taskbar-lyrics-strip-a';
+  });
+  let stripStyle = $derived(
+    `--strip-from: ${stripRun.from}px; --strip-to: ${stripRun.to}px; `
+      + (stripRun.ms === null ? `transform: translateX(${stripRun.from}px)` : `animation: ${stripName} ${Math.round(stripRun.ms)}ms linear forwards`),
+  );
+  // Measure each line's text (not its cell, which is widened to the layout) after the lines, sizes or window changed.
+  $effect(() => {
+    stripLines;
+    stripVisible;
+    fontPx;
+    settings.translationScalePercent;
+    viewportWidth;
+    const main = stripMain;
+    const second = stripTranslation;
+    const frame = requestAnimationFrame(() => {
+      const widths = (root: HTMLElement | null) => (root
+        ? Array.from(root.querySelectorAll<HTMLElement>('.taskbar-lyrics-strip-text'), (element) => element.getBoundingClientRect().width)
+        : []);
+      stripMainWidths = widths(main);
+      stripTranslationWidths = widths(second);
+      stripViewWidth = main?.parentElement?.clientWidth ?? 0;
+    });
+    return () => cancelAnimationFrame(frame);
+  });
   $effect(() => {
     if (floating) void invokeCommand('floating_lyrics_fit', { hasTranslation }).catch(() => {});
   });
@@ -234,6 +295,30 @@
   style:padding={sidePadding}
   style:line-height={lineHeight}
 >
+  {#if continuous}
+    {#if stripVisible}
+      <div class="taskbar-lyrics-line taskbar-lyrics-continuous">
+        <span class="taskbar-lyrics-main">
+          <span class="taskbar-lyrics-strip" bind:this={stripMain} style={stripStyle}>
+            {#each stripLines as line, index (index)}
+              {#if index > 0}<span class="taskbar-lyrics-strip-gap" style:width={`${fontPx}px`}>{LYRICS_STRIP_SEPARATOR}</span>{/if}
+              <span class="taskbar-lyrics-strip-cell" style:min-width={`${stripLayout.widths[index] ?? 0}px`}><span class="taskbar-lyrics-strip-text">{line.text}</span></span>
+            {/each}
+          </span>
+        </span>
+        {#if stripHasTranslation}
+          <span class="taskbar-lyrics-translation">
+            <span class="taskbar-lyrics-strip" bind:this={stripTranslation} style={stripStyle}>
+              {#each stripLines as line, index (index)}
+                {#if index > 0}<span class="taskbar-lyrics-strip-gap" style:width={`${fontPx}px`}></span>{/if}
+                <span class="taskbar-lyrics-strip-cell" style:min-width={`${stripLayout.widths[index] ?? 0}px`}><span class="taskbar-lyrics-strip-text">{line.translation}</span></span>
+              {/each}
+            </span>
+          </span>
+        {/if}
+      </div>
+    {/if}
+  {:else}
   {#key activeIndex}
     {#if text}
       <div class="taskbar-lyrics-line">
@@ -248,6 +333,7 @@
       </div>
     {/if}
   {/key}
+  {/if}
 </div>
 
 <style>
@@ -258,6 +344,14 @@
   @keyframes -global-taskbar-lyrics-scroll-b {
     from { transform: translateX(calc(var(--scroll-shift) * var(--scroll-from))); }
     to { transform: translateX(var(--scroll-shift)); }
+  }
+  @keyframes -global-taskbar-lyrics-strip-a {
+    from { transform: translateX(var(--strip-from)); }
+    to { transform: translateX(var(--strip-to)); }
+  }
+  @keyframes -global-taskbar-lyrics-strip-b {
+    from { transform: translateX(var(--strip-from)); }
+    to { transform: translateX(var(--strip-to)); }
   }
   :global(html.taskbar-lyrics-window),
   :global(html.taskbar-lyrics-window body),
@@ -306,6 +400,32 @@
     transition: transform 100ms linear;
   }
 
+  /* Continuous: the line spans the window and the strip slides inside its clips (the alignment is in the offset). */
+  .taskbar-lyrics-continuous {
+    width: 100%;
+  }
+
+  .taskbar-lyrics-continuous .taskbar-lyrics-main,
+  .taskbar-lyrics-continuous .taskbar-lyrics-translation {
+    width: 100%;
+  }
+
+  .taskbar-lyrics-strip {
+    display: flex;
+    width: max-content;
+    white-space: nowrap;
+    will-change: transform;
+  }
+
+  .taskbar-lyrics-strip-cell {
+    flex: none;
+  }
+
+  .taskbar-lyrics-strip-gap {
+    flex: none;
+    overflow: hidden;
+  }
+
   .taskbar-lyrics-translation {
     font-size: calc(var(--taskbar-lyrics-translation-scale, 0.75) * 1em);
   }
@@ -332,7 +452,8 @@
     margin-block: -0.06em;
   }
 
-  .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-track {
+  .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-track,
+  .taskbar-lyrics[data-text-effect='stroke'] .taskbar-lyrics-strip-text {
     -webkit-text-stroke: 0.08em rgba(var(--taskbar-lyrics-effect-rgb), 0.5);
     paint-order: stroke fill;
   }

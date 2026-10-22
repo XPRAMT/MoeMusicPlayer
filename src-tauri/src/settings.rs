@@ -283,6 +283,16 @@ pub enum LyricsTextEffect {
     None,
 }
 
+/// How the taskbar / floating lyrics move between lines (ADR 0032). `None`: one line at a time (the old look);
+/// `Continuous`: every line joined into one strip that scrolls with playback.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LyricsAnimation {
+    #[default]
+    None,
+    Continuous,
+}
+
 fn default_lyrics_text_effect() -> LyricsTextEffect {
     LyricsTextEffect::Shadow
 }
@@ -929,6 +939,9 @@ pub struct TaskbarLyricsSettings {
     /// Opacity of the lyrics (main line and translation alike), 1–100. Older files without it are fully opaque.
     #[serde(default = "default_lyrics_opacity_percent")]
     pub opacity_percent: u8,
+    /// Line animation; older files without it keep the one-line-at-a-time look.
+    #[serde(default)]
+    pub animation: LyricsAnimation,
 }
 
 fn default_lyrics_opacity_percent() -> u8 {
@@ -990,6 +1003,7 @@ impl Default for TaskbarLyricsSettings {
             display_mode: TaskbarLyricsDisplayMode::default(),
             custom_monitors: Vec::new(),
             opacity_percent: default_lyrics_opacity_percent(),
+            animation: LyricsAnimation::None,
         }
     }
 }
@@ -1033,6 +1047,9 @@ pub struct FloatingLyricsSettings {
     /// Android only: the width while the phone is landscape (`width_px` is the portrait one there).
     #[serde(default = "default_floating_lyrics_width_px")]
     pub landscape_width_px: u16,
+    /// Line animation, saved apart from the taskbar lyrics'.
+    #[serde(default)]
+    pub animation: LyricsAnimation,
     /// Fixed mode: click-through, only the unlock button reacts. False: move mode (draggable).
     pub locked: bool,
     /// None: the default place on the primary monitor.
@@ -1090,6 +1107,7 @@ impl Default for FloatingLyricsSettings {
             opacity_percent: default_lyrics_opacity_percent(),
             width_px: Self::DEFAULT_WIDTH_PX,
             landscape_width_px: Self::DEFAULT_WIDTH_PX,
+            animation: LyricsAnimation::None,
             locked: false,
             position: None,
         }
@@ -1131,6 +1149,9 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         landscape_width_px: field("landscapeWidthPx")
             .and_then(|value| value.as_u64())
             .map_or(defaults.landscape_width_px, |value| value.min(u64::from(u16::MAX)) as u16),
+        animation: field("animation")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.animation),
         locked: flag("locked", defaults.locked),
         position: field("position").and_then(|value| serde_json::from_value(value).ok()),
     }
@@ -1177,6 +1198,9 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         opacity_percent: field("opacityPercent")
             .and_then(|value| value.as_u64())
             .map_or(defaults.opacity_percent, |value| value.min(255) as u8),
+        animation: field("animation")
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or(defaults.animation),
         custom_monitors: field("customMonitors")
             .and_then(|value| value.as_array().cloned())
             .map(|ids| {
@@ -3550,6 +3574,7 @@ mod tests {
             display_mode: TaskbarLyricsDisplayMode::Custom,
             custom_monitors: vec![r"\\?\DISPLAY#AUS28A0#1".into()],
             opacity_percent: 70,
+            animation: LyricsAnimation::Continuous,
         };
         store
             .update(|settings| {
@@ -3564,6 +3589,18 @@ mod tests {
         assert!(persisted["taskbarLyrics"].get("area").is_none());
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
         assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
+        assert_eq!(persisted["taskbarLyrics"]["animation"], "continuous");
+        // Animation: old files and junk keep the one-line look; taskbar and floating are saved apart.
+        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({}))).animation, LyricsAnimation::None);
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"animation": "bounce"}))).animation,
+            LyricsAnimation::None
+        );
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"animation": "continuous"}))).animation,
+            LyricsAnimation::Continuous
+        );
+        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"animation": 3}))).animation, LyricsAnimation::None);
         assert_eq!(persisted["taskbarLyrics"]["displayMode"], "custom");
         assert_eq!(
             persisted["taskbarLyrics"]["customMonitors"][0],
