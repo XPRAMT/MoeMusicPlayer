@@ -9,7 +9,6 @@ pub mod profile;
 pub mod sync;
 #[cfg(windows)]
 mod windows_locator;
-mod zh_t2s;
 
 pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_ARTWORK_PIXELS};
 pub use filesystem_key::unix_path_from_key;

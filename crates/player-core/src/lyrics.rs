@@ -570,10 +570,7 @@ fn text_similarity(left: &str, right: &str) -> f32 {
 }
 
 fn fold_chinese_script(character: char) -> char {
-    crate::zh_t2s::T2S
-        .binary_search_by_key(&character, |(from, _)| *from)
-        .map(|index| crate::zh_t2s::T2S[index].1)
-        .unwrap_or(character)
+    player_zh::fold_to_simplified(character)
 }
 
 fn normalized_tokens(value: &str) -> String {

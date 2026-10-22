@@ -65,6 +65,12 @@ pub struct LyricLineDto {
     pub text: String,
     pub translation: Option<String>,
     pub romanization: Option<String>,
+    /// `text` in Taiwan Traditional glyphs (player-zh, ADR 0030), only when that differs; the
+    /// Simplified-to-Traditional display preference picks it without another round trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_traditional: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translation_traditional: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -161,11 +167,6 @@ struct LyricBrowseSession {
     next_page: u32,
     exhausted: bool,
     generation: u64,
-}
-
-pub(super) struct LyricSearchTerms {
-    pub(super) query_override: Option<String>,
-    pub(super) query_alternates: Vec<String>,
 }
 
 /// What one automatic search produced, shared by every window that asked for the same track.
@@ -304,7 +305,9 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         }
     }
 
-    #[cfg(test)]
+    /// Provider search for one track. QQ Music and NetEase index mainly Simplified text, so the
+    /// query (or the track's title, artist and album) is always converted to Simplified first and
+    /// only that one spelling is searched (ADR 0030); Japanese text with kana stays as it is.
     async fn search_track(
         &self,
         database: &Database,
@@ -314,60 +317,34 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
         allow_auto_apply: bool,
         query_override: Option<String>,
     ) -> Result<LyricsTrackResultDto, String> {
-        self.search_track_with_alternates(
-            database,
-            track_id,
-            track,
-            cancellation,
-            allow_auto_apply,
-            LyricSearchTerms {
-                query_override,
-                query_alternates: Vec::new(),
-            },
-        )
-        .await
-    }
-
-    async fn search_track_with_alternates(
-        &self,
-        database: &Database,
-        track_id: TrackId,
-        track: &TrackSummary,
-        cancellation: CancellationToken,
-        allow_auto_apply: bool,
-        search_terms: LyricSearchTerms,
-    ) -> Result<LyricsTrackResultDto, String> {
         let metadata = LyricsTrackMetadata {
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
             duration_ms: track.duration_ms,
         };
-        let search_metadata = match search_terms
-            .query_override
+        let simplified = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(|value| player_zh::to_simplified(value).into_owned())
+        };
+        let search_metadata = match query_override
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            Some(query) => {
-                let mut queries = vec![query.to_owned()];
-                for alternate in search_terms.query_alternates.iter().take(8) {
-                    let alternate = alternate.trim();
-                    if !alternate.is_empty() && !queries.iter().any(|value| value == alternate) {
-                        queries.push(alternate.to_owned());
-                    }
-                }
-                queries
-                    .into_iter()
-                    .map(|title| LyricsTrackMetadata {
-                        title: Some(title),
-                        artist: None,
-                        album: None,
-                        duration_ms: metadata.duration_ms,
-                    })
-                    .collect()
-            }
-            None => vec![metadata.clone()],
+            Some(query) => vec![LyricsTrackMetadata {
+                title: Some(player_zh::to_simplified(query).into_owned()),
+                artist: None,
+                album: None,
+                duration_ms: metadata.duration_ms,
+            }],
+            None => vec![LyricsTrackMetadata {
+                title: simplified(&metadata.title),
+                artist: simplified(&metadata.artist),
+                album: simplified(&metadata.album),
+                duration_ms: metadata.duration_ms,
+            }],
         };
         self.open_browse(track_id, metadata.clone(), search_metadata);
         let (candidates, has_more) = match tokio::time::timeout(
@@ -1098,7 +1075,6 @@ pub async fn lyrics_search(
     request_id: String,
     manual: Option<bool>,
     query: Option<String>,
-    query_alternates: Option<Vec<String>>,
 ) -> Result<LyricsTrackResultDto, String> {
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
@@ -1112,7 +1088,6 @@ pub async fn lyrics_search(
             &request_id,
             true,
             query,
-            query_alternates,
             &never_cancelled,
         )
         .await;
@@ -1130,7 +1105,6 @@ pub async fn lyrics_search(
                 &request_id,
                 false,
                 query.clone(),
-                query_alternates.clone(),
                 &token_slot,
             )
             .await;
@@ -1152,7 +1126,6 @@ async fn lyrics_search_body(
     request_id: &str,
     manual: bool,
     query: Option<String>,
-    query_alternates: Option<Vec<String>>,
     token_slot: &Mutex<Option<CancellationToken>>,
 ) -> Result<LyricsTrackResultDto, String> {
     let database = super::lyrics_database_for_track(state, track_id)?;
@@ -1202,16 +1175,13 @@ async fn lyrics_search_body(
     };
     let searched = state
         .lyrics_service
-        .search_track_with_alternates(
+        .search_track(
             database.as_database(),
             track_id,
             &track,
             cancellation,
             !manual,
-            LyricSearchTerms {
-                query_override: query,
-                query_alternates: query_alternates.unwrap_or_default(),
-            },
+            query,
         )
         .await;
     let mut result = match searched {
@@ -1975,14 +1945,23 @@ fn line_dto(line: &LyricLine) -> LyricLineDto {
         text: line.text.clone(),
         translation: line.translation.clone(),
         romanization: line.romanization.clone(),
+        text_traditional: traditional_if_changed(&line.text),
+        translation_traditional: line.translation.as_deref().and_then(traditional_if_changed),
+    }
+}
+
+fn traditional_if_changed(text: &str) -> Option<String> {
+    match player_zh::to_traditional(text) {
+        std::borrow::Cow::Owned(converted) => Some(converted),
+        std::borrow::Cow::Borrowed(_) => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_dto, fetch_provider_candidates, raw_to_lyric_candidate, LyricSearchTerms,
-        LyricsService, LyricsSourceDto, LYRIC_BATCH_SIZE,
+        candidate_dto, fetch_provider_candidates, line_dto, raw_to_lyric_candidate, LyricsService,
+        LyricsSourceDto, LYRIC_BATCH_SIZE,
     };
     use crate::lyrics_provider::{
         HttpMethod, HttpRequest, HttpResponse, HttpTransport, LyricsProviderClient, ProviderError,
@@ -1990,8 +1969,9 @@ mod tests {
     };
     use player_core::{
         parse_lrc, FileFingerprint, LibraryRepository, LibraryRoot, LyricCandidate, LyricFormat,
-        LyricProvider, LyricsTrackMetadata, MediaLocator, MediaSourceKind, MediaTrackRecord,
-        SourceId, SourceScanState, TrackId, TrackIdentity, TrackMetadata, TrackSummary,
+        LyricLine, LyricProvider, LyricsTrackMetadata, MediaLocator, MediaSourceKind,
+        MediaTrackRecord, SourceId, SourceScanState, TrackId, TrackIdentity, TrackMetadata,
+        TrackSummary,
     };
     use player_db::Database;
     use std::{
@@ -2681,88 +2661,90 @@ mod tests {
             .is_none());
     }
 
+    fn qq_queries(transport: &FixtureTransport) -> Vec<String> {
+        let requests = transport
+            .requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        requests
+            .iter()
+            .filter_map(|request| request.body.as_deref())
+            .filter_map(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+            .filter_map(|body| {
+                body.get("req_1")?
+                    .get("param")?
+                    .get("query")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
     #[tokio::test]
-    async fn search_queries_and_merges_variants_in_traditional_first_order() {
+    async fn provider_search_sends_only_the_simplified_spelling() {
         let (database, _directory, track) = seeded_test_database("頭髮", "Artist", "Album");
+
         let transport = FixtureTransport::default();
         let service = LyricsService::new(LyricsProviderClient::new(transport.clone()));
-        let result = service
-            .search_track_with_alternates(
+        service
+            .search_track(
                 &database,
                 track.id,
                 &track,
                 CancellationToken::new(),
-                true,
-                LyricSearchTerms {
-                    query_override: Some("頭髮".to_owned()),
-                    query_alternates: vec!["头发".to_owned()],
-                },
+                false,
+                Some("頭髮".to_owned()),
             )
             .await
-            .expect("search both Chinese script variants");
+            .expect("manual query search");
+        let manual = qq_queries(&transport);
+        assert!(!manual.is_empty());
+        assert!(manual.iter().all(|query| query == "头发"), "{manual:?}");
 
-        let qq_queries = {
-            let requests = transport
-                .requests
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            requests
-                .iter()
-                .filter_map(|request| request.body.as_deref())
-                .filter_map(|body| serde_json::from_str::<serde_json::Value>(body).ok())
-                .filter_map(|body| {
-                    body.get("req_1")?
-                        .get("param")?
-                        .get("query")?
-                        .as_str()
-                        .map(str::to_owned)
-                })
-                .collect::<Vec<_>>()
-        };
-        assert!(qq_queries.iter().any(|query| query == "頭髮"));
-        assert!(qq_queries.iter().any(|query| query == "头发"));
-        let traditional_position = qq_queries
-            .iter()
-            .position(|query| query == "頭髮")
-            .expect("Traditional query was sent");
-        let simplified_position = qq_queries
-            .iter()
-            .position(|query| query == "头发")
-            .expect("Simplified query was sent");
+        let transport = FixtureTransport::default();
+        let service = LyricsService::new(LyricsProviderClient::new(transport.clone()));
+        service
+            .search_track(
+                &database,
+                track.id,
+                &track,
+                CancellationToken::new(),
+                false,
+                None,
+            )
+            .await
+            .expect("automatic search");
+        let automatic = qq_queries(&transport);
+        assert!(!automatic.is_empty());
         assert!(
-            traditional_position < simplified_position,
-            "the Traditional search round must run before the Simplified round"
-        );
-        let candidate_ids = result
-            .candidates
-            .iter()
-            .map(|candidate| candidate.id.as_str())
-            .collect::<std::collections::HashSet<_>>();
-        assert_eq!(candidate_ids.len(), result.candidates.len());
-        assert_eq!(
-            result.candidates.len(),
-            LYRIC_BATCH_SIZE,
-            "the visible page remains bounded"
-        );
-        assert!(candidate_ids.iter().any(|id| id.contains("simplified")));
-        let mut saw_traditional = candidate_ids.iter().any(|id| id.contains("traditional"));
-        for _ in 0..8 {
-            if saw_traditional {
-                break;
-            }
-            let next = service
-                .load_more_track(&database, track.id, CancellationToken::new())
-                .await
-                .expect("continue merged script-variant search");
-            saw_traditional = next
-                .candidates
+            automatic
                 .iter()
-                .any(|candidate| candidate.id.contains("traditional"));
-        }
-        assert!(
-            saw_traditional,
-            "pagination should surface the other script's candidates"
+                .all(|query| query.contains("头发") && !query.contains("頭髮")),
+            "{automatic:?}"
         );
+    }
+
+    #[test]
+    fn lyric_lines_carry_their_traditional_spelling_only_when_it_differs() {
+        let simplified = line_dto(&LyricLine {
+            start_ms: Some(0),
+            text: "这只有我知道".to_owned(),
+            translation: Some("君の名は".to_owned()),
+            romanization: None,
+        });
+        assert_eq!(simplified.text_traditional.as_deref(), Some("這只有我知道"));
+        assert_eq!(simplified.translation_traditional, None, "kana lines stay");
+        let json = serde_json::to_value(&simplified).expect("serialize");
+        assert_eq!(json["textTraditional"], "這只有我知道");
+        assert!(json.get("translationTraditional").is_none());
+
+        let traditional = line_dto(&LyricLine {
+            start_ms: None,
+            text: "頭髮".to_owned(),
+            translation: None,
+            romanization: None,
+        });
+        assert_eq!(traditional.text_traditional, None);
     }
 
     #[tokio::test]

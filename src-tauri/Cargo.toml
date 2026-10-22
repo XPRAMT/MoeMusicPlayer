@@ -17,6 +17,7 @@ tauri-build = { version = "2.7.0", features = [] }
 [dependencies]
 player-core = { path = "../crates/player-core" }
 player-db = { path = "../crates/player-db" }
+player-zh = { path = "../crates/player-zh" }
 player-dsd = { path = "../crates/player-dsd" }
 player-formats = { path = "../crates/player-formats" }
 player-tags = { path = "../crates/player-tags" }

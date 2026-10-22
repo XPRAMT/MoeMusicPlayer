@@ -8,7 +8,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use icu_collator::{
     options::CollatorOptions,
     preferences::{CollationNumericOrdering, CollationType},
@@ -1263,10 +1262,6 @@ fn register_music_collation(
     source_scope: Arc<std::sync::atomic::AtomicU8>,
 ) -> rusqlite::Result<()> {
     let collators = collation_spec.build_collators();
-    let opencc = Arc::new(
-        OpenCC::from_config(BuiltinConfig::S2t)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
-    );
     connection.create_collation(MUSIC_COLLATION_NAME, {
         let collators = collators.clone();
         move |left, right| compare_music_names(&collators, left, right)
@@ -1324,21 +1319,18 @@ fn register_music_collation(
         MUSIC_IDENTITY_KEY_FUNCTION,
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        {
-            let opencc = Arc::clone(&opencc);
-            move |context| {
-                let value = context.get::<Option<String>>(0)?.unwrap_or_default();
-                Ok(music_identity_key(&value, &opencc))
-            }
+        |context| {
+            let value = context.get::<Option<String>>(0)?.unwrap_or_default();
+            Ok(music_identity_key(&value))
         },
     )?;
     connection.create_scalar_function(
         MUSIC_IDENTITY_TRADITIONAL_FUNCTION,
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        move |context| {
+        |context| {
             let value = context.get::<Option<String>>(0)?.unwrap_or_default();
-            Ok(music_identity_traditional(&value, &opencc))
+            Ok(music_identity_traditional(&value))
         },
     )?;
     connection.create_scalar_function(
@@ -1352,46 +1344,19 @@ fn register_music_collation(
     )
 }
 
-fn music_identity_traditional(value: &str, opencc: &OpenCC) -> String {
-    let value = value.trim();
-    if !value.chars().any(is_han_character) || value.chars().any(is_japanese_kana) {
-        value.to_owned()
-    } else {
-        opencc.convert(value).trim().to_owned()
-    }
+/// Taiwan-Traditional spelling of a name for 繁簡-insensitive grouping (ADR 0030). Names with
+/// Japanese kana or without Han keep their spelling.
+fn music_identity_traditional(value: &str) -> String {
+    player_zh::to_traditional(value.trim()).trim().to_owned()
 }
 
-fn music_identity_key(value: &str, opencc: &OpenCC) -> String {
-    music_identity_traditional(value, opencc)
+fn music_identity_key(value: &str) -> String {
+    music_identity_traditional(value)
         .nfkc()
         .collect::<String>()
         .to_lowercase()
 }
 
-fn is_han_character(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x3400..=0x4DBF
-            | 0x4E00..=0x9FFF
-            | 0xF900..=0xFAFF
-            | 0x20000..=0x2FA1F
-            | 0x30000..=0x323AF
-    )
-}
-
-fn is_japanese_kana(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x3040..=0x309F
-            | 0x30A0..=0x30FF
-            | 0x31F0..=0x31FF
-            | 0x32D0..=0x32FE
-            | 0x3300..=0x3357
-            | 0xFF66..=0xFF9F
-            | 0x1B000..=0x1B16F
-            | 0x1AFF0..=0x1AFFF
-    )
-}
 
 fn ensure_music_collation_index(
     connection: &Connection,
@@ -6738,10 +6703,13 @@ fn search_terms_json(
     query_alternates: &[String],
 ) -> Result<Option<String>, DatabaseError> {
     let mut terms = Vec::<String>::new();
+    let mut generated = Vec::new();
     if let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) {
         terms.push(query.to_owned());
+        // 繁簡 interop is the database's own job (ADR 0030); callers may still add terms.
+        generated = player_zh::search_alternates(query);
     }
-    for alternate in query_alternates.iter().take(8) {
+    for alternate in generated.iter().chain(query_alternates.iter()).take(8) {
         let alternate = alternate.trim();
         if !alternate.is_empty() && !terms.iter().any(|term| term == alternate) {
             terms.push(alternate.to_owned());
@@ -8083,6 +8051,16 @@ mod tests {
             db.music_identity_key("歌手简")
                 .expect("simplified identity"),
             "歌手簡"
+        );
+        assert_eq!(
+            db.music_identity_key("为了里面")
+                .expect("Taiwan glyphs identity"),
+            "為了裡面",
+            "identity keys use the s2tw glyphs of player-zh (ADR 0030)"
+        );
+        assert_eq!(
+            db.music_identity_key("一只猫").expect("keep-只 identity"),
+            "一只貓"
         );
         assert_eq!(
             db.music_identity_key("歌手简かな")
@@ -14097,6 +14075,7 @@ mod tests {
 
     #[test]
     fn simplified_traditional_query_union_matches_pages_and_queue_without_duplicate_tracks() {
+        // The caller sends no alternates: the database derives 头发 from 頭髮 itself (ADR 0030).
         let mut db = Database::open_in_memory().expect("database");
         let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "script-search");
         let records = ["頭髮歌曲", "头发歌曲", "頭髮與头发"]
@@ -14123,7 +14102,7 @@ mod tests {
         );
 
         let query = Some("頭髮".to_owned());
-        let alternates = vec!["头发".to_owned()];
+        let alternates = Vec::<String>::new();
         let mut paged_ids = Vec::new();
         for offset in 0..3 {
             let page = db

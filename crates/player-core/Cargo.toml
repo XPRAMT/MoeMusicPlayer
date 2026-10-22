@@ -5,6 +5,7 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+player-zh = { path = "../player-zh" }
 serde = { version = "1", features = ["derive"] }
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["serde", "v4"] }
