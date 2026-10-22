@@ -4065,8 +4065,8 @@ dependencies = [
 name = "player-core"
 version = "0.1.0"
 dependencies = [
- "serde",
  "player-zh",
+ "serde",
  "unicode-normalization",
  "uuid",
 ]
@@ -4080,8 +4080,8 @@ dependencies = [
  "jni",
  "ndk-context",
  "player-core",
- "rusqlite",
  "player-zh",
+ "rusqlite",
  "serde",
  "serde_json",
  "unicode-normalization",
@@ -4191,7 +4191,6 @@ dependencies = [
 ]
 
 [[package]]
-[[package]]
 name = "player-zh"
 version = "0.1.0"
 dependencies = [
@@ -4199,6 +4198,7 @@ dependencies = [
  "serde_json",
 ]
 
+[[package]]
 name = "plist"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
