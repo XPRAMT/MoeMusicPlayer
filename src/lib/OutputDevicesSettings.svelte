@@ -823,7 +823,8 @@
     max-height: 50vh;
     max-height: 50dvh;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    /* No overscroll containment: at the top or bottom the wheel or a drag goes on to scroll the settings page or the
+       quick-settings drawer (native scroll chaining). */
     padding-right: 4px;
   }
 

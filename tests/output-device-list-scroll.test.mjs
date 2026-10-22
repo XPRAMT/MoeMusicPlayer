@@ -17,7 +17,8 @@ test('the output device list scrolls inside at most half the window', () => {
   assert.match(list, /max-height:\s*50dvh;/);
   assert.ok(list.indexOf('50vh') < list.indexOf('50dvh'), 'the dvh value comes last and wins where supported');
   assert.match(list, /overflow-y:\s*auto;/);
-  assert.match(list, /overscroll-behavior:\s*contain;/);
+  // At its top or bottom the wheel and touch scroll chain on to the settings page / drawer: no overscroll-behavior.
+  assert.doesNotMatch(list, /overscroll-behavior\s*:/);
   assert.match(list, /align-content:\s*start;/);
   assert.match(component, /<div class="output-device-list" role="list"/);
 });
@@ -44,4 +45,14 @@ test('a device name too long for the channel-map matrix scrolls with the play do
   );
   const styles = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
   assert.match(styles, /\.dock-marquee-text\.is-overflowing \{[^}]*animation: dock-marquee-scroll/);
+});
+test('the device list does not swallow wheel or touch scrolling', () => {
+  const markup = component.slice(component.indexOf('<div class="output-device-list"'));
+  const list = markup.slice(0, markup.indexOf('>'));
+  assert.doesNotMatch(list, /on(wheel|touchmove|touchstart)/, 'no handlers that could preventDefault or stopPropagation');
+  assert.doesNotMatch(component, /stopPropagation\(\)[^\n]*(wheel|touch)|(wheel|touch)[^\n]*stopPropagation\(\)/);
+  // The outer containers really scroll, so the chained scroll has somewhere to go.
+  const styles = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
+  assert.match(styles, /\.page-scroll \{[^}]*overflow: auto;/);
+  assert.match(styles, /\.quick-settings-drawer-scroll \{[^}]*overflow: auto;/);
 });
