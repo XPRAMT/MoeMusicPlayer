@@ -29,7 +29,7 @@ test('floating panels share Quick Settings surface tokens', async () => {
   assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*top: var\(--window-titlebar-height\);[^}]*padding-top: calc\(var\(--sidebar-brand-inset\) \+ var\(--android-safe-top, 0px\)\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\) \+ var\(--nav-panel-dock-overhang\)\);[^}]*left: 0;[^}]*border-radius: 0;/s);
   // Edge timeline overhang is derived from the shared progress tokens, not a literal.
   assert.match(css, /\.app-shell:has\(\.player-dock\[data-timeline-style="edge"\]\) \.sidebar\.floating-surface \{\s*--nav-panel-dock-overhang: var\(--dock-edge-progress-track\);/);
-  assert.match(css, /margin-top: calc\(-0\.5 \* var\(--dock-progress-hit\) - 0\.5 \* var\(--dock-progress-track\)\);/);
+  assert.match(css, /margin-top: calc\(-0\.5 \* var\(--dock-progress-row\) - 0\.5 \* var\(--dock-progress-track\)\);/);
   assert.match(css, /--dock-progress-hit: var\(--dock-edge-progress-hit\);/);
 
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);

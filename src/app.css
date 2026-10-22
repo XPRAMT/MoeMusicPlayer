@@ -124,7 +124,10 @@ input:focus-visible {
 .app-shell {
   --sidebar-width: 252px;
   /* Edge-timeline geometry, shared by the dock and the narrow nav panel clearance. */
-  --dock-edge-progress-hit: 10px;
+  /* Timeline layout band (track + time labels are placed from it) and the larger invisible click
+     area, both centered on the 3px track; the click area grows past the band without moving anything. */
+  --dock-edge-progress-row: 10px;
+  --dock-edge-progress-hit: 20px;
   --dock-edge-progress-track: 3px;
   width: 100%;
   height: 100dvh;
@@ -3773,9 +3776,10 @@ input:focus-visible {
 }
 
 /* Edge progress: 3px painted track stays on/above the dock top (不侵入底欄);
-   10px click hit is track-center ±5px and may extend into the dock. */
+   20px click hit is track-center ±10px and may extend into the dock. */
 .player-dock[data-timeline-style="edge"] {
   --dock-progress-hit: var(--dock-edge-progress-hit);
+  --dock-progress-row: var(--dock-edge-progress-row);
   --dock-progress-track: var(--dock-edge-progress-track);
   height: var(--dock-height);
   min-height: var(--dock-height);
@@ -3803,10 +3807,10 @@ input:focus-visible {
   max-width: none;
   height: auto;
   /* Hit top = track-center − 5px; track bottom lands on the dock top. */
-  margin-top: calc(-0.5 * var(--dock-progress-hit) - 0.5 * var(--dock-progress-track));
+  margin-top: calc(-0.5 * var(--dock-progress-row) - 0.5 * var(--dock-progress-track));
   padding: 0;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: var(--dock-progress-hit) auto;
+  grid-template-rows: var(--dock-progress-row) auto;
   align-items: center;
   column-gap: 0;
   row-gap: 8px;
@@ -3826,15 +3830,17 @@ input:focus-visible {
   grid-column: 1 / -1;
   grid-row: 1;
   width: 100%;
-  height: var(--dock-progress-hit);
-  min-height: var(--dock-progress-hit);
+  height: var(--dock-progress-row);
+  min-height: var(--dock-progress-row);
 }
 
 .player-dock[data-timeline-style="edge"] .progress-slider {
   position: absolute;
-  inset: 0;
+  /* Click area = --dock-progress-hit (20px) centered on the track: reaches 5px past the 10px band on
+     each side (about 8.5px into the dock: above the controls and the time labels, over the top of the dock cover). */
+  inset: calc(0.5 * (var(--dock-progress-row) - var(--dock-progress-hit))) 0;
   width: 100%;
-  height: 100%;
+  height: auto;
   margin: 0;
   border-radius: 0;
   /* Hit target only — the 3px line is painted by .progress-hit::after. */
