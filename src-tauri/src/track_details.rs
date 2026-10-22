@@ -708,6 +708,10 @@ pub struct TrackTagSaveRequest {
     #[serde(default)]
     pub remove_cover: bool,
     pub cover_options: player_tags::CoverOptions,
+    /// The lyrics field was edited: after the write the track is linked to its embedded lyrics, so they
+    /// win over a same-name `.lrc` and earlier picks (user decision 2026-10-22).
+    #[serde(default)]
+    pub lyrics_changed: bool,
 }
 
 #[tauri::command]
@@ -718,7 +722,8 @@ pub async fn track_details_save(
     request: TrackTagSaveRequest,
 ) -> Result<player_tags::TrackDetails, String> {
     let source = track_source(&state, &track_id)?;
-    blocking(move || {
+    let lyrics_changed = request.lyrics_changed;
+    let details = blocking(move || {
         let replace_cover = match &request.replace_cover_path {
             Some(image) => Some(read_image_source(&app, image)?),
             None => match &request.replace_cover_base64 {
@@ -751,7 +756,13 @@ pub async fn track_details_save(
             }
         }
     })
-    .await
+    .await?;
+    if lyrics_changed {
+        let id = player_core::TrackId::parse(&track_id).map_err(|error| error.to_string())?;
+        let database = super::lyrics_database_for_track(&state, id)?;
+        crate::lyrics_service::link_embedded_lyrics(database.as_database(), id, super::now_utc_epoch_ms()?)?;
+    }
+    Ok(details)
 }
 
 /// How Save would write the staged cover (size, JPG or PNG, re-encoded or original bytes), for the

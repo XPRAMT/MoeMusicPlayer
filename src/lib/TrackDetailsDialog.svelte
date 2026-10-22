@@ -333,6 +333,7 @@
           fields: draft,
           replaceCoverPath: pendingCoverPath === CLIPBOARD_COVER ? null : pendingCoverPath,
           replaceCoverBase64: pendingCoverPath === CLIPBOARD_COVER ? pendingCoverBase64 : null,
+          lyricsChanged: isDirty('lyrics'),
           removeCover,
           coverOptions,
         },

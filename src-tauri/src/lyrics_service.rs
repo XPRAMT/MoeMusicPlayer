@@ -407,9 +407,9 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
                     .get_track_lyrics(track_id)
                     .map_err(|error| error.to_string())?
                 {
-                    return Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
-                        track, selected,
-                    )));
+                    if let Some(lyrics) = manual_lyrics_dto(database, track, &selected)? {
+                        return Ok(LyricsTrackResultDto::ready(lyrics));
+                    }
                 }
             }
         }
@@ -1336,14 +1336,18 @@ async fn load_track_result_with_context(
     // the library database and wins over local sidecar/embedded lyrics until it is cleared or
     // re-picked. A cleared sentinel (empty manual row) suppresses local rediscovery and auto
     // search. Without a manual link, local lyrics beat the automatic provider cache.
+    // A pick of the song's own `.lrc` or embedded lyrics is a reference, read live (ADR 0013 lyrics
+    // note, 2026-10-22): when that source is empty now, the normal order below applies, and the
+    // row's stored text (rows from before this rule kept a snapshot) is never used.
+    let mut cached = cached;
     if let Some(selected) = cached.as_ref().filter(|cached| cached.manually_selected) {
         if is_cleared_lyrics(selected) {
             return Ok(LyricsTrackResultDto::cleared());
         }
-        return Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
-            &track,
-            selected.clone(),
-        )));
+        match manual_lyrics_dto(database, &track, selected)? {
+            Some(lyrics) => return Ok(LyricsTrackResultDto::ready(lyrics)),
+            None => cached = None,
+        }
     }
 
     match local_lyrics_for_track(app, sources, database, track_id, &track).await? {
@@ -1641,6 +1645,102 @@ fn local_source_candidate_dto(
     })
 }
 
+/// The manual row for a pick of a local source: provider and candidate id, no text.
+fn local_pick_reference(
+    track_id: TrackId,
+    provider: LyricProvider,
+    candidate_id: &str,
+    updated_at_utc_ms: i64,
+) -> TrackLyrics {
+    TrackLyrics {
+        track_id,
+        provider,
+        candidate_id: Some(candidate_id.to_owned()),
+        lyrics: empty_parsed_lyrics(),
+        manually_selected: true,
+        updated_at_utc_ms,
+    }
+}
+
+/// Saving the song details with changed lyrics links the track to its embedded lyrics (user decision
+/// 2026-10-22): the embedded lyrics then win over a same-name `.lrc` and earlier picks.
+pub(crate) fn link_embedded_lyrics(
+    database: &Database,
+    track_id: TrackId,
+    updated_at_utc_ms: i64,
+) -> Result<(), String> {
+    database
+        .save_manual_track_lyrics(&local_pick_reference(
+            track_id,
+            LyricProvider::Embedded,
+            LOCAL_EMBEDDED_CANDIDATE_ID,
+            updated_at_utc_ms,
+        ))
+        .map_err(|error| error.to_string())
+}
+
+/// What a manual row shows: an online pick is its stored text; a local pick is the source's current
+/// lyrics, or `None` when that source is empty now.
+fn manual_lyrics_dto(
+    database: &Database,
+    track: &TrackSummary,
+    selected: &TrackLyrics,
+) -> Result<Option<TrackLyricsDto>, String> {
+    match selected
+        .candidate_id
+        .as_deref()
+        .and_then(local_candidate_provider)
+    {
+        Some(provider) => Ok(live_local_pick(database, track.id, provider)?
+            .map(|lyrics| track_lyrics_dto(track.id, track, provider, true, &lyrics))),
+        None => Ok(Some(persisted_lyrics_dto(track, selected.clone()))),
+    }
+}
+
+fn parse_stored_lyrics(raw: &str) -> Option<ParsedLyrics> {
+    let parsed = if looks_like_yrc(raw) {
+        parse_yrc(raw).ok()
+    } else {
+        parse_lrc(raw).ok()
+    };
+    parsed.filter(|lyrics| !lyrics.lines.is_empty())
+}
+
+/// The current lyrics of a local source: the embedded lyrics and the `.lrc` the last sync stored
+/// for the track, or the file itself when the sync has nothing for it.
+fn live_local_pick(
+    database: &Database,
+    track_id: TrackId,
+    provider: LyricProvider,
+) -> Result<Option<ParsedLyrics>, String> {
+    match provider {
+        LyricProvider::Embedded => {
+            if let Some(stored) = database
+                .track_embedded_lyrics(track_id)
+                .map_err(|error| error.to_string())?
+            {
+                return Ok(stored.as_deref().and_then(parse_stored_lyrics));
+            }
+        }
+        LyricProvider::Sidecar => match database
+            .track_lyric_sidecar(track_id)
+            .map_err(|error| error.to_string())?
+        {
+            player_db::LyricSidecarLookup::Present { text: Some(text), .. } => {
+                return Ok(parse_lrc(&text).ok().filter(|lyrics| !lyrics.lines.is_empty()));
+            }
+            player_db::LyricSidecarLookup::Present { text: None, oversized: true }
+            | player_db::LyricSidecarLookup::Absent => return Ok(None),
+            player_db::LyricSidecarLookup::Present { text: None, oversized: false }
+            | player_db::LyricSidecarLookup::NotScanned => {}
+        },
+        LyricProvider::NetEase | LyricProvider::Qq => return Ok(None),
+    }
+    Ok(read_local_lyric_source(database, track_id, provider)
+        .ok()
+        .filter(|lyrics| !lyrics.lines.is_empty()))
+}
+
 fn select_local_lyric_candidate(
     database: &Database,
     track_id: TrackId,
@@ -1652,25 +1752,20 @@ fn select_local_lyric_candidate(
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這首曲目。".to_owned())?;
-    let lyrics = read_local_lyric_source(database, track_id, provider)?;
-    let saved = TrackLyrics {
-        track_id,
-        provider,
-        candidate_id: Some(candidate_id.to_owned()),
-        lyrics,
-        manually_selected: true,
-        updated_at_utc_ms: selected_at_utc_ms,
+    let lyrics = match live_local_pick(database, track_id, provider)? {
+        Some(lyrics) => lyrics,
+        None => read_local_lyric_source(database, track_id, provider)?,
     };
+    // Only the reference (provider + candidate id) is kept; the text is read live on every load.
     database
-        .save_manual_track_lyrics(&saved)
+        .save_manual_track_lyrics(&local_pick_reference(
+            track_id,
+            provider,
+            candidate_id,
+            selected_at_utc_ms,
+        ))
         .map_err(|error| error.to_string())?;
-    Ok(track_lyrics_dto(
-        track.id,
-        &track,
-        provider,
-        true,
-        &saved.lyrics,
-    ))
+    Ok(track_lyrics_dto(track.id, &track, provider, true, &lyrics))
 }
 
 #[cfg(target_os = "windows")]
@@ -3127,6 +3222,169 @@ mod tests {
         assert_eq!(
             result.lyrics.expect("manual sidecar link").source,
             LyricsSourceDto::Manual
+        );
+    }
+
+    /// A track whose embedded lyrics (from the sync) can be rewritten by applying the scan again.
+    struct EmbeddedFixture {
+        database: Database,
+        directory: TestDirectory,
+        root: LibraryRoot,
+        record: MediaTrackRecord,
+        track_id: TrackId,
+    }
+
+    impl EmbeddedFixture {
+        fn new(embedded: Option<&str>) -> Self {
+            let directory = TestDirectory::new();
+            let audio_path = directory.0.join("track.mp3");
+            fs::write(&audio_path, b"lyrics reference test media").expect("write media placeholder");
+            let source_id = SourceId::new();
+            let root = LibraryRoot {
+                id: source_id,
+                kind: MediaSourceKind::WindowsFilesystem,
+                display_name: "lyrics reference source".to_owned(),
+                locator: MediaLocator::FileSystem(directory.0.clone()),
+                enabled: true,
+            };
+            let database = Database::open_in_memory().expect("open isolated test database");
+            database.save_library_root(&root).expect("save test source");
+            let record = MediaTrackRecord {
+                identity: TrackIdentity {
+                    source_id,
+                    source_item_id: "lyrics-reference-track".to_owned(),
+                    locator_key: None,
+                },
+                locator: MediaLocator::FileSystem(audio_path.clone()),
+                fingerprint: FileFingerprint {
+                    size_bytes: fs::metadata(&audio_path).expect("media metadata").len(),
+                    modified_at_utc_ms: None,
+                    created_at_utc_ms: None,
+                },
+                metadata: Some(TrackMetadata {
+                    title: Some("參照曲目".to_owned()),
+                    artist: Some("參照演出者".to_owned()),
+                    duration_ms: Some(180_000),
+                    ..TrackMetadata::default()
+                }),
+            };
+            let mut fixture = Self { database, directory, root, record, track_id: TrackId::new() };
+            fixture.rescan(embedded);
+            fixture.track_id = fixture
+                .database
+                .resolve_track_id_for_locator(&MediaLocator::FileSystem(audio_path))
+                .expect("resolve indexed track")
+                .expect("track mapping exists");
+            fixture
+        }
+
+        /// What the next sync would store after the file's embedded lyrics changed.
+        fn rescan(&mut self, embedded: Option<&str>) {
+            if let Some(metadata) = self.record.metadata.as_mut() {
+                metadata.embedded_lyrics = embedded.map(str::to_owned);
+            }
+            self.database
+                .apply_source_scan(
+                    &self.root,
+                    &SourceScanState::Complete,
+                    std::slice::from_ref(&self.record),
+                    std::slice::from_ref(&self.record),
+                    &[],
+                    1_800_000_000_000,
+                )
+                .expect("apply scan");
+        }
+
+        async fn shown(&self) -> Option<(LyricsSourceDto, String)> {
+            super::load_track_result(&self.database, self.track_id)
+                .await
+                .expect("load lyrics")
+                .lyrics
+                .map(|lyrics| (lyrics.source, lyrics.lines[0].text.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn picked_embedded_lyrics_are_a_reference_that_follows_the_file() {
+        let mut fixture = EmbeddedFixture::new(Some("[00:01.00]舊的內嵌"));
+        let selected = super::select_candidate_from_database(
+            &fixture.database,
+            fixture.track_id,
+            super::LOCAL_EMBEDDED_CANDIDATE_ID,
+            1_800_000_000_100,
+        )
+        .expect("pick the embedded lyrics");
+        assert_eq!(selected.lines[0].text, "舊的內嵌");
+        let row = fixture
+            .database
+            .get_track_lyrics(fixture.track_id)
+            .expect("read manual row")
+            .expect("manual row saved");
+        assert!(row.manually_selected);
+        assert_eq!(row.provider, LyricProvider::Embedded);
+        assert_eq!(row.candidate_id.as_deref(), Some(super::LOCAL_EMBEDDED_CANDIDATE_ID));
+        assert!(row.lyrics.lines.is_empty() && row.lyrics.raw_text.is_empty(), "no text snapshot");
+        assert_eq!(fixture.shown().await, Some((LyricsSourceDto::Manual, "舊的內嵌".to_owned())));
+
+        // The tags were edited: the next load shows the new embedded lyrics, no re-pick needed.
+        fixture.rescan(Some("[00:01.00]新的內嵌"));
+        assert_eq!(fixture.shown().await, Some((LyricsSourceDto::Manual, "新的內嵌".to_owned())));
+
+        // The embedded lyrics were removed: the normal order applies (no .lrc, no cache here).
+        fixture.rescan(None);
+        assert_eq!(fixture.shown().await, None);
+    }
+
+    #[tokio::test]
+    async fn legacy_local_pick_rows_ignore_their_stored_snapshot() {
+        let fixture = EmbeddedFixture::new(Some("[00:01.00]檔案裡的內嵌"));
+        fixture
+            .database
+            .save_manual_track_lyrics(&player_core::TrackLyrics {
+                track_id: fixture.track_id,
+                provider: LyricProvider::Embedded,
+                candidate_id: Some(super::LOCAL_EMBEDDED_CANDIDATE_ID.to_owned()),
+                lyrics: parse_lrc("[00:01.00]舊快照").expect("legacy snapshot"),
+                manually_selected: true,
+                updated_at_utc_ms: 1_800_000_000_000,
+            })
+            .expect("save legacy row");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Manual, "檔案裡的內嵌".to_owned()))
+        );
+        // An online pick still keeps its stored text.
+        fixture
+            .database
+            .save_manual_track_lyrics(&player_core::TrackLyrics {
+                track_id: fixture.track_id,
+                provider: LyricProvider::NetEase,
+                candidate_id: Some("netease:42".to_owned()),
+                lyrics: parse_lrc("[00:01.00]線上選擇").expect("online LRC"),
+                manually_selected: true,
+                updated_at_utc_ms: 1_800_000_000_001,
+            })
+            .expect("save online pick");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Manual, "線上選擇".to_owned()))
+        );
+    }
+
+    #[tokio::test]
+    async fn saving_details_links_embedded_lyrics_over_a_same_name_lrc() {
+        let fixture = EmbeddedFixture::new(Some("[00:01.00]寫入的內嵌"));
+        fs::write(fixture.directory.0.join("track.lrc"), "[00:01.00]旁邊的 LRC").expect("write sidecar");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Local, "旁邊的 LRC".to_owned())),
+            "normal order: the .lrc wins"
+        );
+        super::link_embedded_lyrics(&fixture.database, fixture.track_id, 1_800_000_000_200)
+            .expect("link embedded lyrics");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Manual, "寫入的內嵌".to_owned()))
         );
     }
 
