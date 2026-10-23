@@ -181,8 +181,9 @@
   );
   // Opacity of each line (ADR 0032): the window's own opacity setting is on the container; a line that is not the
   // current one is dimmed by the shared "not current line" opacity on top of it (main x not-current). The current line
-  // and the next fade over the last 200 ms before the next line starts, ending with the glide; this is the same pure
-  // function of the lyrics position everywhere, run as an opacity-only CSS animation of those two cells from the
+  // and the next fade over the last 200 ms before the next line starts, ending with the glide (before the first line
+  // nothing is dimmed; the 200 ms before it every line but the first fades out); this is the same pure function of
+  // the lyrics position everywhere, run as an opacity-only CSS animation of the cells whose weight changes from the
   // same re-plan as the glide (a seek or pause re-plans, a pause shows the static value).
   let inactiveOpacityPercent = $state<number>(DEFAULT_LYRICS_PREFERENCES.inactiveOpacityPercent);
   let stripFocus = $derived(lyricsStripFocus(stripStarts, stripRun.at));
@@ -190,10 +191,12 @@
     const focus = stripFocus;
     const factor = (weight: number) => lyricsLineOpacityFactor(weight, inactiveOpacityPercent, settings.animation);
     const still = `opacity: ${factor(lyricsLineWeight(focus, index))}`;
-    if (stripRun.ms === null || focus.fadeStartMs === null || (index !== focus.current && index !== focus.incoming)) return still;
-    const outgoing = index === focus.current;
-    const from = factor(outgoing ? 1 : 0);
-    const to = factor(outgoing ? 0 : 1);
+    if (stripRun.ms === null || focus.fadeStartMs === null) return still;
+    // The weight at the start and at the end of the fade: the cells whose weight does not change keep a static opacity
+    // (the lines far away, and before the first line only the first one is still while the others fade out).
+    const from = factor(lyricsLineWeight({ ...focus, progress: 0 }, index));
+    const to = factor(lyricsLineWeight({ ...focus, progress: 1 }, index));
+    if (from === to) return still;
     const name = stripName.endsWith('-a') ? 'taskbar-lyrics-fade-a' : 'taskbar-lyrics-fade-b';
     return `opacity: ${from}; --fade-from: ${from}; --fade-to: ${to}; animation: ${name} ${Math.round(focus.fadeMs)}ms linear ${Math.round(focus.fadeStartMs - stripRun.at)}ms both`;
   }

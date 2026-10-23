@@ -188,16 +188,52 @@ test('the animation "none" applies no dimming', () => {
   }
 });
 
-test('before the first line only the first fades in, in the 200 ms before it starts', () => {
+test('before the first line nothing is dimmed (like Now Playing)', () => {
   const early = lyricsStripFocus(FADE_STARTS, 100);
   assert.deepEqual([early.current, early.incoming, early.progress], [-1, 0, 0]);
   assert.equal(early.fadeStartMs, 800);
-  assert.equal(factorAt(0, 0), 0.5);
-  assert.equal(factorAt(0, 800), 0.5);
-  assert.equal(factorAt(0, 900), 0.75);
+  for (const position of [-500, 0, 100, 799, 800]) {
+    for (const index of [0, 1, 2]) assert.equal(factorAt(index, position), 1, `line ${index} at ${position}`);
+  }
+});
+
+test('in the 200 ms before the first line starts, the other lines fade out and the first stays at 1', () => {
+  for (const position of [800, 850, 900, 950, 999, 1000]) assert.equal(factorAt(0, position), 1);
+  assert.equal(factorAt(1, 800), 1);
+  assert.equal(factorAt(1, 900), 0.75);
+  assert.equal(factorAt(2, 900), 0.75);
+  assert.equal(factorAt(1, 1000), 0.5);
+  assert.equal(factorAt(2, 1000), 0.5);
+  // No jump at the first line's start: the value just before equals the value at the start.
+  assert.ok(Math.abs(factorAt(1, 999.9) - factorAt(1, 1000)) < 1e-3);
   assert.equal(factorAt(0, 1000), 1);
-  assert.equal(factorAt(1, 900), 0.5);
-  assert.equal(factorAt(1, -500), 0.5);
+  // The weights the view animates between: others 1 -> 0, the first 1 -> 1.
+  const focus = lyricsStripFocus(FADE_STARTS, 900);
+  assert.equal(lyricsLineWeight({ ...focus, progress: 0 }, 1), 1);
+  assert.equal(lyricsLineWeight({ ...focus, progress: 1 }, 1), 0);
+  assert.equal(lyricsLineWeight({ ...focus, progress: 0 }, 0), 1);
+  assert.equal(lyricsLineWeight({ ...focus, progress: 1 }, 0), 1);
+  // Same 200 ms rule afterwards: line 1 then fades in before it starts, the first one out.
+  assert.equal(factorAt(1, 4900), 0.75);
+  assert.equal(factorAt(0, 4900), 0.75);
+});
+
+test('a first line that starts within 200 ms of the song start fades over the time it has, from position 0', () => {
+  const starts = [100, 5000];
+  const focus = lyricsStripFocus(starts, 0);
+  assert.equal(focus.fadeStartMs, 0);
+  assert.equal(focus.fadeMs, 100);
+  assert.equal(lyricsLineOpacityFactor(lyricsLineWeight(focus, 1), 50), 1);
+  assert.equal(lyricsLineOpacityFactor(lyricsLineWeight(lyricsStripFocus(starts, 50), 1), 50), 0.75);
+  assert.equal(lyricsLineOpacityFactor(lyricsLineWeight(lyricsStripFocus(starts, 100), 1), 50), 0.5);
+});
+
+test('seeking back before the first line restores full opacity for every line', () => {
+  assert.equal(factorAt(1, 3000), 0.5);
+  assert.equal(factorAt(1, 100), 1);
+  assert.equal(factorAt(2, 100), 1);
+  assert.equal(factorAt(1, 950), factorAt(1, 950));
+  assert.equal(factorAt(1, 950), 0.625);
 });
 
 test('after the last line starts nothing fades and it stays the current line', () => {
@@ -217,6 +253,7 @@ test('a seek lands on the same value as playing through (the function only looks
   assert.equal(factorAt(1, 7000), 1);
   assert.equal(factorAt(1, 1500), 0.5);
   assert.equal(factorAt(0, 1500), 1);
+  assert.equal(factorAt(1, 500), 1);
 });
 
 test('a line shorter than 200 ms fades over its own length, so the previous fade ends where it starts', () => {
@@ -232,7 +269,7 @@ test('a line shorter than 200 ms fades over its own length, so the previous fade
   assert.equal(lyricsStripFocus([], 500).incoming, -1);
 });
 
-test('the views fade only two cells with an opacity-only animation, fed by the shared setting', () => {
+test('the views fade only the changing cells with an opacity-only animation, fed by the shared setting', () => {
   const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   // Both strips (main and translation) use the same per-cell style, from the same pure functions.

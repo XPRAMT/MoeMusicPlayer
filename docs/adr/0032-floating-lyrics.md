@@ -176,13 +176,16 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 - The fade is a function of the lyrics position, not an event timer. Over the last 200 ms before a line starts
   (`LYRICS_FADE_MS`; shortened to the current line's own length when that is shorter) the current line fades linearly
   from 1 to the not-current factor and the next from the factor to 1, so both finish at the very moment the glide
-  reaches the next line. Before the first line every line is dimmed and only the first fades in during the 200 ms
-  before it starts; from the last line's start nothing fades (it stays 1). Pure functions in `lyrics-strip.js`:
+  reaches the next line. Before the first line nothing is dimmed (every line is 1, like Now Playing). So
+  that the first line's start is no jump, the same 200 ms rule applies to it: in the 200 ms before the first line
+  starts (shortened so it never begins before position 0) every line except the first fades from 1 to the
+  not-current factor, and the first stays 1; at its start it is the current line and the others are already at the
+  factor. From the last line's start nothing fades (it stays 1). Pure functions in `lyrics-strip.js`:
   `lyricsStripFocus(startTimesMs, positionMs)` -> `{ current, incoming, progress, fadeStartMs, fadeMs }`,
   `lyricsLineWeight(focus, index)` (0 not current ... 1 current) and
   `lyricsLineOpacityFactor(weight, inactiveOpacityPercent, animation)` = `inactive + (1 - inactive) * weight` (the
   percent goes through the existing normalize). A seek, a pause or a resume re-plans like the glide does: while
-  playing, the two cells in the fade get one opacity-only CSS animation (delay = fadeStart - position, negative when
+  playing, the cells whose weight changes in the fade (the two lines, or before the first line every line but the first) get one opacity-only CSS animation (delay = fadeStart - position, negative when
   already in progress, fill both; names alternate a/b so a re-plan restarts it); when paused the static value at
   that position is shown. All other cells carry a static `opacity`.
 - Cost: opacity only (no layout, no text repaint); one `opacity` per cell of the already windowed strip (about 9

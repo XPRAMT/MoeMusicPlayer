@@ -126,8 +126,9 @@ export const LYRICS_FADE_MS = 200;
 /**
  * Which lines are mid-fade at a lyrics position (ADR 0032). The current line fades out and the next one fades in over
  * the last `fadeMs` before the next line starts (shortened to the current line's own length when it is shorter), so
- * both finish at the very moment the glide reaches the next line. Before the first line only the first one fades in;
- * after the last line's start nothing fades. A pure function of the position, so seeks and pauses need no event.
+ * both finish at the very moment the glide reaches the next line. Before the first line nothing is dimmed (like Now
+ * Playing); in the `fadeMs` before the first line starts (never reaching back before position 0) every line but the
+ * first fades out to "not current", so the first line's start is no jump. After the last line's start nothing fades. A pure function of the position, so seeks and pauses need no event.
  * @param {readonly number[]} startTimesMs one per strip line, sorted
  * @param {number} positionMs lyrics time (playback position plus the display offset)
  * @param {number} [fadeMs]
@@ -140,7 +141,8 @@ export function lyricsStripFocus(startTimesMs, positionMs, fadeMs = LYRICS_FADE_
   const incoming = current + 1 < startTimesMs.length ? current + 1 : -1;
   if (incoming < 0) return { current, incoming: -1, progress: 0, fadeStartMs: null, fadeMs: 0 };
   const next = startTimesMs[incoming];
-  const length = current >= 0 ? next - startTimesMs[current] : Infinity;
+  // Before the first line the fade may not start before position 0 (the lead-in is the intro, like Now Playing).
+  const length = current >= 0 ? next - startTimesMs[current] : Math.max(1, next);
   const duration = Math.max(1, Math.min(Math.max(0, fadeMs), length));
   const fadeStartMs = next - duration;
   const progress = Math.min(1, Math.max(0, (positionMs - fadeStartMs) / duration));
@@ -148,11 +150,14 @@ export function lyricsStripFocus(startTimesMs, positionMs, fadeMs = LYRICS_FADE_
 }
 
 /**
- * How "current" a line is, 0 (not current) to 1 (current): the fade progress for the two lines in the fade.
+ * How "current" a line is, 0 (not current) to 1 (current): the fade progress for the two lines in the fade. Before the
+ * first line every line counts as current (1) except in the fade before the first line starts, where all lines but the
+ * first go 1 -> 0 and the first stays 1.
  * @param {{ current: number, incoming: number, progress: number }} focus from `lyricsStripFocus`
  * @param {number} index
  */
 export function lyricsLineWeight(focus, index) {
+  if (focus.current < 0) return focus.incoming < 0 || index === focus.incoming ? 1 : 1 - focus.progress;
   if (index === focus.current) return 1 - focus.progress;
   if (index === focus.incoming) return focus.progress;
   return 0;
