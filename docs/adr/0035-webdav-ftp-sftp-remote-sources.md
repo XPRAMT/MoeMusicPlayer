@@ -1,10 +1,25 @@
 ﻿# WebDAV、FTP、SFTP 遠端來源
 
-狀態：提案，未採納
+狀態：部分採納（2026-10-24 使用者決定：「先把 webdav 做完驗證完；sftp、ftps 之後有需要再做」）——P1 WebDAV 進行中；SFTP、FTPS 延後到有需要時；明文 FTP 不支援。
 
 日期：2026-10-24（Asia/Taipei）
 
 相關：ADR 0026（遠端來源，SMB／WebDAV）、ADR 0027（建庫效能）、ADR 0033（遺失檔案隱藏）
+
+## 0. 決定（2026-10-24）
+
+- **P1 WebDAV：進行中。** 實作與真實伺服器驗證見下方「0.1」。
+- **SFTP、FTPS：延後**，有需要時再依本文 §2.2、§2.3、§3 的計畫做；本文其餘段落保留為屆時的計畫。
+- **明文 FTP：不支援。** 理由：（1）不適合範圍讀取與平行讀取——每次 seek 都要 `REST` 加重開資料連線，播放與 16 執行緒讀標籤都會被往返次數拖垮；（2）`LIST` 格式沒有標準（Unix／DOS／各家 NAS 各異），檔名字元集不保證是 UTF-8；（3）被動模式的資料埠在 NAT、防火牆與手機網路下常出問題；（4）時間精度差（`LIST` 常只到分鐘，`MDTM` 不是每台都有），「讀取後被改動」的判斷不可靠；（5）沒有建立時間；（6）帳密明文傳送。主流 NAS（Synology、QNAP、TrueNAS、Unraid）都已提供 SMB、WebDAV 與 SFTP，FTP 沒有不可取代的用途。
+- **建立時間**：WebDAV 的 `creationdate` 是選用屬性，而且不一定是真的建立時間。實測 Apache 2.4.58 mod_dav_fs（Ubuntu 24.04，ext4）回報的是 inode 的 **ctime（狀態改變時間）**：對檔案 `chmod` 之後 `creationdate` 就跟著變，`stat` 的 Birth 不變（例：Birth 2026-10-24 00:53:41、chmod 後 Change 00:56:44，PROPFIND 的 `creationdate` 是 `2026-10-23T16:56:54Z`，也就是 Change）。所以不把 `creationdate` 當作建立時間顯示或儲存：`PROPFIND` 不要求它，`RemoteEntry.created_utc_100ns` 一律 `None`，歌曲資訊面板的建立時間對 WebDAV 留空。
+
+### 0.1 P1 WebDAV 的狀態
+
+- 已補強（`crates/player-remote/src/webdav.rs`）：每個請求有自己的時限（`request_timeout`：10 秒＋每 64 KiB 一秒，上限 30 分鐘；不再是整個 client 共用 60 秒，所以上傳大檔不會被截斷），連線停住時約 10–14 秒回報 `Network`，**停住的讀取不再於 `read_at` 內重試**（只重試 2 秒內就失敗的，例如伺服器已關掉的 keep-alive 連線），交給預取的退避重試與 3 分鐘後的「伺服器無法連線」暫停（ADR 0026）；5xx 視為可重試的網路錯誤；`TCP_NODELAY`、TCP keep-alive、連線池（每台伺服器最多 32 條閒置連線、閒置 4 秒丟棄，小於 Apache 預設 `KeepAliveTimeout` 5 秒）；帳號的基底路徑也做百分比編碼（含 `#`、`%`、空白、中日文）；自簽憑證被拒時正確回報為 `RemoteError::Tls`（以前沿著錯誤鏈看不到 rustls 錯誤，回報成網路錯誤，釘選提示永遠不會出現）。
+- 介面：新增遠端伺服器可選 WebDAV（`WEBDAV_ENTRY_VISIBLE = true`）；WebDAV 路徑旁有「選擇資料夾」（從伺服器 `/` 瀏覽，所在資料夾即基底路徑）；https 遇到不受信任的憑證時，測試連線、選擇資料夾或儲存前會跳出「信任這個伺服器的憑證？」並顯示 SHA-256 指紋，信任後帳號以 `TlsMode::Pinned` 儲存；已釘選的帳號憑證改變時不提示，照舊回報「伺服器的憑證與你先前接受的不同」。純 http 的行為不變。修正：編輯已釘選的帳號以前會把 `tls` 存回 `verify`、讓釘選消失。
+- `settings.json` 遇到不認得的 `protocol`（例如之後版本的 `sftp`）不再整個載入失敗：`RemoteProtocol::Unsupported`（`#[serde(other)]`），帳號保留、列出但不能連線；再次儲存時寫成 `unsupported`（原名不保留）。
+- 真實伺服器：Apache mod_dav 測試機已依 §5A 建好，測試 `crates/player-remote/tests/real_webdav.rs`（環境變數見該檔開頭）。本機 WSL 網路模式退回 Consomme（不是 mirrored），Windows 連不到 WSL 的埠，測試經使用者空間的 stdio 轉送程式進行，**效能數字只供參考**。
+- 尚未驗證：Release GUI（CDP）、手機／平板、區網其他裝置、Nextcloud 等其他 WebDAV 伺服器、真實憑證更換（以錯誤的釘選值代替）。
 
 ## 1. 現況
 
@@ -131,6 +146,8 @@
 - 啟停：Ubuntu 24.04 WSL 預設啟用 systemd，每個服務做成獨立 unit（`moemusic-webdav.service`、`moemusic-ftp.service`、`moemusic-sftp.service`），**不 enable**（不開機自動啟動），測試時 `sudo systemctl start …`、結束 `stop`；不修改系統預設的 apache2／vsftpd／ssh 服務（Ubuntu 套件安裝後會自動啟用預設服務，安裝後立即 `sudo systemctl disable --now apache2 vsftpd ssh`——若使用者本來就在用 ssh 則不關，改確認我們的實例不影響它）。
 
 ### WebDAV：Apache httpd ＋ mod_dav
+
+**已安裝（2026-10-24）**，在 WSL 發行版 `Ubuntu`（24.04；預設發行版是 Debian，兩者同一個 VM、網路相同）：設定 `/etc/moemusic-test/webdav/httpd.conf`、unit `moemusic-webdav.service`（不 enable）、https 18443、自簽憑證 `/etc/moemusic-test/tls.crt`（另有 `tls-alt.*`）；`/music`（Basic，唯讀：只允許 GET／HEAD／OPTIONS／PROPFIND）、`/scratch`（Basic，可寫，`/srv/moemusic-scratch`，擁有者 www-data）、`/digest`（Digest，唯讀，同 `/music`）；只允許 192.168.1.0/24、127.0.0.1、::1，無匿名。與下方計畫的差異：`DavLockDB` 放 `/var/lib/moemusic-webdav/`（`/run/moemusic-webdav/` 屬 root，www-data 寫不進去，PUT 會 500）；為讀取 Samba 的唯讀音樂（`root:moe_test`、0640），把 `www-data` 加入 `moe_test` 群組，不改那些檔案的權限；未載入 autoindex，所以對資料夾 GET 是 404（PROPFIND 正常）。測試帳號密碼只在 repo 外的憑證檔。WSL 的 `127.0.0.1` 在這個網路模式下連不到自己的服務，WSL 內請用 192.168.1.200；Windows 端經 stdio 轉送（見 0.1）。
 
 選 Apache 而非 nginx：nginx 內建 `ngx_http_dav_module` 不支援 PROPFIND（需第三方 `dav-ext`），LOCK 也不完整；Apache mod_dav_fs 是最常見的參考實作，PROPFIND 有 `creationdate`、支援 MOVE Overwrite、Range，且 Basic／Digest 都有現成模組。
 
