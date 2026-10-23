@@ -97,7 +97,7 @@ export function getLyricsLineEstimate(line, preferences) {
   const slots = Number(hasPrimary) + Number(hasTranslation) + Number(hasRomanization);
   if (!slots) return 0;
   return (hasPrimary ? preferences.primaryFontSizePx * (preferences.primaryLineHeight ?? LYRICS_PRIMARY_LINE_HEIGHT) : 0)
-    + (Number(hasTranslation) + Number(hasRomanization)) * preferences.auxiliaryFontSizePx * (preferences.auxiliaryLineHeight ?? LYRICS_AUXILIARY_LINE_HEIGHT)
+    + (Number(hasTranslation) + Number(hasRomanization)) * (preferences.primaryFontSizePx * preferences.auxiliaryScalePercent / 100) * (preferences.auxiliaryLineHeight ?? LYRICS_AUXILIARY_LINE_HEIGHT)
     + Math.max(0, slots - 1) * LYRICS_ROW_GAP_PX
     + LYRICS_ROW_VERTICAL_PADDING_PX + LYRICS_ROW_BORDER_PX;
 }

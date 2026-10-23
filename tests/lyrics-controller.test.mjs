@@ -15,6 +15,7 @@ import {
   getDisplayActiveLyricIndex,
   getLyricLineOpacity,
   normalizeLyricsPreferences,
+  lyricsAuxiliaryFontSizePx,
 } from '../src/lib/lyrics-preferences.js';
 import { createLyricsController } from '../src/lib/lyrics-controller.js';
 import { getCandidatePresentation } from '../src/lib/lyrics-candidate-preview.js';
@@ -139,7 +140,7 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     showRomanization: false,
     inactiveOpacityPercent: 10,
     primaryFontSizePx: 50,
-    auxiliaryFontSizePx: 4,
+    auxiliaryScalePercent: 4,
     lineGapPx: 50,
     textEffect: 'shadow',
     simplifiedToTraditional: true,
@@ -148,7 +149,17 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
   assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
   assert.equal(normalizeLyricsPreferences({ lineGapPx: -1 }).lineGapPx, 0);
   assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: -1 }).primaryFontSizePx, 1);
-  assert.equal(normalizeLyricsPreferences({ auxiliaryFontSizePx: -1 }).auxiliaryFontSizePx, 1);
+  assert.equal(normalizeLyricsPreferences({ auxiliaryScalePercent: -1 }).auxiliaryScalePercent, 1);
+  assert.equal(normalizeLyricsPreferences({ auxiliaryScalePercent: 250 }).auxiliaryScalePercent, 100);
+  assert.equal(DEFAULT_LYRICS_PREFERENCES.auxiliaryScalePercent, 90, 'default matches the old 18 / 20 px');
+  // Old saves stored an absolute size: round(aux / primary × 100), clamped to 1–100.
+  assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: 20, auxiliaryFontSizePx: 18 }).auxiliaryScalePercent, 90);
+  assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: 14, auxiliaryFontSizePx: 10 }).auxiliaryScalePercent, 71);
+  assert.equal(normalizeLyricsPreferences({ auxiliaryFontSizePx: 18 }).auxiliaryScalePercent, 90, 'missing primary uses the default 20 px');
+  assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: 20, auxiliaryFontSizePx: 40 }).auxiliaryScalePercent, 100);
+  assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: 20, auxiliaryFontSizePx: 18, auxiliaryScalePercent: 55 }).auxiliaryScalePercent, 55);
+  assert.ok(!('auxiliaryFontSizePx' in normalizeLyricsPreferences({ auxiliaryFontSizePx: 18 })));
+  assert.equal(lyricsAuxiliaryFontSizePx({ primaryFontSizePx: 20, auxiliaryScalePercent: 90 }), 18);
   assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: 0 }).primaryFontSizePx, 1, 'the font sizes start at 1');
 });
 
@@ -168,8 +179,8 @@ test('variable row geometry adds only nonempty enabled auxiliary lines', () => {
   ];
   const layout = buildLyricsLayout(rows, base, 24);
   const primary = base.primaryFontSizePx * 1.35 + 6;
-  const oneAux = primary + 2 + base.auxiliaryFontSizePx * 1.35;
-  const twoAux = primary + 4 + 2 * base.auxiliaryFontSizePx * 1.35;
+  const oneAux = primary + 2 + (base.primaryFontSizePx * base.auxiliaryScalePercent / 100) * 1.35;
+  const twoAux = primary + 4 + 2 * (base.primaryFontSizePx * base.auxiliaryScalePercent / 100) * 1.35;
 
   assert.equal(layout.heights[0], primary);
   assert.equal(layout.heights[1], primary);

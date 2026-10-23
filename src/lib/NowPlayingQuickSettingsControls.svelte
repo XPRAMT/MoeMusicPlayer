@@ -1,8 +1,14 @@
+<script lang="ts" module>
+  let nextLyricsIdPrefix = 0;
+</script>
+
 <script lang="ts">
   import { tr } from './i18n.js';
   import type { BackdropOpacityCalculation, LyricsPreferences, NowPlayingAppearancePreferences, NowPlayingLayout } from './ipc';
   import NowPlayingLayoutSwitch from './NowPlayingLayoutSwitch.svelte';
   import OpacityCalculation from './OpacityCalculation.svelte';
+  import LyricsLookSettings from './LyricsLookSettings.svelte';
+
 
   interface Props {
     layout: NowPlayingLayout;
@@ -30,6 +36,7 @@
     groups = 'both',
     showGroupHeading = true,
   }: Props = $props();
+  const lyricsIdPrefix = `lyrics-general-${nextLyricsIdPrefix++}`;
 </script>
 
 <div class="quick-settings-controls">
@@ -91,60 +98,51 @@
         <button class="outline-button" type="button" onclick={onLyricsReset}>{tr("恢復預設")}</button>
       </div>
     {/if}
-    <label class="lyrics-preference-toggle">
-      <input type="checkbox" checked={lyrics.showTranslation} onchange={(event) => onLyricsChange({ showTranslation: event.currentTarget.checked }, true)} />
-      <span><strong>{tr("顯示譯文")}</strong><small>{tr("在每行原文下方顯示翻譯")}</small></span>
-    </label>
-    <label class="lyrics-preference-toggle">
-      <input type="checkbox" checked={lyrics.showRomanization} onchange={(event) => onLyricsChange({ showRomanization: event.currentTarget.checked }, true)} />
-      <span><strong>{tr("顯示羅馬拼音")}</strong><small>{tr("在每行原文下方顯示拼音")}</small></span>
-    </label>
-    <label class="lyrics-preference-toggle">
-      <input type="checkbox" checked={lyrics.simplifiedToTraditional} onchange={(event) => onLyricsChange({ simplifiedToTraditional: event.currentTarget.checked }, true)} />
-      <span><strong>{tr("簡體轉繁體")}</strong><small>{tr("播放時把整首歌詞轉成繁體字形，不改用詞，也不另存檔案")}</small></span>
-    </label>
-    <div class="cover-corner-setting" role="group" aria-labelledby="lyrics-text-effect-label">
-      <span id="lyrics-text-effect-label" class="cover-corner-setting-label"><strong>{tr("歌詞外觀")}</strong></span>
-      <div class="layout-choice-row lyrics-text-effect-row">
-        <button
-          type="button"
-          aria-label={tr("歌詞陰影")}
-          aria-pressed={lyrics.textEffect === 'shadow'}
-          class:chosen={lyrics.textEffect === 'shadow'}
-          onclick={() => onLyricsChange({ textEffect: 'shadow' }, true)}
-        >{tr("陰影")}</button>
-        <button
-          type="button"
-          aria-label={tr("歌詞描邊")}
-          aria-pressed={lyrics.textEffect === 'stroke'}
-          class:chosen={lyrics.textEffect === 'stroke'}
-          onclick={() => onLyricsChange({ textEffect: 'stroke' }, true)}
-        >{tr("描邊")}</button>
-        <button
-          type="button"
-          aria-label={tr("關閉歌詞外觀")}
-          aria-pressed={lyrics.textEffect === 'none'}
-          class:chosen={lyrics.textEffect === 'none'}
-          onclick={() => onLyricsChange({ textEffect: 'none' }, true)}
-        >{tr("關閉")}</button>
-      </div>
-    </div>
-    <label class="lyrics-preference-range">
-      <span><strong>{tr("非目前歌詞透明度")}</strong><output>{lyrics.inactiveOpacityPercent}%</output></span>
-      <input type="range" min="10" max="100" step="1" value={lyrics.inactiveOpacityPercent} aria-label={tr("非目前歌詞透明度")} oninput={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) }, true)} />
-    </label>
-    <label class="lyrics-preference-range">
-      <span><strong>{tr("原文字級")}</strong><output>{lyrics.primaryFontSizePx}px</output></span>
-      <input type="range" min="1" max="50" step="1" value={lyrics.primaryFontSizePx} aria-label={tr("原文字級")} oninput={(event) => onLyricsChange({ primaryFontSizePx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ primaryFontSizePx: Number(event.currentTarget.value) }, true)} />
-    </label>
-    <label class="lyrics-preference-range">
-      <span><strong>{tr("譯文與羅馬拼音字級")}</strong><output>{lyrics.auxiliaryFontSizePx}px</output></span>
-      <input type="range" min="1" max="50" step="1" value={lyrics.auxiliaryFontSizePx} aria-label={tr("譯文與羅馬拼音字級")} oninput={(event) => onLyricsChange({ auxiliaryFontSizePx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ auxiliaryFontSizePx: Number(event.currentTarget.value) }, true)} />
-    </label>
-    <label class="lyrics-preference-range">
-      <span><strong>{tr("句間距")}</strong><output>{lyrics.lineGapPx}px</output></span>
-      <input type="range" min="0" max="50" step="1" value={lyrics.lineGapPx} aria-label={tr("歌詞句間距")} oninput={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) }, true)} />
-    </label>
+    <LyricsLookSettings
+      settings={{
+        showTranslation: lyrics.showTranslation,
+        fontSizePx: lyrics.primaryFontSizePx,
+        translationScalePercent: lyrics.auxiliaryScalePercent,
+        textEffect: lyrics.textEffect,
+      }}
+      onChange={(patch) => onLyricsChange({
+        ...(patch.showTranslation !== undefined ? { showTranslation: patch.showTranslation } : {}),
+        ...(patch.fontSizePx !== undefined ? { primaryFontSizePx: patch.fontSizePx } : {}),
+        ...(patch.translationScalePercent !== undefined ? { auxiliaryScalePercent: patch.translationScalePercent } : {}),
+        ...(patch.textEffect !== undefined ? { textEffect: patch.textEffect } : {}),
+      })}
+      idPrefix={lyricsIdPrefix}
+      fontAriaLabel={tr("歌詞字體大小")}
+      translationAriaLabel={tr("譯文與羅馬拼音大小（相對原文）")}
+      translationActive={lyrics.showTranslation || lyrics.showRomanization}
+      withAlign={false}
+      withColor={false}
+      withOpacity={false}
+      withAnimation={false}
+    >
+      {#snippet displayExtra()}
+        <label class="lyrics-preference-toggle">
+          <input type="checkbox" checked={lyrics.showRomanization} onchange={(event) => onLyricsChange({ showRomanization: event.currentTarget.checked }, true)} />
+          <span><strong>{tr("顯示羅馬拼音")}</strong><small>{tr("在每行原文下方顯示拼音")}</small></span>
+        </label>
+        <label class="lyrics-preference-toggle">
+          <input type="checkbox" checked={lyrics.simplifiedToTraditional} onchange={(event) => onLyricsChange({ simplifiedToTraditional: event.currentTarget.checked }, true)} />
+          <span><strong>{tr("簡體轉繁體")}</strong><small>{tr("播放時把整首歌詞轉成繁體字形，不改用詞，也不另存檔案")}</small></span>
+        </label>
+      {/snippet}
+      {#snippet sizeExtra()}
+        <label class="lyrics-preference-range">
+          <span><strong>{tr("句間距")}</strong><output>{lyrics.lineGapPx}px</output></span>
+          <input type="range" min="0" max="50" step="1" value={lyrics.lineGapPx} aria-label={tr("歌詞句間距")} oninput={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) }, true)} />
+        </label>
+      {/snippet}
+      {#snippet lookExtra()}
+        <label class="lyrics-preference-range">
+          <span><strong>{tr("非目前歌詞透明度")}</strong><output>{lyrics.inactiveOpacityPercent}%</output></span>
+          <input type="range" min="10" max="100" step="1" value={lyrics.inactiveOpacityPercent} aria-label={tr("非目前歌詞透明度")} oninput={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) }, true)} />
+        </label>
+      {/snippet}
+    </LyricsLookSettings>
   </section>
   {/if}
 </div>

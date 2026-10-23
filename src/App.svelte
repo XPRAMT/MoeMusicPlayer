@@ -4604,10 +4604,21 @@
                     </div>
                   </div>
                   <div class="taskbar-lyrics-settings" role="group" aria-label={tr("工作列歌詞設定")}>
-                    <label class="lyrics-preference-toggle">
-                      <input type="checkbox" checked={taskbarLyricsSettings.enabled} onchange={(event) => setTaskbarLyricsSettings({ enabled: event.currentTarget.checked })} />
-                      <span><strong>{tr("顯示工作列歌詞")}</strong><small>{tr("在工作列空白處繪製目前播放的歌詞")}</small></span>
-                    </label>
+                    <LyricsLookSettings
+                      settings={taskbarLyricsSettings}
+                      onChange={setTaskbarLyricsSettings}
+                      idPrefix="{scope}taskbar-lyrics"
+                      fontAriaLabel={tr("工作列歌詞字體大小")}
+                      colorAriaLabel={tr("工作列歌詞顏色")}
+                      autoColorHint={tr("關閉時依工作列的深淺色自動使用黑色或白色")}
+                    >
+                      {#snippet enable()}
+                        <label class="lyrics-preference-toggle">
+                          <input type="checkbox" checked={taskbarLyricsSettings.enabled} onchange={(event) => setTaskbarLyricsSettings({ enabled: event.currentTarget.checked })} />
+                          <span><strong>{tr("啟用")}</strong><small>{tr("在工作列空白處繪製目前播放的歌詞")}</small></span>
+                        </label>
+                      {/snippet}
+                      {#snippet position()}
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}taskbar-lyrics-display-label">
                       <span id="{scope}taskbar-lyrics-display-label" class="cover-corner-setting-label"><strong>{tr("顯示在哪些螢幕")}</strong></span>
                       <div class="layout-choice-row lyrics-text-effect-row">
@@ -4636,14 +4647,8 @@
                         <small class="taskbar-lyrics-monitor-hint">{tr("編號依 Windows 設定 → 系統 → 顯示器的順序（按「識別」可確認）；暫時沒接上的螢幕仍保留選擇。")}</small>
                       {/if}
                     </div>
-                    <LyricsLookSettings
-                      settings={taskbarLyricsSettings}
-                      onChange={setTaskbarLyricsSettings}
-                      idPrefix="{scope}taskbar-lyrics"
-                      fontAriaLabel={tr("工作列歌詞字體大小")}
-                      colorAriaLabel={tr("工作列歌詞顏色")}
-                      autoColorHint={tr("關閉時依工作列的深淺色自動使用黑色或白色")}
-                    />
+                      {/snippet}
+                    </LyricsLookSettings>
                     {#if taskbarLyricsError}
                       <p class="settings-preference-status" role="status">{taskbarLyricsError}</p>
                     {/if}
@@ -4659,10 +4664,22 @@
                     </div>
                   </div>
                   <div class="taskbar-lyrics-settings" role="group" aria-label={tr("浮動歌詞設定")}>
-                    <label class="lyrics-preference-toggle">
-                      <input type="checkbox" checked={floatingLyricsSettings.enabled} onchange={(event) => setFloatingLyricsSettings({ enabled: event.currentTarget.checked })} />
-                      <span><strong>{tr("顯示浮動歌詞")}</strong><small>{tr("可以和工作列歌詞同時開啟")}</small></span>
-                    </label>
+                    <LyricsLookSettings
+                      settings={floatingLyricsSettings}
+                      onChange={setFloatingLyricsSettings}
+                      idPrefix="{scope}floating-lyrics"
+                      fontAriaLabel={tr("浮動歌詞字體大小")}
+                      colorAriaLabel={tr("浮動歌詞顏色")}
+                      autoColorHint={tr("關閉時使用白色")}
+                      alignLabel={tr("文字排版")}
+                    >
+                      {#snippet enable()}
+                        <label class="lyrics-preference-toggle">
+                          <input type="checkbox" checked={floatingLyricsSettings.enabled} onchange={(event) => setFloatingLyricsSettings({ enabled: event.currentTarget.checked })} />
+                          <span><strong>{tr("啟用")}</strong><small>{tr("可以和工作列歌詞同時開啟")}</small></span>
+                        </label>
+                      {/snippet}
+                      {#snippet displayExtra()}
                     {#if capabilities?.platform === 'android'}
                       <div class="cover-corner-setting">
                         <span class="cover-corner-setting-label"><strong>{tr("顯示在其他應用程式上層")}</strong></span>
@@ -4674,7 +4691,8 @@
                         {/if}
                       </div>
                     {/if}
-
+                      {/snippet}
+                      {#snippet position()}
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}floating-lyrics-panel-label">
                       <span id="{scope}floating-lyrics-panel-label" class="cover-corner-setting-label"><strong>{tr("面板")}</strong></span>
                       <div class="layout-choice-row lyrics-text-effect-row floating-lyrics-panel-row">
@@ -4727,15 +4745,8 @@
                         />
                       </label>
                     </div>
-                    <LyricsLookSettings
-                      settings={floatingLyricsSettings}
-                      onChange={setFloatingLyricsSettings}
-                      idPrefix="{scope}floating-lyrics"
-                      fontAriaLabel={tr("浮動歌詞字體大小")}
-                      colorAriaLabel={tr("浮動歌詞顏色")}
-                      autoColorHint={tr("關閉時使用白色")}
-                      alignLabel={tr("文字排版")}
-                    />
+                      {/snippet}
+                    </LyricsLookSettings>
                     {#if floatingLyricsError}
                       <p class="settings-preference-status" role="status">{floatingLyricsError}</p>
                     {/if}

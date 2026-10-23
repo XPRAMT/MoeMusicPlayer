@@ -179,20 +179,74 @@ impl Default for ThemeSettings {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "RawLyricsPreferences")]
 pub struct LyricsPreferences {
     pub show_translation: bool,
     pub show_romanization: bool,
     pub inactive_opacity_percent: u8,
     pub primary_font_size_px: u8,
-    pub auxiliary_font_size_px: u8,
-    #[serde(default = "default_line_gap_px")]
+    /// Translation and romanization size as a percent of `primary_font_size_px` (1–100).
+    pub auxiliary_scale_percent: u8,
     pub line_gap_px: u8,
-    #[serde(default = "default_lyrics_text_effect")]
     pub text_effect: LyricsTextEffect,
     /// Display-only Simplified-to-Traditional conversion. Not written into lyric files.
-    #[serde(default = "default_simplified_to_traditional")]
     pub simplified_to_traditional: bool,
+}
+
+/// Wire form of [`LyricsPreferences`]: every field is optional so older files load, and
+/// the former absolute `auxiliaryFontSizePx` is migrated to `auxiliaryScalePercent`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawLyricsPreferences {
+    show_translation: Option<bool>,
+    show_romanization: Option<bool>,
+    inactive_opacity_percent: Option<u8>,
+    primary_font_size_px: Option<u8>,
+    auxiliary_scale_percent: Option<u8>,
+    auxiliary_font_size_px: Option<u8>,
+    line_gap_px: Option<u8>,
+    text_effect: Option<LyricsTextEffect>,
+    simplified_to_traditional: Option<bool>,
+}
+
+/// round(auxiliary px / primary px × 100), clamped to 1–100 (18 / 20 → 90).
+fn migrate_auxiliary_scale_percent(primary_px: u8, auxiliary_px: u8) -> u8 {
+    let primary = f64::from(primary_px.max(1));
+    let scale = (f64::from(auxiliary_px) / primary * 100.0).round();
+    scale.clamp(1.0, 100.0) as u8
+}
+
+fn default_auxiliary_scale_percent() -> u8 {
+    90
+}
+
+impl From<RawLyricsPreferences> for LyricsPreferences {
+    fn from(raw: RawLyricsPreferences) -> Self {
+        let defaults = Self::default();
+        let primary_font_size_px = raw
+            .primary_font_size_px
+            .unwrap_or(defaults.primary_font_size_px);
+        let auxiliary_scale_percent =
+            match (raw.auxiliary_scale_percent, raw.auxiliary_font_size_px) {
+                (Some(scale), _) => scale,
+                (None, Some(px)) => migrate_auxiliary_scale_percent(primary_font_size_px, px),
+                (None, None) => defaults.auxiliary_scale_percent,
+            };
+        Self {
+            show_translation: raw.show_translation.unwrap_or(defaults.show_translation),
+            show_romanization: raw.show_romanization.unwrap_or(defaults.show_romanization),
+            inactive_opacity_percent: raw
+                .inactive_opacity_percent
+                .unwrap_or(defaults.inactive_opacity_percent),
+            primary_font_size_px,
+            auxiliary_scale_percent,
+            line_gap_px: raw.line_gap_px.unwrap_or(defaults.line_gap_px),
+            text_effect: raw.text_effect.unwrap_or(defaults.text_effect),
+            simplified_to_traditional: raw
+                .simplified_to_traditional
+                .unwrap_or(defaults.simplified_to_traditional),
+        }
+    }
 }
 
 fn default_simplified_to_traditional() -> bool {
@@ -210,7 +264,7 @@ impl Default for LyricsPreferences {
             show_romanization: false,
             inactive_opacity_percent: 50,
             primary_font_size_px: 20,
-            auxiliary_font_size_px: 18,
+            auxiliary_scale_percent: default_auxiliary_scale_percent(),
             line_gap_px: default_line_gap_px(),
             text_effect: default_lyrics_text_effect(),
             simplified_to_traditional: default_simplified_to_traditional(),
@@ -230,9 +284,9 @@ impl LyricsPreferences {
                 "primaryFontSizePx must be between 1 and 50".into(),
             ));
         }
-        if !(1..=50).contains(&self.auxiliary_font_size_px) {
+        if !(1..=100).contains(&self.auxiliary_scale_percent) {
             return Err(SettingsError::InvalidData(
-                "auxiliaryFontSizePx must be between 1 and 50".into(),
+                "auxiliaryScalePercent must be between 1 and 100".into(),
             ));
         }
         if self.line_gap_px > 50 {
@@ -1121,7 +1175,11 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         return defaults;
     };
     let field = |name: &str| object.get(name).cloned();
-    let flag = |name: &str, fallback: bool| field(name).and_then(|value| value.as_bool()).unwrap_or(fallback);
+    let flag = |name: &str, fallback: bool| {
+        field(name)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(fallback)
+    };
     let byte = |name: &str, fallback: u8| {
         field(name)
             .and_then(|value| value.as_u64())
@@ -1133,7 +1191,10 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.align),
         font_size_px: byte("fontSizePx", defaults.font_size_px),
-        translation_scale_percent: byte("translationScalePercent", defaults.translation_scale_percent),
+        translation_scale_percent: byte(
+            "translationScalePercent",
+            defaults.translation_scale_percent,
+        ),
         use_custom_color: flag("useCustomColor", defaults.use_custom_color),
         custom_color: field("customColor")
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -1145,10 +1206,14 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         opacity_percent: byte("opacityPercent", defaults.opacity_percent),
         width_px: field("widthPx")
             .and_then(|value| value.as_u64())
-            .map_or(defaults.width_px, |value| value.min(u64::from(u16::MAX)) as u16),
+            .map_or(defaults.width_px, |value| {
+                value.min(u64::from(u16::MAX)) as u16
+            }),
         landscape_width_px: field("landscapeWidthPx")
             .and_then(|value| value.as_u64())
-            .map_or(defaults.landscape_width_px, |value| value.min(u64::from(u16::MAX)) as u16),
+            .map_or(defaults.landscape_width_px, |value| {
+                value.min(u64::from(u16::MAX)) as u16
+            }),
         animation: field("animation")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.animation),
@@ -2639,8 +2704,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     // The font sizes used to start at 0; they now start at 1.
     settings.lyrics_preferences.primary_font_size_px =
         settings.lyrics_preferences.primary_font_size_px.max(1);
-    settings.lyrics_preferences.auxiliary_font_size_px =
-        settings.lyrics_preferences.auxiliary_font_size_px.max(1);
+    settings.lyrics_preferences.auxiliary_scale_percent = settings
+        .lyrics_preferences
+        .auxiliary_scale_percent
+        .clamp(1, 100);
     settings.validate()?;
     Ok((
         settings,
@@ -3426,7 +3493,10 @@ mod tests {
         assert!(!defaults.locked);
         assert_eq!(defaults.position, None);
         assert_eq!(lenient_floating_lyrics(None), defaults);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!("x"))), defaults);
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!("x"))),
+            defaults
+        );
         let parsed = lenient_floating_lyrics(Some(serde_json::json!({
             "enabled": true,
             "align": "right",
@@ -3441,17 +3511,30 @@ mod tests {
         })));
         assert!(parsed.enabled && parsed.locked && parsed.use_custom_color);
         assert_eq!(parsed.align, TaskbarLyricsAlign::Right);
-        assert_eq!(parsed.font_size_px, TaskbarLyricsSettings::FONT_SIZE_RANGE_PX.1);
+        assert_eq!(
+            parsed.font_size_px,
+            TaskbarLyricsSettings::FONT_SIZE_RANGE_PX.1
+        );
         assert_eq!(parsed.translation_scale_percent, 1);
         assert_eq!(parsed.custom_color, "#abcdef");
         assert_eq!(parsed.text_effect, LyricsTextEffect::Stroke);
-        assert_eq!(parsed.position, Some(FloatingLyricsPosition { x: -1200, y: 300 }));
+        assert_eq!(
+            parsed.position,
+            Some(FloatingLyricsPosition { x: -1200, y: 300 })
+        );
         assert_eq!(parsed.show_translation, defaults.show_translation);
-        let far = lenient_floating_lyrics(Some(serde_json::json!({"position": {"x": 5_000_000, "y": 0}})));
+        let far = lenient_floating_lyrics(Some(
+            serde_json::json!({"position": {"x": 5_000_000, "y": 0}}),
+        ));
         assert_eq!(far.position, None);
-        let broken = lenient_floating_lyrics(Some(serde_json::json!({"position": "here", "customColor": "red"})));
+        let broken = lenient_floating_lyrics(Some(
+            serde_json::json!({"position": "here", "customColor": "red"}),
+        ));
         assert_eq!(broken.position, None);
-        assert_eq!(broken.custom_color, TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR);
+        assert_eq!(
+            broken.custom_color,
+            TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR
+        );
         let json = serde_json::to_value(&parsed).unwrap();
         assert_eq!(lenient_floating_lyrics(Some(json)), parsed);
     }
@@ -3460,7 +3543,11 @@ mod tests {
     fn older_settings_files_get_floating_lyrics_off_without_touching_taskbar_lyrics() {
         let directory = test_directory("floating-lyrics-migration");
         let path = directory.join("settings.json");
-        std::fs::write(&path, r#"{"taskbarLyrics":{"enabled":true,"fontSizePx":18}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"taskbarLyrics":{"enabled":true,"fontSizePx":18}}"#,
+        )
+        .unwrap();
         let store = SettingsStore::open(&path, AppSettings::default()).unwrap();
         let snapshot = store.snapshot().unwrap();
         assert_eq!(snapshot.floating_lyrics, FloatingLyricsSettings::default());
@@ -3549,13 +3636,31 @@ mod tests {
         let floating = lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 55})));
         assert_eq!(floating.opacity_percent, 55);
         assert_eq!(lenient_floating_lyrics(None).opacity_percent, 100);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent, 3);
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent,
+            3
+        );
         assert_eq!(lenient_floating_lyrics(None).width_px, 800);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 50}))).width_px, 100);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 99999}))).width_px, 8192);
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 1234}))).width_px, 1234);
-        let both = lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 600, "landscapeWidthPx": 50})));
-        assert_eq!((both.width_px, both.landscape_width_px), (600, 100), "saved apart");
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 50}))).width_px,
+            100
+        );
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 99999}))).width_px,
+            8192
+        );
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 1234}))).width_px,
+            1234
+        );
+        let both = lenient_floating_lyrics(Some(
+            serde_json::json!({"widthPx": 600, "landscapeWidthPx": 50}),
+        ));
+        assert_eq!(
+            (both.width_px, both.landscape_width_px),
+            (600, 100),
+            "saved apart"
+        );
         assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!(7))), defaults);
         assert_eq!(lenient_taskbar_lyrics(None), defaults);
 
@@ -3591,7 +3696,10 @@ mod tests {
         assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
         assert_eq!(persisted["taskbarLyrics"]["animation"], "continuous");
         // Animation: old files and junk keep the one-line look; taskbar and floating are saved apart.
-        assert_eq!(lenient_taskbar_lyrics(Some(serde_json::json!({}))).animation, LyricsAnimation::None);
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({}))).animation,
+            LyricsAnimation::None
+        );
         assert_eq!(
             lenient_taskbar_lyrics(Some(serde_json::json!({"animation": "bounce"}))).animation,
             LyricsAnimation::None
@@ -3600,7 +3708,10 @@ mod tests {
             lenient_floating_lyrics(Some(serde_json::json!({"animation": "continuous"}))).animation,
             LyricsAnimation::Continuous
         );
-        assert_eq!(lenient_floating_lyrics(Some(serde_json::json!({"animation": 3}))).animation, LyricsAnimation::None);
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"animation": 3}))).animation,
+            LyricsAnimation::None
+        );
         assert_eq!(persisted["taskbarLyrics"]["displayMode"], "custom");
         assert_eq!(
             persisted["taskbarLyrics"]["customMonitors"][0],
@@ -4062,7 +4173,7 @@ mod tests {
                 show_romanization: false,
                 inactive_opacity_percent: 50,
                 primary_font_size_px: 20,
-                auxiliary_font_size_px: 18,
+                auxiliary_scale_percent: 90,
                 line_gap_px: 10,
                 text_effect: LyricsTextEffect::Shadow,
                 simplified_to_traditional: true,
@@ -4074,7 +4185,8 @@ mod tests {
         assert_eq!(value["showRomanization"], false);
         assert_eq!(value["inactiveOpacityPercent"], 50);
         assert_eq!(value["primaryFontSizePx"], 20);
-        assert_eq!(value["auxiliaryFontSizePx"], 18);
+        assert_eq!(value["auxiliaryScalePercent"], 90);
+        assert!(value.get("auxiliaryFontSizePx").is_none());
         assert_eq!(value["lineGapPx"], 10);
         assert_eq!(value["textEffect"], "shadow");
         assert_eq!(value["simplifiedToTraditional"], true);
@@ -4101,21 +4213,21 @@ mod tests {
         let mut minimum = LyricsPreferences {
             inactive_opacity_percent: 10,
             primary_font_size_px: 1,
-            auxiliary_font_size_px: 1,
+            auxiliary_scale_percent: 1,
             ..LyricsPreferences::default()
         };
         minimum.validate().expect("accept lower bounds");
         minimum.primary_font_size_px = 0;
         assert!(minimum.validate().is_err(), "the font sizes start at 1");
         minimum.primary_font_size_px = 1;
-        minimum.auxiliary_font_size_px = 0;
-        assert!(minimum.validate().is_err(), "the font sizes start at 1");
-        minimum.auxiliary_font_size_px = 1;
+        minimum.auxiliary_scale_percent = 0;
+        assert!(minimum.validate().is_err(), "the scale starts at 1%");
+        minimum.auxiliary_scale_percent = 1;
 
         let maximum = LyricsPreferences {
             inactive_opacity_percent: 100,
             primary_font_size_px: 50,
-            auxiliary_font_size_px: 50,
+            auxiliary_scale_percent: 100,
             ..LyricsPreferences::default()
         };
         maximum.validate().expect("accept upper bounds");
@@ -4140,8 +4252,30 @@ mod tests {
         assert!(minimum.validate().is_err());
 
         minimum.primary_font_size_px = 14;
-        minimum.auxiliary_font_size_px = 51;
+        minimum.auxiliary_scale_percent = 101;
         assert!(minimum.validate().is_err());
+    }
+
+    #[test]
+    fn old_absolute_auxiliary_font_size_migrates_to_a_percent_of_the_primary() {
+        let load =
+            |json: serde_json::Value| serde_json::from_value::<LyricsPreferences>(json).unwrap();
+        let old = load(serde_json::json!({"primaryFontSizePx": 20, "auxiliaryFontSizePx": 18}));
+        assert_eq!(old.auxiliary_scale_percent, 90, "18 / 20 -> 90%");
+        assert_eq!(old.primary_font_size_px, 20);
+        let small = load(serde_json::json!({"primaryFontSizePx": 14, "auxiliaryFontSizePx": 10}));
+        assert_eq!(small.auxiliary_scale_percent, 71, "round(10 / 14 * 100)");
+        let larger = load(serde_json::json!({"primaryFontSizePx": 20, "auxiliaryFontSizePx": 40}));
+        assert_eq!(
+            larger.auxiliary_scale_percent, 100,
+            "clamped to the 100% maximum"
+        );
+        let new_wins = load(
+            serde_json::json!({"primaryFontSizePx": 20, "auxiliaryFontSizePx": 18, "auxiliaryScalePercent": 55}),
+        );
+        assert_eq!(new_wins.auxiliary_scale_percent, 55);
+        assert_eq!(load(serde_json::json!({})), LyricsPreferences::default());
+        assert_eq!(migrate_auxiliary_scale_percent(0, 0), 1);
     }
 
     #[test]
@@ -4153,7 +4287,7 @@ mod tests {
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         value["lyricsPreferences"]["primaryFontSizePx"] = serde_json::json!(0);
-        value["lyricsPreferences"]["auxiliaryFontSizePx"] = serde_json::json!(0);
+        value["lyricsPreferences"]["auxiliaryScalePercent"] = serde_json::json!(0);
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let reopened =
             SettingsStore::open(&path, AppSettings::default()).expect("old file still loads");
@@ -4161,7 +4295,7 @@ mod tests {
         assert_eq!(
             (
                 preferences.primary_font_size_px,
-                preferences.auxiliary_font_size_px
+                preferences.auxiliary_scale_percent
             ),
             (1, 1)
         );
@@ -4176,7 +4310,7 @@ mod tests {
 
         let result = store.update(|settings| {
             settings.lyrics_preferences = LyricsPreferences {
-                auxiliary_font_size_px: 51,
+                auxiliary_scale_percent: 101,
                 ..LyricsPreferences::default()
             };
             Ok(())
@@ -4294,7 +4428,7 @@ mod tests {
         assert_eq!(persisted["lyricsPreferences"]["showRomanization"], false);
         assert_eq!(persisted["lyricsPreferences"]["inactiveOpacityPercent"], 50);
         assert_eq!(persisted["lyricsPreferences"]["primaryFontSizePx"], 20);
-        assert_eq!(persisted["lyricsPreferences"]["auxiliaryFontSizePx"], 18);
+        assert_eq!(persisted["lyricsPreferences"]["auxiliaryScalePercent"], 90);
         assert_eq!(persisted["sourceRegistryAuthoritative"], false);
     }
 
@@ -4512,7 +4646,7 @@ mod tests {
             show_romanization: true,
             inactive_opacity_percent: 43,
             primary_font_size_px: 26,
-            auxiliary_font_size_px: 17,
+            auxiliary_scale_percent: 65,
             line_gap_px: 42,
             text_effect: LyricsTextEffect::Shadow,
             simplified_to_traditional: true,

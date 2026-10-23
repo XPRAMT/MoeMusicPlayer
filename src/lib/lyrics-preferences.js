@@ -5,7 +5,7 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   showRomanization: false,
   inactiveOpacityPercent: 50,
   primaryFontSizePx: 20,
-  auxiliaryFontSizePx: 18,
+  auxiliaryScalePercent: 90,
   lineGapPx: 10,
   textEffect: 'shadow',
   simplifiedToTraditional: true,
@@ -16,7 +16,7 @@ export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
 export const LYRICS_PREFERENCE_LIMITS = Object.freeze({
   inactiveOpacityPercent: Object.freeze({ min: 10, max: 100 }),
   primaryFontSizePx: Object.freeze({ min: 1, max: 50 }),
-  auxiliaryFontSizePx: Object.freeze({ min: 1, max: 50 }),
+  auxiliaryScalePercent: Object.freeze({ min: 1, max: 100 }),
   lineGapPx: Object.freeze({ min: 0, max: 50 }),
 });
 
@@ -45,12 +45,7 @@ export function normalizeLyricsPreferences(value) {
       LYRICS_PREFERENCE_LIMITS.primaryFontSizePx.max,
       DEFAULT_LYRICS_PREFERENCES.primaryFontSizePx,
     ),
-    auxiliaryFontSizePx: normalizeInteger(
-      candidate.auxiliaryFontSizePx,
-      LYRICS_PREFERENCE_LIMITS.auxiliaryFontSizePx.min,
-      LYRICS_PREFERENCE_LIMITS.auxiliaryFontSizePx.max,
-      DEFAULT_LYRICS_PREFERENCES.auxiliaryFontSizePx,
-    ),
+    auxiliaryScalePercent: normalizeAuxiliaryScale(candidate),
     lineGapPx: normalizeInteger(
       candidate.lineGapPx,
       LYRICS_PREFERENCE_LIMITS.lineGapPx.min,
@@ -92,6 +87,31 @@ export function getLyricLineOpacity(lineIndex, activeIndex, opacityPercent) {
     DEFAULT_LYRICS_PREFERENCES.inactiveOpacityPercent,
   );
   return safeOpacity / 100;
+}
+
+/**
+ * Translation/romanization size as a percent of the primary size. Older saves stored an
+ * absolute `auxiliaryFontSizePx`; it migrates to round(aux / primary × 100) (18 / 20 → 90).
+ * @param {Record<string, unknown>} candidate
+ */
+function normalizeAuxiliaryScale(candidate) {
+  const { min, max } = LYRICS_PREFERENCE_LIMITS.auxiliaryScalePercent;
+  if (typeof candidate.auxiliaryScalePercent === 'number' && Number.isFinite(candidate.auxiliaryScalePercent)) {
+    return normalizeInteger(candidate.auxiliaryScalePercent, min, max, DEFAULT_LYRICS_PREFERENCES.auxiliaryScalePercent);
+  }
+  const auxiliary = candidate.auxiliaryFontSizePx;
+  if (typeof auxiliary === 'number' && Number.isFinite(auxiliary)) {
+    const primaryRaw = candidate.primaryFontSizePx;
+    const primary = typeof primaryRaw === 'number' && Number.isFinite(primaryRaw) && primaryRaw >= 1
+      ? primaryRaw : (typeof primaryRaw === 'number' && Number.isFinite(primaryRaw) ? 1 : DEFAULT_LYRICS_PREFERENCES.primaryFontSizePx);
+    return normalizeInteger((auxiliary / primary) * 100, min, max, DEFAULT_LYRICS_PREFERENCES.auxiliaryScalePercent);
+  }
+  return DEFAULT_LYRICS_PREFERENCES.auxiliaryScalePercent;
+}
+
+/** Translation/romanization font size in px: primary × scale. @param {{ primaryFontSizePx: number, auxiliaryScalePercent: number }} preferences */
+export function lyricsAuxiliaryFontSizePx(preferences) {
+  return preferences.primaryFontSizePx * preferences.auxiliaryScalePercent / 100;
 }
 
 /** @param {unknown} value @param {number} min @param {number} max @param {number} fallback */

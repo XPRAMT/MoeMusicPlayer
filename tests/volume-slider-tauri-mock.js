@@ -69,7 +69,7 @@
     showRomanization: false,
     inactiveOpacityPercent: 70,
     primaryFontSizePx: 14,
-    auxiliaryFontSizePx: 10,
+    auxiliaryScalePercent: 71,
     lineGapPx: 24,
   };
   let artworkPromise;

@@ -36,6 +36,7 @@
     DEFAULT_LYRICS_PREFERENCES,
     getDisplayActiveLyricIndex,
     getLyricLineOpacity,
+    lyricsAuxiliaryFontSizePx,
     normalizeLyricsPreferences,
   } from './lyrics-preferences.js';
   import {
@@ -794,7 +795,7 @@
   data-active-cue-index={displayTimedIndex}
   data-current-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
-  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${preferences.auxiliaryFontSizePx}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
+  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">{tr("播放歌曲後會在此顯示歌詞。")}</p>

@@ -732,7 +732,8 @@ export interface LyricsPreferences {
   showRomanization: boolean;
   inactiveOpacityPercent: number;
   primaryFontSizePx: number;
-  auxiliaryFontSizePx: number;
+  /** Translation and romanization size, percent of primaryFontSizePx (1–100). */
+  auxiliaryScalePercent: number;
   lineGapPx: number;
   textEffect: LyricsTextEffect;
   simplifiedToTraditional: boolean;

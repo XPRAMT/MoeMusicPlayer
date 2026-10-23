@@ -86,7 +86,7 @@
   assert.equal(emptyCue.currentRowCount, 0, 'an empty-content cue is not rendered or transferred to the next line');
   assert.equal(emptyCue.allTextOpaque, true, 'an empty-content cue does not dim every visible row');
 
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 50, auxiliaryFontSizePx: 50, lineGapPx: 50 }));
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 50, auxiliaryScalePercent: 100, lineGapPx: 50 }));
   await page.evaluate(() => window.lyricsViewHarness.setPosition(90_000));
   await page.waitForTimeout(40);
   const maximum = await page.evaluate(() => window.lyricsViewHarness.snapshot());
@@ -187,7 +187,7 @@
   await page.evaluate(() => window.lyricsViewHarness.setPosition(93_000));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
 
-  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 14, auxiliaryFontSizePx: 10 }));
+  await page.evaluate(() => window.lyricsViewHarness.setPreferences({ primaryFontSizePx: 14, auxiliaryScalePercent: 71 }));
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.waitForTimeout(80);
   const widePrimary = await page.evaluate(() => window.lyricsViewHarness.snapshot().longPrimaryHeight);
@@ -338,7 +338,7 @@
     showTranslation: true,
     showRomanization: true,
     primaryFontSizePx: 50,
-    auxiliaryFontSizePx: 50,
+    auxiliaryScalePercent: 100,
     lineGapPx: 0,
   }));
   await page.evaluate(() => window.lyricsViewHarness.scrollPlainTo(60));
