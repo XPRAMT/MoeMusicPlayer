@@ -62,3 +62,10 @@ test('the translation-size slider stays enabled when translations are hidden', (
   assert.doesNotMatch(source, /translationActive/);
   assert.doesNotMatch(quick, /translationActive/);
 });
+
+test('the colour picker stays enabled when the custom-colour toggle is off', () => {
+  const source = readFileSync(path.join(root, 'src/lib/LyricsLookSettings.svelte'), 'utf8');
+  const picker = source.match(/<input[^>]*type="color"[\s\S]*?\/>/)?.[0] ?? '';
+  assert.ok(picker.includes('type="color"'));
+  assert.doesNotMatch(picker, /disabled|inert/);
+});

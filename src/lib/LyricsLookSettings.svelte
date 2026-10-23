@@ -135,7 +135,6 @@
         class="taskbar-lyrics-color"
         type="color"
         value={settings.customColor}
-        disabled={!settings.useCustomColor}
         aria-label={colorAriaLabel}
         oninput={(event) => onChange({ customColor: event.currentTarget.value })}
       />
