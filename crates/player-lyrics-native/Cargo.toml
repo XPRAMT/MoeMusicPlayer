@@ -3,7 +3,7 @@ name = "player-lyrics-native"
 version = "0.1.0"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
-description = "Native DirectComposition + Direct2D/DirectWrite renderer of the Windows taskbar and floating lyrics windows (ADR 0034)"
+description = "Native Windows.UI.Composition + Direct2D/DirectWrite renderer of the Windows taskbar and floating lyrics windows (ADR 0034)"
 
 [dependencies]
 player-lyrics-rules = { path = "../player-lyrics-rules" }
@@ -13,18 +13,31 @@ unicode-segmentation = "1.13"
 windows-core = "=0.62.2"
 windows-numerics = "0.3.1"
 windows = { version = "=0.62.2", features = [
+    "Foundation",
+    "Foundation_Metadata",
+    "Foundation_Numerics",
+    "Graphics",
+    "Graphics_DirectX",
+    "System",
+    "UI",
+    "UI_Composition",
+    "UI_Composition_Desktop",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
     "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Composition",
     "Win32_UI_Controls",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",

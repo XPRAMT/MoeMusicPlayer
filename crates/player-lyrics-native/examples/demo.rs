@@ -1,5 +1,6 @@
 //! Manual check of the native renderer: a floating window and a taskbar-style window with sample lyrics.
-//! `cargo run -p player-lyrics-native --example demo -- [continuous|none] [shadow|stroke|none] [seconds]`
+//! `cargo run -p player-lyrics-native --example demo -- [continuous|none] [shadow|stroke|none] [seconds] [windows]`
+//! (`windows` = how many lyrics windows: the floating one plus taskbar-style ones; default 2.)
 
 #[cfg(not(windows))]
 fn main() {}
@@ -34,6 +35,7 @@ fn main() {
         _ => TextEffect::Shadow,
     };
     let seconds: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let count: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2).max(1);
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
@@ -50,6 +52,8 @@ fn main() {
     ];
     let lines = texts
         .iter()
+        .cycle()
+        .take(texts.len() * 40)
         .enumerate()
         .map(|(i, (t, tr))| LyricLine {
             start_ms: 500.0 + i as f64 * 2500.0,
@@ -66,7 +70,7 @@ fn main() {
         track_id: Some("demo".into()),
         state: PlayState::Playing,
         position_ms: 0.0,
-        duration_ms: Some(20000.0),
+        duration_ms: Some(600_000.0),
     });
     let look = |font: f64| Look {
         align: Align::Center,
@@ -100,9 +104,12 @@ fn main() {
         },
     );
     place(floating, 200, 300, 1800, 160);
-    let bar = r.create("taskbar-lyrics-0", Kind::Taskbar, None).unwrap();
-    r.set_look("taskbar-lyrics-0", Some(look(20.0)));
-    place(bar, 200, 600, 1200, 96);
+    for i in 0..count - 1 {
+        let id = format!("taskbar-lyrics-{i}");
+        let bar = r.create(&id, Kind::Taskbar, None).unwrap();
+        r.set_look(&id, Some(look(20.0)));
+        place(bar, 200, 600 + 130 * i as i32, 1200, 96);
+    }
     std::thread::sleep(std::time::Duration::from_secs(seconds));
     r.shutdown();
     std::thread::sleep(std::time::Duration::from_millis(300));

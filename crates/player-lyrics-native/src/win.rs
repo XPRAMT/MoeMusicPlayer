@@ -3,33 +3,48 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use player_lyrics_rules as rules;
 use windows::core::{implement, w, Interface, Ref, Result, BOOL, HSTRING, PCWSTR, PWSTR};
+use windows::Foundation::Metadata::ApiInformation;
+use windows::Foundation::{Size, TimeSpan, TypedEventHandler};
+use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
+use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::WinRT::Composition::{
+    ICompositionDrawingSurfaceInterop, ICompositorDesktopInterop, ICompositorInterop,
+};
+use windows::Win32::System::WinRT::{
+    CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+};
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows_numerics::{Matrix3x2, Vector2};
+use windows::UI::Color;
+use windows::UI::Composition::Desktop::DesktopWindowTarget;
+use windows::UI::Composition::*;
+use windows_numerics::{Matrix3x2, Vector2, Vector3};
 
-use crate::plan::{self, Keys};
+use crate::keyframes::{self, Ease, Track};
+use crate::plan;
 use crate::{
     effect_rgb, fit_font_size, floating_lock_css, floating_margin_css, Chrome, Events, Kind, Look,
     LyricsData, PlayState, PlaybackSample, FLOATING_LINE_HEIGHT, FLOATING_PANEL_LINE_HEIGHT,
@@ -172,10 +187,36 @@ struct Gfx {
     _d2d_device: ID2D1Device,
     dwrite: IDWriteFactory2,
     fallback: IDWriteFontFallback,
-    dcomp: IDCompositionDesktopDevice,
+    compositor: Compositor,
+    graphics: CompositionGraphicsDevice,
+    linear: CompositionEasingFunction,
+    /// Set by `CompositionGraphicsDevice.RenderingDeviceReplaced`: every drawing surface must be drawn again.
+    replaced: Arc<AtomicBool>,
     /// Segoe UI ascent and descent in em: the line box of every row (CSS uses the primary font's metrics).
     ascent_em: f32,
     descent_em: f32,
+}
+
+/// Windows.UI.Composition with `CompositionVisualSurface` (the edge-fade mask) needs Windows 10 1809
+/// (UniversalApiContract 7); the desktop interop itself needs 1803.
+fn composition_supported() -> bool {
+    ApiInformation::IsApiContractPresentByMajor(
+        &HSTRING::from("Windows.Foundation.UniversalApiContract"),
+        7,
+    )
+    .unwrap_or(false)
+}
+
+/// The thread's dispatcher queue: Windows.UI.Composition on a desktop thread needs one (it commits implicitly
+/// through it while the thread pumps messages).
+fn create_dispatcher_queue() -> Result<DispatcherQueueController> {
+    unsafe {
+        CreateDispatcherQueueController(DispatcherQueueOptions {
+            dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_STA,
+        })
+    }
 }
 
 fn create_gfx() -> Result<Gfx> {
@@ -211,7 +252,19 @@ fn create_gfx() -> Result<Gfx> {
         let d2d_factory: ID2D1Factory1 =
             D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
         let d2d_device = d2d_factory.CreateDevice(&dxgi)?;
-        let dcomp: IDCompositionDesktopDevice = DCompositionCreateDevice2(&d2d_device)?;
+        let compositor = Compositor::new()?;
+        let graphics = compositor
+            .cast::<ICompositorInterop>()?
+            .CreateGraphicsDevice(&d2d_device)?;
+        let replaced = Arc::new(AtomicBool::new(false));
+        let flag = replaced.clone();
+        let thread = GetCurrentThreadId();
+        graphics.RenderingDeviceReplaced(&TypedEventHandler::new(move |_, _| {
+            flag.store(true, Ordering::SeqCst);
+            let _ = PostThreadMessageW(thread, WM_WAKE, WPARAM(0), LPARAM(0));
+            Ok(())
+        }))?;
+        let linear: CompositionEasingFunction = compositor.CreateLinearEasingFunction()?.cast()?;
         let dwrite: IDWriteFactory2 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         // 'Segoe UI', 'Microsoft JhengHei', sans-serif (app.css): CJK and kana go to JhengHei, then the system
         // fallback (Segoe UI Emoji for colour emoji).
@@ -252,11 +305,86 @@ fn create_gfx() -> Result<Gfx> {
             _d2d_device: d2d_device,
             dwrite,
             fallback,
-            dcomp,
+            compositor,
+            graphics,
+            linear,
+            replaced,
             ascent_em,
             descent_em,
         })
     }
+}
+
+/// A Direct2D-drawn composition surface and its size in device pixels.
+#[derive(Clone)]
+struct Surface {
+    surface: CompositionDrawingSurface,
+    width: u32,
+    height: u32,
+}
+
+/// Creates a `width` x `height` px drawing surface and draws it once with `draw` (the device context is translated
+/// to the surface's update offset by `base`, cleared to transparent, at 96 DPI so one unit is one device pixel).
+fn draw_surface(
+    gfx: &Gfx,
+    width: u32,
+    height: u32,
+    draw: impl FnOnce(&ID2D1DeviceContext, Matrix3x2) -> Result<()>,
+) -> Result<Surface> {
+    let (width, height) = (width.max(1), height.max(1));
+    let surface = gfx.graphics.CreateDrawingSurface(
+        Size {
+            Width: width as f32,
+            Height: height as f32,
+        },
+        DirectXPixelFormat::B8G8R8A8UIntNormalized,
+        DirectXAlphaMode::Premultiplied,
+    )?;
+    let interop: ICompositionDrawingSurfaceInterop = surface.cast()?;
+    unsafe {
+        let mut offset = POINT::default();
+        let dc: ID2D1DeviceContext = interop.BeginDraw(None, &mut offset)?;
+        dc.SetDpi(96.0, 96.0);
+        let base = Matrix3x2::translation(offset.x as f32, offset.y as f32);
+        dc.SetTransform(&base);
+        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
+        let drawn = draw(&dc, base);
+        let ended = interop.EndDraw();
+        drawn?;
+        ended?;
+    }
+    Ok(Surface {
+        surface,
+        width,
+        height,
+    })
+}
+
+/// A sprite showing `surface` 1:1 at its pixel size; `nearest` samples whole device pixels (AGENTS.md device-pixel
+/// rule: content at a fractional offset during a glide still lands on whole pixels).
+fn sprite(gfx: &Gfx, surface: &Surface, nearest: bool) -> Result<SpriteVisual> {
+    let brush = gfx
+        .compositor
+        .CreateSurfaceBrushWithSurface(&surface.surface.cast::<ICompositionSurface>()?)?;
+    brush.SetStretch(CompositionStretch::None)?;
+    if nearest {
+        brush.SetBitmapInterpolationMode(CompositionBitmapInterpolationMode::NearestNeighbor)?;
+    }
+    let visual = gfx.compositor.CreateSpriteVisual()?;
+    visual.SetBrush(&brush)?;
+    visual.SetSize(Vector2 {
+        X: surface.width as f32,
+        Y: surface.height as f32,
+    })?;
+    Ok(visual)
+}
+
+fn set_offset(visual: &Visual, x: f64, y: f64) -> Result<()> {
+    visual.SetOffset(Vector3 {
+        X: x as f32,
+        Y: y as f32,
+        Z: 0.0,
+    })
 }
 
 fn segoe_metrics(dwrite: &IDWriteFactory2) -> Result<(f32, f32)> {
@@ -482,7 +610,7 @@ struct RasterRequest<'a> {
 }
 
 struct Raster {
-    surface: IDCompositionSurface,
+    surface: Surface,
     /// Room around the text for the effect (px on every side).
     margin: f32,
     row_widths: Vec<f32>,
@@ -511,90 +639,80 @@ fn rasterise(gfx: &Gfx, request: &RasterRequest) -> Result<Raster> {
             .sum();
         let sw = (width + 2.0 * margin).ceil().max(1.0) as u32;
         let sh = (height + 2.0 * margin).ceil().max(1.0) as u32;
-        let surface = gfx.dcomp.CreateSurface(
-            sw,
-            sh,
-            DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_ALPHA_MODE_PREMULTIPLIED,
-        )?;
-        let mut offset = POINT::default();
-        let dc: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
-        dc.SetDpi(96.0, 96.0);
-        dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-        let base = Matrix3x2::translation(offset.x as f32, offset.y as f32);
-        dc.SetTransform(&base);
-        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
-        let mut origins = Vec::new();
-        let mut y = margin;
-        for (_, px) in request.rows {
-            origins.push(Vector2 { X: margin, Y: y });
-            y += px * request.style.line_height;
-        }
-        let text_brush = dc.CreateSolidColorBrush(&rgba(request.style.color, 1.0), None)?;
-        let effect_color = effect_rgb(request.style.color);
-        let options = D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_NO_SNAP;
-        match request.style.effect {
-            rules::TextEffect::None => {}
-            rules::TextEffect::Shadow => {
-                // text-shadow: 0 0 0.6em rgba(effect, 0.75) — a CSS blur radius is 2 sigma, so sigma = 0.3 em.
-                let list = dc.CreateCommandList()?;
-                let target = dc.GetTarget()?;
-                dc.SetTarget(&list);
-                dc.SetTransform(&Matrix3x2::identity());
-                for (layout, origin) in layouts.iter().zip(&origins) {
-                    dc.DrawTextLayout(*origin, layout, &text_brush, options);
-                }
-                list.Close()?;
-                dc.SetTarget(&target);
-                let shadow = dc.CreateEffect(&CLSID_D2D1Shadow)?;
-                shadow.SetInput(0, &list, true);
-                let sigma = font * 0.3;
-                shadow.SetValue(
-                    D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION.0 as u32,
-                    D2D1_PROPERTY_TYPE_FLOAT,
-                    &sigma.to_le_bytes(),
-                )?;
-                let colour = rgba(effect_color, 0.75);
-                let mut bytes = Vec::new();
-                for v in [colour.r, colour.g, colour.b, colour.a] {
-                    bytes.extend_from_slice(&v.to_le_bytes());
-                }
-                shadow.SetValue(
-                    D2D1_SHADOW_PROP_COLOR.0 as u32,
-                    D2D1_PROPERTY_TYPE_VECTOR4,
-                    &bytes,
-                )?;
-                let output = shadow.GetOutput()?;
-                dc.SetTransform(&base);
-                dc.DrawImage(
-                    &output,
-                    None,
-                    None,
-                    D2D1_INTERPOLATION_MODE_LINEAR,
-                    D2D1_COMPOSITE_MODE_SOURCE_OVER,
-                );
+        let surface = draw_surface(gfx, sw, sh, |dc, base| {
+            dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            let mut origins = Vec::new();
+            let mut y = margin;
+            for (_, px) in request.rows {
+                origins.push(Vector2 { X: margin, Y: y });
+                y += px * request.style.line_height;
             }
-            rules::TextEffect::Stroke => {
-                // -webkit-text-stroke: 0.08em rgba(effect, 0.5), stroke under the fill.
-                let geometries = Rc::new(RefCell::new(Vec::new()));
-                let collector: IDWriteTextRenderer = OutlineCollector {
-                    factory: gfx.d2d_factory.clone(),
-                    geometries: geometries.clone(),
+            let text_brush = dc.CreateSolidColorBrush(&rgba(request.style.color, 1.0), None)?;
+            let effect_color = effect_rgb(request.style.color);
+            let options = D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_NO_SNAP;
+            match request.style.effect {
+                rules::TextEffect::None => {}
+                rules::TextEffect::Shadow => {
+                    // text-shadow: 0 0 0.6em rgba(effect, 0.75) — a CSS blur radius is 2 sigma, so sigma = 0.3 em.
+                    let list = dc.CreateCommandList()?;
+                    let target = dc.GetTarget()?;
+                    dc.SetTarget(&list);
+                    dc.SetTransform(&Matrix3x2::identity());
+                    for (layout, origin) in layouts.iter().zip(&origins) {
+                        dc.DrawTextLayout(*origin, layout, &text_brush, options);
+                    }
+                    list.Close()?;
+                    dc.SetTarget(&target);
+                    let shadow = dc.CreateEffect(&CLSID_D2D1Shadow)?;
+                    shadow.SetInput(0, &list, true);
+                    let sigma = font * 0.3;
+                    shadow.SetValue(
+                        D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &sigma.to_le_bytes(),
+                    )?;
+                    let colour = rgba(effect_color, 0.75);
+                    let mut bytes = Vec::new();
+                    for v in [colour.r, colour.g, colour.b, colour.a] {
+                        bytes.extend_from_slice(&v.to_le_bytes());
+                    }
+                    shadow.SetValue(
+                        D2D1_SHADOW_PROP_COLOR.0 as u32,
+                        D2D1_PROPERTY_TYPE_VECTOR4,
+                        &bytes,
+                    )?;
+                    let output = shadow.GetOutput()?;
+                    dc.SetTransform(&base);
+                    dc.DrawImage(
+                        &output,
+                        None,
+                        None,
+                        D2D1_INTERPOLATION_MODE_LINEAR,
+                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                    );
                 }
-                .into();
-                for (layout, origin) in layouts.iter().zip(&origins) {
-                    layout.Draw(None, &collector, origin.X, origin.Y)?;
-                }
-                let stroke = dc.CreateSolidColorBrush(&rgba(effect_color, 0.5), None)?;
-                for g in geometries.borrow().iter() {
-                    dc.DrawGeometry(g, &stroke, font * 0.08, None);
+                rules::TextEffect::Stroke => {
+                    // -webkit-text-stroke: 0.08em rgba(effect, 0.5), stroke under the fill.
+                    let geometries = Rc::new(RefCell::new(Vec::new()));
+                    let collector: IDWriteTextRenderer = OutlineCollector {
+                        factory: gfx.d2d_factory.clone(),
+                        geometries: geometries.clone(),
+                    }
+                    .into();
+                    for (layout, origin) in layouts.iter().zip(&origins) {
+                        layout.Draw(None, &collector, origin.X, origin.Y)?;
+                    }
+                    let stroke = dc.CreateSolidColorBrush(&rgba(effect_color, 0.5), None)?;
+                    for g in geometries.borrow().iter() {
+                        dc.DrawGeometry(g, &stroke, font * 0.08, None);
+                    }
                 }
             }
-        }
-        for (layout, origin) in layouts.iter().zip(&origins) {
-            dc.DrawTextLayout(*origin, layout, &text_brush, options);
-        }
-        surface.EndDraw()?;
+            for (layout, origin) in layouts.iter().zip(&origins) {
+                dc.DrawTextLayout(*origin, layout, &text_brush, options);
+            }
+            Ok(())
+        })?;
         Ok(Raster {
             surface,
             margin,
@@ -610,20 +728,13 @@ fn rasterise_lock(
     scale: f32,
     locked: bool,
     pressed_hover: bool,
-) -> Result<IDCompositionSurface> {
-    unsafe {
-        let surface = gfx.dcomp.CreateSurface(
-            size.max(1),
-            size.max(1),
-            DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_ALPHA_MODE_PREMULTIPLIED,
-        )?;
-        let mut offset = POINT::default();
-        let dc: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
-        dc.SetDpi(96.0, 96.0);
-        dc.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
-        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
-        let s = size as f32;
+) -> Result<Surface> {
+    draw_surface(gfx, size, size, |dc, base| unsafe {
+        let offset = POINT {
+            x: base.M31 as i32,
+            y: base.M32 as i32,
+        };
+        let s = size.max(1) as f32;
         let r = s / 2.0;
         let fill = dc.CreateSolidColorBrush(
             &rgba([0, 0, 0], if pressed_hover { 0.75 } else { 0.55 }),
@@ -706,25 +817,13 @@ fn rasterise_lock(
         };
         let style = gfx.d2d_factory.CreateStrokeStyle(&props, None)?;
         dc.DrawGeometry(&path, &white, 2.0, &style);
-        surface.EndDraw()?;
-        Ok(surface)
-    }
+        Ok(())
+    })
 }
 
 /// The move-mode highlight behind the lyric area: rgba(0,0,0,0.28), 10 CSS px corners.
-fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<IDCompositionSurface> {
-    unsafe {
-        let surface = gfx.dcomp.CreateSurface(
-            width.max(1),
-            height.max(1),
-            DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_ALPHA_MODE_PREMULTIPLIED,
-        )?;
-        let mut offset = POINT::default();
-        let dc: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
-        dc.SetDpi(96.0, 96.0);
-        dc.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
-        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
+fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<Surface> {
+    draw_surface(gfx, width, height, |dc, _| unsafe {
         let brush = dc.CreateSolidColorBrush(&rgba([0, 0, 0], 0.28), None)?;
         let rect = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
@@ -737,91 +836,54 @@ fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<IDC
             radiusY: radius,
         };
         dc.FillRoundedRectangle(&rect, &brush);
-        surface.EndDraw()?;
-        Ok(surface)
-    }
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------- animations
 
-fn animation(
-    gfx: &Gfx,
-    keys: &Keys,
-    add: f64,
-    factor: f64,
-) -> Result<Option<IDCompositionAnimation>> {
-    if keys.len() < 2 {
-        return Ok(None);
+/// Runs `track` on `property` of `object` as a `ScalarKeyFrameAnimation` the compositor evaluates every frame (no
+/// work in this process); does nothing when it does not move (the caller set the static value).
+fn animate(gfx: &Gfx, object: &CompositionObject, property: &str, track: &Track) -> Result<()> {
+    if !track.is_animated() {
+        return Ok(());
     }
-    unsafe {
-        let a = gfx.dcomp.CreateAnimation()?;
-        for pair in keys.windows(2) {
-            let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
-            let slope = if t1 > t0 { (v1 - v0) / (t1 - t0) } else { 0.0 };
-            a.AddCubic(
-                t0,
-                (add + v0 * factor) as f32,
-                (slope * factor) as f32,
-                0.0,
-                0.0,
-            )?;
-        }
-        let (t, v) = *keys.last().unwrap();
-        a.End(t, (add + v * factor) as f32)?;
-        Ok(Some(a))
+    let a = gfx.compositor.CreateScalarKeyFrameAnimation()?;
+    a.InsertKeyFrame(0.0, track.first_value() as f32)?;
+    for frame in &track.frames[1..] {
+        let easing = match frame.ease {
+            Ease::Linear => gfx.linear.clone(),
+            Ease::Cubic(y1, y2) => gfx
+                .compositor
+                .CreateCubicBezierEasingFunction(
+                    Vector2 {
+                        X: 1.0 / 3.0,
+                        Y: y1 as f32,
+                    },
+                    Vector2 {
+                        X: 2.0 / 3.0,
+                        Y: y2 as f32,
+                    },
+                )?
+                .cast()?,
+        };
+        a.InsertKeyFrameWithEasingFunction(frame.progress as f32, frame.value as f32, &easing)?;
     }
+    a.SetDuration(TimeSpan {
+        Duration: (track.duration_secs * 1e7).round() as i64,
+    })?;
+    object.StartAnimation(&HSTRING::from(property), &a)
 }
 
-fn set_offset_x(
-    gfx: &Gfx,
-    visual: &IDCompositionVisual2,
-    keys: &Keys,
-    add: f64,
-    factor: f64,
-) -> Result<()> {
-    unsafe {
-        match animation(gfx, keys, add, factor)? {
-            Some(a) => visual.SetOffsetX(&a),
-            None => visual.SetOffsetX2((add + keys.first().map_or(0.0, |k| k.1) * factor) as f32),
-        }
-    }
+/// Offset.X from `track` (its first value until the animation starts), Y fixed.
+fn place_x(gfx: &Gfx, visual: &Visual, track: &Track, y: f64) -> Result<()> {
+    set_offset(visual, track.first_value(), y)?;
+    animate(gfx, &visual.cast()?, "Offset.X", track)
 }
 
-/// The glide: each key is one `AddCubic` segment (value, velocity, quadratic and cubic coefficients per second), so DWM
-/// evaluates the C1 curve itself with no per-frame work.
-fn set_offset_x_cubic(
-    gfx: &Gfx,
-    visual: &IDCompositionVisual2,
-    keys: &plan::Cubics,
-    add: f64,
-) -> Result<()> {
-    unsafe {
-        if keys.len() < 2 {
-            return visual.SetOffsetX2((add + keys.first().map_or(0.0, |k| k.1[0])) as f32);
-        }
-        let a = gfx.dcomp.CreateAnimation()?;
-        for &(t, c) in &keys[..keys.len() - 1] {
-            a.AddCubic(
-                t,
-                (add + c[0]) as f32,
-                c[1] as f32,
-                c[2] as f32,
-                c[3] as f32,
-            )?;
-        }
-        let (t, c) = *keys.last().unwrap();
-        a.End(t, (add + c[0]) as f32)?;
-        visual.SetOffsetX(&a)
-    }
-}
-
-fn set_opacity(gfx: &Gfx, effect: &IDCompositionEffectGroup, keys: &Keys) -> Result<()> {
-    unsafe {
-        match animation(gfx, keys, 0.0, 1.0)? {
-            Some(a) => effect.SetOpacity(&a),
-            None => effect.SetOpacity2(keys.first().map_or(1.0, |k| k.1) as f32),
-        }
-    }
+fn fade(gfx: &Gfx, visual: &Visual, track: &Track) -> Result<()> {
+    visual.SetOpacity(track.first_value() as f32)?;
+    animate(gfx, &visual.cast()?, "Opacity", track)
 }
 
 // ---------------------------------------------------------------- windows
@@ -1032,8 +1094,10 @@ fn register_class() {
 struct Win {
     hwnd: HWND,
     kind: Kind,
-    target: Option<IDCompositionTarget>,
-    root: Option<IDCompositionVisual2>,
+    target: Option<DesktopWindowTarget>,
+    root: Option<ContainerVisual>,
+    /// The edge-fade mask host, rebuilt only on a size, DPI or area change.
+    fade: Option<FadeHost>,
     look: Option<Look>,
     chrome: Chrome,
     /// Fixed mode hover from the watcher.
@@ -1041,8 +1105,8 @@ struct Win {
     tooltip: Option<HWND>,
     tooltip_text: Vec<u16>,
     cache: HashMap<String, Rc<Raster>>,
-    lock_cache: HashMap<(u32, bool, bool), IDCompositionSurface>,
-    area_cache: HashMap<(u32, u32, u32), IDCompositionSurface>,
+    lock_cache: HashMap<(u32, bool, bool), Surface>,
+    area_cache: HashMap<(u32, u32, u32), Surface>,
     wake_at: Option<Instant>,
     has_translation: Option<bool>,
 }
@@ -1196,6 +1260,8 @@ struct Renderer {
     delay: Option<(String, f64)>,
     events: Arc<dyn Events>,
     dirty: Vec<String>,
+    /// False on Windows older than 10 1809, or without a dispatcher queue: no lyrics windows at all.
+    supported: bool,
 }
 
 fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
@@ -1203,10 +1269,27 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
     register_class();
+    // Kept alive for the thread's lifetime: Windows.UI.Composition commits through it.
+    let queue = if composition_supported() {
+        create_dispatcher_queue()
+            .map_err(|e| eprintln!("lyrics renderer: no dispatcher queue: {e}"))
+            .ok()
+    } else {
+        eprintln!(
+            "lyrics renderer: needs Windows 10 version 1809 or later; lyrics windows are off"
+        );
+        None
+    };
+    let supported = queue.is_some();
     let mut r = Renderer {
-        gfx: create_gfx()
-            .map_err(|e| eprintln!("lyrics renderer: {e}"))
-            .ok(),
+        gfx: if supported {
+            create_gfx()
+                .map_err(|e| eprintln!("lyrics renderer: {e}"))
+                .ok()
+        } else {
+            None
+        },
+        supported,
         windows: HashMap::new(),
         lyrics: None,
         clock: Clock {
@@ -1239,6 +1322,14 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
             }
         }
         r.pending();
+        if r.gfx
+            .as_ref()
+            .is_some_and(|g| g.replaced.swap(false, Ordering::SeqCst))
+        {
+            // CompositionGraphicsDevice.RenderingDeviceReplaced: the drawing surfaces lost their content.
+            r.forget_surfaces();
+            r.mark_all();
+        }
         let now = Instant::now();
         for (id, win) in &r.windows {
             if win.wake_at.is_some_and(|at| at <= now) {
@@ -1247,7 +1338,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         }
         if now.duration_since(last_check) >= DEVICE_CHECK {
             last_check = now;
-            if r.gfx.as_ref().is_none_or(device_lost) {
+            if r.supported && r.gfx.as_ref().is_none_or(device_lost) {
                 r.rebuild_devices();
             }
         }
@@ -1411,6 +1502,9 @@ impl Renderer {
         if let Some(old) = self.windows.remove(id) {
             destroy(old);
         }
+        if !self.supported {
+            return None;
+        }
         let hwnd = create_window(id, kind, owner)
             .map_err(|e| eprintln!("lyrics window {id}: {e}"))
             .ok()?;
@@ -1424,6 +1518,7 @@ impl Renderer {
             kind,
             target: None,
             root: None,
+            fade: None,
             look: None,
             chrome: Chrome::default(),
             hover: false,
@@ -1460,13 +1555,22 @@ impl Renderer {
         }
     }
 
-    fn rebuild_devices(&mut self) {
+    fn forget_surfaces(&mut self) {
         for win in self.windows.values_mut() {
-            win.target = None;
-            win.root = None;
             win.cache.clear();
             win.lock_cache.clear();
             win.area_cache.clear();
+        }
+    }
+
+    fn rebuild_devices(&mut self) {
+        self.forget_surfaces();
+        for win in self.windows.values_mut() {
+            win.fade = None;
+            win.root = None;
+            if let Some(target) = win.target.take() {
+                let _ = target.Close();
+            }
         }
         self.gfx = None;
         match create_gfx() {
@@ -1496,7 +1600,7 @@ impl Renderer {
             clock: &self.clock,
             inactive: self.inactive,
             delay: self.delay.as_ref(),
-            now: Instant::now() + commit_lead(gfx),
+            now: Instant::now() + commit_lead(),
         };
         let mut reports = Vec::new();
         for id in &ids {
@@ -1513,9 +1617,7 @@ impl Renderer {
                 }
             }
         }
-        if let Err(e) = unsafe { gfx.dcomp.Commit() } {
-            lost |= is_device_loss(&e);
-        }
+        // Windows.UI.Composition commits implicitly when the thread returns to its message loop.
         for (id, has) in reports {
             self.events.has_translation(&id, has);
         }
@@ -1525,39 +1627,56 @@ impl Renderer {
     }
 }
 
-/// DComp starts the animations of a commit at the composition frame that picks it up, not now: plan for that
-/// frame so a re-plan continues the running glide exactly instead of lagging by up to one frame.
-fn commit_lead(gfx: &Gfx) -> Duration {
-    let Ok(stats) = (unsafe { gfx.dcomp.GetFrameStatistics() }) else {
-        return Duration::ZERO;
-    };
-    if stats.timeFrequency <= 0 {
-        return Duration::ZERO;
+/// The compositor starts the animations of a commit at the composition frame that picks it up, not now: plan for
+/// that frame (the next vblank DWM reports) so a re-plan continues the running glide instead of lagging by a frame.
+fn commit_lead() -> Duration {
+    unsafe {
+        let mut info = DWM_TIMING_INFO {
+            cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,
+            ..Default::default()
+        };
+        let (mut now, mut freq) = (0i64, 0i64);
+        if DwmGetCompositionTimingInfo(HWND::default(), &mut info).is_err()
+            || QueryPerformanceCounter(&mut now).is_err()
+            || QueryPerformanceFrequency(&mut freq).is_err()
+            || freq <= 0
+            || info.qpcRefreshPeriod == 0
+        {
+            return Duration::ZERO;
+        }
+        let period = info.qpcRefreshPeriod as i64;
+        let vblank = info.qpcVBlank as i64;
+        let behind = (now - vblank).max(0);
+        let next = vblank + (behind / period + 1) * period;
+        let ticks = (next - now).clamp(0, freq / 20);
+        Duration::from_secs_f64(ticks as f64 / freq as f64)
     }
-    let ticks =
-        (stats.nextEstimatedFrameTime - stats.currentTime).clamp(0, stats.timeFrequency / 20);
-    Duration::from_secs_f64(ticks as f64 / stats.timeFrequency as f64)
 }
 
 fn attach(gfx: &Gfx, win: &mut Win) {
-    unsafe {
-        let made = (|| -> Result<(IDCompositionTarget, IDCompositionVisual2)> {
-            let target = gfx.dcomp.CreateTargetForHwnd(win.hwnd, true)?;
-            let root = gfx.dcomp.CreateVisual()?;
-            target.SetRoot(&root)?;
-            Ok((target, root))
-        })();
-        match made {
-            Ok((target, root)) => {
-                win.target = Some(target);
-                win.root = Some(root);
-            }
-            Err(e) => eprintln!("lyrics window target: {e}"),
+    let made = (|| -> Result<(DesktopWindowTarget, ContainerVisual)> {
+        let target = unsafe {
+            gfx.compositor
+                .cast::<ICompositorDesktopInterop>()?
+                .CreateDesktopWindowTarget(win.hwnd, true)?
+        };
+        let root = gfx.compositor.CreateContainerVisual()?;
+        target.SetRoot(&root)?;
+        Ok((target, root))
+    })();
+    match made {
+        Ok((target, root)) => {
+            win.target = Some(target);
+            win.root = Some(root);
         }
+        Err(e) => eprintln!("lyrics window target: {e}"),
     }
 }
 
 fn destroy(win: Win) {
+    if let Some(target) = &win.target {
+        let _ = target.Close();
+    }
     unsafe {
         if let Some(tip) = win.tooltip {
             let _ = DestroyWindow(tip);
@@ -1588,9 +1707,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
     let Some(root) = win.root.clone() else {
         return Ok(false);
     };
-    unsafe {
-        root.RemoveAllVisuals()?;
-    }
+    root.Children()?.RemoveAll()?;
     let mut client = RECT::default();
     unsafe {
         GetClientRect(win.hwnd, &mut client)?;
@@ -1634,11 +1751,11 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         }
     };
 
-    // Window opacity on the root; the content sits in a container clipped to the area (plus the effect's room).
-    let window_effect = unsafe { gfx.dcomp.CreateEffectGroup()? };
-    unsafe {
-        window_effect.SetOpacity2((look.opacity_percent.clamp(1.0, 100.0) / 100.0) as f32)?;
-    }
+    root.SetSize(Vector2 {
+        X: w as f32,
+        Y: h as f32,
+    })?;
+    let opacity = (look.opacity_percent.clamp(1.0, 100.0) / 100.0) as f32;
 
     if floating {
         chrome(gfx, win, &root, area, w, h, scale, &look)?;
@@ -1668,12 +1785,6 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         rules::TextEffect::Stroke => 0.04,
         rules::TextEffect::None => 0.0,
     };
-
-    let content = unsafe { gfx.dcomp.CreateVisual()? };
-    unsafe {
-        content.SetEffect(&window_effect)?;
-        root.AddVisual(&content, true, None)?;
-    }
 
     let has_translation;
     if look.animation == rules::Animation::Continuous {
@@ -1770,32 +1881,37 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             };
             cells.push((cached(gfx, win, &rows, style)?, *index, keys));
         }
-        // One copy of the strip per edge-fade band (a single band while the fade is off); every copy runs the
-        // same planned animations, so DWM keeps them in step and this process still does no per-frame work.
-        edge_faded(gfx, &content, area, h, font as f64 * clip_room, |band| {
-            let strip = unsafe { gfx.dcomp.CreateVisual()? };
-            set_offset_x_cubic(gfx, &strip, &planned.offset, area.left)?;
-            unsafe {
-                // Whole device pixels while gliding (AGENTS.md device-pixel rule).
-                strip.SetBitmapInterpolationMode(
-                    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                )?;
-                band.AddVisual(&strip, true, None)?;
-            }
-            for (raster, index, keys) in &cells {
-                let cell = unsafe { gfx.dcomp.CreateVisual()? };
-                let fade = unsafe { gfx.dcomp.CreateEffectGroup()? };
-                set_opacity(gfx, &fade, keys)?;
-                unsafe {
-                    cell.SetContent(&raster.surface)?;
-                    cell.SetOffsetX2((layout.starts[*index] - raster.margin as f64) as f32)?;
-                    cell.SetOffsetY2((top - raster.margin as f64).round() as f32)?;
-                    cell.SetEffect(&fade)?;
-                    strip.AddVisual(&cell, true, None)?;
-                }
-            }
-            Ok(())
-        })?;
+        let content = content_host(
+            gfx,
+            win,
+            &root,
+            area,
+            w,
+            h,
+            opacity,
+            font as f64 * clip_room,
+        )?;
+        // The strip glides (Offset.X key frames) and every cell fades (Opacity key frames); the compositor evaluates
+        // both on each frame. The cells sample whole device pixels (AGENTS.md device-pixel rule).
+        let strip = gfx.compositor.CreateContainerVisual()?;
+        let strip_visual: Visual = strip.cast()?;
+        place_x(
+            gfx,
+            &strip_visual,
+            &keyframes::cubic(&planned.offset, area.left),
+            0.0,
+        )?;
+        content.Children()?.InsertAtTop(&strip)?;
+        for (raster, index, keys) in &cells {
+            let cell: Visual = sprite(gfx, &raster.surface, true)?.cast()?;
+            set_offset(
+                &cell,
+                layout.starts[*index] - raster.margin as f64,
+                (top - raster.margin as f64).round(),
+            )?;
+            fade(gfx, &cell, &keyframes::linear(keys, 0.0, 1.0))?;
+            strip.Children()?.InsertAtTop(&cell)?;
+        }
         win.wake_at = planned
             .wake_ms
             .map(|ms| ctx.now + Duration::from_secs_f64(ms.max(1.0) / 1000.0));
@@ -1861,92 +1977,148 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             placed.push((raster, base, overflow, y));
             y += row.1 as f64 * line_height;
         }
-        edge_faded(gfx, &content, area, h, font as f64 * clip_room, |band| {
-            for (raster, base, overflow, y) in &placed {
-                let visual = unsafe { gfx.dcomp.CreateVisual()? };
-                set_offset_x(
-                    gfx,
-                    &visual,
-                    &planned.scroll,
-                    base - raster.margin as f64,
-                    -overflow,
-                )?;
-                unsafe {
-                    visual.SetBitmapInterpolationMode(
-                        DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                    )?;
-                    visual.SetContent(&raster.surface)?;
-                    visual.SetOffsetY2((y - raster.margin as f64).round() as f32)?;
-                    band.AddVisual(&visual, true, None)?;
-                }
-            }
-            Ok(())
-        })?;
+        let content = content_host(
+            gfx,
+            win,
+            &root,
+            area,
+            w,
+            h,
+            opacity,
+            font as f64 * clip_room,
+        )?;
+        for (raster, base, overflow, y) in &placed {
+            let visual: Visual = sprite(gfx, &raster.surface, true)?.cast()?;
+            place_x(
+                gfx,
+                &visual,
+                &keyframes::linear(&planned.scroll, base - raster.margin as f64, -overflow),
+                (y - raster.margin as f64).round(),
+            )?;
+            content.Children()?.InsertAtTop(&visual)?;
+        }
     }
     Ok(has_translation)
 }
 
-/// Most bands per edge-fade zone: one device pixel wide up to this, so each opacity step is at most 1/64.
-pub(crate) const EDGE_FADE_MAX_BANDS: f64 = 64.0;
+/// Diagnostics: `MOE_LYRICS_NO_FADE=1` draws the lyrics without the edge fade (to measure what it costs).
+fn edge_fade_enabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*OFF.get_or_init(|| std::env::var("MOE_LYRICS_NO_FADE").is_ok_and(|v| v == "1"))
+}
 
-/// Whether the band-based edge fade is built (see `edge_faded`). Off: its cost in dwm.exe was too high.
-const EDGE_FADE_BANDS: bool = false;
+/// The edge-fade host of one window: the lyric visuals go into `content`, which a `CompositionVisualSurface` renders
+/// offscreen; `shown` paints that surface through a `CompositionMaskBrush` whose mask is a static horizontal
+/// `CompositionLinearGradientBrush` (`keyframes::edge_fade_stops`, the rule `edge_fade_opacity`). One copy of the
+/// content per window, and the mask is a single pass in DWM.
+struct FadeHost {
+    key: [i64; 4],
+    content: ContainerVisual,
+    shown: SpriteVisual,
+}
 
-/// The left/right edge fade (`rules::edge_fade_bands`). DirectComposition cannot mask a visual with a gradient (its
-/// filter effects take no surface input, and `CompositionMaskBrush` needs Windows.UI.Composition), so the lyric
-/// content is built once per vertical band: each band is a static clip with a static opacity, and the content in it
-/// moves by the same DWM-evaluated animations. Rebuilt only when the window is re-planned.
-///
-/// Disabled (`EDGE_FADE_BANDS`): about 1,300 visuals per window kept dwm.exe near one full core with three windows
-/// animating at 120 Hz. While off, the content is built once in a single visual clipped to the lyric area plus
-/// `clip` (room for the shadow or outline), as before the fade.
-fn edge_faded(
+fn build_fade_host(
     gfx: &Gfx,
-    parent: &IDCompositionVisual2,
     area: Area,
+    w: f64,
     h: f64,
+) -> Result<(ContainerVisual, SpriteVisual)> {
+    let c = &gfx.compositor;
+    let size = Vector2 {
+        X: w as f32,
+        Y: h as f32,
+    };
+    let content = c.CreateContainerVisual()?;
+    content.SetSize(size)?;
+    let surface = c.CreateVisualSurface()?;
+    surface.SetSourceVisual(&content)?;
+    surface.SetSourceSize(size)?;
+    let source = c.CreateSurfaceBrushWithSurface(&surface)?;
+    source.SetStretch(CompositionStretch::None)?;
+    source.SetHorizontalAlignmentRatio(0.0)?;
+    source.SetVerticalAlignmentRatio(0.0)?;
+    let gradient = c.CreateLinearGradientBrush()?;
+    gradient.SetMappingMode(CompositionMappingMode::Absolute)?;
+    gradient.SetStartPoint(Vector2 {
+        X: area.left as f32,
+        Y: 0.0,
+    })?;
+    gradient.SetEndPoint(Vector2 {
+        X: (area.left + area.width) as f32,
+        Y: 0.0,
+    })?;
+    // Clamp: transparent beyond the lyric area on both sides (as the zones end there).
+    gradient.SetExtendMode(CompositionGradientExtendMode::Clamp)?;
+    let stops = gradient.ColorStops()?;
+    for (offset, alpha) in keyframes::edge_fade_stops(area.width, area.height) {
+        let stop = c.CreateColorGradientStopWithOffsetAndColor(
+            offset as f32,
+            Color {
+                A: (alpha * 255.0).round() as u8,
+                R: 255,
+                G: 255,
+                B: 255,
+            },
+        )?;
+        stops.Append(&stop)?;
+    }
+    let mask = c.CreateMaskBrush()?;
+    mask.SetSource(&source)?;
+    mask.SetMask(&gradient)?;
+    let shown = c.CreateSpriteVisual()?;
+    shown.SetSize(size)?;
+    shown.SetBrush(&mask)?;
+    Ok((content, shown))
+}
+
+/// The container the lyric visuals of this refresh go into, already in the window's tree with the window opacity.
+/// With the edge fade it is the (cached) masked host; without it a plain container clipped to the area plus `clip`.
+#[allow(clippy::too_many_arguments)]
+fn content_host(
+    gfx: &Gfx,
+    win: &mut Win,
+    root: &ContainerVisual,
+    area: Area,
+    w: f64,
+    h: f64,
+    opacity: f32,
     clip: f64,
-    mut build: impl FnMut(&IDCompositionVisual2) -> Result<()>,
-) -> Result<()> {
-    if !EDGE_FADE_BANDS {
-        let band = unsafe { gfx.dcomp.CreateVisual()? };
-        unsafe {
-            band.SetClip2(&D2D_RECT_F {
-                left: (area.left - clip) as f32,
-                top: 0.0,
-                right: (area.left + area.width + clip) as f32,
-                bottom: h as f32,
-            })?;
-            parent.AddVisual(&band, true, None)?;
-        }
-        return build(&band);
+) -> Result<ContainerVisual> {
+    if !edge_fade_enabled() {
+        let content = gfx.compositor.CreateContainerVisual()?;
+        content.SetSize(Vector2 {
+            X: w as f32,
+            Y: h as f32,
+        })?;
+        let left = (area.left - clip).max(0.0);
+        let right = (w - (area.left + area.width + clip)).max(0.0);
+        let inset =
+            gfx.compositor
+                .CreateInsetClipWithInsets(left as f32, 0.0, right as f32, 0.0)?;
+        content.SetClip(&inset)?;
+        content.SetOpacity(opacity)?;
+        root.Children()?.InsertAtTop(&content)?;
+        return Ok(content);
     }
-    let zone = rules::edge_fade_width(area.width, area.height);
-    let band_px = (zone / EDGE_FADE_MAX_BANDS).max(1.0);
-    for (l, r, opacity) in rules::edge_fade_bands(area.width, area.height, band_px) {
-        // Whole device pixels so neighbouring bands neither overlap nor leave a seam.
-        let (left, right) = ((area.left + l).round(), (area.left + r).round());
-        if right <= left || opacity <= 0.0 {
-            continue;
-        }
-        let band = unsafe { gfx.dcomp.CreateVisual()? };
-        unsafe {
-            band.SetClip2(&D2D_RECT_F {
-                left: left as f32,
-                top: 0.0,
-                right: right as f32,
-                bottom: h as f32,
-            })?;
-            if opacity < 1.0 {
-                let effect = gfx.dcomp.CreateEffectGroup()?;
-                effect.SetOpacity2(opacity as f32)?;
-                band.SetEffect(&effect)?;
-            }
-            parent.AddVisual(&band, true, None)?;
-        }
-        build(&band)?;
+    let key = [
+        w.round() as i64,
+        h.round() as i64,
+        (area.left * 64.0).round() as i64,
+        (area.width * 64.0).round() as i64 ^ ((area.height * 64.0).round() as i64) << 32,
+    ];
+    if win.fade.as_ref().is_none_or(|f| f.key != key) {
+        let (content, shown) = build_fade_host(gfx, area, w, h)?;
+        win.fade = Some(FadeHost {
+            key,
+            content,
+            shown,
+        });
     }
-    Ok(())
+    let host = win.fade.as_ref().unwrap();
+    host.content.Children()?.RemoveAll()?;
+    host.shown.SetOpacity(opacity)?;
+    root.Children()?.InsertAtTop(&host.shown)?;
+    Ok(host.content.clone())
 }
 
 fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
@@ -1967,7 +2139,7 @@ fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> R
 fn chrome(
     gfx: &Gfx,
     win: &mut Win,
-    root: &IDCompositionVisual2,
+    root: &ContainerVisual,
     area: Area,
     w: f64,
     h: f64,
@@ -2014,13 +2186,9 @@ fn chrome(
                 s
             }
         };
-        unsafe {
-            let v = gfx.dcomp.CreateVisual()?;
-            v.SetContent(&surface)?;
-            v.SetOffsetX2(area.left.round() as f32)?;
-            v.SetOffsetY2(area.top.round() as f32)?;
-            root.AddVisual(&v, false, None)?;
-        }
+        let v = sprite(gfx, &surface, false)?;
+        set_offset(&v.cast()?, area.left.round(), area.top.round())?;
+        root.Children()?.InsertAtBottom(&v)?;
     }
     if show {
         let over = s.over_lock.get();
@@ -2033,13 +2201,9 @@ fn chrome(
                 s
             }
         };
-        unsafe {
-            let v = gfx.dcomp.CreateVisual()?;
-            v.SetContent(&surface)?;
-            v.SetOffsetX2(rect.left as f32)?;
-            v.SetOffsetY2(rect.top as f32)?;
-            root.AddVisual(&v, true, None)?;
-        }
+        let v = sprite(gfx, &surface, false)?;
+        set_offset(&v.cast()?, rect.left as f64, rect.top as f64)?;
+        root.Children()?.InsertAtTop(&v)?;
     }
     Ok(())
 }

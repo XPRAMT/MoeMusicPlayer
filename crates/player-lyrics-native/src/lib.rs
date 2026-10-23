@@ -1,12 +1,16 @@
 //! Native renderer of the Windows taskbar and floating lyrics windows (ADR 0034).
 //!
-//! All lyrics windows live on one dedicated UI thread with one D3D11 device, one Direct2D device, one DirectWrite
-//! factory and one DirectComposition device (one target per window). Each lyric line is rasterised once (with its
-//! shadow or outline) into a cached composition surface; the continuous glide, the fades and the long-line scroll are
-//! `IDCompositionAnimation`s that DWM evaluates on every composed frame of each monitor, so this process does no work
-//! per frame. A window is re-planned only at a line change, a seek, pause/resume, a playback correction, new lyrics,
-//! a setting, or a size/DPI change. The rules themselves are `player-lyrics-rules`.
+//! All lyrics windows live on one dedicated UI thread (with its dispatcher queue) with one D3D11 device, one
+//! Direct2D device, one DirectWrite factory and one Windows.UI.Composition compositor (one desktop window target per
+//! window). Each lyric line is rasterised once (with its shadow or outline) into a cached `CompositionDrawingSurface`;
+//! the continuous glide, the fades and the long-line scroll are key-frame animations (`keyframes`) that the
+//! compositor evaluates on every composed frame of each monitor, so this process does no work per frame. The edge
+//! fade is one `CompositionMaskBrush` per window over a `CompositionVisualSurface` of the content. A window is
+//! re-planned only at a line change, a seek, pause/resume, a playback correction, new lyrics, a setting, or a
+//! size/DPI change. The rules themselves are `player-lyrics-rules`. Needs Windows 10 1809 or later (otherwise no
+//! lyrics windows are created).
 
+pub mod keyframes;
 pub mod plan;
 
 pub use player_lyrics_rules::{Align, Animation, TextEffect};
