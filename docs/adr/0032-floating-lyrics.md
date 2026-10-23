@@ -273,4 +273,9 @@ edge to transparent at the outer edge. The padlock column and the move-mode back
 edge is transparent, the horizontal clip room kept for the shadow at the area's sides is gone. Rules:
 `player-lyrics-rules::edge_fade_*`, `lyricsEdgeFade*` (lyrics-strip.js, shared vectors `edgeFade`),
 `FloatingLyricsRules.edgeFade*`. Android masks the lyric column (`EdgeFadeLayout`) with a `LinearGradient` in
-`DST_IN` on a saved layer.
+`DST_IN` on a saved layer. Windows (from 2026-10-23) renders the lyric content once per window into a `CompositionVisualSurface`
+and paints it through a `CompositionMaskBrush` whose mask is a static horizontal gradient from the same rule, which
+needs Windows.UI.Composition and so Windows 10 1809 or later (older systems get no lyrics windows). The first Windows
+version used static clipped bands, each with its own copy of the lyrics (about 1,300 visuals per window). With 3
+windows on a 120 Hz display, dwm.exe used about 95% of one core and composed only 33 frames/s. With the mask it is
+within noise of having no fade (about 25% vs 28% here, at full 120/60 Hz; see ADR 0034).

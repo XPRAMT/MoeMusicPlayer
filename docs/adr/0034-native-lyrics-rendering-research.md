@@ -1,4 +1,4 @@
-# 歌詞視窗改用原生 DirectComposition 繪製
+# 歌詞視窗改用原生 DirectComposition 繪製（2026-10-23 起合成層改為 Windows.UI.Composition，見文末）
 
 狀態：已採納（2026-10-23，使用者決定「歌詞繪製採用原生視窗方案 不再使用 WebView2 方案」）
 
@@ -155,3 +155,53 @@ surface，所以無法放靜態漸層當 DestinationIn；`MIN_BLEND` 合成模�
 只在重排（換行、跳轉、設定、尺寸／DPI）時重建，裝置遺失重建沿用原流程。每側最多 64 條：淡出區 ≤ 64 裝置像素時每條
 1 px（精確的逐像素斜坡），更寬時每階 1/64。代價是 visual 數量約為 (2×64＋1)×（每條的歌詞格數＋1）；若實測 DWM 成本
 過高，下一步是改用 Windows.UI.Composition 的 `CompositionMaskBrush`。
+
+（已取代，見下節：實測三窗 dwm.exe 約 95%、120 Hz 螢幕只剩 33 presents/s，條帶版先以 `EDGE_FADE_BANDS = false`
+關閉，再整個移除。）
+
+## 改用 Windows.UI.Composition 與遮罩淡出（2026-10-23）
+
+原因：條帶淡出每窗約 1,300 個 visual，使用者實測三個連續歌詞視窗、120 Hz 主螢幕時 dwm.exe 吃滿約一核（兩種歌詞都關時
+9–16%）。DirectComposition 沒有漸層遮罩（見上節），所以渲染器的合成層改為 Windows.UI.Composition（Desktop 互通），
+D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
+
+- 渲染執行緒建立 `CreateDispatcherQueueController`（`DQTYPE_THREAD_CURRENT`、`DQTAT_COM_STA`），本身的訊息迴圈照舊；
+  一個 `Compositor`，每個 HWND 以 `ICompositorDesktopInterop::CreateDesktopWindowTarget(hwnd, true)` 建 target
+  （視窗樣式、擁有者、置頂、不搶焦點、點擊穿透、鎖頭與拖曳都沒改），`ICompositorInterop::CreateGraphicsDevice`
+  把既有 D2D 裝置包成 `CompositionGraphicsDevice`，每行（含陰影／描邊）只畫一次進快取的 `CompositionDrawingSurface`。
+  變更由 dispatcher queue 隱式提交（不再呼叫 `Commit`）。
+- 動畫：`keyframes.rs`（平台中立、有單元測試）把計畫轉成 `ScalarKeyFrameAnimation`。滑動的每段三次多項式
+  ＝時間控制點固定 1/3、2/3 的 `CubicBezierEasingFunction`（此時貝茲的時間座標對參數是線性的，進度就是時間的三次
+  多項式），數值控制點由段兩端斜率算出，所以與 `plan.rs` 的分段單調三次曲線（同樣的節點、漂移修正的節點）完全相同；
+  淡化與長句捲動是線性關鍵格。全部由合成器每幀求值，本程序沒有逐幀工作。測試每 10 ms 比對計畫（含漂移修正、
+  行首錨點與規則一致）。動畫的起點仍提前到下一個合成幀：改用 `DwmGetCompositionTimingInfo` 的下一個 vblank
+  （取代 DComp 的 `GetFrameStatistics`）。
+- 整數裝置像素：所有歌詞 sprite 的 `CompositionSurfaceBrush` 用 `NearestNeighbor` 取樣、`Stretch::None`，滑動中的
+  小數位移照樣落在整數像素上（與 DComp 的最近鄰相同；沒有用 `SnapToPixels`）。
+- 淡出：每窗一個 `ContainerVisual`（歌詞內容）交給 `CompositionVisualSurface` 離屏繪製，畫面上的 `SpriteVisual` 用
+  `CompositionMaskBrush`（source＝該 visual surface 的 surface brush，mask＝靜態水平 `CompositionLinearGradientBrush`，
+  Absolute 座標、Clamp），漸層停駐點由 `keyframes::edge_fade_stops`（與 `edge_fade_opacity` 相同的分段線性）產生；
+  只在視窗尺寸、DPI 或歌詞區改變時重建，重排時只換內容。每窗只有一份歌詞 visual。窗透明度設在遮罩 sprite 上。
+  診斷用 `MOE_LYRICS_NO_FADE=1` 關閉淡出（內容改為剪裁到歌詞區＋效果餘量）。
+- 裝置遺失：每 2 秒檢查 D3D 裝置，遺失或繪製失敗即關閉 target、整組重建（新 compositor 與 target）；
+  `CompositionGraphicsDevice.RenderingDeviceReplaced` 觸發時清除 surface 快取並重排全部視窗。
+- 最低系統：**Windows 10 1809（UniversalApiContract 7，`CompositionVisualSurface` 需要）**；Desktop 互通本身是 1803。
+  啟動時以 `ApiInformation::IsApiContractPresentByMajor` 檢查，不符合或 dispatcher queue 建立失敗時記錄
+  「needs Windows 10 version 1809 or later」，不建立任何歌詞視窗（`create` 回傳 None），不會當機。
+- 相依：只加同一個 `windows` 0.62.2 的 feature（Foundation、Foundation_Metadata、Foundation_Numerics、Graphics、
+  Graphics_DirectX、System、UI、UI_Composition、UI_Composition_Desktop、Win32_Graphics_Dwm、Win32_System_Performance、
+  Win32_System_WinRT、Win32_System_WinRT_Composition），`Cargo.lock` 不變。
+
+實測（2026-10-23，隔離的 `--example demo`，3 個視窗〔浮動＋2 個工作列樣式〕、連續、陰影，各 20 秒；
+主螢幕 **120 Hz**、第二螢幕 **60 Hz**；使用者的 Release 播放器同時執行，dwm.exe 閒置基線約 23.6–26%，
+`Get-Counter '\Process(dwm)\% Processor Time'` 每 2 秒取樣）：
+
+| 版本 | dwm.exe（單核 %） | 測試行程 CPU | presents/s（120 Hz／60 Hz） |
+| --- | --- | --- | --- |
+| DComp＋條帶淡出（e936cd2） | 94.9 | 10.5% | 33.5／23.5 |
+| DComp、淡出關閉（ef1ce35） | 28.5 | 4.1% | 120.0／58.5 |
+| WUC、淡出關閉（`MOE_LYRICS_NO_FADE=1`） | 28.1 | 2.8% | 120.0／60.0 |
+| WUC＋遮罩淡出 | 25.2 | 3.5% | 120.0／60.7 |
+
+遮罩淡出的 DWM 成本在量測雜訊內（與淡出關閉相同）。截圖確認淡出平滑、外緣全透明。未驗證：真實裝置遺失、
+1809 以前系統的退路（只在本機 Windows 11 執行過）、鎖頭懸停外觀、Release 播放器內的實機外觀。
