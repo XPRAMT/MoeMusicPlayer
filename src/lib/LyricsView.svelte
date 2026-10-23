@@ -18,10 +18,18 @@
     LYRIC_CUE_LEAD_MS,
     cueAnimationMs,
     displayCuePositions,
-    easeOutCubic,
     findDisplayCueIndex,
     nextDisplayCuePosition,
   } from './lyrics-cue-timing';
+  import {
+    LYRIC_OFFSET_GLIDE_MS,
+    glidePosition,
+    restingGlide,
+    retargetGlide,
+    snapToDevicePixel,
+    timedNavigationKind,
+    type ScrollGlide,
+  } from './lyrics-scroll-glide';
   import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
@@ -177,30 +185,42 @@
     height: number;
     jumpId: number | null;
     clockPlaying: boolean | null;
+    offsetMs: number;
   } | null = null;
   // Cue scroll tween (ADR 0029): fixed length (the cue animation), ease-out, requestAnimationFrame only while it runs.
   // It replaces the browser's smooth scrollTo, whose length the browser picks, so the scroll can end on the line start.
+  // Both the cue advance and the delay-change glide are one retargetable Hermite glide (lyrics-scroll-glide.ts), so a new
+  // target taken mid-flight keeps the position and speed continuous. Positions are written in whole device pixels.
   let cueScrollFrame = 0;
+  let cueGlide: ScrollGlide | null = null;
   function stopCueScroll(): void {
     if (cueScrollFrame) cancelAnimationFrame(cueScrollFrame);
     cueScrollFrame = 0;
+    cueGlide = null;
     timedSmoothScrolling = false;
   }
-  function startCueScroll(element: HTMLDivElement, targetTop: number, durationMs: number): void {
-    if (cueScrollFrame) cancelAnimationFrame(cueScrollFrame);
-    const fromTop = element.scrollTop;
-    const startedAt = performance.now();
+  function runCueGlide(element: HTMLDivElement, glide: ScrollGlide): void {
+    cueGlide = glide;
     timedSmoothScrolling = true;
+    if (cueScrollFrame) return; // the running frame loop picks up the new glide
     const step = (now: number) => {
-      if (timedUserScrolling) { stopCueScroll(); return; }
-      const progress = Math.min(1, (now - startedAt) / durationMs);
-      element.scrollTop = fromTop + (targetTop - fromTop) * easeOutCubic(progress);
-      if (progress < 1) { cueScrollFrame = requestAnimationFrame(step); return; }
+      const current = cueGlide;
+      if (!current || timedUserScrolling) { stopCueScroll(); return; }
+      const top = snapToDevicePixel(glidePosition(current, now), window.devicePixelRatio);
+      if (Math.abs(element.scrollTop - top) >= 0.5 / (window.devicePixelRatio || 1)) element.scrollTop = top;
+      if (now < current.startedAt + current.durationMs) { cueScrollFrame = requestAnimationFrame(step); return; }
       cueScrollFrame = 0;
+      cueGlide = null;
       timedSmoothScrolling = false;
       correctTimedCenter();
     };
     cueScrollFrame = requestAnimationFrame(step);
+  }
+  function startCueScroll(element: HTMLDivElement, targetTop: number, durationMs: number): void {
+    runCueGlide(element, restingGlide(element.scrollTop, targetTop, performance.now(), durationMs));
+  }
+  function glideCueScroll(element: HTMLDivElement, targetTop: number): void {
+    runCueGlide(element, retargetGlide(cueGlide, element.scrollTop, targetTop, performance.now(), LYRIC_OFFSET_GLIDE_MS));
   }
   let timedSmoothScrolling = false;
   let timedUserScrolling = false;
@@ -498,6 +518,7 @@
     const currentTrackId = trackId;
     const currentlyPlaying = isPlaying && effectivePlaybackState === 'playing';
     const viewportHeight = timedViewportHeight;
+    const offsetMs = timedOffsetMs;
     if (!element) return;
 
     const previous = previousTimedNavigation;
@@ -511,18 +532,30 @@
       // Same line: remember the clock state so a later normal advance is not mistaken for a seek.
       previous.jumpId = jumpId;
       previous.clockPlaying = clockPlaying;
+      previous.offsetMs = offsetMs;
       return;
     }
     // A seek while playing (the clock jumped without a play/pause change) lands at once, like a track change.
     const seeked = previous !== null && previous.jumpId !== jumpId && previous.clockPlaying === clockPlaying;
-    const isNormalCueAdvance = Boolean(currentlyPlaying && sameTrackAndLayout && !seeked && previous?.index >= 0 && activeIndex === previous.index + 1);
-    previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight, jumpId, clockPlaying };
+    const kind = timedNavigationKind({
+      sameTrackAndLayout: Boolean(sameTrackAndLayout && previous?.viewport === element && previous.height === viewportHeight),
+      seeked,
+      offsetChanged: previous !== null && previous.offsetMs !== offsetMs,
+      playing: currentlyPlaying,
+      previousIndex: previous?.index ?? -1,
+      index: activeIndex,
+    });
+    previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight, jumpId, clockPlaying, offsetMs };
 
     const frame = requestAnimationFrame(() => {
       const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       const targetTop = timedCueScrollTop(layout, activeIndex, viewportHeight, element.clientHeight);
-      if (isNormalCueAdvance && !reducedMotion && animationMs >= 16 && Math.abs(element.scrollTop - targetTop) > 1) {
-        startCueScroll(element, targetTop, animationMs);
+      const far = Math.abs(element.scrollTop - targetTop) > 1 || cueGlide !== null;
+      if (!reducedMotion && kind === 'glide' && far) {
+        // The per-track delay changed: bend the running glide (or start one) toward the new line.
+        glideCueScroll(element, targetTop);
+      } else if (!reducedMotion && kind === 'cue' && animationMs >= 16 && far) {
+        if (cueGlide) glideCueScroll(element, targetTop); else startCueScroll(element, targetTop, animationMs);
       } else {
         stopCueScroll();
         element.scrollTo({ top: targetTop, behavior: 'instant' });
