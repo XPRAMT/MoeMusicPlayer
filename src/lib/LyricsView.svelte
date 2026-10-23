@@ -24,6 +24,7 @@
   } from './lyrics-cue-timing';
   import {
     glidePosition,
+    planTimedScroll,
     restingGlide,
     retargetGlide,
     snapToDevicePixel,
@@ -265,8 +266,11 @@
   let timedOffsetMs = $derived(lyricsDisplayOffsetMs(viewState.lyrics?.offsetMs, timingOffsetSec));
   // Bumped by the cue timer below; the clock estimate is read again only then (or when the clock itself changes).
   let cueTick = $state(0);
+  // The offset is read too: right after a delay step the index must come from a fresh position, not the estimate of
+  // the last cue tick (a stale position picked a wrong line that the next timer then flipped back).
   let cuePositionMs = $derived.by(() => {
     cueTick;
+    timedOffsetMs;
     return playbackClock ? estimatePlaybackPosition(playbackClock, performance.now()) : positionMs;
   });
   let timedStartTimes = $derived(timedLines.map((entry) => entry.startMs));
@@ -544,19 +548,17 @@
       playing: currentlyPlaying,
       previousIndex: previous?.index ?? -1,
       index: activeIndex,
+      glideRunning: cueGlide !== null,
     });
     previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight, jumpId, clockPlaying, offsetMs };
 
     const frame = requestAnimationFrame(() => {
       const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       const targetTop = timedCueScrollTop(layout, activeIndex, viewportHeight, element.clientHeight);
-      const far = Math.abs(element.scrollTop - targetTop) > 1 || cueGlide !== null;
-      if (!reducedMotion && kind === 'glide' && far) {
-        // The per-track delay changed: bend the running glide (or start one) toward the new line.
-        glideCueScroll(element, targetTop);
-      } else if (!reducedMotion && kind === 'cue' && animationMs >= 16 && far) {
-        if (cueGlide) glideCueScroll(element, targetTop); else startCueScroll(element, targetTop, animationMs);
-      } else {
+      const plan = planTimedScroll({ kind, glideRunning: cueGlide !== null, animationMs, reducedMotion, distancePx: targetTop - element.scrollTop });
+      if (plan === 'retarget') glideCueScroll(element, targetTop);
+      else if (plan === 'rest') startCueScroll(element, targetTop, animationMs);
+      else if (plan === 'instant') {
         stopCueScroll();
         element.scrollTo({ top: targetTop, behavior: 'instant' });
       }

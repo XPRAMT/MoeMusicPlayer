@@ -64,9 +64,11 @@ export type TimedNavigationKind = 'cue' | 'glide' | 'instant';
 
 /**
  * How the timed list moves to a newly shown line.
- * - `cue`: the normal advance to the next line while playing (ADR 0029 tween, ends on the line start);
- * - `glide`: the same track and layout but the lyric delay changed (no seek, no track change): retargetable glide;
- * - `instant`: everything else (seek, track change, layout change, reduced motion handled by the caller).
+ * - `instant`: a seek, a track change or a layout/viewport change (always lands at once);
+ * - `glide`: the lyric delay changed, or the line changed some other way while a glide is still running (for example
+ *   a cue advance that a delay step moved by more than one line): bend the running glide;
+ * - `cue`: the normal advance to the next line while playing (ADR 0029, ends on the line start);
+ * - otherwise `instant` (nothing in flight to continue).
  */
 export function timedNavigationKind(input: {
   sameTrackAndLayout: boolean;
@@ -75,9 +77,32 @@ export function timedNavigationKind(input: {
   playing: boolean;
   previousIndex: number;
   index: number;
+  glideRunning?: boolean;
 }): TimedNavigationKind {
   if (!input.sameTrackAndLayout || input.seeked) return 'instant';
   if (input.offsetChanged) return input.index >= 0 ? 'glide' : 'instant';
   if (input.playing && input.previousIndex >= 0 && input.index === input.previousIndex + 1) return 'cue';
-  return 'instant';
+  return input.glideRunning && input.index >= 0 ? 'glide' : 'instant';
+}
+
+export type TimedScrollPlan = 'retarget' | 'rest' | 'instant' | 'none';
+
+/**
+ * What the scroll does for a navigation (decided on the frame, with the glide state of that frame). Every animated
+ * change goes through the one glide: while a glide runs, a cue advance or a delay change retargets it (keeping position
+ * and speed); a standalone cue advance starts the ADR 0029 ease-out from rest. A cue advance with under 16 ms left is
+ * instant only when nothing is gliding.
+ */
+export function planTimedScroll(input: {
+  kind: TimedNavigationKind;
+  glideRunning: boolean;
+  animationMs: number;
+  reducedMotion: boolean;
+  distancePx: number;
+}): TimedScrollPlan {
+  if (input.reducedMotion || input.kind === 'instant') return 'instant';
+  if (input.glideRunning) return 'retarget';
+  if (Math.abs(input.distancePx) <= 1) return 'none';
+  if (input.kind === 'glide') return 'retarget';
+  return input.animationMs >= 16 ? 'rest' : 'instant';
 }
