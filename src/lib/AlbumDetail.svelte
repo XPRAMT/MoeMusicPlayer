@@ -10,7 +10,7 @@
   import TrackList from './TrackList.svelte';
   import { formatDurationHours, formatAlbumTrackNumber } from './format';
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
-  import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange, getAlbumDetailCoverSize } from './album-detail-collapse.js';
+  import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange } from './album-detail-collapse.js';
 
   interface Props {
     album: AlbumEntry;
@@ -46,10 +46,20 @@
     && CSS.supports('animation-range', '0px 1px')
     && CSS.supports('timeline-scope', '--album-detail-scroll')
     && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
+  /**
+   * Current collapse offset in CSS px. Only the fallback for runtimes without CSS scroll timelines uses it (and only then
+   * does the list report scroll positions); with scroll timelines the compositor drives the cover from the native scroll
+   * offset and nothing here is written per scroll event.
+   */
   let albumCoverScrollPeak = $state(0);
-  let albumCoverSize = $derived(getAlbumDetailCoverSize(albumCoverBaseSize, albumCoverScrollPeak));
   let albumCollapseRange = $derived(getAlbumDetailCollapseRange(albumCoverBaseSize));
-  let albumCollapseOffset = $derived(Math.min(albumCollapseRange, albumCoverScrollPeak));
+  let albumCollapseProgress = $derived(albumCollapseRange > 0 ? Math.min(1, Math.max(0, albumCoverScrollPeak / albumCollapseRange)) : 0);
+  /** Cover scale when fully collapsed (80px / base size). The cover is always laid out at base size and only scaled. */
+  let albumCoverEndScale = $derived(Math.min(1, MIN_ALBUM_DETAIL_COVER_SIZE_PX / albumCoverBaseSize));
+  let shellStyle = $derived(
+    `--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px;--album-detail-cover-end-scale:${albumCoverEndScale}`
+    + (supportsScrollDrivenAlbumOverlay ? '' : `;--album-detail-collapse-progress:${albumCollapseProgress}`),
+  );
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
     descending: QuickIndexSnapshot;
@@ -282,7 +292,7 @@
 <div
   class="album-detail-shell"
   class:scroll-driven-collapse={supportsScrollDrivenAlbumOverlay}
-  style={`--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-heading-height:${albumHeadingBaseHeight - albumCollapseOffset}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px;--album-detail-cover-min-size:${MIN_ALBUM_DETAIL_COVER_SIZE_PX}px`}
+  style={shellStyle}
 >
   <div class="album-detail-tracks">
     {#if sortReady}
@@ -299,14 +309,11 @@
         getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
         leadingOverlayHeight={albumHeadingBaseHeight}
         leadingCollapseRange={albumCollapseRange}
-        onViewportScrollTopChange={handleListScrollTopChange}
+        onViewportScrollTopChange={supportsScrollDrivenAlbumOverlay ? undefined : handleListScrollTopChange}
       />
     {/if}
   </div>
-  <div
-    class="album-detail-heading"
-    style={`--album-detail-cover-size:${albumCoverSize}px`}
-  >
+  <div class="album-detail-heading">
     <div class="album-detail-art">
       <AlbumArtworkMosaic sources={displayedCoverUrls} label={tr("{0} 封面拼貼", [album.displayName])} />
     </div>
@@ -326,35 +333,57 @@
 
 <style>
   .album-detail-shell { position:relative; min-width:0; min-height:0; flex:1 1 auto; overflow:hidden; }
-  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; }
+  /*
+   * The cover is always laid out at its base size (200px, 160px narrow) and the heading keeps its base height, so scrolling
+   * never changes layout: the cover only gets transform: scale() and the summary only translate(), both driven by the
+   * list's native scroll offset (CSS scroll timeline, compositor) when supported. Cover and summary follow one linear
+   * progress, so the cover's visual size is base - scrollTop px and the summary stays beside it and vertically centred on it.
+   * Without scroll timelines, the script writes --album-detail-collapse-progress (0..1) and the same declarations apply.
+   */
+  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-base-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; }
   @supports (animation-timeline: scroll()) and (timeline-scope: --album-detail-scroll) {
     .album-detail-shell.scroll-driven-collapse { timeline-scope: --album-detail-scroll; }
 
-    .album-detail-shell.scroll-driven-collapse .album-detail-heading {
-      animation: album-detail-heading-collapse auto linear both;
-      animation-timeline: --album-detail-scroll;
-      animation-range: 0px var(--album-detail-collapse-range);
-    }
-
     .album-detail-shell.scroll-driven-collapse .album-detail-art {
-      animation: album-detail-cover-collapse auto linear both;
+      animation: album-detail-cover-collapse auto linear both, album-detail-cover-radius auto linear both;
       animation-timeline: --album-detail-scroll;
       animation-range: 0px var(--album-detail-collapse-range);
     }
 
-    @keyframes album-detail-heading-collapse {
-      from { height: var(--album-detail-heading-base-height); }
-      to { height: calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range)); }
+    .album-detail-shell.scroll-driven-collapse .album-detail-summary {
+      animation: album-detail-summary-collapse auto linear both;
+      animation-timeline: --album-detail-scroll;
+      animation-range: 0px var(--album-detail-collapse-range);
     }
 
     @keyframes album-detail-cover-collapse {
-      from { width: var(--album-detail-cover-base-size); height: var(--album-detail-cover-base-size); flex-basis: var(--album-detail-cover-base-size); }
-      to { width: var(--album-detail-cover-min-size); height: var(--album-detail-cover-min-size); flex-basis: var(--album-detail-cover-min-size); }
+      from { transform: scale(1); }
+      to { transform: scale(var(--album-detail-cover-end-scale, 1)); }
+    }
+
+    /* Keeps the visual corner radius at 10px: layout radius = 10px / scale (paint only, no layout). */
+    @keyframes album-detail-cover-radius {
+      from { border-radius: 10px; }
+      25% { border-radius: calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * 0.25)); }
+      50% { border-radius: calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * 0.5)); }
+      75% { border-radius: calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * 0.75)); }
+      to { border-radius: calc(10px / var(--album-detail-cover-end-scale, 1)); }
+    }
+
+    @keyframes album-detail-summary-collapse {
+      from { transform: translate(0, 0); }
+      to { transform: translate(calc(var(--album-detail-collapse-range, 0px) * -1), calc(var(--album-detail-collapse-range, 0px) * -0.5)); }
     }
   }
   .album-detail-heading > * { pointer-events:auto; }
-  .album-detail-art { width:var(--album-detail-cover-size,200px); height:var(--album-detail-cover-size,200px); flex:0 0 var(--album-detail-cover-size,200px); aspect-ratio:1; overflow:hidden; border-radius:10px; background:#000; }
-  .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; }
+  .album-detail-art {
+    width:var(--album-detail-cover-base-size,200px); height:var(--album-detail-cover-base-size,200px); flex:0 0 var(--album-detail-cover-base-size,200px); aspect-ratio:1; overflow:hidden; background:#000;
+    border-radius:calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * var(--album-detail-collapse-progress, 0)));
+    transform-origin:0 0;
+    transform:scale(calc(1 - (1 - var(--album-detail-cover-end-scale, 1)) * var(--album-detail-collapse-progress, 0)));
+    will-change:transform;
+  }
+  .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; transform:translate(calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -1), calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -0.5)); }
   .album-detail-artists,
   .album-detail-stats,
   .album-detail-stats > span { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:8px; }

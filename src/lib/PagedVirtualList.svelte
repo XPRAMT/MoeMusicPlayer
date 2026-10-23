@@ -778,10 +778,11 @@
   class="paged-virtual-frame"
   class:fill-available={fillAvailable}
   class:leading-overlay={hasLeadingOverlay}
+  class:scroll-driven-collapse={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
   bind:this={frame}
   style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-range:${leadingCollapseRange}px;--paged-viewport-top:${viewportTopOffset}px`}
 >
-  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${Math.max(0, leadingOverlayHeight - collapseOffset)}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
+  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${leadingOverlayHeight}px;right:${headerGutter}px;${supportsScrollDrivenAlbumOverlay ? '' : `transform:translateY(${-collapseOffset}px);`}` : `padding-right:${headerGutter}px;`}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
       {#if header}{@render header()}{/if}
     </div>
@@ -965,15 +966,15 @@
       scroll-timeline: --album-detail-scroll block;
     }
 
-    .paged-virtual-frame.leading-overlay .paged-virtual-header {
+    .paged-virtual-frame.leading-overlay.scroll-driven-collapse .paged-virtual-header {
       animation: album-detail-grid-header-collapse auto linear both;
       animation-timeline: --album-detail-scroll;
       animation-range: 0px var(--paged-collapse-range);
     }
 
     @keyframes album-detail-grid-header-collapse {
-      from { top: var(--paged-leading-height); }
-      to { top: calc(var(--paged-leading-height) - var(--paged-collapse-range)); }
+      from { transform: translateY(0); }
+      to { transform: translateY(calc(var(--paged-collapse-range) * -1)); }
     }
   }
 
