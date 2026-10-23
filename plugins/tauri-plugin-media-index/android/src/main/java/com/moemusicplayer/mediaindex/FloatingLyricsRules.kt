@@ -198,22 +198,29 @@ object FloatingLyricsRules {
     /**
      * The playback position for this display frame. ExoPlayer's reported position only advances in coarse steps (it
      * is refreshed when the playback thread does work, every ~100-200 ms for audio), so while playing it is carried on
-     * from the last report by the time since then. A report a little behind the carried-on value does not pull the
-     * text back (no jitter); a jump (seek, a new track, a stall) of more than `resyncMs` is taken as is.
+     * from the last report by the time since then. A difference between that and the position shown on the previous
+     * frame of less than `resyncMs` is never stepped over: the shown position keeps running from where it was, a
+     * little fast or slow (`slewMs` time constant), so it stays continuous with a continuous speed and never moves
+     * back. A larger jump (seek, a new track, a stall) is taken as is.
      */
     fun smoothPositionMs(
-        previousMs: Long?,
+        previousMs: Double?,
+        previousAtMs: Long,
         reportedMs: Long,
         reportedAtMs: Long,
         nowMs: Long,
         playing: Boolean,
         resyncMs: Long = 250,
-    ): Long {
-        if (!playing) return reportedMs
-        val carried = reportedMs + maxOf(0L, nowMs - reportedAtMs)
+        slewMs: Double = 750.0,
+    ): Double {
+        if (!playing) return reportedMs.toDouble()
+        val carried = (reportedMs + maxOf(0L, nowMs - reportedAtMs)).toDouble()
         if (previousMs == null) return carried
-        val drift = carried - previousMs
-        return if (drift < 0 && drift > -resyncMs) previousMs else carried
+        val step = maxOf(0L, nowMs - previousAtMs).toDouble()
+        val drift = carried - (previousMs + step)
+        if (kotlin.math.abs(drift) >= resyncMs) return carried
+        val rate = (1.0 + drift / slewMs).coerceIn(0.5, 1.5)
+        return previousMs + step * rate
     }
 
     /** Height of one drawn line: the text's own height (ascent to descent) with a 10% buffer. */

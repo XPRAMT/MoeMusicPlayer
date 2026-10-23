@@ -12,6 +12,75 @@ pub type Keys = Vec<(f64, f64)>;
 /// the last key is the end value (only `c0`), constant after it.
 pub type Cubics = Vec<(f64, [f64; 4])>;
 
+/// Playback samples within this of the running clock are ignored (about 1 device px of glide).
+pub const CLOCK_TOLERANCE_MS: f64 = 4.0;
+/// Larger differences are a seek and jump; smaller ones are absorbed by a rate change (ADR 0028 / 0034).
+pub const CLOCK_JUMP_MS: f64 = 250.0;
+/// Wall time over which a small drift is absorbed.
+pub const CLOCK_SLEW_MS: f64 = 750.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Correction {
+    Keep,
+    Slew(Motion),
+    Jump,
+}
+
+/// The renderer's playing clock from its last base: position `base_ms`, running at `rate` lyrics ms per wall ms for
+/// the first `slew_ms` wall ms (a drift correction), then at 1. Continuous in position by construction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Motion {
+    pub base_ms: f64,
+    pub rate: f64,
+    pub slew_ms: f64,
+}
+
+impl Motion {
+    pub fn at(base_ms: f64) -> Self {
+        Motion {
+            base_ms,
+            rate: 1.0,
+            slew_ms: 0.0,
+        }
+    }
+
+    /// Position `dt_ms` wall ms after the base (playing).
+    pub fn position(&self, dt_ms: f64) -> f64 {
+        let dt = dt_ms.max(0.0);
+        self.base_ms
+            + if dt <= self.slew_ms {
+                self.rate * dt
+            } else {
+                self.rate * self.slew_ms + (dt - self.slew_ms)
+            }
+    }
+
+    /// The correction still running `dt_ms` after the base: (rate, lyrics ms until it ends).
+    pub fn slew(&self, dt_ms: f64) -> Option<(f64, f64)> {
+        let dt = dt_ms.max(0.0);
+        (dt < self.slew_ms).then_some((self.rate, self.rate * (self.slew_ms - dt)))
+    }
+
+    /// A sample `sample_ms` arrives `dt_ms` after the base while playing on: `Ok(None)` keeps the motion, `Ok(Some)`
+    /// continues from the current position with a rate that absorbs the drift over `CLOCK_SLEW_MS`, `Jump` is a
+    /// seek (jump to the sample).
+    pub fn correct(&self, dt_ms: f64, sample_ms: f64) -> Correction {
+        let predicted = self.position(dt_ms);
+        let drift = sample_ms - predicted;
+        if drift.abs() < CLOCK_TOLERANCE_MS {
+            Correction::Keep
+        } else if drift.abs() < CLOCK_JUMP_MS {
+            Correction::Slew(Motion {
+                base_ms: predicted,
+                rate: 1.0 + drift / CLOCK_SLEW_MS,
+                slew_ms: CLOCK_SLEW_MS,
+            })
+        } else {
+            Correction::Jump
+        }
+    }
+}
+
 /// How many glide breaks (line starts) one plan covers, so a late wake-up never stalls the strip.
 pub const HORIZON_BREAKS: usize = 3;
 
@@ -36,6 +105,37 @@ pub struct StripInput<'a> {
     pub at_ms: f64,
     pub playing: bool,
     pub inactive_percent: u32,
+    /// Lyrics ms per wall ms while a small drift is being absorbed (1 otherwise, always > 0).
+    pub rate: f64,
+    /// Lyrics time at which `rate` returns to 1 (`None` = no correction running).
+    pub slew_until_ms: Option<f64>,
+}
+
+impl StripInput<'_> {
+    /// The correction in effect: its rate and the lyrics time it ends (a knot of the plan).
+    fn slew(&self) -> Option<(f64, f64)> {
+        self.slew_until_ms
+            .filter(|&u| u > self.at_ms && self.playing && self.rate > 0.0)
+            .map(|u| (self.rate, u))
+    }
+
+    /// Wall seconds from now until lyrics time `t` (the clock runs at `rate` until the slew ends, then at 1).
+    pub fn wall_secs(&self, t: f64) -> f64 {
+        let p = self.at_ms;
+        match self.slew() {
+            Some((r, u)) if t > u => (u - p) / r / 1000.0 + (t - u) / 1000.0,
+            Some((r, _)) => (t - p) / r / 1000.0,
+            None => (t - p) / 1000.0,
+        }
+    }
+
+    /// Lyrics ms per wall ms at lyrics time `t` (just after it).
+    fn rate_at(&self, t: f64) -> f64 {
+        match self.slew() {
+            Some((r, u)) if t < u => r,
+            _ => 1.0,
+        }
+    }
 }
 
 fn offset_at(input: &StripInput, t: f64) -> f64 {
@@ -89,15 +189,25 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
             }
         }
     }
-    let secs = |t: f64| (t - p) / 1000.0;
+    let secs = |t: f64| input.wall_secs(t);
+    // The end of a drift correction changes the time mapping, so it is a knot too (no re-plan needed there).
+    let mut knots = breaks.clone();
+    if let Some((_, u)) = input.slew() {
+        if u < breaks.last().copied().unwrap_or(f64::INFINITY) {
+            knots.push(u);
+            knots.sort_by(f64::total_cmp);
+        }
+    }
     // Every break is a knot of the glide curve, so each stretch between two of them is one cubic piece; the
     // coefficients come from the rule in ms and are rescaled to seconds. A re-plan samples the same global curve
     // (its tangents only read neighbouring knots), so the hand-over between plans has no kink.
     let mut offset: Cubics = Vec::new();
     let mut from = p;
-    for &b in &breaks {
+    for &b in &knots {
         let c = cubic_at(input, from);
-        offset.push((secs(from), [c[0], c[1] * 1e3, c[2] * 1e6, c[3] * 1e9]));
+        // u (lyrics ms) = r * 1000 * s (wall seconds) within one piece.
+        let k = input.rate_at(from) * 1e3;
+        offset.push((secs(from), [c[0], c[1] * k, c[2] * k * k, c[3] * k * k * k]));
         from = b;
     }
     offset.push((secs(from), [offset_at(input, from), 0.0, 0.0, 0.0]));
@@ -125,6 +235,11 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
             }
         }
     }
+    if let Some((_, u)) = input.slew() {
+        if u <= horizon {
+            times.push(u);
+        }
+    }
     times.sort_by(f64::total_cmp);
     times.dedup();
     let opacity = match cells {
@@ -143,7 +258,7 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
         offset,
         cells,
         opacity,
-        wake_ms: breaks.first().map(|b| b - p),
+        wake_ms: breaks.first().map(|&b| secs(b) * 1000.0),
     }
 }
 
@@ -272,6 +387,8 @@ mod tests {
             at_ms: at,
             playing,
             inactive_percent: 50,
+            rate: 1.0,
+            slew_until_ms: None,
         }
     }
 
@@ -352,5 +469,106 @@ mod tests {
             plan_line(&[1000.0], 500.0, 0.0, None, true, true).index,
             None
         );
+    }
+
+    /// Replays a jittery, drifting sample feed through the renderer's clock and re-plans (every correction and
+    /// every line start), evaluating what DWM shows each ms: the strip never moves back and never steps.
+    #[test]
+    fn a_jittery_drifting_sample_feed_never_steps_or_reverses_the_strip() {
+        let starts: Vec<f64> = (0..40)
+            .map(|i| 1000.0 + i as f64 * 1700.0 + (i % 3) as f64 * 400.0)
+            .collect();
+        let widths: Vec<f64> = (0..40).map(|i| 150.0 + (i * 37 % 120) as f64).collect();
+        let layout = rules::layout_strip(&widths, &[], 20.0);
+        // Pseudo random latency 0..25 ms, a 0.3 % fast player and one 120 ms hiccup.
+        let mut seed = 7u64;
+        let mut rand = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as f64 / (1u64 << 31) as f64
+        };
+        let truth = |w: f64| w * 1.003 + if w > 30_000.0 { 120.0 } else { 0.0 };
+        let mut motion = Motion::at(0.0);
+        let mut base_wall = 0.0;
+        let plan_at = |motion: &Motion, base_wall: f64, w: f64| {
+            let dt = w - base_wall;
+            let at = motion.position(dt);
+            let slew = motion.slew(dt);
+            let i = StripInput {
+                starts: &starts,
+                layout: &layout,
+                view_width: 400.0,
+                final_line: None,
+                at_ms: at,
+                playing: true,
+                inactive_percent: 50,
+                rate: slew.map_or(1.0, |s| s.0),
+                slew_until_ms: slew.map(|s| at + s.1),
+            };
+            plan_strip(&i)
+        };
+        let mut plan = plan_at(&motion, base_wall, 0.0);
+        let mut plan_wall = 0.0;
+        let mut wake = plan.wake_ms.map(|ms| ms);
+        let mut next_sample = 500.0 + rand() * 25.0;
+        let mut last: Option<f64> = None;
+        let mut w = 0.0;
+        while w < 60_000.0 {
+            let replan = if w >= next_sample {
+                let sample = truth(w - rand() * 25.0);
+                match motion.correct(w - base_wall, sample) {
+                    Correction::Keep => false,
+                    Correction::Slew(m) => {
+                        motion = m;
+                        base_wall = w;
+                        true
+                    }
+                    Correction::Jump => panic!("a sample at {w} jumped"),
+                }
+            } else {
+                false
+            };
+            if w >= next_sample {
+                next_sample += 500.0;
+            }
+            if replan || wake.is_some_and(|ms| w - plan_wall >= ms) {
+                plan = plan_at(&motion, base_wall, w);
+                plan_wall = w;
+                wake = plan.wake_ms;
+            }
+            let x = cubic_value_at(&plan.offset, (w - plan_wall) / 1000.0);
+            if let Some(prev) = last {
+                assert!(x <= prev + 1e-6, "backwards at {w}: {prev} -> {x}");
+                assert!(prev - x < 1.0, "step at {w}: {prev} -> {x}");
+            }
+            last = Some(x);
+            w += 1.0;
+        }
+    }
+
+    #[test]
+    fn a_slew_plan_follows_the_corrected_clock() {
+        let starts = [1000.0, 3000.0, 5000.0, 9000.0];
+        let layout = rules::layout_strip(&[100.0, 50.0, 80.0, 120.0], &[], 20.0);
+        let motion = Motion {
+            base_ms: 2000.0,
+            rate: 1.1,
+            slew_ms: 750.0,
+        };
+        let mut i = input(&starts, &layout, 2000.0, true);
+        i.rate = 1.1;
+        i.slew_until_ms = Some(2000.0 + 1.1 * 750.0);
+        let plan = plan_strip(&i);
+        let mut t = 0.0;
+        while t < 3.0 {
+            let want = offset_at(&i, motion.position(t * 1000.0));
+            assert!(
+                (cubic_value_at(&plan.offset, t) - want).abs() < 1e-6,
+                "at {t}"
+            );
+            t += 0.005;
+        }
+        assert!((plan.wake_ms.unwrap() - (750.0 + (3000.0 - 2825.0))).abs() < 1e-6);
     }
 }

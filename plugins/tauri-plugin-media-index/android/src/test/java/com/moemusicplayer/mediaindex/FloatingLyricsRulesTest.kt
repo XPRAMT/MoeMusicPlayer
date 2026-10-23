@@ -55,15 +55,47 @@ class FloatingLyricsRulesTest {
 
     @Test
     fun positionIsCarriedOnBetweenCoarseReports() {
+        val r = FloatingLyricsRules
         // Paused: the report as is.
-        assertEquals(1_000L, FloatingLyricsRules.smoothPositionMs(900L, 1_000L, 0L, 500L, playing = false))
-        // Playing: the last report plus the time since it.
-        assertEquals(1_016L, FloatingLyricsRules.smoothPositionMs(null, 1_000L, 100L, 116L, playing = true))
-        // A fresh report slightly behind the carried-on value: hold, never step back.
-        assertEquals(1_120L, FloatingLyricsRules.smoothPositionMs(1_120L, 1_100L, 200L, 210L, playing = true))
-        // A seek back: follow it.
-        assertEquals(5_010L, FloatingLyricsRules.smoothPositionMs(1_120L, 5_000L, 200L, 210L, playing = true))
-        assertEquals(110L, FloatingLyricsRules.smoothPositionMs(9_000L, 100L, 200L, 210L, playing = true))
+        assertEquals(1_000.0, r.smoothPositionMs(900.0, 400L, 1_000L, 0L, 500L, playing = false), 1e-9)
+        // Playing, first frame: the last report plus the time since it.
+        assertEquals(1_016.0, r.smoothPositionMs(null, 0L, 1_000L, 100L, 116L, playing = true), 1e-9)
+        // A seek either way: follow it.
+        assertEquals(5_010.0, r.smoothPositionMs(1_120.0, 200L, 5_000L, 200L, 210L, playing = true), 1e-9)
+        assertEquals(110.0, r.smoothPositionMs(9_000.0, 200L, 100L, 200L, 210L, playing = true), 1e-9)
+    }
+
+    @Test
+    fun coarseJitteryReportsNeverStepOrReverseThePosition() {
+        // Reports refreshed every 100-200 ms, each up to 60 ms off, frames every 16 ms: the shown position always
+        // moves forward by less than two frames' worth and stays within the jitter of the truth.
+        var seed = 11L
+        fun rand(): Double {
+            seed = seed * 6364136223846793005L + 1442695040888963407L
+            return ((seed ushr 33).toDouble()) / (1L shl 31).toDouble()
+        }
+        var reported = 0L
+        var reportedAt = 0L
+        var nextReport = 0L
+        var shown: Double? = null
+        var shownAt = 0L
+        var now = 0L
+        while (now < 60_000L) {
+            if (now >= nextReport) {
+                reported = (now - rand() * 60.0).toLong().coerceAtLeast(0L)
+                reportedAt = now
+                nextReport = now + 100 + (rand() * 100).toLong()
+            }
+            val next = FloatingLyricsRules.smoothPositionMs(shown, shownAt, reported, reportedAt, now, playing = true)
+            shown?.let { prev ->
+                assertTrue("backwards at $now: $prev -> $next", next >= prev)
+                assertTrue("step at $now: $prev -> $next", next - prev < 32.0)
+            }
+            if (now > 2_000L) assertTrue("lost the clock at $now: $next", kotlin.math.abs(next - now) < 120.0)
+            shown = next
+            shownAt = now
+            now += 16
+        }
     }
 
     @Test

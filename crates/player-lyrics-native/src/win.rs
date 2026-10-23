@@ -54,8 +54,6 @@ fn debug_log(line: &str) {
 }
 /// How often an idle renderer checks that its GPU device still exists.
 const DEVICE_CHECK: Duration = Duration::from_secs(2);
-/// Playback samples within this of the running clock do not re-plan (ADR 0028).
-const CLOCK_TOLERANCE_MS: f64 = 30.0;
 
 enum Cmd {
     Create {
@@ -1158,17 +1156,30 @@ fn update_tooltip(win: &mut Win, rect: RECT, text: &str) {
 struct Clock {
     track_id: Option<String>,
     state: PlayState,
-    base_ms: f64,
+    motion: plan::Motion,
     at: Instant,
     duration_ms: Option<f64>,
 }
 
 impl Clock {
-    fn position(&self, now: Instant) -> f64 {
-        let mut p = self.base_ms;
-        if self.state == PlayState::Playing {
-            p += now.saturating_duration_since(self.at).as_secs_f64() * 1000.0;
+    fn dt(&self, now: Instant) -> f64 {
+        now.saturating_duration_since(self.at).as_secs_f64() * 1000.0
+    }
+
+    /// The drift correction still running at `now`: (rate, lyrics ms until it ends).
+    fn slew(&self, now: Instant) -> Option<(f64, f64)> {
+        if self.state != PlayState::Playing {
+            return None;
         }
+        self.motion.slew(self.dt(now))
+    }
+
+    fn position(&self, now: Instant) -> f64 {
+        let p = if self.state == PlayState::Playing {
+            self.motion.position(self.dt(now))
+        } else {
+            self.motion.base_ms
+        };
         match self.duration_ms {
             Some(d) if d > 0.0 => p.clamp(0.0, d),
             _ => p.max(0.0),
@@ -1201,7 +1212,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         clock: Clock {
             track_id: None,
             state: PlayState::Stopped,
-            base_ms: 0.0,
+            motion: plan::Motion::at(0.0),
             at: Instant::now(),
             duration_ms: None,
         },
@@ -1327,27 +1338,52 @@ impl Renderer {
             }
             Cmd::Playback(sample) => {
                 let now = Instant::now();
-                let predicted = self.clock.position(now);
                 let same = self.clock.track_id == sample.track_id
                     && self.clock.state == sample.state
-                    && self.clock.duration_ms == sample.duration_ms
-                    && (predicted - sample.position_ms).abs() < CLOCK_TOLERANCE_MS;
-                if !same {
-                    debug_log(&format!(
-                        "rebase: predicted {predicted:.0} sample {:.0} state {:?}->{:?} track same {}",
-                        sample.position_ms,
-                        self.clock.state,
-                        sample.state,
-                        self.clock.track_id == sample.track_id
-                    ));
-                    self.clock = Clock {
-                        track_id: sample.track_id,
-                        state: sample.state,
-                        base_ms: sample.position_ms,
-                        at: now,
-                        duration_ms: sample.duration_ms,
-                    };
-                    self.mark_all();
+                    && self.clock.duration_ms == sample.duration_ms;
+                let correction = if !same {
+                    plan::Correction::Jump
+                } else if sample.state == PlayState::Playing {
+                    // Small drift is absorbed by a rate change from the current position (never a step).
+                    self.clock
+                        .motion
+                        .correct(self.clock.dt(now), sample.position_ms)
+                } else if (self.clock.position(now) - sample.position_ms).abs()
+                    < plan::CLOCK_TOLERANCE_MS
+                {
+                    plan::Correction::Keep
+                } else {
+                    plan::Correction::Jump
+                };
+                match correction {
+                    plan::Correction::Keep => {}
+                    plan::Correction::Slew(motion) => {
+                        debug_log(&format!(
+                            "slew: predicted {:.1} sample {:.1} rate {:.4}",
+                            motion.base_ms, sample.position_ms, motion.rate
+                        ));
+                        self.clock.motion = motion;
+                        self.clock.at = now;
+                        self.mark_all();
+                    }
+                    plan::Correction::Jump => {
+                        debug_log(&format!(
+                            "rebase: predicted {:.0} sample {:.0} state {:?}->{:?} track same {}",
+                            self.clock.position(now),
+                            sample.position_ms,
+                            self.clock.state,
+                            sample.state,
+                            self.clock.track_id == sample.track_id
+                        ));
+                        self.clock = Clock {
+                            track_id: sample.track_id,
+                            state: sample.state,
+                            motion: plan::Motion::at(sample.position_ms),
+                            at: now,
+                            duration_ms: sample.duration_ms,
+                        };
+                        self.mark_all();
+                    }
                 }
             }
             Cmd::Inactive(percent) => {
@@ -1460,7 +1496,7 @@ impl Renderer {
             clock: &self.clock,
             inactive: self.inactive,
             delay: self.delay.as_ref(),
-            now: Instant::now(),
+            now: Instant::now() + commit_lead(gfx),
         };
         let mut reports = Vec::new();
         for id in &ids {
@@ -1487,6 +1523,20 @@ impl Renderer {
             self.rebuild_devices();
         }
     }
+}
+
+/// DComp starts the animations of a commit at the composition frame that picks it up, not now: plan for that
+/// frame so a re-plan continues the running glide exactly instead of lagging by up to one frame.
+fn commit_lead(gfx: &Gfx) -> Duration {
+    let Ok(stats) = (unsafe { gfx.dcomp.GetFrameStatistics() }) else {
+        return Duration::ZERO;
+    };
+    if stats.timeFrequency <= 0 {
+        return Duration::ZERO;
+    }
+    let ticks =
+        (stats.nextEstimatedFrameTime - stats.currentTime).clamp(0, stats.timeFrequency / 20);
+    Duration::from_secs_f64(ticks as f64 / stats.timeFrequency as f64)
 }
 
 fn attach(gfx: &Gfx, win: &mut Win) {
@@ -1708,6 +1758,8 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             at_ms: position + offset,
             playing,
             inactive_percent: ctx.inactive,
+            rate: ctx.clock.slew(ctx.now).map_or(1.0, |s| s.0),
+            slew_until_ms: ctx.clock.slew(ctx.now).map(|s| position + offset + s.1),
         };
         let planned = plan::plan_strip(&input);
         let rows_h = font as f64 * line_height

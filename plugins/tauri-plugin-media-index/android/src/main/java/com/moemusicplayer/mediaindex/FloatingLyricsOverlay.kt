@@ -82,7 +82,8 @@ object FloatingLyricsOverlay {
     private var landscapeWidthDp = 800
     private var rotationWatch: android.content.ComponentCallbacks? = null
     // The position carried on between ExoPlayer's coarse reports (FloatingLyricsRules.smoothPositionMs).
-    private var smoothedMs: Long? = null
+    private var smoothedMs: Double? = null
+    private var smoothedAt = 0L
     private var lastReportedMs = Long.MIN_VALUE
     private var lastReportedAt = 0L
     private var lastReportedTrack: String? = null
@@ -591,9 +592,12 @@ object FloatingLyricsOverlay {
                 lastReportedMs = reported.positionMs
                 lastReportedAt = now
             }
-            val smoothed = FloatingLyricsRules.smoothPositionMs(smoothedMs, reported.positionMs, lastReportedAt, now, reported.playing)
+            val smoothed = FloatingLyricsRules.smoothPositionMs(
+                smoothedMs, smoothedAt, reported.positionMs, lastReportedAt, now, reported.playing,
+            )
             smoothedMs = smoothed
-            reported.copy(positionMs = smoothed)
+            smoothedAt = now
+            reported.copy(positionMs = kotlin.math.round(smoothed).toLong())
         }
         val index = if (sample != null && sample.active && sample.trackId == trackId) {
             FloatingLyricsRules.activeIndex(starts, sample.positionMs, offsetMs)
