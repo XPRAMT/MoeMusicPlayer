@@ -319,14 +319,36 @@ pub(crate) fn read_remote_details(
     path: &str,
 ) -> Result<player_tags::TrackDetails, String> {
     let (mut details, length) = with_remote_file(source_id, path, player_tags::read_details)?;
-    // The facts of the scratch file are not the file's: the real size is known, the times are not.
+    // Scratch-file timestamps belong to the local cache. Ask the server for the real timestamps;
+    // details remain available if a server cannot answer this optional metadata request.
+    let stamp =
+        player_core::remote_content().and_then(|content| content.stat(source_id, path).ok());
+    let (modified, created) = remote_file_times(stamp, cfg!(target_os = "windows"));
     details.file_size = length;
-    details.modified_unix_ms = None;
-    details.created_unix_ms = None;
+    details.modified_unix_ms = modified;
+    details.created_unix_ms = created;
     details.file_name = remote_file_name(path);
     details.path = path.to_owned();
     details.remote = true;
     Ok(details)
+}
+
+fn remote_file_times(
+    stamp: Option<player_core::RemoteStamp>,
+    include_creation: bool,
+) -> (Option<u64>, Option<u64>) {
+    let Some(stamp) = stamp else {
+        return (None, None);
+    };
+    let modified = stamp
+        .modified_ms
+        .and_then(|value| u64::try_from(value).ok());
+    let created = include_creation
+        .then_some(stamp.created_utc_100ns)
+        .flatten()
+        .and_then(|value| u64::try_from(value).ok())
+        .map(|value| value / 10_000);
+    (modified, created)
 }
 
 /// Save the edit of a song on a remote server. Nothing may be reading the file while the server replaces it, so first the
@@ -1267,7 +1289,7 @@ fn reveal_in_explorer(path: &std::path::Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_verbatim;
+    use super::{remote_file_times, strip_verbatim};
     use std::path::PathBuf;
 
     #[test]
@@ -1296,6 +1318,27 @@ mod tests {
             strip_verbatim(PathBuf::from(r"\\?\Volume{abc}\x")),
             PathBuf::from(r"\\?\Volume{abc}\x")
         );
+    }
+
+    #[test]
+    fn remote_details_use_server_modified_time_and_only_windows_creation_time() {
+        let stamp = player_core::RemoteStamp {
+            len: 1,
+            modified_ms: Some(1_798_000_000_123),
+            created_utc_100ns: Some(1_798_000_000_123_456),
+        };
+
+        assert_eq!(
+            remote_file_times(Some(stamp), false),
+            (Some(1_798_000_000_123), None),
+            "Android details display server modification time but leave creation time blank"
+        );
+        assert_eq!(
+            remote_file_times(Some(stamp), true),
+            (Some(1_798_000_000_123), Some(179_800_000_012)),
+            "desktop details display both timestamps reported by the server"
+        );
+        assert_eq!(remote_file_times(None, true), (None, None));
     }
 }
 
