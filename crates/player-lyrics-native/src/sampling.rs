@@ -1,7 +1,8 @@
 //! Per-frame sampling of the plans (ADR 0034): the renderer thread waits for each composition frame, evaluates every
 //! window's glide, fades and long-line scroll from its own playback clock (the plan's curves, which already carry the
-//! drift slewing), and writes a property only when its device value changed: an offset by at least one whole device
-//! pixel (offsets are always whole pixels), an opacity by at least 1/255. Nothing is rasterised per frame.
+//! drift slewing), and writes a property only when its value changed visibly: an offset in steps of
+//! `OFFSET_STEP_PX` (1/8 device px, sub-pixel; the sprites are sampled with linear filtering), an opacity in 1/255
+//! steps. Nothing is rasterised per frame.
 
 use crate::plan::{cubic_value_at, value_at, Cubics, Keys};
 use player_lyrics_rules as rules;
@@ -35,16 +36,22 @@ impl Curve {
 /// What a sampled value becomes on screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
-    /// Offset.X in whole device pixels.
+    /// Offset.X in `OFFSET_STEP_PX` steps.
     OffsetX,
     /// Opacity in 1/255 steps.
     Opacity,
 }
 
-/// The device value of `v`: whole pixels for an offset, the nearest 1/255 for an opacity.
+/// The offset step (device px): finer moves are not written. With linear filtering a 1/8 px move changes an edge
+/// pixel's coverage by at most 1/8 (about 32 of 255 levels on a hard edge, much less on anti-aliased text), below
+/// what reads as motion, while at the slowest glides (about 100 px/s) it is still under 2 ms of travel, so the
+/// glide stays even. It also caps the writes at 8 per pixel moved.
+pub const OFFSET_STEP_PX: f64 = 0.125;
+
+/// The written value of `v`: the nearest `OFFSET_STEP_PX` for an offset, the nearest 1/255 for an opacity.
 pub fn quantize(kind: Kind, v: f64) -> f64 {
     match kind {
-        Kind::OffsetX => v.round(),
+        Kind::OffsetX => (v / OFFSET_STEP_PX).round() * OFFSET_STEP_PX,
         Kind::Opacity => (v.clamp(0.0, 1.0) * 255.0).round() / 255.0,
     }
 }
@@ -98,8 +105,8 @@ mod tests {
 
     /// Per-frame sampling at 120 Hz over two minutes with re-plans at line changes and at every playback sample
     /// (drift corrections of either sign, up to the jump threshold): the written offset never moves backwards, and
-    /// at every re-plan the old and new plan give the same device pixel (no step), so each frame moves by at most
-    /// the glide's own per-frame motion.
+    /// at every re-plan the old and new plan agree within one offset step (no step), and every frame's delta is the
+    /// curve's own motion within the rounding.
     #[test]
     fn per_frame_samples_never_step_or_go_back() {
         let starts: Vec<f64> = (0..60)
@@ -141,7 +148,10 @@ mod tests {
                     cubic_value_at(&planned.offset, (w - plan_at) / 1000.0),
                 );
                 let new = quantize(Kind::OffsetX, cubic_value_at(&next.offset, 0.0));
-                assert!((old - new).abs() <= 1.0, "step at {w}: {old} -> {new}");
+                assert!(
+                    (old - new).abs() <= OFFSET_STEP_PX + 1e-9,
+                    "step at {w}: {old} -> {new}"
+                );
                 planned = next;
                 plan_at = w;
             }
@@ -154,9 +164,10 @@ mod tests {
                     assert!(v <= written, "backwards at {w}: {written} -> {v}");
                     // No more than the curve's own motion since the last frame (plus the rounding).
                     let own = prev_raw - curve.value_at((w - plan_at) / 1000.0);
+                    // Sub-pixel: each frame's delta follows the curve's own motion within one step either way.
                     assert!(
-                        written - v <= own.abs().ceil() + 1.0,
-                        "jump at {w}: {written} -> {v}"
+                        ((written - v) - own).abs() <= 2.0 * OFFSET_STEP_PX + 1e-9,
+                        "jump at {w}: {written} -> {v}, curve moved {own}"
                     );
                     max_step = max_step.max(written - v);
                 }
@@ -194,7 +205,8 @@ mod tests {
             factor: -100.0,
         };
         assert_eq!(changed(Kind::OffsetX, &still, 5.0, -20.0), None);
-        assert_eq!(quantize(Kind::OffsetX, 12.49), 12.0);
+        assert_eq!(quantize(Kind::OffsetX, 12.49), 12.5);
+        assert_eq!(quantize(Kind::OffsetX, 12.06), 12.0);
         assert_eq!(quantize(Kind::Opacity, 0.5), 128.0 / 255.0);
     }
 

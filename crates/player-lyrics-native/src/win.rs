@@ -357,16 +357,14 @@ fn draw_surface(
     })
 }
 
-/// A sprite showing `surface` 1:1 at its pixel size; `nearest` samples whole device pixels (AGENTS.md device-pixel
-/// rule: content at a fractional offset during a glide still lands on whole pixels).
-fn sprite(gfx: &Gfx, surface: &Surface, nearest: bool) -> Result<SpriteVisual> {
+/// A sprite showing `surface` 1:1 at its pixel size, sampled with linear filtering (the glide moves in sub-pixel
+/// steps, `sampling::OFFSET_STEP_PX`).
+fn sprite(gfx: &Gfx, surface: &Surface) -> Result<SpriteVisual> {
     let brush = gfx
         .compositor
         .CreateSurfaceBrushWithSurface(&surface.surface.cast::<ICompositionSurface>()?)?;
     brush.SetStretch(CompositionStretch::None)?;
-    if nearest {
-        brush.SetBitmapInterpolationMode(CompositionBitmapInterpolationMode::NearestNeighbor)?;
-    }
+    brush.SetBitmapInterpolationMode(CompositionBitmapInterpolationMode::Linear)?;
     let visual = gfx.compositor.CreateSpriteVisual()?;
     visual.SetBrush(&brush)?;
     visual.SetSize(Vector2 {
@@ -1358,6 +1356,32 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
     }
 }
 
+/// Diagnostics: with `MOE_LYRICS_FRAME_LOG=<file>` every sampled frame appends `id wake_ms sample_ms offset` (the
+/// first per-frame property, the strip or the first row, as written; ms since the first logged frame).
+fn frame_log(id: &str, woke: Instant, frame: Instant, win: &Win) {
+    use std::io::Write;
+    use std::sync::Mutex;
+    type FrameLog = Mutex<(std::io::BufWriter<std::fs::File>, Instant)>;
+    static LOG: std::sync::OnceLock<Option<FrameLog>> = std::sync::OnceLock::new();
+    let Some(log) = LOG.get_or_init(|| {
+        let path = std::env::var("MOE_LYRICS_FRAME_LOG").ok()?;
+        let file = std::fs::File::create(path).ok()?;
+        Some(Mutex::new((std::io::BufWriter::new(file), Instant::now())))
+    }) else {
+        return;
+    };
+    let Some(first) = win.live.first() else {
+        return;
+    };
+    if let Ok(mut g) = log.lock() {
+        let start = g.1;
+        let ms = |t: Instant| t.saturating_duration_since(start).as_secs_f64() * 1000.0;
+        let line = format!("{id} {:.3} {:.3} {}\n", ms(woke), ms(frame), first.written);
+        let _ = g.0.write_all(line.as_bytes());
+        let _ = g.0.flush();
+    }
+}
+
 /// Dispatches the thread's messages (window messages, the dispatcher queue and so the composition commit).
 fn pump_messages() {
     let mut msg = MSG::default();
@@ -1380,13 +1404,16 @@ const PRESENT_LATENCY: Duration = Duration::from_millis(32);
 impl Renderer {
     /// Writes the changed per-frame values of every moving window for the coming frame.
     fn sample_frame(&mut self) {
-        let frame = Instant::now() + PRESENT_LATENCY;
+        let woke = Instant::now();
+        let frame = present_time();
         let mut lost = false;
         for (id, win) in self.windows.iter_mut() {
             if win.moving_until.is_none() {
                 continue;
             }
-            match sample_window(win, frame) {
+            let result = sample_window(win, frame);
+            frame_log(id, woke, frame, win);
+            match result {
                 Ok(_) => {}
                 Err(e) if is_device_loss(&e) => lost = true,
                 Err(e) => eprintln!("lyrics window {id}: {e}"),
@@ -1641,7 +1668,7 @@ impl Renderer {
             inactive: self.inactive,
             delay: self.delay.as_ref(),
             now: Instant::now(),
-            frame: Instant::now() + PRESENT_LATENCY,
+            frame: present_time(),
         };
         let mut reports = Vec::new();
         for id in &ids {
@@ -1670,6 +1697,42 @@ impl Renderer {
 
 /// Values set now are committed when the thread returns to its message loop and composed at the next DWM frame:
 /// sample them for that frame's vblank, so the strip shows where the playback clock is when it reaches the screen.
+/// When values set now reach the screen, on DWM's vblank grid: the last vblank DWM reports (advanced by whole
+/// periods if DWM has been idle) plus `PRESENT_LATENCY` rounded to whole periods. Every frame's sample time is then
+/// exactly one refresh period after the previous one, however late the thread woke after `DwmFlush`, so the deltas
+/// follow the curve without wake-time noise. Falls back to now + `PRESENT_LATENCY` without DWM timing.
+fn present_time() -> Instant {
+    let now_instant = Instant::now();
+    let fallback = now_instant + PRESENT_LATENCY;
+    unsafe {
+        let mut info = DWM_TIMING_INFO {
+            cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,
+            ..Default::default()
+        };
+        let (mut now, mut freq) = (0i64, 0i64);
+        if DwmGetCompositionTimingInfo(HWND::default(), &mut info).is_err()
+            || QueryPerformanceCounter(&mut now).is_err()
+            || QueryPerformanceFrequency(&mut freq).is_err()
+            || freq <= 0
+            || info.qpcRefreshPeriod == 0
+        {
+            return fallback;
+        }
+        let period = info.qpcRefreshPeriod as i64;
+        let vblank = info.qpcVBlank as i64;
+        let last = vblank + (now - vblank).max(0) / period * period;
+        let frames = (PRESENT_LATENCY.as_secs_f64() * freq as f64 / period as f64)
+            .round()
+            .max(1.0) as i64;
+        let target = last + frames * period;
+        let ahead = (target - now) as f64 / freq as f64;
+        if !(0.0..=0.2).contains(&ahead) {
+            return fallback;
+        }
+        now_instant + Duration::from_secs_f64(ahead)
+    }
+}
+
 fn frame_lead() -> Duration {
     unsafe {
         let mut info = DWM_TIMING_INFO {
@@ -1977,7 +2040,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             opacity,
             font as f64 * clip_room,
         )?;
-        // The strip glides and every cell fades: sampled per frame from the plan (`Live`), in whole device pixels
+        // The strip glides and every cell fades: sampled per frame from the plan (`Live`), in 1/8 device px steps
         // and 1/255 opacity steps.
         let strip = gfx.compositor.CreateContainerVisual()?;
         let strip_visual: Visual = strip.cast()?;
@@ -1994,7 +2057,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         )?;
         content.Children()?.InsertAtTop(&strip)?;
         for (raster, index, keys) in &cells {
-            let cell: Visual = sprite(gfx, &raster.surface, true)?.cast()?;
+            let cell: Visual = sprite(gfx, &raster.surface)?.cast()?;
             set_offset(
                 &cell,
                 layout.starts[*index] - raster.margin as f64,
@@ -2090,7 +2153,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             font as f64 * clip_room,
         )?;
         for (raster, base, overflow, y) in &placed {
-            let visual: Visual = sprite(gfx, &raster.surface, true)?.cast()?;
+            let visual: Visual = sprite(gfx, &raster.surface)?.cast()?;
             content.Children()?.InsertAtTop(&visual)?;
             live(
                 win,
@@ -2294,7 +2357,7 @@ fn chrome(
                 s
             }
         };
-        let v = sprite(gfx, &surface, false)?;
+        let v = sprite(gfx, &surface)?;
         set_offset(&v.cast()?, area.left.round(), area.top.round())?;
         root.Children()?.InsertAtBottom(&v)?;
     }
@@ -2309,7 +2372,7 @@ fn chrome(
                 s
             }
         };
-        let v = sprite(gfx, &surface, false)?;
+        let v = sprite(gfx, &surface)?;
         set_offset(&v.cast()?, rect.left as f64, rect.top as f64)?;
         root.Children()?.InsertAtTop(&v)?;
     }
