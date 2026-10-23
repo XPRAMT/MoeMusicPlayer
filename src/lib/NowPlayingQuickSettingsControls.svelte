@@ -114,7 +114,6 @@
       idPrefix={lyricsIdPrefix}
       fontAriaLabel={tr("歌詞字體大小")}
       translationAriaLabel={tr("譯文與羅馬拼音大小（相對原文）")}
-      translationActive={lyrics.showTranslation || lyrics.showRomanization}
       withAlign={false}
       withColor={false}
       withOpacity={false}

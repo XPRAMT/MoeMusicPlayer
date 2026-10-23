@@ -52,3 +52,13 @@ test('the three lyrics settings pages share one group order', () => {
   for (const [i, at] of positions.entries()) assert.ok(at >= 0, order[i]);
   assert.deepEqual([...positions].sort((a, b) => a - b), positions);
 });
+
+test('the translation-size slider stays enabled when translations are hidden', () => {
+  const source = readFileSync(path.join(root, 'src/lib/LyricsLookSettings.svelte'), 'utf8');
+  const quick = readFileSync(path.join(root, 'src/lib/NowPlayingQuickSettingsControls.svelte'), 'utf8');
+  const slider = source.match(/<input[^>]*translationScalePercent[\s\S]*?\/>/)?.[0] ?? '';
+  assert.ok(slider.includes('translationScalePercent'));
+  assert.doesNotMatch(slider, /disabled|inert/);
+  assert.doesNotMatch(source, /translationActive/);
+  assert.doesNotMatch(quick, /translationActive/);
+});

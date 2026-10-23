@@ -19,7 +19,6 @@
     autoColorHint = '',
     alignLabel,
     translationAriaLabel,
-    translationActive,
     withAlign = true,
     withColor = true,
     withOpacity = true,
@@ -39,8 +38,6 @@
     /** Label of the alignment row (floating lyrics: 「文字排版」, the text inside the panel). */
     alignLabel?: string;
     translationAriaLabel?: string;
-    /** Whether the translation-size slider applies (defaults to showTranslation). */
-    translationActive?: boolean;
     withAlign?: boolean;
     withColor?: boolean;
     withOpacity?: boolean;
@@ -107,7 +104,6 @@
       max={TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.max}
       step="1"
       value={settings.translationScalePercent}
-      disabled={!(translationActive ?? settings.showTranslation)}
       aria-label={translationAriaLabel ?? tr("譯文大小（相對原文）")}
       oninput={(event) => onChange({ translationScalePercent: Number(event.currentTarget.value) })}
     />
