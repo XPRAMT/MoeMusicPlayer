@@ -159,6 +159,9 @@ pub(crate) fn connect_account(
             password: password.unwrap_or_default(),
         })?)),
         RemoteProtocol::Webdav => Ok(Arc::new(WebDavFs::new(account, password)?)),
+        RemoteProtocol::Unsupported => Err(RemoteError::Unsupported(
+            "這個版本不支援此伺服器的通訊協定，請更新播放器".to_owned(),
+        )),
     }
 }
 

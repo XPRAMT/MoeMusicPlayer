@@ -17,6 +17,11 @@ pub enum RemoteProtocol {
     #[default]
     Webdav,
     Smb,
+    /// A protocol this version does not know (written by a newer version, for example `sftp`). Loading the
+    /// settings must not fail over it: the account is kept and listed, but cannot connect. Saved again, it reads
+    /// `unsupported` (the original name is not kept).
+    #[serde(other)]
+    Unsupported,
 }
 
 /// How a TLS (https) connection is trusted. SMB ignores it.
@@ -342,5 +347,16 @@ mod tests {
                 .unwrap(),
             account
         );
+    }
+
+    #[test]
+    fn an_account_of_an_unknown_protocol_loads_and_is_kept() {
+        let json = r#"[{"id":"a","name":"n","protocol":"sftp","host":"h","username":"u"},
+                       {"id":"b","name":"m","protocol":"webdav","host":"h2"}]"#;
+        let accounts: Vec<RemoteAccount> = serde_json::from_str(json).unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].protocol, RemoteProtocol::Unsupported);
+        assert_eq!(accounts[0].username, "u");
+        assert_eq!(accounts[1].protocol, RemoteProtocol::Webdav);
     }
 }

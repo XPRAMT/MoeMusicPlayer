@@ -28,6 +28,28 @@ const PATH_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'~')
     .remove(b'/');
 
+/// Connecting (TCP and TLS) may take this long.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A request without a body to speak of (PROPFIND, MOVE, DELETE, a small ranged GET) must be answered in full in
+/// this time; a link that went dead mid-request is thereby found in seconds, not minutes. The read is then retried
+/// on a new connection (`WebDavFile::read_at`), and the prefetcher keeps retrying with back-off before playback
+/// stops with `REMOTE_LINK_LOST` (ADR 0026, ADR 0035).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// The slowest transfer still accepted before a request is called stalled: 64 KiB/s on top of `REQUEST_TIMEOUT`.
+const SLOWEST_BYTES_PER_SECOND: u64 = 64 * 1024;
+/// Nothing waits longer than this.
+const LONGEST_REQUEST: Duration = Duration::from_secs(30 * 60);
+
+/// The bound of one request that carries or fetches `bytes`.
+fn request_timeout(bytes: u64) -> Duration {
+    (REQUEST_TIMEOUT + Duration::from_secs(bytes / SLOWEST_BYTES_PER_SECOND)).min(LONGEST_REQUEST)
+}
+
+/// Percent-encode a path, segment by segment (`/` kept).
+fn encode_path(path: &str) -> String {
+    utf8_percent_encode(path, PATH_SET).to_string()
+}
+
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"#;
 
 #[derive(Clone, Debug)]
@@ -54,6 +76,8 @@ pub struct WebDavClient {
     origin: String,
     /// The account's base path without a trailing slash (`""` or `/remote.php/dav/files/me`).
     base_path: String,
+    /// `base_path` percent-encoded, as it goes into a URL.
+    base_url_path: String,
     user: String,
     password: Option<Zeroizing<String>>,
     auth: Mutex<AuthState>,
@@ -66,6 +90,26 @@ fn hex(bytes: &[u8]) -> String {
 fn network(error: reqwest::Error) -> RemoteError {
     let text = error.to_string();
     let chain = format!("{error:?}");
+    // A refused certificate is a `rustls::Error` somewhere down the source chain (inside an `io::Error`); its
+    // `Display` is all the top-level error shows of it ("error sending request"), so look for it there.
+    let mut tls_error = None;
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&error);
+    while let Some(current) = source {
+        if let Some(rustls_error) = current.downcast_ref::<rustls::Error>() {
+            tls_error = Some(rustls_error.to_string());
+            break;
+        }
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            if let Some(rustls_error) = io.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
+                tls_error = Some(rustls_error.to_string());
+                break;
+            }
+        }
+        source = current.source();
+    }
+    if let Some(reason) = tls_error {
+        return RemoteError::Tls(reason);
+    }
     if chain.contains("certificate")
         || chain.contains("InvalidCertificate")
         || chain.contains("UnknownIssuer")
@@ -192,9 +236,17 @@ impl WebDavClient {
             .port
             .map(|port| format!(":{port}"))
             .unwrap_or_default();
+        // No client-wide timeout: every request gets its own bound (`request_timeout`), so a stalled link is found
+        // in seconds while an upload of a whole song may take minutes. Idle keep-alive connections are reused by
+        // the 16 tag-reading threads and the prefetcher; they are dropped before a typical server closes them
+        // (Apache's default `KeepAliveTimeout` is 5 s, many NAS use 15–30 s), and a reused one the server already
+        // closed fails fast and is retried on a fresh connection.
         let mut builder = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .tcp_nodelay(true)
+            .tcp_keepalive(Duration::from_secs(15))
+            .pool_idle_timeout(Duration::from_secs(4))
+            .pool_max_idle_per_host(32)
             .user_agent("MoeMusicPlayer")
             .redirect(reqwest::redirect::Policy::limited(5));
         if let TlsMode::Pinned { sha256 } = &account.tls {
@@ -207,6 +259,7 @@ impl WebDavClient {
             http,
             origin: format!("{scheme}://{}{port}", account.host),
             base_path: account.path.trim_end_matches('/').to_owned(),
+            base_url_path: encode_path(account.path.trim_end_matches('/')),
             user: account.username.clone(),
             password,
             auth: Mutex::new(AuthState::Unknown),
@@ -215,11 +268,11 @@ impl WebDavClient {
 
     fn url(&self, path: &str) -> String {
         let path = path.trim_matches('/');
-        let encoded = utf8_percent_encode(path, PATH_SET).to_string();
+        let encoded = encode_path(path);
         if encoded.is_empty() {
-            format!("{}{}/", self.origin, self.base_path)
+            format!("{}{}/", self.origin, self.base_url_path)
         } else {
-            format!("{}{}/{encoded}", self.origin, self.base_path)
+            format!("{}{}/{encoded}", self.origin, self.base_url_path)
         }
     }
 
@@ -264,6 +317,7 @@ impl WebDavClient {
         path: &str,
         headers: &[(&str, String)],
         body: &[u8],
+        timeout: Duration,
     ) -> Result<Response, RemoteError> {
         let url = self.url(path);
         let request_target = url.strip_prefix(&self.origin).unwrap_or(&url).to_owned();
@@ -272,7 +326,7 @@ impl WebDavClient {
             for (name, value) in headers {
                 builder = builder.header(*name, value);
             }
-            builder = builder.body(body.to_vec());
+            builder = builder.body(body.to_vec()).timeout(timeout);
             let response = self
                 .authorize(builder, method.as_str(), &request_target)
                 .send()
@@ -308,11 +362,12 @@ impl WebDavClient {
         path: &str,
         headers: &[(&str, String)],
         body: Option<&'static str>,
+        timeout: Duration,
     ) -> Result<Response, RemoteError> {
         let url = self.url(path);
         let request_target = url.strip_prefix(&self.origin).unwrap_or(&url).to_owned();
         for attempt in 0..2 {
-            let mut builder = self.http.request(method.clone(), &url);
+            let mut builder = self.http.request(method.clone(), &url).timeout(timeout);
             for (name, value) in headers {
                 builder = builder.header(*name, value);
             }
@@ -351,11 +406,15 @@ impl WebDavClient {
             path,
             &[("Depth", depth.to_owned())],
             Some(PROPFIND_BODY),
+            // A big folder's listing is a big answer.
+            request_timeout(1024 * 1024),
         )?;
         match response.status().as_u16() {
             207 => {}
             404 => return Err(RemoteError::NotFound),
             401 | 403 => return Err(RemoteError::Auth),
+            // A server restarting or a proxy in front of one that is down: worth retrying.
+            status @ 500..=599 => return Err(RemoteError::Network(format!("PROPFIND 回應 {status}"))),
             status => return Err(RemoteError::Protocol(format!("PROPFIND 回應 {status}"))),
         }
         let text = response.text().map_err(network)?;
@@ -508,6 +567,7 @@ impl RemoteFs for WebDavFs {
                 &temp,
                 &[("Content-Type", "application/octet-stream".to_owned())],
                 &data,
+                request_timeout(len),
             )?;
             match put.status().as_u16() {
                 200 | 201 | 204 => {}
@@ -529,6 +589,7 @@ impl RemoteFs for WebDavFs {
                     ("Overwrite", "T".to_owned()),
                 ],
                 None,
+                REQUEST_TIMEOUT,
             )?;
             match moved.status().as_u16() {
                 200 | 201 | 204 => Ok(()),
@@ -545,7 +606,7 @@ impl RemoteFs for WebDavFs {
     }
 
     fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
-        let response = self.client.send(Method::DELETE, path.trim_matches('/'), &[], None)?;
+        let response = self.client.send(Method::DELETE, path.trim_matches('/'), &[], None, REQUEST_TIMEOUT)?;
         match response.status().as_u16() {
             200 | 204 => Ok(()),
             404 => Err(RemoteError::NotFound),
@@ -564,6 +625,7 @@ impl RemoteFs for WebDavFs {
                 ("Overwrite", "F".to_owned()),
             ],
             None,
+            REQUEST_TIMEOUT,
         )?;
         match moved.status().as_u16() {
             200 | 201 | 204 => Ok(()),
@@ -605,9 +667,15 @@ impl RemoteFile for WebDavFile {
         let mut attempts = 0;
         loop {
             attempts += 1;
+            let started = std::time::Instant::now();
             let result = self.fetch(offset, last, buf);
             match result {
-                Err(RemoteError::Network(_)) if attempts < 3 => {
+                // A quick failure (a pooled connection the server had closed, a restart) is retried at once on a
+                // new connection. A request that ran into its timeout is a stalled link: report it now and let the
+                // prefetcher's back-off (ADR 0026) take over instead of waiting out two more timeouts here.
+                Err(RemoteError::Network(_))
+                    if attempts < 3 && started.elapsed() < Duration::from_secs(2) =>
+                {
                     std::thread::sleep(Duration::from_millis(200 * attempts))
                 }
                 other => return other,
@@ -623,6 +691,7 @@ impl WebDavFile {
             &self.path,
             &[(RANGE.as_str(), format!("bytes={offset}-{last}"))],
             None,
+            request_timeout(last - offset + 1),
         )?;
         match response.status().as_u16() {
             206 => {
@@ -651,6 +720,7 @@ impl WebDavFile {
             416 => return Ok(0),
             404 => return Err(RemoteError::NotFound),
             401 | 403 => return Err(RemoteError::Auth),
+            status @ 500..=599 => return Err(RemoteError::Network(format!("GET 回應 {status}"))),
             status => return Err(RemoteError::Protocol(format!("GET 回應 {status}"))),
         }
         let wanted = ((last - offset + 1) as usize).min(buf.len());
@@ -899,6 +969,28 @@ mod tests {
         assert_eq!(names, ["01 歌 (live) & more.flac", "CD 1"]);
         assert_eq!(fs.stat("CD 1/02.mp3").unwrap().size, 1_234);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_base_path_with_url_special_characters_is_encoded() {
+        let dir = music_folder("special");
+        std::fs::create_dir_all(dir.join("a #1 %20 b;")).unwrap();
+        std::fs::write(dir.join("a #1 %20 b;").join("歌 #2.flac"), b"12345").unwrap();
+        let server = TestWebDav::serve(&dir, Auth::None);
+        let mut with_base = account(&server);
+        with_base.path = "/a #1 %20 b;".to_owned();
+        let fs = WebDavFs::new(&with_base, None).unwrap();
+        let names: Vec<_> = fs.list("").unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["歌 #2.flac"]);
+        assert_eq!(fs.stat("歌 #2.flac").unwrap().size, 5);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn requests_are_bounded_by_their_size() {
+        assert_eq!(request_timeout(0), REQUEST_TIMEOUT);
+        assert_eq!(request_timeout(1024 * 1024), REQUEST_TIMEOUT + Duration::from_secs(16));
+        assert_eq!(request_timeout(u64::MAX), LONGEST_REQUEST);
     }
 
     #[test]

@@ -125,6 +125,9 @@ fn normalize_input(input: &RemoteAccountInput) -> Result<(String, String, String
                 format!("/{trimmed}")
             }
         }
+        RemoteProtocol::Unsupported => {
+            return Err("這個版本不支援此伺服器的通訊協定，請更新播放器。".to_owned())
+        }
     };
     Ok((name, host, username, path))
 }
