@@ -1074,6 +1074,12 @@ fn register_class() {
     }
 }
 
+/// Lines beyond the drawn ones that must be rasterised already, and how many are drawn ahead in one batch.
+const PREWARM_NEEDED: usize = 2;
+const PREWARM_LINES: usize = 8;
+
+type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, f64);
+
 struct Win {
     hwnd: HWND,
     kind: Kind,
@@ -1095,6 +1101,11 @@ struct Win {
     /// The properties sampled every frame and the instant their plan's time 0 stands for.
     live: Vec<Live>,
     plan_at: Instant,
+    /// Line widths of the continuous strip: (font, translation font, line count), main and translation widths,
+    /// the last glyph's centre. Cleared with the raster cache (new lyrics or look).
+    measured: Option<MeasuredLines>,
+    /// Lines to rasterise ahead of their entry (rows, style).
+    prewarm: Vec<(Vec<(String, f32)>, TextStyle)>,
     /// Until when any of them still moves (`None` = nothing moves).
     moving_until: Option<Instant>,
 }
@@ -1335,6 +1346,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
             // implicit commit), then wait for DWM's next composition. One loop for all windows, paced by DWM.
             r.sample_frame();
             pump_messages();
+            r.prewarm_batch();
             let waited = Instant::now();
             unsafe {
                 let _ = DwmFlush();
@@ -1434,6 +1446,28 @@ fn pump_messages() {
 const PRESENT_LATENCY: Duration = Duration::from_millis(32);
 
 impl Renderer {
+    /// Rasterises the queued upcoming lines of every window together (after this frame's commit).
+    fn prewarm_batch(&mut self) {
+        let Some(gfx) = self.gfx.as_ref() else { return };
+        let started = Instant::now();
+        let mut count = 0;
+        for win in self.windows.values_mut() {
+            for (rows, style) in std::mem::take(&mut win.prewarm) {
+                let rows: Vec<(&str, f32)> = rows.iter().map(|(t, f)| (t.as_str(), *f)).collect();
+                if let Err(e) = cached(gfx, win, &rows, style) {
+                    eprintln!("lyrics prewarm: {e}");
+                }
+                count += 1;
+            }
+        }
+        if count > 0 {
+            frame_log_line(&format!(
+                "prewarm {count} lines took {:.3} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            ));
+        }
+    }
+
     /// Writes the changed per-frame values of every moving window for the coming frame.
     fn sample_frame(&mut self) {
         let woke = Instant::now();
@@ -1543,6 +1577,7 @@ impl Renderer {
                     if win.look != look {
                         win.look = look;
                         win.cache.clear();
+                        win.measured = None;
                         self.dirty.push(id);
                     }
                 }
@@ -1581,6 +1616,7 @@ impl Renderer {
                     self.lyrics = lyrics;
                     for win in self.windows.values_mut() {
                         win.cache.clear();
+                        win.measured = None;
                     }
                     self.mark_all();
                 }
@@ -1709,6 +1745,8 @@ impl Renderer {
             has_translation: None,
             live: Vec::new(),
             plan_at: Instant::now(),
+            measured: None,
+            prewarm: Vec::new(),
             moving_until: None,
         };
         if let Some(gfx) = &self.gfx {
@@ -1739,6 +1777,7 @@ impl Renderer {
     fn forget_surfaces(&mut self) {
         for win in self.windows.values_mut() {
             win.cache.clear();
+            win.measured = None;
             win.lock_cache.clear();
             win.area_cache.clear();
         }
@@ -1773,6 +1812,7 @@ impl Renderer {
         let mut ids = std::mem::take(&mut self.dirty);
         ids.sort();
         ids.dedup();
+        let started = Instant::now();
         debug_log(&format!("refresh {ids:?}"));
         let Some(gfx) = self.gfx.as_ref() else { return };
         let mut lost = false;
@@ -1800,6 +1840,11 @@ impl Renderer {
             }
         }
         // Windows.UI.Composition commits implicitly when the thread returns to its message loop.
+        frame_log_line(&format!(
+            "refresh {} took {:.3} ms",
+            ids.join(","),
+            started.elapsed().as_secs_f64() * 1000.0
+        ));
         for (id, has) in reports {
             self.events.has_translation(&id, has);
         }
@@ -2083,30 +2128,36 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         );
         let font = (font_css * scale) as f32;
         let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
-        // Measure every line (DirectWrite layouts; cheap, no rasterising).
-        let mut main_widths = Vec::new();
-        let mut trans_widths = Vec::new();
-        let mut last_centre = 0.0;
-        for (i, (_, text, tr)) in lines.iter().enumerate() {
-            let main = text_layout(gfx, text, font, style.line_height)?;
-            main_widths.push(if text.is_empty() {
-                0.0
-            } else {
-                text_width(&main) as f64
-            });
-            if i + 1 == lines.len() {
-                last_centre = if text.is_empty() {
+        // Measure every line once per lyrics, size and look (DirectWrite layouts; a few hundred of them take tens of
+        // milliseconds, far too long to redo at every line change).
+        let key = (font.to_bits(), trans_font.to_bits(), lines.len());
+        if win.measured.as_ref().is_none_or(|m| m.0 != key) {
+            let mut main_widths = Vec::new();
+            let mut trans_widths = Vec::new();
+            let mut last_centre = 0.0;
+            for (i, (_, text, tr)) in lines.iter().enumerate() {
+                let main = text_layout(gfx, text, font, style.line_height)?;
+                main_widths.push(if text.is_empty() {
                     0.0
                 } else {
-                    last_glyph_centre(&main, text) as f64
-                };
+                    text_width(&main) as f64
+                });
+                if i + 1 == lines.len() {
+                    last_centre = if text.is_empty() {
+                        0.0
+                    } else {
+                        last_glyph_centre(&main, text) as f64
+                    };
+                }
+                trans_widths.push(if tr.is_empty() {
+                    0.0
+                } else {
+                    text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
+                });
             }
-            trans_widths.push(if tr.is_empty() {
-                0.0
-            } else {
-                text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
-            });
+            win.measured = Some((key, main_widths, trans_widths, last_centre));
         }
+        let (_, main_widths, trans_widths, last_centre) = win.measured.clone().unwrap();
         let starts: Vec<f64> = lines.iter().map(|l| l.0).collect();
         let layout = rules::layout_strip(&main_widths, &trans_widths, font as f64);
         let last = lines.last().unwrap();
@@ -2143,6 +2194,33 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 vec![(text, font)]
             };
             cells.push((cached(gfx, win, &rows, style)?, *index, keys));
+        }
+        // The lines that enter next are rasterised ahead (`prewarm_batch`, after a frame's commit), so a line change
+        // does not rasterise on its own frame. Drawing a composition surface makes the next commit wait about 30 ms
+        // (3–4 frames at 120 Hz) however many are drawn in that frame, so they are drawn in batches: when the next
+        // `PREWARM_NEEDED` lines are not cached yet, the next `PREWARM_LINES` are drawn together.
+        win.prewarm.clear();
+        if let Some((_, last)) = planned.cells {
+            let rows_of = |text: &str, tr: &str| {
+                let mut rows = vec![(text.to_string(), font)];
+                if has_translation {
+                    rows.push((tr.to_string(), trans_font));
+                }
+                rows
+            };
+            let needed = lines
+                .iter()
+                .skip(last + 1)
+                .take(PREWARM_NEEDED)
+                .any(|(_, text, tr)| !is_cached(win, &rows_of(text, tr), style));
+            if needed {
+                for (_, text, tr) in lines.iter().skip(last + 1).take(PREWARM_LINES) {
+                    let rows = rows_of(text, tr);
+                    if !is_cached(win, &rows, style) {
+                        win.prewarm.push((rows, style));
+                    }
+                }
+            }
         }
         let content = content_host(
             gfx,
@@ -2406,11 +2484,20 @@ fn content_host(
     Ok(host.content.clone())
 }
 
-fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
-    let key = format!(
+fn raster_key<T: std::fmt::Debug>(rows: &[(T, f32)], style: TextStyle) -> String {
+    format!(
         "{:?}|{:?}|{}|{}",
         rows, style.color, style.effect as u8, style.line_height
-    );
+    )
+}
+
+fn is_cached(win: &Win, rows: &[(String, f32)], style: TextStyle) -> bool {
+    let rows: Vec<(&str, f32)> = rows.iter().map(|(t, f)| (t.as_str(), *f)).collect();
+    win.cache.contains_key(&raster_key(&rows, style))
+}
+
+fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
+    let key = raster_key(rows, style);
     if let Some(r) = win.cache.get(&key) {
         return Ok(r.clone());
     }

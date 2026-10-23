@@ -58,7 +58,8 @@ fn main() {
         .enumerate()
         .map(|(i, (t, tr))| LyricLine {
             start_ms: 500.0 + i as f64 * 2500.0,
-            text: t.to_string(),
+            // Unique lines, so every line change brings a line that was never rasterised.
+            text: format!("{t} {i}"),
             translation: tr.to_string(),
         })
         .collect();
