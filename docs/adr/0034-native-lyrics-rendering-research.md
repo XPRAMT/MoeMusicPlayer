@@ -133,3 +133,13 @@ Windows 的工作列歌詞（每條工作列一個）與浮動歌詞改為原生
 | 獨立 demo（只有原生視窗） | 行程 CPU 0.00%，主螢幕 120.0、副螢幕 59.9 presents/s |
 
 未驗證：與 WebView 版的像素並排比較（兩者落在同一塊工作列空白，只有重疊截圖）、裝置遺失實際觸發、混合 DPI 拖曳、自動隱藏／全螢幕／Explorer 重啟、鎖頭 tooltip 與固定模式穿透的實機操作。
+
+## 修訂 2026-10-23：位移改為三次曲線段
+
+連續條位移不再是分段線性：`plan.rs` 的 `StripPlan.offset` 改為 `Cubics`（每段 `(秒, [c0, c1, c2, c3])`），由
+`player_lyrics_rules::strip_cubic` 取得各換行點之間那一段的單調 C1 三次 Hermite 多項式（規則見 ADR 0032 的
+2026-10-23 修訂），把毫秒係數換成秒，`win.rs` 的 `set_offset_x_cubic` 每段呼叫一次
+`IDCompositionAnimation::AddCubic(時間, c0, c1, c2, c3)`，最後 `End`；DWM 仍自己逐幀計算，我們不做每幀工作。換行點就是
+曲線的節點，所以一個計畫（接下來 3 個換行點）剛好是 3 段；切線只看相鄰節點，重排時取樣的是同一條全域曲線，前後計畫
+銜接沒有折角。位移視覺仍用最近鄰取樣（整數裝置像素）。不透明度關鍵格仍是分段線性。單元測試
+`the_cubic_keys_match_the_curve_every_10_ms_for_uneven_lines` 逐 10 ms 比對計畫與規則。

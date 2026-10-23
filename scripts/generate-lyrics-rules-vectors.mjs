@@ -35,14 +35,20 @@ const translation = [60, 90, 0, 40];
 const gap = 20;
 const layout = layoutLyricsStrip(main, translation, gap);
 const strip = [];
-for (const align of ['left', 'center', 'right']) {
-  for (const target of ['left', 'center']) {
-    for (const positionMs of [0, 1000, 2000, 3000, 4500, 9000, 9500, 12000]) {
-      for (const finalLine of [null, { endMs: 11000, lastGlyphCenter: 110 }]) {
-        strip.push({
-          starts, main, translation, gap, align, target, positionMs, viewWidth: 400, finalLine,
-          expected: lyricsStripOffset(starts, layout, align, positionMs, 400, target, finalLine),
-        });
+// The second list has a very short line (150 ms) and a long gap, so the curve's tangent choice is pinned too.
+for (const [list, positions] of [
+  [starts, [0, 1000, 1500, 2000, 2500, 3000, 4500, 6000, 7500, 9000, 9500, 10000, 12000]],
+  [[1000, 1150, 5000, 5200], [1000, 1075, 1150, 2000, 4000, 5000, 5100, 5200, 6000, 7000]],
+]) {
+  for (const align of ['left', 'center', 'right']) {
+    for (const target of ['left', 'center']) {
+      for (const positionMs of positions) {
+        for (const finalLine of [null, { endMs: 11000, lastGlyphCenter: 110 }]) {
+          strip.push({
+            starts: list, main, translation, gap, align, target, positionMs, viewWidth: 400, finalLine,
+            expected: lyricsStripOffset(list, layout, align, positionMs, 400, target, finalLine),
+          });
+        }
       }
     }
   }

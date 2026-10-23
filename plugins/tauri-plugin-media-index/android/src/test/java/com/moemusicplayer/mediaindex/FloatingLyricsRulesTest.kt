@@ -1,4 +1,4 @@
-﻿package com.moemusicplayer.mediaindex
+package com.moemusicplayer.mediaindex
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,7 +28,7 @@ class FloatingLyricsRulesTest {
         val times = longArrayOf(1_000, 3_000, 5_000)
         val at = { align: String, ms: Long -> FloatingLyricsRules.stripOffset(times, even, evenWidths, align, ms, 400f) }
         assertEquals(0f, at("left", 1_000), 0.001f)
-        assertEquals(-60f, at("left", 2_000), 0.001f)
+        assertEquals(-45f, at("left", 2_000), 0.001f) // C1 glide: starts from rest
         assertEquals(-120f, at("left", 3_000), 0.001f)
         assertEquals(30f, at("center", 3_000), 0.001f)
         assertEquals(300f, at("right", 1_000), 0.001f)
@@ -129,7 +129,7 @@ class FloatingLyricsRulesTest {
         val at = { ms: Long, view: Float -> FloatingLyricsRules.stripOffset(times, cells, widths, FloatingLyricsRules.STRIP_ALIGN, ms, view, FloatingLyricsRules.STRIP_TARGET) }
         assertEquals(150f, at(1_000, 300f), 0.001f)
         assertEquals(30f, at(3_000, 300f), 0.001f)
-        assertEquals(90f, at(2_000, 300f), 0.001f)
+        assertEquals(105f, at(2_000, 300f), 0.001f)
         assertEquals(-90f, at(5_000, 300f), 0.001f)
         // The panel width only moves the centre.
         assertEquals(130f, at(3_000, 500f), 0.001f)
@@ -145,7 +145,18 @@ class FloatingLyricsRulesTest {
         val at = { ms: Long -> FloatingLyricsRules.stripOffset(times, cells, widths, "left", ms, 300f, "center", 11_000, mainWidths, lastGlyphCenters) }
 
         assertEquals(150f - 180f, at(5_000), 0.001f)
-        assertEquals(150f - 180f - 35f, at(8_000), 0.001f)
+        // C1 curve (same value as lyrics-strip.js): ahead of the old linear 35 px, still short of the end.
+        assertEquals(-79.4643f, at(8_000), 0.001f)
+        // Monotone, never backwards, with no speed jump at the line start (5000 ms).
+        var previous = at(0)
+        for (ms in 0L..12_000L step 10) {
+            val value = at(ms)
+            assertEquals("backwards at $ms", true, value <= previous + 1e-3f)
+            previous = value
+        }
+        val before = at(4_990) - at(4_980)
+        val after = at(5_010) - at(5_000)
+        assertEquals(before, after, 0.05f)
         // Final glyph occupies [140, 160], placing its centre at x=150.
         assertEquals(150f - 180f - 70f, at(11_000), 0.001f)
         assertEquals("stroke", FloatingLyricsRules.effectiveTextEffect("continuous", "shadow"))

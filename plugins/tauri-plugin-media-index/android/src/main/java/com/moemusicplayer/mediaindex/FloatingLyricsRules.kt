@@ -1,4 +1,4 @@
-﻿package com.moemusicplayer.mediaindex
+package com.moemusicplayer.mediaindex
 
 /**
  * Pure rules of the Android floating lyrics (ADR 0032), ports of the web ones so the overlay shows the same line at the
@@ -98,10 +98,12 @@ object FloatingLyricsRules {
     }
 
     /**
-     * Shift of the strip (px) at lyrics time `lyricsMs` (position + offset): the current line's anchor on the alignment
-     * point, gliding linearly to the next line's anchor until that line starts; rests on the first line before it and on
-       * the last one when there is no terminal glide interval. The final main-text glyph centre reaches the alignment
-       * point at the estimated terminal arrival (500 ms per grapheme, capped at track end).
+     * Shift of the strip (px) at lyrics time `lyricsMs` (position + offset), port of `lyricsStripCubic`: a monotone C1
+     * cubic Hermite through the knots (line start, that line's anchor on the alignment point) and the terminal knot
+     * (`finalArrivalMs`, the last main-text glyph centre), so the speed never jumps at a line start. Tangents are 0 at
+     * the first and last knot (the strip rests before / after them) and, inside, the weighted harmonic mean of the two
+     * neighbouring slopes (Fritsch-Butland; 0 when either is 0 or a neighbour has the same time), which keeps it
+     * monotone and never faster than 3x the slower neighbour. Each segment reads only its four nearest knots.
      */
     fun stripOffset(
         startTimesMs: LongArray,
@@ -118,37 +120,50 @@ object FloatingLyricsRules {
         val count = minOf(startTimesMs.size, cellStarts.size)
         if (count == 0) return 0f
         val target = when (targetAlign) {
-            "right" -> viewWidth
-            "center" -> viewWidth / 2f
-            else -> 0f
+            "right" -> viewWidth.toDouble()
+            "center" -> viewWidth / 2.0
+            else -> 0.0
         }
+        val last = count - 1
+        val end = finalArrivalMs?.takeIf { it > startTimesMs[last] }
+        val knots = count + if (end != null) 1 else 0
+        fun time(k: Int): Double = (if (k < count) startTimesMs[k] else end!!).toDouble()
+        fun value(k: Int): Double {
+            if (k < count) return stripAnchor(cellStarts, cellWidths, k, align).toDouble()
+            val mainWidth = maxOf(0f, mainTextWidths.getOrElse(last) { cellWidths.getOrElse(last) { 0f } })
+            val glyphCenter = lastGlyphCenters.getOrElse(last) { mainWidth }.coerceIn(0f, mainWidth)
+            return maxOf(
+                stripAnchor(cellStarts, cellWidths, last, align).toDouble(),
+                cellStarts.getOrElse(last) { 0f }.toDouble() + glyphCenter,
+            )
+        }
+        fun tangent(k: Int): Double {
+            if (k <= 0 || k >= knots - 1) return 0.0
+            val h0 = time(k) - time(k - 1)
+            val h1 = time(k + 1) - time(k)
+            if (h0 <= 0 || h1 <= 0) return 0.0
+            val d0 = (value(k) - value(k - 1)) / h0
+            val d1 = (value(k + 1) - value(k)) / h1
+            if (d0 <= 0 || d1 <= 0) return 0.0
+            val w0 = 2 * h1 + h0
+            val w1 = h1 + 2 * h0
+            return (w0 + w1) / (w0 / d0 + w1 / d1)
+        }
+        val p = lyricsMs.toDouble()
         var index = -1
-        while (index + 1 < count && startTimesMs[index + 1] <= lyricsMs) index++
-        val anchor = when {
-            index < 0 -> stripAnchor(cellStarts, cellWidths, 0, align)
-            index >= count - 1 -> {
-                val last = count - 1
-                val start = startTimesMs[last]
-                val arrival = finalArrivalMs
-                if (arrival != null && arrival > start && lyricsMs > start) {
-                    val progress = ((lyricsMs - start).toDouble() / (arrival - start).toDouble()).toFloat().coerceIn(0f, 1f)
-                    val mainWidth = maxOf(0f, mainTextWidths.getOrElse(last) { cellWidths.getOrElse(last) { 0f } })
-                    val glyphCenter = lastGlyphCenters.getOrElse(last) { mainWidth }.coerceIn(0f, mainWidth)
-                    val from = cellStarts.getOrElse(last) { 0f }
-                    val to = from + glyphCenter
-                    from + (to - from) * progress
-                } else {
-                    stripAnchor(cellStarts, cellWidths, last, align)
-                }
-            }
-            else -> {
-                val span = startTimesMs[index + 1] - startTimesMs[index]
-                val fraction = if (span > 0) ((lyricsMs - startTimesMs[index]).toFloat() / span).coerceIn(0f, 1f) else 1f
-                val from = stripAnchor(cellStarts, cellWidths, index, align)
-                from + (stripAnchor(cellStarts, cellWidths, index + 1, align) - from) * fraction
-            }
-        }
-        return target - anchor
+        while (index + 1 < knots && time(index + 1) <= p) index++
+        if (index < 0) return (target - value(0)).toFloat()
+        if (index >= knots - 1) return (target - value(knots - 1)).toFloat()
+        val t0 = time(index)
+        val h = time(index + 1) - t0
+        val v0 = value(index)
+        val m0 = tangent(index)
+        val m1 = tangent(index + 1)
+        val d = (value(index + 1) - v0) / h
+        val c2 = (3 * d - 2 * m0 - m1) / h
+        val c3 = (m0 + m1 - 2 * d) / (h * h)
+        val u = p - t0
+        return (target - (v0 + u * (m0 + u * (c2 + u * c3)))).toFloat()
     }
 
     /** Use a crisp outline instead of a blur while continuous text is moving; keep other selected effects unchanged. */

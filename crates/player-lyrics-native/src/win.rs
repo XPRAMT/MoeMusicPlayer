@@ -789,6 +789,34 @@ fn set_offset_x(
     }
 }
 
+/// The glide: each key is one `AddCubic` segment (value, velocity, quadratic and cubic coefficients per second), so DWM
+/// evaluates the C1 curve itself with no per-frame work.
+fn set_offset_x_cubic(
+    gfx: &Gfx,
+    visual: &IDCompositionVisual2,
+    keys: &plan::Cubics,
+    add: f64,
+) -> Result<()> {
+    unsafe {
+        if keys.len() < 2 {
+            return visual.SetOffsetX2((add + keys.first().map_or(0.0, |k| k.1[0])) as f32);
+        }
+        let a = gfx.dcomp.CreateAnimation()?;
+        for &(t, c) in &keys[..keys.len() - 1] {
+            a.AddCubic(
+                t,
+                (add + c[0]) as f32,
+                c[1] as f32,
+                c[2] as f32,
+                c[3] as f32,
+            )?;
+        }
+        let (t, c) = *keys.last().unwrap();
+        a.End(t, (add + c[0]) as f32)?;
+        visual.SetOffsetX(&a)
+    }
+}
+
 fn set_opacity(gfx: &Gfx, effect: &IDCompositionEffectGroup, keys: &Keys) -> Result<()> {
     unsafe {
         match animation(gfx, keys, 0.0, 1.0)? {
@@ -1690,7 +1718,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             };
         let top = area.top + (area.height - rows_h) / 2.0;
         let strip = unsafe { gfx.dcomp.CreateVisual()? };
-        set_offset_x(gfx, &strip, &planned.offset, area.left, 1.0)?;
+        set_offset_x_cubic(gfx, &strip, &planned.offset, area.left)?;
         unsafe {
             // Whole device pixels while gliding (AGENTS.md device-pixel rule).
             strip.SetBitmapInterpolationMode(

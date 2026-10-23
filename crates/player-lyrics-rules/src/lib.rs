@@ -192,46 +192,103 @@ pub fn strip_offset(
     target_align: Align,
     final_line: Option<FinalLine>,
 ) -> f64 {
+    strip_cubic(
+        starts_ms,
+        layout,
+        align,
+        position_ms,
+        view_width_px,
+        target_align,
+        final_line,
+    )[0]
+}
+
+/// `lyricsStripCubic`: the glide is a monotone C1 cubic Hermite through the knots (line start, that line's anchor)
+/// plus the terminal knot (final arrival, last glyph centre). Tangents are 0 at the first and last knot (the strip
+/// rests outside them) and, inside, the weighted harmonic mean of the neighbouring slopes (Fritsch-Butland / PCHIP;
+/// 0 when a slope is 0 or a neighbour shares the time), which is monotone (Fritsch-Carlson) and bounded by 3x the
+/// smaller slope, so a very short line does not speed up its neighbours. Each segment reads only its four nearest
+/// knots. Returns `[c0, c1, c2, c3]` of the offset in `u = t - position_ms` (ms), valid up to the next knot.
+pub fn strip_cubic(
+    starts_ms: &[f64],
+    layout: &StripLayout,
+    align: Align,
+    position_ms: f64,
+    view_width_px: f64,
+    target_align: Align,
+    final_line: Option<FinalLine>,
+) -> [f64; 4] {
     let count = starts_ms.len().min(layout.starts.len());
     if count == 0 {
-        return 0.0;
+        return [0.0; 4];
     }
     let target = match target_align {
         Align::Right => view_width_px,
         Align::Center => view_width_px / 2.0,
         Align::Left => 0.0,
     };
-    let index = starts_ms[..count].partition_point(|&s| s <= position_ms) as isize - 1;
-    let anchor = if index < 0 {
-        strip_anchor(layout, 0, align)
-    } else if index as usize >= count - 1 {
-        let last = count - 1;
-        let start = starts_ms[last];
-        let fin = final_line.unwrap_or_default();
+    let last = count - 1;
+    let fin = final_line.unwrap_or_default();
+    let end_ms = fin.end_ms.filter(|e| e.is_finite() && *e > starts_ms[last]);
+    let knots = count + usize::from(end_ms.is_some());
+    let time = |k: usize| {
+        if k < count {
+            starts_ms[k]
+        } else {
+            end_ms.unwrap_or(0.0)
+        }
+    };
+    let value = |k: usize| {
+        if k < count {
+            return strip_anchor(layout, k, align);
+        }
         let glyph = fin
             .last_glyph_center
             .unwrap_or(layout.widths.get(last).copied().unwrap_or(0.0))
             .max(0.0);
-        match fin.end_ms {
-            Some(end) if end.is_finite() && end > start && position_ms > start => {
-                let progress = ((position_ms - start) / (end - start)).clamp(0.0, 1.0);
-                let from = layout.starts[last];
-                from + glyph * progress
-            }
-            _ => strip_anchor(layout, last, align),
-        }
-    } else {
-        let i = index as usize;
-        let span = starts_ms[i + 1] - starts_ms[i];
-        let fraction = if span > 0.0 {
-            ((position_ms - starts_ms[i]) / span).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let from = strip_anchor(layout, i, align);
-        from + (strip_anchor(layout, i + 1, align) - from) * fraction
+        strip_anchor(layout, last, align).max(layout.starts[last] + glyph)
     };
-    target - anchor
+    let tangent = |k: usize| {
+        if k == 0 || k >= knots - 1 {
+            return 0.0;
+        }
+        let h0 = time(k) - time(k - 1);
+        let h1 = time(k + 1) - time(k);
+        if h0 <= 0.0 || h1 <= 0.0 {
+            return 0.0;
+        }
+        let d0 = (value(k) - value(k - 1)) / h0;
+        let d1 = (value(k + 1) - value(k)) / h1;
+        if d0 <= 0.0 || d1 <= 0.0 {
+            return 0.0;
+        }
+        let w0 = 2.0 * h1 + h0;
+        let w1 = h1 + 2.0 * h0;
+        (w0 + w1) / (w0 / d0 + w1 / d1)
+    };
+    let mut index: isize = -1;
+    while ((index + 1) as usize) < knots && time((index + 1) as usize) <= position_ms {
+        index += 1;
+    }
+    if index < 0 {
+        return [target - value(0), 0.0, 0.0, 0.0];
+    }
+    let i = index as usize;
+    if i >= knots - 1 {
+        return [target - value(knots - 1), 0.0, 0.0, 0.0];
+    }
+    let t0 = time(i);
+    let h = time(i + 1) - t0;
+    let v0 = value(i);
+    let m0 = tangent(i);
+    let m1 = tangent(i + 1);
+    let d = (value(i + 1) - v0) / h;
+    let c2 = (3.0 * d - 2.0 * m0 - m1) / h;
+    let c3 = (m0 + m1 - 2.0 * d) / (h * h);
+    let u = position_ms - t0;
+    let anchor = v0 + u * (m0 + u * (c2 + u * c3));
+    let velocity = m0 + u * (2.0 * c2 + 3.0 * c3 * u);
+    [target - anchor, -velocity, -(c2 + 3.0 * c3 * u), -c3]
 }
 
 /// Cells to draw while the strip glides between two offsets, plus `margin_px` on both sides. `None` when empty.
@@ -380,5 +437,40 @@ mod tests {
         assert_eq!(display_offset_ms(Some(100.0), 0.15), -100.0);
         assert_eq!(display_offset_ms(None, -0.0), 0.0);
         assert_eq!(display_offset_ms(None, 99.0), -10000.0);
+    }
+
+    #[test]
+    fn the_glide_is_exact_at_the_knots_monotone_and_c1() {
+        let layout = layout_strip(&[100.0, 30.0, 200.0, 60.0, 90.0], &[], 20.0);
+        let starts = [1000.0, 1150.0, 4000.0, 12000.0, 12500.0];
+        let fin = Some(FinalLine {
+            end_ms: Some(14000.0),
+            last_glyph_center: Some(40.0),
+        });
+        let at =
+            |ms: f64| strip_cubic(&starts, &layout, Align::Left, ms, 300.0, Align::Center, fin);
+        for (i, &s) in starts.iter().enumerate() {
+            assert!((at(s)[0] - (150.0 - layout.starts[i])).abs() < 1e-9);
+        }
+        assert!((at(14000.0)[0] - (150.0 - layout.starts[4] - 40.0)).abs() < 1e-9);
+        let mut previous = at(0.0)[0];
+        let mut t = 0.0;
+        while t <= 15000.0 {
+            let v = at(t)[0];
+            assert!(v <= previous + 1e-9, "backwards at {t}");
+            previous = v;
+            t += 10.0;
+        }
+        for knot in [1000.0, 1150.0, 4000.0, 12000.0, 12500.0, 14000.0] {
+            let e = 1e-3;
+            let b = at(knot - e);
+            let before = b[1] + 2.0 * b[2] * e + 3.0 * b[3] * e * e;
+            assert!((before - at(knot)[1]).abs() < 1e-4, "speed jump at {knot}");
+        }
+        assert_eq!(at(1000.0)[1], 0.0);
+        assert_eq!(at(14000.0)[1], 0.0);
+        // A neighbour of the 150 ms line stays within 3x its own slope.
+        let slope = (layout.starts[3] - layout.starts[2]) / 8000.0;
+        assert!(at(4000.0)[1].abs() <= 3.0 * slope + 1e-12);
     }
 }

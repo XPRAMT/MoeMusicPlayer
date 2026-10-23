@@ -242,3 +242,24 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 ## 更新（2026-10-23，ADR 0034）
 
 Windows 的浮動歌詞與工作列歌詞改為原生 DirectComposition 繪製（見 ADR 0034），WebView 視窗已移除；行為規則不變，唯一刻意的改變：連續模式選陰影時，Windows 原生版照畫陰影（點陣化一次，沒有每幀成本），Android 仍改描邊。
+
+## Amendment 2026-10-23: C1 glide curve
+
+The continuous strip no longer glides piecewise linearly (the speed jumped at every line start). The offset is a
+monotone C1 cubic Hermite (`lyricsStripCubic` / `strip_cubic` / `FloatingLyricsRules.stripOffset`) through the knots
+(line start, that line's left edge on the lyric-area centre) plus the terminal knot (final arrival, last glyph centre):
+
+- Knots are exact: at each line start that line's left edge is on the centre; at the final arrival (500 ms per
+  grapheme, clipped by the track end) the last glyph centre is.
+- Tangents: 0 at the first knot (the strip rests before the first line, so the lead-in starts from rest) and at the
+  last knot (it eases to a stop at the terminal arrival, or at the last line start when there is no terminal glide).
+  Inside, the weighted harmonic mean of the two neighbouring slopes (Fritsch-Butland, as in PCHIP; weights
+  `2h1+h0`, `h1+2h0`), and 0 when either slope is 0 or a neighbour has the same time (a jump). The harmonic mean is
+  pulled toward the smaller slope and never exceeds 3x it, which satisfies Fritsch-Carlson, so the glide never goes
+  backwards and a very short line (huge slope) does not make its neighbours rush; a long instrumental gap (tiny slope)
+  makes the strip slow down around it instead of carrying the previous speed into it.
+- Locality: a segment depends only on its four nearest knots, so the curve is one global function of the lyrics time.
+  Seeks and pauses evaluate it at the new position as before, and the Windows plan (which covers the next three line
+  starts) samples the same curve at every re-plan, so hand-overs have no kink.
+- The 200 ms opacity crossfades are unchanged. Non-left anchors (not used by the app) take
+  max(last anchor, last cell start + glyph centre) as the terminal value so the curve stays monotone.

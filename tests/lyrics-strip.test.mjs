@@ -16,6 +16,7 @@ import {
   lyricsStripFocus,
   lyricsStripAnchor,
   lyricsStripOffset,
+  lyricsStripCubic,
   lyricsStripWindow,
   nextLyricsStripBreak,
   normalizeLyricsAnimation,
@@ -65,9 +66,9 @@ test('cells are as wide as the wider text and one gap apart', () => {
 test('the current line sits at the alignment point and glides to the next', () => {
   const layout = layoutLyricsStrip([100, 100, 100], [], 20);
   const starts = [1000, 3000, 5000];
-  // Left: line 0 at x 0, half-way to line 1 at 2000 ms.
+  // Left: line 0 at x 0; half-way to line 1 at 2000 ms it has covered 3/8 (it starts from rest, C1 curve).
   assert.equal(lyricsStripOffset(starts, layout, 'left', 1000, 400), 0);
-  assert.equal(lyricsStripOffset(starts, layout, 'left', 2000, 400), -60);
+  assert.equal(lyricsStripOffset(starts, layout, 'left', 2000, 400), -45);
   assert.equal(lyricsStripOffset(starts, layout, 'left', 3000, 400), -120);
   // Centre: the cell's middle on the window's middle.
   assert.equal(lyricsStripOffset(starts, layout, 'center', 3000, 400), 200 - 170);
@@ -81,8 +82,8 @@ test('the current line sits at the alignment point and glides to the next', () =
 
 test('seeking lands on the interpolated place at once', () => {
   const layout = layoutLyricsStrip([100, 100], [], 0);
-  assert.equal(lyricsStripOffset([0, 1000], layout, 'left', 250, 0), -25);
-  assert.equal(lyricsStripOffset([0, 1000], layout, 'left', 750, 0), -75);
+  assert.equal(lyricsStripOffset([0, 1000], layout, 'left', 250, 0), -15.625);
+  assert.ok(Math.abs(lyricsStripOffset([0, 1000], layout, 'left', 750, 0) + 84.375) < 1e-9);
 });
 
 test('the next break is the next line start', () => {
@@ -124,7 +125,7 @@ test('a line starts with its left edge on the lyric area centre and slides left 
   const at = (ms, view = 300) => lyricsStripOffset(starts, layout, LYRICS_STRIP_ALIGN, ms, view, LYRICS_STRIP_TARGET);
   assert.equal(at(1000), 150);
   assert.equal(at(3000), 150 - 120);
-  assert.equal(at(2000), 150 - 60);
+  assert.equal(at(2000), 150 - 45);
   assert.equal(at(5000), 150 - 240);
   // Independent of the panel width: only the centre moves.
   assert.equal(at(3000, 500), 250 - 120);
@@ -140,7 +141,7 @@ test('the final line keeps gliding until its last grapheme centre reaches the ly
 
   // The line still starts with its left edge on the centre.
   assert.equal(at(5000), 150 - 180);
-  assert.equal(at(8000), 150 - (180 + 35));
+  assert.ok(at(8000) < 150 - 180 && at(8000) > 150 - 250);
   // At the track end, the final glyph occupies [140, 160], centred at x=150.
   assert.equal(at(11000), 150 - (180 + 70));
   assert.equal(nextLyricsStripBreak(starts, 9000, 11000), 11000);
@@ -312,4 +313,30 @@ test('the views fade only the changing cells with an opacity-only animation, fed
   assert.match(app, /emit\('lyrics-inactive-opacity', inactiveOpacityPercent\)/);
   assert.match(app, /emit\('lyrics-inactive-opacity', lyricsPreferences\.inactiveOpacityPercent\)/);
   assert.match(app, /payload: \{ inactiveOpacityPercent \}/);
+});
+
+test('the glide is monotone, C1 and exact at every line start', () => {
+  const layout = layoutLyricsStrip([100, 30, 200, 60, 90], [0, 0, 0, 0, 0], 20);
+  // Uneven gaps: a 150 ms line and a long instrumental gap.
+  const starts = [1000, 1150, 4000, 12000, 12500];
+  const finalLine = { endMs: 14000, lastGlyphCenter: 40 };
+  const at = (ms) => lyricsStripCubic(starts, layout, 'left', ms, 300, 'center', finalLine);
+  starts.forEach((start, i) => assert.ok(Math.abs(at(start)[0] - (150 - layout.starts[i])) < 1e-9));
+  assert.ok(Math.abs(at(14000)[0] - (150 - layout.starts[4] - 40)) < 1e-9);
+  let previous = at(0)[0];
+  for (let t = 0; t <= 15000; t += 10) {
+    const value = at(t)[0];
+    assert.ok(value <= previous + 1e-9, `backwards at ${t}`);
+    previous = value;
+  }
+  for (const knot of [...starts, 14000]) {
+    const before = at(knot - 1e-3);
+    const speedBefore = before[1] + 2 * before[2] * 1e-3 + 3 * before[3] * 1e-6;
+    assert.ok(Math.abs(speedBefore - at(knot)[1]) < 1e-4, `speed jump at ${knot}`);
+  }
+  // Rest before the first and after the terminal knot.
+  assert.equal(at(1000)[1] + 0, 0);
+  assert.equal(at(14000)[1] + 0, 0);
+  // The short line does not push its neighbours' speed beyond 3x their own average slope.
+  assert.ok(Math.abs(at(4000)[1]) <= 3 * (layout.starts[3] - layout.starts[2]) / 8000 + 1e-12);
 });

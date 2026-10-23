@@ -87,7 +87,8 @@ export function lyricsStripAnchor(layout, index, align) {
 
 /**
  * Horizontal shift of the strip (px) at a lyrics position: the current line's anchor on the window's alignment point,
- * gliding linearly to the next line's anchor until the next line starts. Before the first line it rests on the first.
+ * gliding to the next line's anchor until the next line starts (the monotone C1 curve of `lyricsStripCubic`, so the
+ * speed never jumps at a line start). Before the first line it rests on the first.
  * When the track duration and last main-text glyph centre are known, the final line glides until that glyph's centre
  * reaches the target at track end.
  * @param {readonly number[]} startTimesMs one per strip line, sorted
@@ -99,34 +100,71 @@ export function lyricsStripAnchor(layout, index, align) {
  * @param {{endMs?:number|null,lastGlyphCenter?:number}|null} [finalLine]
  */
 export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign = align, finalLine = null) {
+  return lyricsStripCubic(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign, finalLine)[0];
+}
+
+/**
+ * The glide curve (ADR 0032, 2026-10-23 revision): a monotone C1 cubic Hermite through the knots (line start, that
+ * line's anchor), plus the terminal knot (final arrival, last glyph centre) when there is a terminal glide. Tangents:
+ * 0 at the first knot (the strip rests before it) and the last knot (it rests after it); inside, the weighted harmonic
+ * mean of the two neighbouring slopes (Fritsch-Butland / PCHIP), 0 when either slope is 0 or a neighbour shares the
+ * knot's time. The harmonic mean is pulled toward the smaller slope and never exceeds 3x it, so the curve is monotone
+ * (Fritsch-Carlson) and a very short line does not speed up its neighbours. Each segment only reads its four nearest
+ * knots, so any window of knots yields the same curve.
+ *
+ * Returns the offset polynomial `[c0, c1, c2, c3]` in `u = t - positionMs` (ms), valid from `positionMs` up to the next
+ * knot: offset(t) = c0 + c1 u + c2 u^2 + c3 u^3 (`c0` is `lyricsStripOffset`, `c1` the velocity in px/ms).
+ * @param {readonly number[]} startTimesMs @param {{ starts: number[], widths: number[] }} layout
+ * @param {'left'|'center'|'right'} align @param {number} positionMs @param {number} viewWidthPx
+ * @param {'left'|'center'|'right'} [targetAlign] @param {{endMs?:number|null,lastGlyphCenter?:number}|null} [finalLine]
+ * @returns {[number, number, number, number]}
+ */
+export function lyricsStripCubic(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign = align, finalLine = null) {
   const count = Math.min(startTimesMs.length, layout.starts.length);
-  if (count === 0) return 0;
+  if (count === 0) return [0, 0, 0, 0];
   const target = targetAlign === 'right' ? viewWidthPx : targetAlign === 'center' ? viewWidthPx / 2 : 0;
+  const last = count - 1;
+  const endMs = finalLine?.endMs;
+  const hasFinal = typeof endMs === 'number' && Number.isFinite(endMs) && endMs > startTimesMs[last];
+  const knots = count + (hasFinal ? 1 : 0);
+  const finalMs = hasFinal ? /** @type {number} */ (endMs) : 0;
+  /** @param {number} k */
+  const time = (k) => (k < count ? startTimesMs[k] : finalMs);
+  /** @param {number} k */
+  const value = (k) => {
+    if (k < count) return lyricsStripAnchor(layout, k, align);
+    const glyph = Math.max(0, finalLine?.lastGlyphCenter ?? layout.widths[last] ?? 0);
+    return Math.max(lyricsStripAnchor(layout, last, align), (layout.starts[last] ?? 0) + glyph);
+  };
+  /** @param {number} k */
+  const tangent = (k) => {
+    if (k <= 0 || k >= knots - 1) return 0;
+    const h0 = time(k) - time(k - 1);
+    const h1 = time(k + 1) - time(k);
+    if (!(h0 > 0) || !(h1 > 0)) return 0;
+    const d0 = (value(k) - value(k - 1)) / h0;
+    const d1 = (value(k + 1) - value(k)) / h1;
+    if (!(d0 > 0) || !(d1 > 0)) return 0;
+    const w0 = 2 * h1 + h0;
+    const w1 = h1 + 2 * h0;
+    return (w0 + w1) / (w0 / d0 + w1 / d1);
+  };
   let index = -1;
-  for (let i = 0; i < count && startTimesMs[i] <= positionMs; i += 1) index = i;
-  let anchor;
-  if (index < 0) anchor = lyricsStripAnchor(layout, 0, align);
-  else if (index >= count - 1) {
-    const last = count - 1;
-    const start = startTimesMs[last];
-    const endMs = finalLine?.endMs;
-    const lastGlyphCenter = Math.max(0, finalLine?.lastGlyphCenter ?? layout.widths[last] ?? 0);
-    if (typeof endMs === 'number' && Number.isFinite(endMs) && endMs > start && positionMs > start) {
-      const progress = Math.min(1, Math.max(0, (positionMs - start) / (endMs - start)));
-      const from = layout.starts[last] ?? 0;
-      const to = from + lastGlyphCenter;
-      anchor = from + (to - from) * progress;
-    } else {
-      anchor = lyricsStripAnchor(layout, last, align);
-    }
-  }
-  else {
-    const span = startTimesMs[index + 1] - startTimesMs[index];
-    const fraction = span > 0 ? Math.min(1, Math.max(0, (positionMs - startTimesMs[index]) / span)) : 1;
-    const from = lyricsStripAnchor(layout, index, align);
-    anchor = from + (lyricsStripAnchor(layout, index + 1, align) - from) * fraction;
-  }
-  return target - anchor;
+  while (index + 1 < knots && time(index + 1) <= positionMs) index += 1;
+  if (index < 0) return [target - value(0), 0, 0, 0];
+  if (index >= knots - 1) return [target - value(knots - 1), 0, 0, 0];
+  const t0 = time(index);
+  const h = time(index + 1) - t0;
+  const v0 = value(index);
+  const m0 = tangent(index);
+  const m1 = tangent(index + 1);
+  const d = (value(index + 1) - v0) / h;
+  const c2 = (3 * d - 2 * m0 - m1) / h;
+  const c3 = (m0 + m1 - 2 * d) / (h * h);
+  const u = positionMs - t0;
+  const anchor = v0 + u * (m0 + u * (c2 + u * c3));
+  const velocity = m0 + u * (2 * c2 + 3 * c3 * u);
+  return [target - anchor, -velocity, -(c2 + 3 * c3 * u), -c3];
 }
 
 /**

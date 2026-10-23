@@ -1,4 +1,4 @@
-//! Platform-neutral planning (ADR 0034): what one lyrics window shows and the piecewise-linear animations DWM runs
+//! Platform-neutral planning (ADR 0034): what one lyrics window shows and the piecewise animations DWM runs
 //! from "now" until the next re-plan. Re-planned only at a line change (the next glide break), a seek, pause/resume,
 //! a playback correction, new lyrics, a setting or a size/DPI change; never per frame.
 
@@ -7,12 +7,18 @@ use player_lyrics_rules as rules;
 /// Piecewise-linear keyframes `(seconds from the commit, value)`: linear between keys, constant after the last one.
 pub type Keys = Vec<(f64, f64)>;
 
+/// Piecewise-cubic keys `(seconds from the commit, [c0, c1, c2, c3])`: from its time up to the next key the value is
+/// `c0 + c1 s + c2 s^2 + c3 s^3` (`s` = seconds since the key's time), the `IDCompositionAnimation::AddCubic` form;
+/// the last key is the end value (only `c0`), constant after it.
+pub type Cubics = Vec<(f64, [f64; 4])>;
+
 /// How many glide breaks (line starts) one plan covers, so a late wake-up never stalls the strip.
 pub const HORIZON_BREAKS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StripPlan {
-    pub offset: Keys,
+    /// The glide: one cubic segment per stretch between line starts (`rules::strip_cubic`).
+    pub offset: Cubics,
     /// Cells to draw (inclusive), `None` when nothing is in view.
     pub cells: Option<(usize, usize)>,
     /// Opacity factor keys per drawn cell (relative to the window opacity).
@@ -34,6 +40,18 @@ pub struct StripInput<'a> {
 
 fn offset_at(input: &StripInput, t: f64) -> f64 {
     rules::strip_offset(
+        input.starts,
+        input.layout,
+        rules::STRIP_ALIGN,
+        t,
+        input.view_width,
+        rules::STRIP_TARGET,
+        input.final_line,
+    )
+}
+
+fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
+    rules::strip_cubic(
         input.starts,
         input.layout,
         rules::STRIP_ALIGN,
@@ -72,15 +90,23 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
         }
     }
     let secs = |t: f64| (t - p) / 1000.0;
-    let mut offset = vec![(0.0, offset_at(input, p))];
+    // Every break is a knot of the glide curve, so each stretch between two of them is one cubic piece; the
+    // coefficients come from the rule in ms and are rescaled to seconds. A re-plan samples the same global curve
+    // (its tangents only read neighbouring knots), so the hand-over between plans has no kink.
+    let mut offset: Cubics = Vec::new();
+    let mut from = p;
     for &b in &breaks {
-        offset.push((secs(b), offset_at(input, b)));
+        let c = cubic_at(input, from);
+        offset.push((secs(from), [c[0], c[1] * 1e3, c[2] * 1e6, c[3] * 1e9]));
+        from = b;
     }
+    offset.push((secs(from), [offset_at(input, from), 0.0, 0.0, 0.0]));
     let horizon = breaks.last().copied().unwrap_or(p);
+    // Monotone between knots, so the extremes are at the keys.
     let (lo, hi) = offset
         .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, v)| {
-            (lo.min(v), hi.max(v))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, c)| {
+            (lo.min(c[0]), hi.max(c[0]))
         });
     let cells = rules::strip_window(input.layout, hi, lo, input.view_width, input.view_width);
 
@@ -187,6 +213,23 @@ pub fn plan_line(
     }
 }
 
+/// Value of piecewise-cubic keys at `t` seconds (what DWM evaluates).
+pub fn cubic_value_at(keys: &Cubics, t: f64) -> f64 {
+    let Some(&(t0, c)) = keys.first() else {
+        return 0.0;
+    };
+    if t <= t0 {
+        return c[0];
+    }
+    let index = keys.partition_point(|&(k, _)| k <= t) - 1;
+    let (k, c) = keys[index];
+    if index + 1 == keys.len() {
+        return c[0];
+    }
+    let s = t - k;
+    c[0] + s * (c[1] + s * (c[2] + s * c[3]))
+}
+
 /// Value of piecewise-linear keys at `t` seconds (for tests and for paused states).
 pub fn value_at(keys: &Keys, t: f64) -> f64 {
     let Some(&(t0, v0)) = keys.first() else {
@@ -245,7 +288,7 @@ mod tests {
             while t <= horizon {
                 let expected = offset_at(&i, at + t * 1000.0);
                 assert!(
-                    (value_at(&plan.offset, t) - expected).abs() < 1e-6,
+                    (cubic_value_at(&plan.offset, t) - expected).abs() < 1e-6,
                     "offset at {at}+{t}"
                 );
                 for (cell, keys) in &plan.opacity {
@@ -261,6 +304,29 @@ mod tests {
                 plan.wake_ms,
                 rules::next_strip_break(&starts, at, Some(11000.0)).map(|b| b - at)
             );
+        }
+    }
+
+    #[test]
+    fn the_cubic_keys_match_the_curve_every_10_ms_for_uneven_lines() {
+        // A 150 ms line and a long gap: every stretch is one AddCubic segment and re-plans sample the same curve.
+        let starts = [1000.0, 1150.0, 4000.0, 12000.0, 12500.0];
+        let layout = rules::layout_strip(&[100.0, 30.0, 200.0, 60.0, 90.0], &[], 20.0);
+        for at in [0.0, 1075.0, 1150.0, 3000.0, 11990.0, 12600.0] {
+            let i = input(&starts, &layout, at, true);
+            let plan = plan_strip(&i);
+            assert!(plan.offset.len() <= HORIZON_BREAKS + 1);
+            let horizon = plan.offset.last().unwrap().0;
+            let mut t = 0.0;
+            while t <= horizon + 1e-9 {
+                let expected = offset_at(&i, at + t * 1000.0);
+                let got = cubic_value_at(&plan.offset, t);
+                assert!(
+                    (got - expected).abs() < 1e-6,
+                    "at {at}+{t}: {got} vs {expected}"
+                );
+                t += 0.01;
+            }
         }
     }
 
