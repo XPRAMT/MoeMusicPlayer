@@ -3,8 +3,10 @@
 // button) keeps both position and speed continuous: one animation that bends to the new target instead of a restart
 // or a jump per step.
 
-/** How long the list takes to glide to a new line after the per-track lyric delay changed. */
-export const LYRIC_OFFSET_GLIDE_MS = 240;
+import { LYRIC_CUE_LEAD_MS } from './lyrics-cue-timing.ts';
+
+/** How long the list takes to glide to a new line after the per-track lyric delay changed: the one lyric animation length. */
+export const LYRIC_OFFSET_GLIDE_MS = LYRIC_CUE_LEAD_MS;
 
 export interface ScrollGlide {
   readonly from: number;

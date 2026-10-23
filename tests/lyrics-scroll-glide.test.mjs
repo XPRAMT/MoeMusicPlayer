@@ -45,9 +45,13 @@ test('retargeting keeps position and speed continuous', () => {
   assert.equal(glidePosition(glide, 300 + LYRIC_OFFSET_GLIDE_MS), target);
 });
 
+test('the delay glide uses the one 200 ms lyric animation length', () => {
+  assert.equal(LYRIC_OFFSET_GLIDE_MS, 200);
+});
+
 test('a glide that already ended restarts from the real scroll position at rest', () => {
-  const old = retargetGlide(null, 0, 100, 0, 240);
-  const next = retargetGlide(old, 100, 400, 1000, 240);
+  const old = retargetGlide(null, 0, 100, 0, LYRIC_OFFSET_GLIDE_MS);
+  const next = retargetGlide(old, 100, 400, 1000, LYRIC_OFFSET_GLIDE_MS);
   assert.equal(next.from, 100);
   assert.equal(next.velocity, 0);
 });
