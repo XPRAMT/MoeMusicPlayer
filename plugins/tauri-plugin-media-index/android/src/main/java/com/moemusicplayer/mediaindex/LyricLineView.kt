@@ -1,6 +1,7 @@
 package com.moemusicplayer.mediaindex
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -40,6 +41,13 @@ internal class LyricLineView(context: Context) : View(context) {
     private val fadePaint = Paint(paint)
     private var fadeAlpha = -1
 
+    // Each line is rasterised once with its shadow / outline (ADR 0032) and only drawn at its offset while gliding.
+    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val rasterKeep = HashSet<String>()
+    private val rasters = LineRasterCache<Raster>(::rasterise) { /* dropped; the GC frees it after any frame using it */ }
+
+    private class Raster(val bitmap: Bitmap, val pad: Int)
+
     fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int, strokeWidth: Float, strokeColor: Int) {
         val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius || this.strokeWidth != strokeWidth
         paint.textSize = sizePx
@@ -56,6 +64,7 @@ internal class LyricLineView(context: Context) : View(context) {
         if (shadowRadius > 0f) paint.setShadowLayer(shadowRadius, 0f, 0f, shadowColor) else paint.clearShadowLayer()
         styleDim()
         fadeAlpha = -1
+        rasters.setLook(LineLook(sizePx, color, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density))
         if (resize) requestLayout()
         invalidate()
     }
@@ -209,6 +218,9 @@ internal class LyricLineView(context: Context) : View(context) {
         // always (the panel's transparent room; the parents do not clip).
         val sides = if (textWidth > available) 0 else width
         canvas.clipRect(-sides, -height, width + sides, 2 * height)
+        rasterKeep.clear()
+        rasterKeep.add(text)
+        rasters.retain(rasterKeep)
         drawText(canvas, text, x, baseline, 1f)
         canvas.restore()
     }
@@ -221,6 +233,9 @@ internal class LyricLineView(context: Context) : View(context) {
         canvas.clipRect(0, -height, width, 2 * height)
         // Only the cells near the view (one view of margin on each side), not every line of the song.
         val cells = FloatingLyricsRules.stripWindow(stripCells, stripWidths, stripOffset + paddingLeft, width.toFloat(), width.toFloat())
+        rasterKeep.clear()
+        for (index in cells) texts.getOrNull(index)?.let { rasterKeep.add(it) }
+        rasters.retain(rasterKeep)
         for (index in cells) {
             val value = texts.getOrNull(index) ?: continue
             if (value.isEmpty()) continue
@@ -235,6 +250,17 @@ internal class LyricLineView(context: Context) : View(context) {
     }
 
     private fun drawText(canvas: Canvas, value: String, x: Float, baseline: Float, weight: Float) {
+        val raster = rasters.get(value)
+        if (raster != null) {
+            val factor = if (inactiveFactor >= 1f || weight >= 1f) 1f
+            else if (weight <= 0f) inactiveFactor
+            else FloatingLyricsRules.fadedFactor(inactiveFactor, weight)
+            // The image holds text, shadow and outline at full opacity, so its alpha fades all three together.
+            bitmapPaint.alpha = Math.round(255 * factor).coerceIn(0, 255)
+            val top = baseline + paint.fontMetrics.ascent - raster.pad
+            canvas.drawBitmap(raster.bitmap, Math.round(x - raster.pad).toFloat(), Math.round(top).toFloat(), bitmapPaint)
+            return
+        }
         val fill = paintFor(weight)
         if (strokeWidth > 0f) {
             val baseAlpha = android.graphics.Color.alpha(color)
@@ -243,5 +269,30 @@ internal class LyricLineView(context: Context) : View(context) {
             canvas.drawText(value, x, baseline, outlinePaint)
         }
         canvas.drawText(value, x, baseline, fill)
+    }
+
+    /** `value` with its shadow / outline into an image with room for the blur; null if empty or too large for a texture. */
+    private fun rasterise(value: String, look: LineLook): Raster? {
+        if (value.isEmpty()) return null
+        val blur = if (look.shadowRadius > 0f) kotlin.math.ceil(3f * (0.57735f * look.shadowRadius + 0.5f)).toInt() else 0
+        val pad = maxOf(blur, kotlin.math.ceil(look.strokeWidth).toInt()) + 1
+        val metrics = paint.fontMetrics
+        val w = kotlin.math.ceil(paint.measureText(value)).toInt() + 2 * pad
+        val h = kotlin.math.ceil(metrics.descent - metrics.ascent).toInt() + 2 * pad
+        if (w <= 0 || h <= 0 || w > MAX_RASTER_PX || h > MAX_RASTER_PX) return null
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val target = Canvas(bitmap)
+        val baseline = pad - metrics.ascent
+        if (look.strokeWidth > 0f) {
+            outlinePaint.alpha = android.graphics.Color.alpha(look.strokeColor)
+            target.drawText(value, pad.toFloat(), baseline, outlinePaint)
+        }
+        target.drawText(value, pad.toFloat(), baseline, paint)
+        return Raster(bitmap, pad)
+    }
+
+    private companion object {
+        // Bitmaps wider than the GPU's texture limit are not drawn; such a line falls back to direct drawing.
+        const val MAX_RASTER_PX = 4096
     }
 }

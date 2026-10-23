@@ -166,9 +166,24 @@ object FloatingLyricsRules {
         return (target - (v0 + u * (m0 + u * (c2 + u * c3)))).toFloat()
     }
 
-    /** Use a crisp outline instead of a blur while continuous text is moving; keep other selected effects unchanged. */
-    fun effectiveTextEffect(animation: String, preference: String): String =
-        if (animation == "continuous" && preference == "shadow") "stroke" else preference
+    /**
+     * The effect drawn: the selected one in every mode, as on Windows. (Continuous mode used to swap the shadow for the
+     * outline; lines are now rasterised once with their shadow, LineRasterCache, so the glide never blurs per frame.)
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun effectiveTextEffect(animation: String, preference: String): String = preference
+
+    /**
+     * Shadow look matching Windows (`text-shadow: 0 0 0.6em`, D2D shadow sigma 0.3 em, 75 % alpha): the
+     * `Paint.setShadowLayer` radius for a `fontPx` font. Skia turns a radius r into sigma 0.57735 r + 0.5.
+     */
+    fun shadowLayerRadius(fontPx: Float): Float = maxOf(1f, (fontPx * SHADOW_SIGMA_EM - 0.5f) / 0.57735f)
+
+    /** Blur reach (3 sigma) that a rasterised line keeps around its text so the shadow is not cut. */
+    fun shadowPadPx(fontPx: Float): Int = kotlin.math.ceil(3f * fontPx * SHADOW_SIGMA_EM).toInt()
+
+    const val SHADOW_SIGMA_EM = 0.3f
+    const val SHADOW_ALPHA = 0xBF
 
     /** Suffix of the saved position keys: portrait and landscape are saved apart. */
     fun orientationKey(landscape: Boolean): String = if (landscape) "landscape" else "portrait"

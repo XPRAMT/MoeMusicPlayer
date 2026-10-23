@@ -540,8 +540,8 @@ object FloatingLyricsOverlay {
             view ?: continue
             val px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
             val effectiveEffect = FloatingLyricsRules.effectiveTextEffect(animation, textEffect)
-            val radius = if (effectiveEffect == "shadow") maxOf(1f, px * 0.25f) else 0f
-            val shadow = if (effectiveEffect == "shadow") 0x99000000.toInt() or effect else 0
+            val radius = if (effectiveEffect == "shadow") FloatingLyricsRules.shadowLayerRadius(px) else 0f
+            val shadow = if (effectiveEffect == "shadow") (FloatingLyricsRules.SHADOW_ALPHA shl 24) or effect else 0
             val strokeWidth = if (effectiveEffect == "stroke") maxOf(1f, px * 0.08f) else 0f
             val strokeColor = if (effectiveEffect == "stroke") 0x80000000.toInt() or effect else 0
             view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor)

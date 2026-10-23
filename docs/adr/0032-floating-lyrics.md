@@ -241,7 +241,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 
 ## 更新（2026-10-23，ADR 0034）
 
-Windows 的浮動歌詞與工作列歌詞改為原生 DirectComposition 繪製（見 ADR 0034），WebView 視窗已移除；行為規則不變，唯一刻意的改變：連續模式選陰影時，Windows 原生版照畫陰影（點陣化一次，沒有每幀成本），Android 仍改描邊。
+Windows 的浮動歌詞與工作列歌詞改為原生 DirectComposition 繪製（見 ADR 0034），WebView 視窗已移除；行為規則不變，唯一刻意的改變：連續模式選陰影時，Windows 原生版照畫陰影（點陣化一次，沒有每幀成本）。2026-10-24 起 Android 也一樣：每種模式都畫使用者選的效果；`LyricLineView` 把每行連同陰影／描邊點陣化成一張 Bitmap（`LineRasterCache`，外觀〔字級、顏色、效果、密度〕改變就全部重建，只保留目前條狀視窗內的行），滑動與淡化只以新位置與透明度畫該圖，不每幀模糊；陰影對齊 Windows（σ 0.3 em、文字反色 75%），描邊不變；EdgeFadeLayout 的 DST_IN 照樣淡化陰影。
 
 ## Amendment 2026-10-23: C1 glide curve
 

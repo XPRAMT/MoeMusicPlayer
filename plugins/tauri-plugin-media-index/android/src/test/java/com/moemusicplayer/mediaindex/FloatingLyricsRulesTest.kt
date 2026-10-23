@@ -191,9 +191,44 @@ class FloatingLyricsRulesTest {
         assertEquals(before, after, 0.05f)
         // Final glyph occupies [140, 160], placing its centre at x=150.
         assertEquals(150f - 180f - 70f, at(11_000), 0.001f)
-        assertEquals("stroke", FloatingLyricsRules.effectiveTextEffect("continuous", "shadow"))
+        assertEquals("shadow", FloatingLyricsRules.effectiveTextEffect("continuous", "shadow"))
+        assertEquals("stroke", FloatingLyricsRules.effectiveTextEffect("continuous", "stroke"))
         assertEquals("none", FloatingLyricsRules.effectiveTextEffect("continuous", "none"))
         assertEquals("shadow", FloatingLyricsRules.effectiveTextEffect("none", "shadow"))
+    }
+
+    @Test
+    fun theShadowMatchesWindowsSigmaAndItsPadCoversTheBlur() {
+        // Skia: sigma = 0.57735 r + 0.5; Windows: sigma = 0.3 em.
+        val radius = FloatingLyricsRules.shadowLayerRadius(40f)
+        assertEquals(12f, 0.57735f * radius + 0.5f, 0.001f)
+        assertEquals(36, FloatingLyricsRules.shadowPadPx(40f))
+        assertEquals(0xBF, FloatingLyricsRules.SHADOW_ALPHA)
+    }
+
+    @Test
+    fun lineRasterCacheKeysOnLookAndKeepsOnlyTheWindow() {
+        var created = 0
+        val released = mutableListOf<String>()
+        val cache = LineRasterCache<String>({ text, _ -> created++; text }, { released += it })
+        val look = LineLook(40f, -1, 10f, 0, 0f, 0, 2f)
+        assertEquals(null, cache.get("a"))
+        cache.setLook(look)
+        cache.get("a"); cache.get("a"); cache.get("b")
+        assertEquals(2, created)
+        cache.setLook(look.copy())
+        assertEquals(2, cache.size)
+        for (changed in listOf(look.copy(sizePx = 41f), look.copy(color = 0), look.copy(shadowRadius = 0f),
+            look.copy(shadowColor = 1), look.copy(strokeWidth = 1f), look.copy(strokeColor = 1), look.copy(density = 3f))) {
+            cache.get("a")
+            cache.setLook(changed)
+            assertEquals(0, cache.size)
+        }
+        cache.get("a"); cache.get("b"); cache.get("c")
+        released.clear()
+        cache.retain(setOf("b"))
+        assertEquals(listOf("a", "c"), released.sorted())
+        assertEquals(1, cache.size)
     }
 
     @Test
