@@ -57,11 +57,9 @@ test('every continuous position animation uses device-pixel steps, recomputed wi
   const progress = read('src/lib/PlaybackProgress.svelte');
   assert.match(progress, /steps\(\$\{run\.steps\}, end\) forwards/);
   assert.match(progress, /watchDevicePixelRatio/);
-  const lyrics = read('src/lib/TaskbarLyricsView.svelte');
-  assert.doesNotMatch(lyrics, /ms linear forwards/);
-  assert.equal((lyrics.match(/devicePixelEasing\(/g) ?? []).length, 2, 'the glide and the long-line scroll');
-  assert.match(lyrics, /watchDevicePixelRatio/);
-  assert.doesNotMatch(lyrics, /transition: transform/);
+  // The taskbar / floating lyrics are native (ADR 0034): their glide and scroll sample whole device pixels.
+  const lyrics = read('crates/player-lyrics-native/src/win.rs');
+  assert.equal((lyrics.match(/DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR/g) ?? []).length, 2, 'the glide and the long-line scroll');
   const marquee = read('src/lib/dock-marquee.ts');
   assert.match(marquee, /devicePixelEasing\(distance/);
   assert.match(marquee, /watchDevicePixelRatio\(update\)/);

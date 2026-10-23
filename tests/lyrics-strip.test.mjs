@@ -95,11 +95,10 @@ test('the next break is the next line start', () => {
 
 test('the views anchor the continuous strip on the lyric area centre whatever the alignment setting', async () => {
   const { readFileSync } = await import('node:fs');
-  const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
-  assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,/g)?.length, 2);
-  assert.match(view, /nextLyricsStripBreak\(stripStarts, at, stripFinalArrivalAtLyricsTime\)/);
-  assert.match(view, /data-text-effect=\{effectiveTextEffect\}/);
-  assert.doesNotMatch(view, /lyricsStripOffset\([^)]*settings\.align/);
+  // Windows draws natively (ADR 0034): the plan anchors on STRIP_ALIGN / STRIP_TARGET, never the alignment setting.
+  const plan = readFileSync(new URL('../crates/player-lyrics-native/src/plan.rs', import.meta.url), 'utf8');
+  assert.match(plan, /rules::STRIP_ALIGN,[\s\S]*rules::STRIP_TARGET,/);
+  assert.doesNotMatch(plan, /align: Align|look\.align/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
   assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN,\s*lyricsMs, main\.availableWidth\(\), FloatingLyricsRules\.STRIP_TARGET,/);
   assert.match(kotlin, /finalArrivalAtLyricsMs, current\.mainWidths, current\.lastGlyphCenters/);
@@ -112,13 +111,10 @@ test('the strip holds only the lines near the lyric area, never the whole song',
   assert.deepEqual(lyricsStripWindow({ starts: [], widths: [] }, 0, 0, 300, 300), { first: 0, last: -1 });
 });
 
-test('the view draws the strip window at layout offsets, measured off-screen', async () => {
+test('the native renderer draws only the strip window', async () => {
   const { readFile } = await import('node:fs/promises');
-  const source = await readFile(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
-  assert.match(source, /lyricsStripWindow\(/);
-  assert.match(source, /#each stripCells as cell/);
-  assert.doesNotMatch(source, /#each stripLines as/);
-  assert.match(source, /measureText/);
+  const source = await readFile(new URL('../crates/player-lyrics-native/src/plan.rs', import.meta.url), 'utf8');
+  assert.match(source, /rules::strip_window\(/);
 });
 
 test('a line starts with its left edge on the lyric area centre and slides left to the next line', () => {
@@ -306,17 +302,14 @@ test('a line shorter than 200 ms fades over its own length, so the previous fade
 });
 
 test('the views fade only the changing cells with an opacity-only animation, fed by the shared setting', () => {
-  const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
+  // Windows: the native renderer (ADR 0034) fades each drawn cell by an opacity animation from the same rules.
+  const plan = readFileSync(new URL('../crates/player-lyrics-native/src/plan.rs', import.meta.url), 'utf8');
+  const bridge = readFileSync(new URL('../src-tauri/src/native_lyrics.rs', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
-  // Both strips (main and translation) use the same per-cell style, from the same pure functions.
-  assert.equal((view.match(/style=\{cellFadeStyle\(cell\.index\)\}/g) ?? []).length, 2);
-  assert.match(view, /lyricsLineOpacityFactor\(weight, inactiveOpacityPercent, settings\.animation\)/);
-  assert.match(view, /@keyframes -global-taskbar-lyrics-fade-a \{\s*from \{ opacity: var\(--fade-from\); \}\s*to \{ opacity: var\(--fade-to\); \}/);
-  // No will-change per cell (an own layer per line would cost more than the fade saves).
-  assert.doesNotMatch(view, /strip-cell\s*\{[^}]*will-change/);
-  // The shared setting reaches the windows by event (the preview too) and by one read at start-up.
-  assert.match(view, /listen<unknown>\('lyrics-inactive-opacity'/);
-  assert.match(view, /invokeCommand\('settings_get_lyrics_preferences'/);
+  assert.match(plan, /rules::line_opacity_factor\(/);
+  // The shared setting reaches the renderer by event (the preview too), and again when the renderer asks.
+  assert.match(bridge, /listen_any\("lyrics-inactive-opacity"/);
   assert.match(app, /emit\('lyrics-inactive-opacity', inactiveOpacityPercent\)/);
+  assert.match(app, /emit\('lyrics-inactive-opacity', lyricsPreferences\.inactiveOpacityPercent\)/);
   assert.match(app, /payload: \{ inactiveOpacityPercent \}/);
 });

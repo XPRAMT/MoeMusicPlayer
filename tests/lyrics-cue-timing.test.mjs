@@ -79,6 +79,8 @@ test('no hard-coded lyric transition times; the taskbar lyrics switch without a 
   assert.match(view, /transition: color var\(--lyric-cue-ms\) ease/);
   assert.match(view, /--lyric-cue-ms:\$\{/);
   assert.doesNotMatch(view, /behavior: 'smooth'/);
-  const taskbar = readFileSync(path.join(root, 'src/lib/TaskbarLyricsView.svelte'), 'utf8');
-  assert.doesNotMatch(taskbar, /in:fade|svelte\/transition|\b120\b/);
+  // The native taskbar lyrics (ADR 0034) switch lines at the cue: "none" mode plans no opacity animation.
+  const native = readFileSync(path.join(root, 'crates/player-lyrics-native/src/plan.rs'), 'utf8');
+  const planLine = native.slice(native.indexOf('pub fn plan_line'), native.indexOf('pub fn value_at'));
+  assert.doesNotMatch(planLine, /opacity/);
 });

@@ -1832,6 +1832,21 @@
     void emit('lyrics-inactive-opacity', inactiveOpacityPercent).catch(() => {});
   });
 
+  // Windows native lyrics (ADR 0034): the per-track delay lives in this window's localStorage, so it is sent with the
+  // track (and again when it changes), together with the padlock tooltips in the interface language.
+  function sendNativeLyricsExtras(): void {
+    if (!isTauri() || !isWindowsPlatform) return;
+    const trackId = taskbarLyricsData?.trackId ?? null;
+    if (trackId) void emit('lyrics-native-delay', { trackId, delaySec: loadLyricsTimingOffsetSec(trackId) }).catch(() => {});
+    void emit('lyrics-inactive-opacity', lyricsPreferences.inactiveOpacityPercent).catch(() => {});
+    void emit('floating-lyrics-tips', { lock: tr('鎖定位置（滑鼠穿透）'), unlock: tr('解除鎖定（可移動）') }).catch(() => {});
+  }
+  $effect(() => {
+    taskbarLyricsData?.trackId;
+    lyricsDelayRevision;
+    if (!isTauri() || !isWindowsPlatform || !taskbarLyricsEnabled) return;
+    untrack(sendNativeLyricsExtras);
+  });
   // Android: the native overlay draws the lines itself from the playback service's position (so it keeps going while
   // this page is in the background); it gets the lyrics, with the per-track delay folded into one offset, whenever
   // they change.
@@ -1905,8 +1920,10 @@
     if (!isTauri() || capabilities?.platform !== 'windows') return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    // The native lyrics renderer (ADR 0034) asks once when it starts: send the lyrics and everything else it draws from.
     void listen('taskbar-lyrics-request', () => {
       if (taskbarLyricsData) void emit('taskbar-lyrics-data', taskbarLyricsData).catch(() => {});
+      untrack(sendNativeLyricsExtras);
     })
       .then((stop) => { if (disposed) stop(); else unlisten = stop; })
       .catch(() => {});

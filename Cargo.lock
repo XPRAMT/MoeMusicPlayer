@@ -3162,6 +3162,7 @@ dependencies = [
  "player-db",
  "player-dsd",
  "player-formats",
+ "player-lyrics-native",
  "player-platform-windows",
  "player-remote",
  "player-tags",

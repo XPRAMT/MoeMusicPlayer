@@ -1,8 +1,8 @@
 //! Lyrics on the Windows taskbars (ADR 0018, ADR 0031): one transparent, click-through, always-on-top window per
 //! taskbar the settings pick (`Shell_TrayWnd` and every `Shell_SecondaryTrayWnd`). One watcher thread lists the
 //! taskbars every pass, opens and closes windows to match, and keeps each over the free stretch of its own taskbar.
-//! Every window loads the same page (`?view=taskbar-lyrics`); the main window broadcasts lyric data, playback and
-//! settings to all of them.
+//! The windows are drawn natively (ADR 0034, `native_lyrics`); the main window broadcasts lyric data and playback to the
+//! renderer, and the look follows the settings and the taskbar theme.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -14,12 +14,12 @@ use player_platform_windows::taskbar::{
     DisplayMonitor, Rect, TaskbarProber, TaskbarWindow,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWLP_HWNDPARENT,
-    GWL_EXSTYLE, HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    GetWindowLongPtrW, GetWindowRect, IsWindow, SetWindowLongPtrW, SetWindowPos, GWLP_HWNDPARENT,
+    HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    SWP_NOZORDER, SWP_SHOWWINDOW,
 };
 
 use crate::settings::{TaskbarLyricsDisplayMode, TaskbarLyricsSettings};
@@ -72,14 +72,6 @@ impl From<&DisplayMonitor> for MonitorChoice {
     }
 }
 
-/// Whether `label` is one of the lyrics windows.
-pub fn is_window_label(label: &str) -> bool {
-    label == WINDOW_LABEL_PREFIX
-        || label
-            .strip_prefix(WINDOW_LABEL_PREFIX)
-            .is_some_and(|rest| rest.starts_with('-'))
-}
-
 pub fn system_uses_light_theme() -> bool {
     taskbar_uses_light_theme()
 }
@@ -118,10 +110,33 @@ pub async fn apply(app: &AppHandle, settings: &TaskbarLyricsSettings) -> Result<
     if settings.enabled {
         start_watcher(app);
         let _ = app.emit(SETTINGS_EVENT, settings);
+        // Live: every open window takes the new look at once.
+        if let Some(renderer) = crate::native_lyrics::renderer(app) {
+            let look = crate::native_lyrics::taskbar_look(settings, taskbar_uses_light_theme());
+            for label in labels() {
+                renderer.set_look(&label, Some(look.clone()));
+            }
+        }
     } else {
         shutdown(app);
     }
     Ok(())
+}
+
+/// Labels of the open windows.
+static LABELS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn labels() -> Vec<String> {
+    LABELS
+        .lock()
+        .map(|labels| labels.clone())
+        .unwrap_or_default()
+}
+
+fn set_labels(slots: &HashMap<isize, Slot>) {
+    if let Ok(mut labels) = LABELS.lock() {
+        *labels = slots.values().map(|slot| slot.label.clone()).collect();
+    }
 }
 
 /// Stop the watcher and close every lyrics window (also when the main window closes, so none can keep the process
@@ -130,44 +145,27 @@ pub fn shutdown(app: &AppHandle) {
     if let Some(stop) = STOP.lock().ok().and_then(|mut guard| guard.take()) {
         stop.store(true, Ordering::Relaxed);
     }
-    for (label, window) in app.webview_windows() {
-        if is_window_label(&label) {
-            let _ = window.destroy();
+    if let Some(renderer) = crate::native_lyrics::renderer(app) {
+        for label in labels() {
+            renderer.destroy(&label);
         }
+    }
+    if let Ok(mut labels) = LABELS.lock() {
+        labels.clear();
     }
 }
 
-fn open_window(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
-    let window = WebviewWindowBuilder::new(
-        app,
-        label,
-        WebviewUrl::App("index.html?view=taskbar-lyrics".into()),
-    )
-    .title("工作列歌詞")
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .resizable(false)
-    .focusable(false)
-    .visible(false)
-    .inner_size(400.0, 40.0)
-    .build()
-    .map_err(|error| format!("無法開啟工作列歌詞視窗：{error}"))?;
-    window
-        .set_ignore_cursor_events(true)
-        .map_err(|error| error.to_string())?;
-    if let Ok(hwnd) = window.hwnd() {
-        let hwnd = HWND(hwnd.0);
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let style = (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
-                & !(WS_EX_APPWINDOW.0 as isize);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
-        }
-    }
-    Ok(window)
+/// A native window owned by its taskbar (it dies with it when Explorer restarts).
+fn open_window(
+    app: &AppHandle,
+    label: &str,
+    tray: isize,
+    look: &player_lyrics_native::Look,
+) -> Option<HWND> {
+    let renderer = crate::native_lyrics::renderer(app)?;
+    let hwnd = renderer.create(label, player_lyrics_native::Kind::Taskbar, Some(tray))?;
+    renderer.set_look(label, Some(look.clone()));
+    Some(HWND(hwnd as *mut _))
 }
 
 fn start_watcher(app: &AppHandle) {
@@ -189,6 +187,8 @@ fn start_watcher(app: &AppHandle) {
 /// One lyrics window and the taskbar it sits on.
 struct Slot {
     label: String,
+    hwnd: Option<HWND>,
+    look: Option<player_lyrics_native::Look>,
     visible: bool,
     /// The taskbar's DPI when the window was last placed: a change (the window moved to another monitor, or the
     /// scale changed) places it once more after Windows resized it for the new DPI.
@@ -243,15 +243,22 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
             .collect();
 
         // Taskbars that are gone (a monitor was unplugged, Explorer restarted) or no longer chosen lose their window.
+        let renderer = crate::native_lyrics::renderer(&app);
         slots.retain(|tray, slot| {
             let keep = wanted.iter().any(|taskbar| taskbar.hwnd == *tray);
             if !keep {
-                if let Some(window) = app.get_webview_window(&slot.label) {
-                    let _ = window.destroy();
+                if let Some(renderer) = renderer {
+                    renderer.destroy(&slot.label);
                 }
             }
             keep
         });
+        let light = taskbar_uses_light_theme();
+        if last_light != Some(light) {
+            last_light = Some(light);
+            let _ = app.emit(THEME_EVENT, light);
+        }
+        let look = crate::native_lyrics::taskbar_look(&settings, light);
         for taskbar in &wanted {
             if stop.load(Ordering::Relaxed) {
                 break;
@@ -261,32 +268,31 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
                     "{WINDOW_LABEL_PREFIX}-{}",
                     NEXT_WINDOW.fetch_add(1, Ordering::Relaxed)
                 ),
+                hwnd: None,
+                look: None,
                 visible: false,
                 dpi: 0,
             });
             // Owned by its taskbar, the window dies with it (Explorer restarting): open a new one.
-            let window = match app.get_webview_window(&slot.label) {
-                Some(window) => window,
-                None => match open_window(&app, &slot.label) {
-                    Ok(window) => {
-                        slot.visible = false;
-                        slot.dpi = 0;
-                        window
-                    }
-                    Err(error) => {
-                        eprintln!("{error}");
-                        continue;
-                    }
-                },
-            };
-            place(&window, slot, taskbar, &prober);
+            let alive = slot
+                .hwnd
+                .is_some_and(|hwnd| unsafe { IsWindow(Some(hwnd)) }.as_bool());
+            if !alive {
+                slot.hwnd = open_window(&app, &slot.label, taskbar.hwnd, &look);
+                slot.look = Some(look.clone());
+                slot.visible = false;
+                slot.dpi = 0;
+            }
+            let Some(hwnd) = slot.hwnd else { continue };
+            if slot.look.as_ref() != Some(&look) {
+                if let Some(renderer) = renderer {
+                    renderer.set_look(&slot.label, Some(look.clone()));
+                }
+                slot.look = Some(look.clone());
+            }
+            place(hwnd, slot, taskbar, &prober);
         }
-
-        let light = taskbar_uses_light_theme();
-        if last_light != Some(light) {
-            last_light = Some(light);
-            let _ = app.emit(THEME_EVENT, light);
-        }
+        set_labels(&slots);
         for _ in 0..POLL_STEPS {
             if stop.load(Ordering::Relaxed) {
                 return;
@@ -334,11 +340,7 @@ fn show_at(hwnd: HWND, area: Rect) {
 }
 
 /// Keep one window over the free stretch of its own taskbar, or hide it.
-fn place(window: &WebviewWindow, slot: &mut Slot, taskbar: &TaskbarWindow, prober: &TaskbarProber) {
-    let Ok(hwnd) = window.hwnd() else {
-        return;
-    };
-    let hwnd = HWND(hwnd.0);
+fn place(hwnd: HWND, slot: &mut Slot, taskbar: &TaskbarWindow, prober: &TaskbarProber) {
     // Owned by the taskbar, the window keeps its place above it: when the taskbar takes focus (a tray click, the
     // Windows quick settings) Windows lifts it into a higher layer than any ordinary topmost window.
     let tray = HWND(taskbar.hwnd as *mut _);
@@ -416,13 +418,5 @@ mod tests {
             !wants_taskbar(custom, &[], Some("A"), true, None),
             "nothing chosen shows nothing"
         );
-    }
-
-    #[test]
-    fn lyrics_window_labels_share_the_prefix() {
-        assert!(is_window_label("taskbar-lyrics"));
-        assert!(is_window_label("taskbar-lyrics-3"));
-        assert!(!is_window_label("taskbar-lyricsX"));
-        assert!(!is_window_label("main"));
     }
 }

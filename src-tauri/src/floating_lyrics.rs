@@ -1,30 +1,31 @@
-﻿//! Floating lyrics on Windows (ADR 0032): one transparent, frameless, always-on-top window (`?view=floating-lyrics`)
+//! Floating lyrics on Windows (ADR 0032): one transparent, frameless, always-on-top native window (ADR 0034)
 //! fed by the same events as the taskbar lyrics. Move mode: the page drags the window and shows a lock button on
 //! hover. Fixed mode: the window ignores the mouse (WS_EX_TRANSPARENT through `set_ignore_cursor_events`); a 100 ms
 //! watcher polls the cursor and makes only the unlock button's rectangle clickable while the cursor is over it.
 //! The position is saved in physical pixels and kept inside the monitors' work areas.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, TRUE};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HDC, HMONITOR,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
 };
-use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW,
+    GetCursorPos, GetWindowRect, IsWindow, SetWindowPos, HWND_TOPMOST, MONITORINFOF_PRIMARY,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
 };
 
 use crate::settings::{FloatingLyricsPosition, FloatingLyricsSettings};
 
 pub const WINDOW_LABEL: &str = "floating-lyrics";
 pub const SETTINGS_EVENT: &str = "floating-lyrics-settings";
-/// `true` while the cursor is over the window in fixed mode (the page then shows the unlock button).
-pub const HOVER_EVENT: &str = "floating-lyrics-hover";
 
 /// Keep in step with `FLOATING_LYRICS_LAYOUT` in `src/lib/floating-lyrics-settings.js`.
 /// Height of one drawn line in em: the text's own height (1.25 em) with a 10% buffer. The lyric area (the part with the
@@ -82,12 +83,16 @@ impl Rect {
 /// The lock button (and the transparent gutter right of the lyric area that holds it) in CSS px: as tall as the main
 /// line, so it scales with the font and never props the window open.
 pub fn lock_css(settings: &FloatingLyricsSettings) -> f64 {
-    (f64::from(settings.font_size_px) * LINE_HEIGHT).ceil().max(1.0)
+    (f64::from(settings.font_size_px) * LINE_HEIGHT)
+        .ceil()
+        .max(1.0)
 }
 
 /// The transparent side margin (CSS px) left of the lyric area and again right of the lock gutter.
 pub fn side_margin_css(settings: &FloatingLyricsSettings) -> f64 {
-    (f64::from(settings.font_size_px) * SIDE_MARGIN_EM).ceil().max(1.0)
+    (f64::from(settings.font_size_px) * SIDE_MARGIN_EM)
+        .ceil()
+        .max(1.0)
 }
 
 /// Everything in the window beside the lyric area, CSS px: both side margins and the lock gutter.
@@ -120,12 +125,16 @@ fn lines_em_px(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 
 /// (The page draws the area as the middle 1.1 / 1.5 of the window; this states the rule for the tests.)
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn lyric_height_css(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 {
-    (lines_em_px(settings, has_translation) * LINE_HEIGHT).ceil().max(1.0)
+    (lines_em_px(settings, has_translation) * LINE_HEIGHT)
+        .ceil()
+        .max(1.0)
 }
 
 /// Window height in CSS px: text height x 1.5, so the shadow / glow has transparent room above and below the area.
 pub fn window_height_css(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 {
-    (lines_em_px(settings, has_translation) * PANEL_LINE_HEIGHT).ceil().max(1.0)
+    (lines_em_px(settings, has_translation) * PANEL_LINE_HEIGHT)
+        .ceil()
+        .max(1.0)
 }
 
 fn valid_scale(scale: f64) -> f64 {
@@ -224,12 +233,18 @@ pub fn centre_on(bounds: Rect, size: (i32, i32), gutter: Gutters) -> FloatingLyr
 
 /// 「水平置中」 / 「垂直置中」: centre the window on one axis of the monitor that holds its centre point (the first
 /// monitor when none does), keeping the other coordinate.
-pub fn centre_axis(window: Rect, monitors: &[Rect], horizontal: bool, gutter: Gutters) -> FloatingLyricsPosition {
+pub fn centre_axis(
+    window: Rect,
+    monitors: &[Rect],
+    horizontal: bool,
+    gutter: Gutters,
+) -> FloatingLyricsPosition {
     let (cx, cy) = (
         window.left + gutter.lead.max(0) + gutter.lyric_width(window.width()) / 2,
         window.top + window.height() / 2,
     );
-    let holds = |area: &&Rect| cx >= area.left && cx < area.right && cy >= area.top && cy < area.bottom;
+    let holds =
+        |area: &&Rect| cx >= area.left && cx < area.right && cy >= area.top && cy < area.bottom;
     let Some(monitor) = monitors.iter().find(holds).or(monitors.first()) else {
         return FloatingLyricsPosition {
             x: window.left,
@@ -250,37 +265,146 @@ pub fn centre_axis(window: Rect, monitors: &[Rect], horizontal: bool, gutter: Gu
     }
 }
 
+/// The native window (ADR 0034): its HWND as created by the renderer.
+static HWND_VALUE: AtomicIsize = AtomicIsize::new(0);
+
+#[derive(Clone, Copy)]
+struct Native(HWND);
+
+fn window() -> Option<Native> {
+    let raw = HWND_VALUE.load(Ordering::SeqCst);
+    let hwnd = HWND(raw as *mut _);
+    (raw != 0 && unsafe { IsWindow(Some(hwnd)) }.as_bool()).then_some(Native(hwnd))
+}
+
+fn to_rect(raw: RECT) -> Rect {
+    Rect {
+        left: raw.left,
+        top: raw.top,
+        right: raw.right,
+        bottom: raw.bottom,
+    }
+}
+
+/// Every monitor: (bounds, work area, primary).
+fn monitors() -> Vec<(Rect, Rect, bool)> {
+    unsafe extern "system" fn each(monitor: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+        let list = &mut *(data.0 as *mut Vec<(Rect, Rect, bool)>);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            list.push((
+                to_rect(info.rcMonitor),
+                to_rect(info.rcWork),
+                info.dwFlags & MONITORINFOF_PRIMARY != 0,
+            ));
+        }
+        TRUE
+    }
+    let mut list: Vec<(Rect, Rect, bool)> = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut list as *mut _ as isize));
+    }
+    // The primary monitor first (the default place and the first work area).
+    list.sort_by_key(|m| !m.2);
+    list
+}
+
+impl Native {
+    fn rect(self) -> Option<Rect> {
+        let mut raw = RECT::default();
+        unsafe { GetWindowRect(self.0, &mut raw) }.ok()?;
+        Some(to_rect(raw))
+    }
+    fn scale(self) -> f64 {
+        f64::from(unsafe { GetDpiForWindow(self.0) }.max(96)) / 96.0
+    }
+    /// The monitor holding the window: (bounds, scale).
+    fn monitor(self) -> Option<(Rect, f64)> {
+        let monitor = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetMonitorInfoW(monitor, &mut info) }
+            .as_bool()
+            .then(|| (to_rect(info.rcMonitor), self.scale()))
+    }
+    fn set_position(self, x: i32, y: i32) {
+        let _ = unsafe {
+            SetWindowPos(
+                self.0,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            )
+        };
+    }
+    fn set_size(self, width: i32, height: i32) {
+        let _ = unsafe {
+            SetWindowPos(
+                self.0,
+                None,
+                0,
+                0,
+                width,
+                height,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+    fn show(self) {
+        let _ = unsafe {
+            SetWindowPos(
+                self.0,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        };
+    }
+}
+
 /// Centre the open window on one axis (see `centre_axis`); the move event saves the position.
-pub fn centre_window_axis(app: &AppHandle, horizontal: bool) {
-    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
-        return;
-    };
-    let Some(rect) = window_rect(&window) else {
-        return;
-    };
-    let monitors: Vec<Rect> = window
-        .available_monitors()
-        .unwrap_or_default()
-        .iter()
-        .map(|monitor| Rect {
-            left: monitor.position().x,
-            top: monitor.position().y,
-            right: monitor.position().x + monitor.size().width as i32,
-            bottom: monitor.position().y + monitor.size().height as i32,
-        })
-        .collect();
-    let gutter = current().map_or(Gutters::NONE, |settings| gutter_px(&settings, window.scale_factor().unwrap_or(1.0)));
-    place(&window, Some(centre_axis(rect, &monitors, horizontal, gutter)));
+pub fn centre_window_axis(_app: &AppHandle, horizontal: bool) {
+    let Some(window) = window() else { return };
+    let Some(rect) = window.rect() else { return };
+    let bounds: Vec<Rect> = monitors().iter().map(|m| m.0).collect();
+    let gutter = current().map_or(Gutters::NONE, |settings| {
+        gutter_px(&settings, window.scale())
+    });
+    place(window, Some(centre_axis(rect, &bounds, horizontal, gutter)));
 }
 
 /// Width in CSS px of the monitor holding the window (the primary one when closed): the width slider's maximum.
-pub fn screen_width_css(app: &AppHandle) -> Option<f64> {
-    let monitor = match app.get_webview_window(WINDOW_LABEL) {
-        Some(window) => window.current_monitor().ok().flatten(),
-        None => None,
+pub fn screen_width_css(_app: &AppHandle) -> Option<f64> {
+    match window().and_then(Native::monitor) {
+        Some((bounds, scale)) => Some(f64::from(bounds.width()) / valid_scale(scale)),
+        None => {
+            let primary = monitors().into_iter().next()?;
+            let dpi = unsafe {
+                let monitor = MonitorFromPoint(
+                    POINT {
+                        x: primary.0.left,
+                        y: primary.0.top,
+                    },
+                    MONITOR_DEFAULTTOPRIMARY,
+                );
+                let (mut x, mut y) = (96u32, 96u32);
+                let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y);
+                x.max(96)
+            };
+            Some(f64::from(primary.0.width()) / (f64::from(dpi) / 96.0))
+        }
     }
-    .or_else(|| app.primary_monitor().ok().flatten())?;
-    Some(f64::from(monitor.size().width) / valid_scale(monitor.scale_factor()))
 }
 
 pub fn is_window_label(label: &str) -> bool {
@@ -301,51 +425,64 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
         shutdown(app);
         return Ok(());
     }
-    let window = match app.get_webview_window(WINDOW_LABEL) {
+    let renderer =
+        crate::native_lyrics::renderer(app).ok_or_else(|| "無法開啟浮動歌詞視窗".to_owned())?;
+    let window = match window() {
         Some(window) => window,
-        None => open_window(app)?,
+        None => {
+            let hwnd = renderer
+                .create(WINDOW_LABEL, player_lyrics_native::Kind::Floating, None)
+                .ok_or_else(|| "無法開啟浮動歌詞視窗".to_owned())?;
+            HWND_VALUE.store(hwnd, Ordering::SeqCst);
+            Native(HWND(hwnd as *mut _))
+        }
     };
-    window
-        .set_size(window_size(&window, settings))
-        .map_err(|error| error.to_string())?;
-    place(&window, settings.position);
-    window
-        .set_ignore_cursor_events(settings.locked)
-        .map_err(|error| error.to_string())?;
+    renderer.set_look(
+        WINDOW_LABEL,
+        Some(crate::native_lyrics::floating_look(settings)),
+    );
+    crate::native_lyrics::apply_floating_chrome(app, settings);
+    let (width, height) = window_size(window, settings);
+    window.set_size(width, height);
+    place(window, settings.position);
+    renderer.set_click_through(WINDOW_LABEL, settings.locked);
     if !settings.locked {
-        let _ = window.emit(HOVER_EVENT, false);
+        renderer.set_hover(WINDOW_LABEL, false);
     }
-    window.show().map_err(|error| error.to_string())?;
+    window.show();
     start_watcher(app);
     Ok(())
 }
 
-/// Lyric area (narrowed to the monitor) plus the lock gutter and the side margins; text height x 1.5 tall.
-fn window_size(window: &WebviewWindow, settings: &FloatingLyricsSettings) -> LogicalSize<f64> {
+/// Lyric area (narrowed to the monitor) plus the lock gutter and the side margins; text height x 1.5 tall (physical px).
+fn window_size(window: Native, settings: &FloatingLyricsSettings) -> (i32, i32) {
     let monitor_css = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| f64::from(monitor.size().width) / valid_scale(monitor.scale_factor()));
-    LogicalSize::new(
-        lyric_width_css(settings, monitor_css) + chrome_width_css(settings),
-        window_height_css(settings, HAS_TRANSLATION.load(Ordering::SeqCst)),
+        .monitor()
+        .map(|(bounds, scale)| f64::from(bounds.width()) / valid_scale(scale));
+    let scale = window.scale();
+    let width = lyric_width_css(settings, monitor_css) + chrome_width_css(settings);
+    let height = window_height_css(settings, HAS_TRANSLATION.load(Ordering::SeqCst));
+    (
+        (width * scale).round() as i32,
+        (height * scale).round() as i32,
     )
 }
 
-/// The page says whether the line it draws has a translation: grow or shrink the window to the lines (top-left kept,
-/// then kept on screen).
-pub fn fit_lines(app: &AppHandle, has_translation: bool) {
+/// The renderer says whether the line it draws has a translation: grow or shrink the window to the lines (top-left
+/// kept, then kept on screen).
+pub fn fit_lines(_app: &AppHandle, has_translation: bool) {
     if HAS_TRANSLATION.swap(has_translation, Ordering::SeqCst) == has_translation {
         return;
     }
-    let (Some(settings), Some(window)) = (current(), app.get_webview_window(WINDOW_LABEL)) else {
+    let (Some(settings), Some(window)) = (current(), window()) else {
         return;
     };
-    if settings.enabled && window.set_size(window_size(&window, &settings)).is_ok() {
-        if let Some(rect) = window_rect(&window) {
+    if settings.enabled {
+        let (width, height) = window_size(window, &settings);
+        window.set_size(width, height);
+        if let Some(rect) = window.rect() {
             place(
-                &window,
+                window,
                 Some(FloatingLyricsPosition {
                     x: rect.left,
                     y: rect.top,
@@ -356,13 +493,11 @@ pub fn fit_lines(app: &AppHandle, has_translation: bool) {
 }
 
 /// The 面板 arrows in the settings: one physical px in any direction, kept on the work area (the move event saves the position).
-pub fn nudge(app: &AppHandle, dx: i32, dy: i32) {
-    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
-        return;
-    };
-    if let Some(rect) = window_rect(&window) {
+pub fn nudge(_app: &AppHandle, dx: i32, dy: i32) {
+    let Some(window) = window() else { return };
+    if let Some(rect) = window.rect() {
         place(
-            &window,
+            window,
             Some(FloatingLyricsPosition {
                 x: rect.left + dx.clamp(-1, 1),
                 y: rect.top + dy.clamp(-1, 1),
@@ -376,8 +511,10 @@ pub fn shutdown(app: &AppHandle) {
     if let Some(stop) = STOP.lock().ok().and_then(|mut guard| guard.take()) {
         stop.store(true, Ordering::Relaxed);
     }
-    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        let _ = window.destroy();
+    if HWND_VALUE.swap(0, Ordering::SeqCst) != 0 {
+        if let Some(renderer) = crate::native_lyrics::renderer(app) {
+            renderer.destroy(WINDOW_LABEL);
+        }
     }
 }
 
@@ -416,90 +553,31 @@ pub fn remember_position(app: &AppHandle, position: PhysicalPosition<i32>) {
     });
 }
 
-fn open_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    let window = WebviewWindowBuilder::new(
-        app,
-        WINDOW_LABEL,
-        WebviewUrl::App("index.html?view=floating-lyrics".into()),
-    )
-    .title("浮動歌詞")
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .resizable(false)
-    .focusable(false)
-    .visible(false)
-    .inner_size(
-        f64::from(crate::settings::FloatingLyricsSettings::DEFAULT_WIDTH_PX),
-        44.0,
-    )
-    .build()
-    .map_err(|error| format!("無法開啟浮動歌詞視窗：{error}"))?;
-    if let Ok(hwnd) = window.hwnd() {
-        let hwnd = HWND(hwnd.0);
-        unsafe {
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let style = (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
-                & !(WS_EX_APPWINDOW.0 as isize);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
-        }
-    }
-    Ok(window)
-}
-
-fn work_areas(window: &WebviewWindow) -> Vec<Rect> {
+fn work_areas() -> Vec<Rect> {
     let mut areas: Vec<Rect> = Vec::new();
-    let primary = window.primary_monitor().ok().flatten();
-    let all = window.available_monitors().unwrap_or_default();
-    for monitor in primary.iter().chain(all.iter()) {
-        let area = monitor.work_area();
-        let rect = Rect {
-            left: area.position.x,
-            top: area.position.y,
-            right: area.position.x + area.size.width as i32,
-            bottom: area.position.y + area.size.height as i32,
-        };
-        if rect.width() > 0 && rect.height() > 0 && !areas.contains(&rect) {
-            areas.push(rect);
+    for (_, work, _) in monitors() {
+        if work.width() > 0 && work.height() > 0 && !areas.contains(&work) {
+            areas.push(work);
         }
     }
     areas
 }
 
-fn window_rect(window: &WebviewWindow) -> Option<Rect> {
-    let position = window.outer_position().ok()?;
-    let size = window.outer_size().ok()?;
-    Some(Rect {
-        left: position.x,
-        top: position.y,
-        right: position.x + size.width as i32,
-        bottom: position.y + size.height as i32,
-    })
-}
-
 /// Move the window to `wanted` kept inside the visible monitors; None: the default place.
-fn place(window: &WebviewWindow, wanted: Option<FloatingLyricsPosition>) {
-    let Some(rect) = window_rect(window) else {
-        return;
-    };
+fn place(window: Native, wanted: Option<FloatingLyricsPosition>) {
+    let Some(rect) = window.rect() else { return };
     let size = (rect.width(), rect.height());
-    let gutter = current().map_or(Gutters::NONE, |settings| gutter_px(&settings, window.scale_factor().unwrap_or(1.0)));
+    let gutter = current().map_or(Gutters::NONE, |settings| {
+        gutter_px(&settings, window.scale())
+    });
     // No saved position (first open, or 重設位置): the exact centre of the primary monitor.
     let wanted = wanted.or_else(|| {
-        let monitor = window.primary_monitor().ok().flatten()?;
-        let bounds = Rect {
-            left: monitor.position().x,
-            top: monitor.position().y,
-            right: monitor.position().x + monitor.size().width as i32,
-            bottom: monitor.position().y + monitor.size().height as i32,
-        };
+        let bounds = monitors().first()?.0;
         (bounds.width() > 0 && bounds.height() > 0).then(|| centre_on(bounds, size, gutter))
     });
-    let target = place_on_monitors(wanted, size, gutter, &work_areas(window));
+    let target = place_on_monitors(wanted, size, gutter, &work_areas());
     if target.x != rect.left || target.y != rect.top {
-        let _ = window.set_position(PhysicalPosition::new(target.x, target.y));
+        window.set_position(target.x, target.y);
     }
 }
 
@@ -527,7 +605,10 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
         let Some(settings) = current().filter(|settings| settings.enabled) else {
             break;
         };
-        let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        let Some(window) = window() else {
+            break;
+        };
+        let Some(renderer) = crate::native_lyrics::renderer(&app) else {
             break;
         };
         if last_locked != Some(settings.locked) {
@@ -537,9 +618,9 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
         }
         steps = steps.wrapping_add(1);
         if steps.is_multiple_of(PLACEMENT_CHECK_STEPS) {
-            if let Some(rect) = window_rect(&window) {
+            if let Some(rect) = window.rect() {
                 place(
-                    &window,
+                    window,
                     Some(FloatingLyricsPosition {
                         x: rect.left,
                         y: rect.top,
@@ -550,25 +631,32 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
         if !settings.locked {
             continue;
         }
-        let Some(rect) = window_rect(&window) else {
+        let Some(rect) = window.rect() else {
             continue;
         };
-        let scale = window.scale_factor().unwrap_or(1.0);
-        let (inside, over_button) = match app.cursor_position() {
-            Ok(cursor) => (
-                rect.contains(cursor.x, cursor.y),
-                unlock_button_rect(rect, scale, lock_css(&settings), side_margin_css(&settings))
-                    .contains(cursor.x, cursor.y),
-            ),
-            Err(_) => (false, false),
+        let mut cursor = POINT::default();
+        let (inside, over_button) = if unsafe { GetCursorPos(&mut cursor) }.is_ok() {
+            let (x, y) = (f64::from(cursor.x), f64::from(cursor.y));
+            (
+                rect.contains(x, y),
+                unlock_button_rect(
+                    rect,
+                    window.scale(),
+                    lock_css(&settings),
+                    side_margin_css(&settings),
+                )
+                .contains(x, y),
+            )
+        } else {
+            (false, false)
         };
         if inside != hovering {
             hovering = inside;
-            let _ = window.emit(HOVER_EVENT, inside);
+            renderer.set_hover(WINDOW_LABEL, inside);
         }
         if clickable != Some(over_button) {
             clickable = Some(over_button);
-            let _ = window.set_ignore_cursor_events(!over_button);
+            renderer.set_click_through(WINDOW_LABEL, !over_button);
         }
     }
     if let Ok(mut guard) = STOP.lock() {
@@ -604,14 +692,22 @@ mod tests {
         };
         // Lyric area = text height x 1.1: (30 + 15) * 1.375 = 61.875 -> 62; 30 * 1.375 = 41.25 -> 42.
         assert_eq!(lyric_height_css(&settings, true), 62.0);
-        assert_eq!(lyric_height_css(&settings, false), 42.0, "no translation on this line: shrink");
+        assert_eq!(
+            lyric_height_css(&settings, false),
+            42.0,
+            "no translation on this line: shrink"
+        );
         // Window = text height x 1.5: 45 * 1.875 = 84.375 -> 85; 30 * 1.875 = 56.25 -> 57.
         assert_eq!(window_height_css(&settings, true), 85.0);
         assert_eq!(window_height_css(&settings, false), 57.0);
         settings.show_translation = false;
         assert_eq!(window_height_css(&settings, true), 57.0);
         settings.font_size_px = 8;
-        assert_eq!(window_height_css(&settings, true), 15.0, "small text: a small panel");
+        assert_eq!(
+            window_height_css(&settings, true),
+            15.0,
+            "small text: a small panel"
+        );
         assert_eq!(lock_css(&settings), 11.0, "the lock follows the main line");
         assert_eq!(side_margin_css(&settings), 2.0);
     }
@@ -628,14 +724,27 @@ mod tests {
         // The window (8 + area + 44 + 8) fits the monitor.
         assert_eq!(lyric_width_css(&settings, Some(1920.0)), 1920.0 - 60.0);
         assert_eq!(lyric_width_css(&settings, None), 3000.0);
-        assert_eq!(gutter_px(&settings, 1.5), Gutters { lead: 12, trail: 78 });
+        assert_eq!(
+            gutter_px(&settings, 1.5),
+            Gutters {
+                lead: 12,
+                trail: 78
+            }
+        );
     }
 
     #[test]
     fn unlock_button_scales_with_the_font_and_dpi() {
         let window = rect(1000, 500, 2600, 620);
-        assert_eq!(unlock_button_rect(window, 1.0, 32.0, 0.0), rect(2568, 544, 2600, 576));
-        assert_eq!(unlock_button_rect(window, 1.0, 32.0, 8.0), rect(2560, 544, 2592, 576), "in from the margin");
+        assert_eq!(
+            unlock_button_rect(window, 1.0, 32.0, 0.0),
+            rect(2568, 544, 2600, 576)
+        );
+        assert_eq!(
+            unlock_button_rect(window, 1.0, 32.0, 8.0),
+            rect(2560, 544, 2592, 576),
+            "in from the margin"
+        );
         let big = unlock_button_rect(window, 2.5, 32.0, 8.0);
         assert_eq!((big.width(), big.height()), (80, 80));
         assert_eq!(big.right, 2600 - 20);
@@ -653,28 +762,46 @@ mod tests {
         let window = rect(2020, 100, 2820, 200);
         assert_eq!(
             centre_axis(window, &monitors, true, Gutters::NONE),
-            FloatingLyricsPosition { x: 1920 + (2560 - 800) / 2, y: 100 }
+            FloatingLyricsPosition {
+                x: 1920 + (2560 - 800) / 2,
+                y: 100
+            }
         );
         // With a 40 px lock gutter only the 760 px lyric area is centred.
         let lock = Gutters { lead: 0, trail: 40 };
         assert_eq!(
             centre_axis(window, &monitors, true, lock),
-            FloatingLyricsPosition { x: 1920 + (2560 - 760) / 2, y: 100 }
+            FloatingLyricsPosition {
+                x: 1920 + (2560 - 760) / 2,
+                y: 100
+            }
         );
         // A 10 px side margin on each side: the 740 px area is centred, the window starts 10 px left of it.
-        let margins = Gutters { lead: 10, trail: 50 };
+        let margins = Gutters {
+            lead: 10,
+            trail: 50,
+        };
         assert_eq!(
             centre_axis(window, &monitors, true, margins),
-            FloatingLyricsPosition { x: 1920 + (2560 - 740) / 2 - 10, y: 100 }
+            FloatingLyricsPosition {
+                x: 1920 + (2560 - 740) / 2 - 10,
+                y: 100
+            }
         );
         assert_eq!(
             centre_axis(window, &monitors, false, lock),
-            FloatingLyricsPosition { x: 2020, y: (1440 - 100) / 2 }
+            FloatingLyricsPosition {
+                x: 2020,
+                y: (1440 - 100) / 2
+            }
         );
         // Off every monitor: the first one.
         assert_eq!(
             centre_axis(rect(-5000, 10, -4800, 60), &monitors, true, Gutters::NONE),
-            FloatingLyricsPosition { x: (1920 - 200) / 2, y: 10 }
+            FloatingLyricsPosition {
+                x: (1920 - 200) / 2,
+                y: 10
+            }
         );
     }
 
@@ -686,12 +813,30 @@ mod tests {
         let size = (1600, 120);
         let default = place_on_monitors(None, size, Gutters::NONE, &areas);
         assert_eq!(
-            place_on_monitors(None, size, Gutters { lead: 0, trail: 100 }, &areas).x,
+            place_on_monitors(
+                None,
+                size,
+                Gutters {
+                    lead: 0,
+                    trail: 100
+                },
+                &areas
+            )
+            .x,
             (3840 - 1500) / 2,
             "first use: the lyric area at the centre"
         );
         assert_eq!(
-            place_on_monitors(None, size, Gutters { lead: 20, trail: 80 }, &areas).x,
+            place_on_monitors(
+                None,
+                size,
+                Gutters {
+                    lead: 20,
+                    trail: 80
+                },
+                &areas
+            )
+            .x,
             (3840 - 1500) / 2 - 20,
             "first use with side margins: still the lyric area at the centre"
         );
@@ -711,19 +856,28 @@ mod tests {
             FloatingLyricsPosition { x: -1060, y: 490 }
         );
         let inside = FloatingLyricsPosition { x: 4000, y: 1000 };
-        assert_eq!(place_on_monitors(Some(inside), size, Gutters::NONE, &areas), inside);
+        assert_eq!(
+            place_on_monitors(Some(inside), size, Gutters::NONE, &areas),
+            inside
+        );
         let hanging = FloatingLyricsPosition { x: 5500, y: 2050 };
         assert_eq!(
             place_on_monitors(Some(hanging), size, Gutters::NONE, &areas),
             FloatingLyricsPosition { x: 4800, y: 1992 }
         );
         let gone = FloatingLyricsPosition { x: -5000, y: 200 };
-        assert_eq!(place_on_monitors(Some(gone), size, Gutters::NONE, &areas), default);
+        assert_eq!(
+            place_on_monitors(Some(gone), size, Gutters::NONE, &areas),
+            default
+        );
         let straddling = FloatingLyricsPosition { x: 3000, y: 800 };
         assert_eq!(
             place_on_monitors(Some(straddling), size, Gutters::NONE, &areas),
             FloatingLyricsPosition { x: 2240, y: 800 }
         );
-        assert_eq!(place_on_monitors(Some(inside), size, Gutters::NONE, &[]), inside);
+        assert_eq!(
+            place_on_monitors(Some(inside), size, Gutters::NONE, &[]),
+            inside
+        );
     }
 }

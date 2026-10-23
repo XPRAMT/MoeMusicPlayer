@@ -74,18 +74,17 @@ test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track del
   assert.equal(lyricsDisplayOffsetMs(Number.NaN, 0), 0);
   assert.ok(!Object.is(lyricsDisplayOffsetMs(500, 0.5), -0));
   const page = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
-  const taskbar = await readFile(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
+  // Windows taskbar / floating lyrics are native (ADR 0034): the same offset rule in Rust (shared vectors), the delay
+  // sent by the main window with the track and on every change.
+  const native = await readFile(new URL('../crates/player-lyrics-native/src/win.rs', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
   assert.match(page, /timedOffsetMs = \$derived\(lyricsDisplayOffsetMs\(viewState\.lyrics\?\.offsetMs, timingOffsetSec\)\)/);
-  assert.match(taskbar, /timingOffsetMs = \$derived\(lyricsDisplayOffsetMs\(data\?\.offsetMs, timingDelaySec\)\)/);
-  assert.doesNotMatch(page + taskbar, /\+ lyricsTimingDelaySecToOffsetMs\(/, 'no second hand-made sum');
-  // The page tells the other windows at once; the taskbar follows the event (and storage) and re-plans its timers.
+  assert.match(native, /rules::display_offset_ms\(lyrics\.offset_ms, delay\)/);
+  assert.doesNotMatch(page, /\+ lyricsTimingDelaySecToOffsetMs\(/, 'no second hand-made sum');
   assert.equal(LYRICS_TIMING_OFFSET_EVENT, 'lyrics-timing-offset-changed');
   assert.match(page, /emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId, delaySec: timingOffsetSec \}\)/);
-  assert.match(taskbar, /listen<\{ trackId: string; delaySec: number \}>\(LYRICS_TIMING_OFFSET_EVENT/);
-  assert.match(taskbar, /addEventListener\('storage', onStorage\)/);
-  assert.match(taskbar, /nextCuePosition\(starts, offset,/);
-  assert.match(taskbar, /const offset = timingOffsetMs;/);
-  // The cue lead is the page's animation lead only, added on top of the same offset.
-  assert.doesNotMatch(taskbar, /LYRIC_CUE_LEAD_MS/);
+  assert.match(app, /emit\('lyrics-native-delay', \{ trackId, delaySec: loadLyricsTimingOffsetSec\(trackId\) \}\)/);
+  // The cue lead is the page's animation lead only.
+  assert.doesNotMatch(native, /LYRIC_CUE_LEAD/);
   assert.match(page, /displayCuePositions\(timedStartTimes, timedOffsetMs, cueLeading\)/);
 });

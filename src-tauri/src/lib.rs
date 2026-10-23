@@ -61,6 +61,8 @@ mod sleep_timer;
 mod taskbar_lyrics;
 #[cfg(target_os = "windows")]
 mod floating_lyrics;
+#[cfg(target_os = "windows")]
+mod native_lyrics;
 mod track_details;
 pub mod updater;
 mod volume_sync;
@@ -7417,9 +7419,17 @@ async fn settings_set_floating_lyrics(
 #[tauri::command]
 async fn floating_lyrics_set_locked(
     app: AppHandle,
-    state: State<'_, AppState>,
     locked: bool,
 ) -> Result<settings::FloatingLyricsSettings, String> {
+    set_floating_lyrics_locked(&app, locked).await
+}
+
+/// Save the lock state and apply it (the settings command and the native padlock both use this).
+pub(crate) async fn set_floating_lyrics_locked(
+    app: &AppHandle,
+    locked: bool,
+) -> Result<settings::FloatingLyricsSettings, String> {
+    let state = app.state::<AppState>();
     let saved = state
         .settings
         .update(|stored| {
@@ -7428,7 +7438,7 @@ async fn floating_lyrics_set_locked(
         })
         .map(|stored| stored.floating_lyrics)
         .map_err(|error| error.to_string())?;
-    apply_floating_lyrics(&app, &saved).await?;
+    apply_floating_lyrics(app, &saved).await?;
     Ok(saved)
 }
 
@@ -12322,33 +12332,6 @@ pub fn run() {
 
     builder
         .on_window_event(|window, event| {
-            // A close request sent to a taskbar-lyrics window (tools that close "the process's main window" can
-            // pick it, and Windows sends WM_CLOSE to every window at logoff) means the app should quit: forward it
-            // to the main window's normal close flow instead of destroying only the lyrics window.
-            #[cfg(target_os = "windows")]
-            if taskbar_lyrics::is_window_label(window.label()) {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    if let Some(main) = window.app_handle().get_webview_window("main") {
-                        let _ = main.close();
-                    }
-                }
-            }
-            #[cfg(target_os = "windows")]
-            if floating_lyrics::is_window_label(window.label()) {
-                match event {
-                    tauri::WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        if let Some(main) = window.app_handle().get_webview_window("main") {
-                            let _ = main.close();
-                        }
-                    }
-                    tauri::WindowEvent::Moved(position) => {
-                        floating_lyrics::remember_position(window.app_handle(), *position);
-                    }
-                    _ => {}
-                }
-            }
             #[cfg(target_os = "windows")]
             if window.label() == "main" {
                 match event {
@@ -12358,6 +12341,10 @@ pub fn run() {
                     tauri::WindowEvent::Destroyed => {
                         taskbar_lyrics::shutdown(window.app_handle());
                         floating_lyrics::shutdown(window.app_handle());
+                        // The native lyrics windows (ADR 0034) go with the main window.
+                        if let Some(renderer) = native_lyrics::renderer(window.app_handle()) {
+                            renderer.shutdown();
+                        }
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         persist_main_window_geometry(window);
