@@ -490,15 +490,27 @@
     font-size: calc(var(--taskbar-lyrics-translation-scale, 0.75) * 1em);
   }
 
-  /* The same two looks as the Now Playing lyrics (a soft shadow, drawn as ONE filter layer because every extra layer costs a repaint per frame of the glide, or a thin outline), in the colour
-     opposite to the text. The clipped lines get the shadow as a filter: a text-shadow would be cut by the clip. */
+  /* The same two looks as the Now Playing lyrics (a soft shadow, or a thin outline), in the colour opposite to the text.
+     The shadow is a text-shadow on the text itself (the track / each strip cell's text), not a filter on the clipped
+     parent: a parent filter is re-blurred over the whole area on every frame of the continuous glide (and again when
+     the cells' opacity fades), while a text-shadow is part of the text's own paint and moves, fades and composites with
+     it. The old filter took its blur as a standard deviation (sigma), text-shadow's blur radius is 2 sigma: the same look needs 2 * B.
+     The clips are overflow: clip with a clip margin of that radius so the shadow is not cut at the clip edge (the
+     measured widths, clientWidth, do not change; the window itself keeps the room, see ADR 0032). */
   .taskbar-lyrics {
     --taskbar-lyrics-shadow-blur: 0.3em;
+    --taskbar-lyrics-shadow-radius: calc(var(--taskbar-lyrics-shadow-blur) * 2);
   }
 
   .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-main,
   .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-translation {
-    filter: drop-shadow(0 0 var(--taskbar-lyrics-shadow-blur) rgba(var(--taskbar-lyrics-effect-rgb), 0.75));
+    overflow: clip;
+    overflow-clip-margin: var(--taskbar-lyrics-shadow-radius);
+  }
+
+  .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-track,
+  .taskbar-lyrics[data-text-effect='shadow'] .taskbar-lyrics-strip-text {
+    text-shadow: 0 0 var(--taskbar-lyrics-shadow-radius) rgba(var(--taskbar-lyrics-effect-rgb), 0.75);
   }
 
   /* The lines are clipped (for the scrolling); the outline reaches 0.04em past the glyphs, so give the clip room above and
