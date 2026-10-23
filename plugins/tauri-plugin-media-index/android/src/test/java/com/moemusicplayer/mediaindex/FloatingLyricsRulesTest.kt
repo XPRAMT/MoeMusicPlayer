@@ -1,4 +1,4 @@
-package com.moemusicplayer.mediaindex
+﻿package com.moemusicplayer.mediaindex
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -220,13 +220,31 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
-    fun beforeTheFirstLineItFadesInAndTheLastLineStaysCurrent() {
-        // Before the first line's lead-in nothing is current.
-        assertEquals(listOf(0f, 0f, 0f), weights(0))
-        assertEquals(listOf(0f, 0f, 0f), weights(800))
-        // The first line fades in over the 200 ms before it starts, as the strip rests on it.
-        assertEquals(listOf(0.5f, 0f, 0f), weights(900))
+    fun beforeTheFirstLineNothingIsFadedOut() {
+        // Until the first line's lead-in every cell is fully "current" (the main opacity), whatever the position.
+        assertEquals(listOf(1f, 1f, 1f), weights(0))
+        assertEquals(listOf(1f, 1f, 1f), weights(500))
+        assertEquals(listOf(1f, 1f, 1f), weights(800))
+        assertEquals(listOf(1f, 1f, 1f), weights(-3_000))
+    }
+
+    @Test
+    fun theOthersFadeOutOverTheLeadInOfTheFirstLine() {
+        // From 200 ms before the first line the others ease 1 to the inactive value; the first line stays 1.
+        assertEquals(listOf(1f, 0.5f, 0.5f), weights(900))
+        assertEquals(listOf(1f, 0.75f, 0.75f), weights(850))
+        assertEquals(listOf(1f, 0.25f, 0.25f), weights(950))
+        // Its start: finished, the first line is current and the rest are inactive.
         assertEquals(listOf(1f, 0f, 0f), weights(1_000))
+        assertEquals(listOf(1f, 0f, 0f), weights(1_500))
+        // With a 50% inactive setting the lead-in goes 1.0 -> 0.5 for the others, never below it.
+        assertEquals(0.75f, FloatingLyricsRules.fadedFactor(0.5f, FloatingLyricsRules.cellWeight(starts, 1, 900)), 0.0001f)
+        assertEquals(0.5f, FloatingLyricsRules.fadedFactor(0.5f, FloatingLyricsRules.cellWeight(starts, 1, 1_000)), 0.0001f)
+        assertEquals(1f, FloatingLyricsRules.fadedFactor(0.5f, FloatingLyricsRules.cellWeight(starts, 1, 800)), 0.0001f)
+    }
+
+    @Test
+    fun theLastLineStaysCurrent() {
         // The last line has no next line to hand over to: it stays at 1 to the end.
         assertEquals(listOf(0f, 0f, 1f), weights(4_000))
         assertEquals(listOf(0f, 0f, 1f), weights(900_000))
@@ -239,17 +257,26 @@ class FloatingLyricsRulesTest {
         assertEquals(listOf(0.5f, 0.5f, 0f), weights(1_900))
         assertEquals(listOf(0f, 0f, 1f), weights(5_000))
         assertEquals(listOf(1f, 0f, 0f), weights(1_100))
-        assertEquals(listOf(0f, 0f, 0f), weights(-3_000))
+        // Back before the first line: everything is un-faded again.
+        assertEquals(listOf(1f, 1f, 1f), weights(-3_000))
+        assertEquals(listOf(1f, 1f, 1f), weights(0))
+        // Into the first line's lead-in.
+        assertEquals(listOf(1f, 0.5f, 0.5f), weights(900))
     }
-
     @Test
     fun fadeEdgeCases() {
         assertEquals(0f, FloatingLyricsRules.cellWeight(starts, -1, 2_000), 0f)
         assertEquals(0f, FloatingLyricsRules.cellWeight(starts, 3, 2_000), 0f)
         assertEquals(0f, FloatingLyricsRules.cellWeight(longArrayOf(), 0, 0), 0f)
+        // A single line is always current.
+        assertEquals(1f, FloatingLyricsRules.cellWeight(longArrayOf(1_000), 0, 0), 0f)
+        assertEquals(1f, FloatingLyricsRules.cellWeight(longArrayOf(1_000), 0, 5_000), 0f)
         // Lines sharing a start time: only the later one is ever current.
         val same = longArrayOf(1_000, 1_000, 3_000)
         assertEquals(0f, FloatingLyricsRules.cellWeight(same, 0, 1_500), 0f)
+        // ...but before them all of them are un-faded, like every other cell.
+        assertEquals(1f, FloatingLyricsRules.cellWeight(same, 0, 500), 0f)
+        assertEquals(1f, FloatingLyricsRules.cellWeight(same, 1, 500), 0f)
         assertEquals(1f, FloatingLyricsRules.cellWeight(same, 1, 1_500), 0f)
         // A line closer than the fade length to the next one still hands over, finishing at the next start.
         val quick = longArrayOf(1_000, 1_100)

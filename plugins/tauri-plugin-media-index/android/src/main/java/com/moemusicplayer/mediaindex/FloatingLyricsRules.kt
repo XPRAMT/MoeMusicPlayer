@@ -178,21 +178,26 @@ object FloatingLyricsRules {
 
     /**
      * How much strip cell `index` is "the current line", 0..1, from the lyrics time alone (no timer, so a seek or the
-     * rest before the first / after the last line need no special case). A line ramps 0 to 1 over the `fadeMs` before
-     * its own start and ramps back down over the `fadeMs` before the next line's start, so the old line dims while
-     * the next brightens and both finish when the next line starts (as the strip's glide ends). The last line stays 1.
-     * Lines sharing a start time are never current (the later one is).
+     * rest before the first / after the last line need no special case). Before the first line starts nothing is faded
+     * out: every cell is 1 (the main opacity). Over the `fadeMs` before the first line's start the other cells ease
+     * from 1 down to 0 (the first line stays 1), the same lead-in every later hand-over uses: a line ramps 0 to 1 over
+     * the `fadeMs` before its own start and back down over the `fadeMs` before the next line's start, so the old line
+     * dims while the next brightens and both finish when the next line starts (as the strip's glide ends). The last
+     * line stays 1. Lines sharing a start time are never current (the later one is).
      */
     fun cellWeight(startTimesMs: LongArray, index: Int, lyricsMs: Long, fadeMs: Long = STRIP_FADE_MS): Float {
         if (index < 0 || index >= startTimesMs.size) return 0f
         val fade = maxOf(1L, fadeMs)
+        // 1 until the first line's lead-in, then down to 0 as the first line starts: lifts every cell before it.
+        val before = ((startTimesMs[0] - lyricsMs).toFloat() / fade).coerceIn(0f, 1f)
         val start = startTimesMs[index]
-        val rise = ((lyricsMs - (start - fade)).toFloat() / fade).coerceIn(0f, 1f)
-        if (index + 1 >= startTimesMs.size) return rise
+        // The first line has no hand-over to wait for: it is fully current from the start of the song.
+        val rise = if (index == 0) 1f else ((lyricsMs - (start - fade)).toFloat() / fade).coerceIn(0f, 1f)
+        if (index + 1 >= startTimesMs.size) return maxOf(rise, before)
         val next = startTimesMs[index + 1]
-        if (next <= start) return 0f
+        if (next <= start) return before
         val fall = ((lyricsMs - (next - fade)).toFloat() / fade).coerceIn(0f, 1f)
-        return rise * (1f - fall)
+        return maxOf(rise * (1f - fall), before)
     }
 
     /** Index of the first line starting after `lyricsMs` (the size when none does); lines are sorted. */
