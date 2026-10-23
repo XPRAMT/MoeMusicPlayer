@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
   // Remote music sources (ADR 0026): the servers (accounts) and the folders of them that join the library.
   // A password is only ever typed here and sent to the backend, which seals it; the page never gets it back.
   import { onMount, tick, type Snippet } from 'svelte';
@@ -325,7 +325,7 @@
     }
   }
 
-  // ---- the root picker of the form: browse the shares of the server and the folders inside them; "use this folder" takes the one the picker is in ----
+  // ---- the root picker of the form: SMB lists only the shares (clicking one picks it); WebDAV browses folders and "use this folder" takes the one the picker is in ----
   let shareDialog = $state<HTMLDialogElement>();
   /** Where the picker is: empty is the list of shares, otherwise `share/folder/...`. */
   let pickPath = $state('');
@@ -376,15 +376,18 @@
     void loadPick(start);
   }
 
-  /** The folder the picker is in becomes the root of the account (not one of the folders listed in it). */
+  /** WebDAV: the folder the picker is in becomes the root of the account (not one of the folders listed in it). */
   function usePickedFolder(): void {
-    if (!form) return;
-    if (form.protocol === 'webdav') {
-      form.path = pickPath === '' ? '' : `/${pickPath}`;
-    } else {
-      if (pickPath === '') return;
-      form.path = pickPath;
-    }
+    if (!form || form.protocol !== 'webdav') return;
+    form.path = pickPath === '' ? '' : `/${pickPath}`;
+    shareDialog?.close();
+  }
+
+  /** SMB: only a share (the top level) can be the root; clicking one picks it. A deeper root saved by an older
+   * version stays as it is until a share is picked here. */
+  function pickShare(share: string): void {
+    if (!form || form.protocol === 'webdav' || share === '' || share.includes('/')) return;
+    form.path = share;
     shareDialog?.close();
   }
 
@@ -732,13 +735,13 @@
     <div class="folder-browser-path" title={pickPath}>{form?.host ?? ''}{pickPath ? ` / ${pickPath}` : ''}</div>
     {#if pickError}<p class="error-text" role="alert">{pickError}</p>{/if}
     <div class="folder-browser-list" aria-busy={pickLoading}>
-      {#if pickPath !== ''}
+      {#if pickPath !== '' && form?.protocol === 'webdav'}
         <button class="folder-browser-entry" type="button" onclick={() => void loadPick(parentOf(pickPath))}>
           <span aria-hidden="true">⬆</span><span>{tr("上一層")}</span>
         </button>
       {/if}
       {#each pickFolders as folder (folder.path)}
-        <button class="folder-browser-entry" type="button" onclick={() => void loadPick(folder.path)}>
+        <button class="folder-browser-entry" type="button" onclick={() => form?.protocol === 'webdav' ? void loadPick(folder.path) : pickShare(folder.path)}>
           <span aria-hidden="true">📁</span><span>{folder.name}</span>
         </button>
       {/each}
@@ -748,7 +751,7 @@
     </div>
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" onclick={() => shareDialog?.close()}>{tr("取消")}</button>
-      {#if pickPath !== '' || form?.protocol === 'webdav'}
+      {#if form?.protocol === 'webdav'}
         <button class="soft-button" type="button" disabled={pickLoading} onclick={usePickedFolder}>{tr("使用這個資料夾")}</button>
       {/if}
     </div>
