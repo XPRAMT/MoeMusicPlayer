@@ -4,7 +4,6 @@
 // A new sample corrects the estimate: a deviation under 30 ms is ignored, 30–250 ms is absorbed by running slightly
 // faster or slower for CONVERGE_MS (never backwards), anything larger, a new track or a play/pause change jumps.
 
-import { devicePixelSteps } from './device-pixel-steps.js';
 import type { PlaybackSnapshot } from './ipc';
 
 export const IGNORE_DEVIATION_MS = 30;
@@ -145,15 +144,4 @@ export function playbackProgressRun(clock: PlaybackClock | null, now: number): {
   const ratio = Math.min(1, Math.max(0, position / clock.durationMs));
   const remainingMs = clock.playing ? clock.durationMs - position : 0;
   return { ratio, remainingMs: remainingMs > 0 ? remainingMs : null };
-}
-
-/**
- * Steps of the progress bar run (device-pixel rule, `device-pixel-steps.js`): one per device pixel of the rest of the bar.
- * `barCssPx` is an upper bound of the bar's width (the window's width), so each step moves the bar at most one device
- * pixel. A linear run repainted the dock on every frame and took one of the few presents per vsync that the WebView2
- * GPU process shares between all windows (ADR 0028).
- */
-export function playbackProgressSteps(ratio: number, barCssPx: number, devicePixelRatio: number): number {
-  const rest = 1 - Math.min(1, Math.max(0, Number.isFinite(ratio) ? ratio : 0));
-  return devicePixelSteps(rest * (Number.isFinite(barCssPx) ? barCssPx : 0), devicePixelRatio);
 }
