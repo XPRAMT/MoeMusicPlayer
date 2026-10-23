@@ -1,0 +1,39 @@
+[package]
+name = "lyrics-native-proto"
+version = "0.0.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+publish = false
+description = "Research prototype (ADR 0034 draft): native DirectComposition + Direct2D/DirectWrite lyrics strip. Not part of the app."
+
+# Standalone on purpose: its own workspace and Cargo.lock, so the app's workspace and root Cargo.lock are untouched.
+[workspace]
+
+[[bin]]
+name = "lyrics-native-proto"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "=0.62.2"
+windows-numerics = "0.3.1"
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+debug = false

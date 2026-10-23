@@ -1,0 +1,110 @@
+﻿# 歌詞視窗改用原生 DirectComposition 繪製（研究）
+
+狀態：研究／提案，未採納
+
+日期：2026-10-23，Asia/Taipei (UTC+08:00)
+
+相關：[ADR 0018](0018-taskbar-lyrics.md)、[ADR 0031](0031-multi-monitor-taskbar-lyrics.md)、[ADR 0032](0032-floating-lyrics.md)、[ADR 0028](0028-frontend-playback-clock.md)
+
+## 背景
+
+使用者希望所有歌詞動畫以螢幕的完整更新率執行（120 Hz 螢幕 120 fps、60 Hz 螢幕 60 fps），而且主視窗、每條工作列各一個的工作列歌詞視窗（本機 2 條）與浮動歌詞可同時開啟。另一位代理以 CDP 對 Release 播放器量測：所有 WebView2 視窗共用一個 GPU 行程，該行程每個 vsync 合計最多約 3 次有損壞區的 present（120 Hz 時約每秒 340–360 次），4 個動畫中的視窗在 120 Hz 時各掉到約 90 fps；60 Hz 時使用者看得到頓挫。
+
+本文件研究把 Windows 的歌詞視窗（工作列歌詞、浮動歌詞）改成原生繪製，讓動畫不經過 WebView2 GPU 行程。只做研究與獨立原型，沒有整合進 App。
+
+## 候選技術比較
+
+| 項目 | DirectComposition + Direct2D/DirectWrite | Windows.UI.Composition（`CreateDesktopWindowTarget`） | 翻頁模式 DXGI swap chain（premultiplied alpha，`CreateSwapChainForComposition`） |
+|---|---|---|---|
+| 動畫在合成器（DWM）上跑、與我們的執行緒無關 | 可以：`IDCompositionAnimation`（分段三次多項式＋`AddRepeat`）可綁到 OffsetX/Y、不透明度（effect group）、transform、clip。DWM 在每個合成幀計算值，我們的行程不必每幀工作。 | 可以，而且更豐富：`KeyFrameAnimation`、`ExpressionAnimation`（可用運算式表示「依時間的位置」）、`CompositionScopedBatch`。 | 不行：swap chain 只是內容；位移動畫要嘛另外疊 DComp/WinRT visual，要嘛自己每幀 Present（等於回到「我們自己每幀畫」）。 |
+| 每台螢幕完整更新率 | 可以：動畫由各螢幕自己的合成幀驅動（實測見下）。 | 同左（底層同一個 DWM 合成器）。 | 自己 Present，要對每台螢幕的 vblank 節奏（`DCompositionWaitForCompositorClock` 或 waitable swap chain）。 |
+| 透明、點擊穿透、置頂、`Shell_TrayWnd` 擁有、不搶焦點 | 可以（原型已驗證）：`WS_EX_NOREDIRECTIONBITMAP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`、`WS_POPUP`、建立時指定擁有者；`WindowFromPoint` 不會回傳原型視窗。 | 可以（相同的 HWND 樣式；需要 `DispatcherQueueController` 與 WinRT 執行緒）。 | 可以（搭配 DComp target）。 |
+| 混合 DPI | 可以：程序設 Per-Monitor V2，每個視窗依自己螢幕的 DPI 以實體像素繪製；換 DPI 時（`WM_DPICHANGED`）重新排版重畫一次。 | 同左。 | 同左。 |
+| 文字效果 | D2D Shadow 效果（標準差＝0.3 em，與 CSS `text-shadow` 0.6 em 半徑等價）、自訂 `IDWriteTextRenderer` 取字形輪廓做 0.08 em 描邊（paint-order stroke fill）、`D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT` 彩色 emoji、`IDWriteFontFallbackBuilder` 對應 `'Segoe UI', 'Microsoft JhengHei'`。全部在原型實作。 | WinRT 本身不畫文字，仍要用 D2D/DWrite 畫進 `CompositionDrawingSurface`（經 `ICompositionDrawingSurfaceInterop`）；陰影可用 `DropShadow`（只吃遮罩，對文字要多一步）。 | 同 D2D。 |
+| 依賴 | `windows` crate 已有的模組；無新增第三方相依。 | 需要 WinRT 專案元件（`Windows.UI.Composition` 系列 feature）、DispatcherQueue；行為與 DComp 相近但多一層 interop。 | — |
+
+結論：DirectComposition + D2D/DWrite 最合適。WinRT Composition 能力相同但多一層 interop，且文字仍要 D2D；swap chain 只在要每幀重畫內容時才需要，而本案的動畫只是「已畫好的文字在動」，不需要。
+
+## 原型
+
+位置：`crates/lyrics-native-proto/`（獨立 crate，有自己的 `[workspace]` 與 `Cargo.lock`，不屬於 App workspace，不改根目錄 `Cargo.lock`；`windows` 0.62.2，與 App 相同版本，離線建置）。
+
+```
+cd crates/lyrics-native-proto
+cargo build --release --offline
+target\release\lyrics-native-proto.exe --windows 3 --mode anim --seconds 15 --effect shadow --owner-taskbar
+powershell -File measure.ps1 -ProtoArgs "--windows 3 --mode anim --seconds 12 --owner-taskbar"
+```
+
+- 視窗：第 1、2 個放在第 1、2 台螢幕的工作列區（`--owner-taskbar` 時擁有者為該螢幕的 `Shell_TrayWnd`／`Shell_SecondaryTrayWnd`），其餘為主螢幕上的浮動視窗（32 DIP 字）。
+- 內容：10 行中文／日文（含假名、漢字、`🌙 ✨ 🎧` 彩色 emoji）與譯文，兩列；以 U+3000（1 em）間隔接成連續條，譯文同寬格。
+- 動畫規則與 `lyrics-strip.js` 相同：目前行開始時左緣在歌詞區中心，線性滑到下一行開始時下一行左緣抵達中心；不透明度：目前行 1，其餘 0.5（非目前透明度預設），換行前 200 ms 線性交叉淡化、剛好在下一行開始時完成。整段 31.3 秒，`AddRepeat` 無限循環。
+- 三種模式：
+  - `anim`：位移與每行不透明度全是 `IDCompositionAnimation`，提交一次後由 DWM 執行，本行程只有訊息迴圈。
+  - `commit`：每個合成器時脈（`DCompositionWaitForCompositorClock`）由本行程算出位移與不透明度後 `SetOffsetX2`／`SetOpacity2`＋`Commit`（不重畫點陣）。
+  - `redraw`：每幀清空並重新點陣化可見的行（含陰影模糊），類似 WebView 的最壞情況。
+- `--shot <前綴>`：3 秒時以螢幕 DC 擷取各視窗區域（BMP），用來確認實際畫面。
+- 已確認：透明背景、點擊穿透（`WindowFromPoint` 不命中）、擁有者為工作列、主螢幕 240 DPI 字級 29.1 px（工作列高 80 px 內兩列）、副螢幕 192 DPI 23.3 px、中日文與 emoji 正常、交叉淡化可見。
+
+## 量測
+
+環境：RTX 5070 Ti；DISPLAY1 3840×2160、240 DPI、**120 Hz**（主）；DISPLAY6 2560×1440、192 DPI、**60 Hz**（VDD 虛擬顯示器，IddCx）。Release 播放器同時執行中（主視窗、2 個工作列歌詞、1 個浮動歌詞，CDP 埠由另一位代理開啟），沒有關閉或終止播放器與 msedgewebview2。DWM 數字取自 `DCompositionGetStatistics`／`DCompositionGetTargetStatistics`（每台螢幕一個 target：presents＝DWM 實際送出的合成幀，refreshes＝vblank），CPU 取程序 `TotalProcessorTime` 差值（單核百分比；dwm.exe 無權限讀取），GPU 為效能計數器 `GPU Engine(*engtype_3D)` 依 pid 加總。每項 12 秒、陰影效果。
+
+| 情境 | 原型 CPU | 主螢幕 DWM presents / refresh（120 Hz） | 副螢幕 DWM presents / refresh（60 Hz） | dwm GPU 3D | 原型 GPU 3D |
+|---|---|---|---|---|---|
+| 不開原型（基準） | — | 12.3 / 119.8 | 4.1 / 59.9 | 0.2 % | — |
+| `anim` 1 視窗（主螢幕工作列） | 0.13–0.19 % | 120.0 / 120.0 | 8.3 / 60.0 | 3.6 % | 0 |
+| `anim` 3 視窗 | 1.0 % | 119.8 / 119.8 | 69.9 / 59.9 ※ | 5.3 % | 0 |
+| `commit` 3 視窗（本行程每幀提交） | 0.2–0.4 %（自己 120 次提交/秒，最長間隔 9.0 ms） | 120.0 / 120.0 | 67.6 / 59.9 ※ | 4.8 % | 0 |
+| `redraw` 3 視窗（每幀重畫含模糊） | 41.5 %（只到 30 幀/秒，最長間隔 37.7 ms） | 76.3 / 120.1 | 34.1 / 60.0 | 1.7 % | 1.4 % |
+
+※ 虛擬顯示器的 presents 略高於 refresh，推測是 IddCx 驅動的計數方式；重點是每個 vblank 都有合成幀。
+
+- 基準時 DWM 只在有變化時合成（主螢幕 12 幀/秒）；開 `anim` 後，有動畫的螢幕每個 vblank 都合成一次（120 Hz → 120、60 Hz → 60），也就是動畫以兩台螢幕各自的完整更新率執行，而本行程幾乎不用 CPU。
+- 合成在 dwm.exe 裡，與 WebView2 GPU 行程無關；原型不產生任何 swap chain present。
+- 播放器各 WebView 頁面的 rAF（CDP 唯讀量測 4 秒）：不開原型、開 3 視窗、開 6 視窗都是主視窗 120.2、工作列歌詞 120.4、浮動歌詞 120.5 fps，最長間隔約 8.6–8.9 ms，沒有變化。**注意**：rAF 不等於實際 present；量測時播放器歌詞是否在連續動畫中未確認，WebView 的 present 數由另一位代理量測。
+- `redraw` 證明「每幀重新點陣化含模糊的文字」在 CPU 上很貴（Direct2D 每幀重建陰影效果、240 DPI 大字），原生實作不能這樣做；應該像 `anim` 只在換歌、改設定或換 DPI 時畫一次。
+
+## 畫質
+
+- DirectWrite 灰階反鋸齒（透明表面不能用 ClearType，WebView2 透明視窗同樣是灰階），在 240／192 DPI 下以實體像素繪製，字形清晰度與 WebView2 相當；字型對應 `'Segoe UI', 'Microsoft JhengHei'` 後外觀接近（拉丁用 Segoe UI，CJK 與假名用正黑體，emoji 由系統備援到 Segoe UI Emoji）。
+- 位移預設最近鄰取樣（每幀整數像素位移，120 Hz 時每幀約 1–3 px，不糊）；`--linear` 改雙線性取樣可做次像素位移，但移動中文字會略軟。沒有做肉眼並排比較。
+- 陰影：D2D Shadow（高斯，σ＝0.3 em，顏色＝反色、α 0.75）與 Chromium 的 `text-shadow` 演算法不同，但數學上同樣是高斯模糊，外觀應接近；未做像素差異比較。
+
+## Rust 可行性與注意事項
+
+- 需要的 `windows` 0.62.2 feature：`Win32_Graphics_DirectComposition`、`Win32_Graphics_Direct2D`、`Win32_Graphics_Direct2D_Common`、`Win32_Graphics_DirectWrite`、`Win32_Graphics_Direct3D`、`Win32_Graphics_Direct3D11`、`Win32_Graphics_Dxgi`、`Win32_Graphics_Dxgi_Common`、`Win32_Graphics_Dwm`（量測用）、以及已有的 `Win32_UI_WindowsAndMessaging`、`Win32_UI_HiDpi`、`Win32_Graphics_Gdi`、`Win32_Foundation`。另需 `windows-core` 的 `#[implement]`（已在 `player-platform-windows` 使用）實作 `IDWriteTextRenderer` 取字形輪廓。都是同一個 crate 的 feature，不新增第三方相依，不涉及 GPL。
+- 執行緒：所有歌詞視窗放在**一條**專用 UI 執行緒（D2D 單執行緒 factory、一個 D3D11 裝置、一個 `IDCompositionDesktopDevice`、每個視窗一個 target），自己的訊息迴圈。不要放在 Tauri 主執行緒。DComp/D2D 不需要 COM STA（`D3D11CreateDevice`、`D2D1CreateFactory`、`DWriteCreateFactory` 都不需 `CoInitialize`）；若用 WinRT Composition 才需要 DispatcherQueue。
+- 裝置遺失：顯示卡驅動更新或 TDR 時 D3D 裝置失效；`IDCompositionDevice::CheckDeviceState` 或 `BeginDraw` 回 `DXGI_ERROR_DEVICE_REMOVED` 時要重建裝置、surface 並重新提交動畫（資料都在記憶體，重建代價小）。原型未處理。
+- 不需要 `DwmFlush`；`commit` 模式用 `DCompositionWaitForCompositorClock`（Windows 11）就能與合成器同步。`anim` 模式完全不用等。
+- 時間基準：DComp 動畫的時間 0 是「該次 Commit 被合成器套用的時刻」，所以播放位置對應要在提交時帶入目前位置（從目前位置開始的分段多項式），跳轉、暫停、繼續時重建動畫（與目前 CSS 動畫的重排一樣，事件驅動，不每幀）。暫停時改成常數值。
+- 紋理：每行一張 surface（只需畫可見範圍加左右各一個歌詞區寬，沿用 `lyricsStripWindow` 的視窗化規則）；D3D11 紋理寬度上限 16384 px，不能把整首畫成一張。
+- `WS_EX_LAYERED` 與 DComp 搭配可正常顯示（原型已驗證），點擊穿透因此不需要額外的 `WM_NCHITTEST` 技巧；浮動歌詞「固定／移動」模式的切換改成切換 `WS_EX_TRANSPARENT`，滑鼠位置監看沿用既有 100 ms 執行緒。
+
+## 若採納的實作計畫
+
+1. **資料流**：主視窗已把歌詞（`taskbar-lyrics-data`）、播放取樣（`taskbar-lyrics-playback`）、設定與深淺色以事件送到歌詞視窗。改為頁面把同一份 payload 用 Tauri 命令送到 Rust（或直接由 Rust 端的播放快照提供時間），Rust 的原生歌詞執行緒（新模組，例如 `player-platform-windows/src/lyrics_native/`）以 channel 接收：歌詞行（已依偏好轉好繁簡、含偏移）、播放位置＋取樣時間＋播放狀態、外觀設定、非目前透明度。選句、連續條偏移、權重沿用現有純函式規則，在 Rust 重寫一份（`lyrics-strip.js` 的 `stripOffset`／`lyricsLineWeight`；Android 已有 Kotlin 版 `FloatingLyricsRules`，三份需用同一組測試向量對照）。
+2. **繪製**：換歌、換設定、換 DPI、視窗寬改變時畫各行 surface；播放中只在跳轉／暫停／繼續／換行窗（視窗化範圍改變）時重建 DComp 動畫並 Commit。單行模式（非連續）的長句捲動同樣用 OffsetX 動畫；換行直接切換內容。
+3. **效果對齊**：陰影（D2D Shadow，σ 0.3 em）、描邊（字形輪廓 0.08 em、α 0.5、反色、先描邊後填色）、整窗透明度（root effect group）、非目前透明度（每行 effect group）、連續模式選陰影時改描邊的既有規則照搬；emoji 彩色字型；字型備援表與 app.css 一致。
+4. **視窗管理**：沿用 `taskbar_lyrics.rs`／`floating_lyrics.rs` 的位置、擁有者、遮蓋判斷與熱插拔邏輯，只把「建立 Tauri WebviewWindow」換成「請原生執行緒建立／移動／銷毀 HWND」。浮動歌詞的鎖頭按鈕與移動模式拖曳要以原生方式實作（`WM_NCHITTEST` 回 `HTCAPTION`、自畫鎖頭圖示）。
+5. **多螢幕／DPI**：每個視窗以自己螢幕的 DPI 繪製，`WM_DPICHANGED` 時重畫；動畫天然以各螢幕更新率執行。
+6. **Android**：不受影響（浮動歌詞已是原生 `FloatingLyricsOverlay`）。
+7. **過渡**：保留 WebView 版作為設定或建置旗標的後備，直到原生版驗收完成。
+
+粗估工作量：原生繪製與動畫模組 4–6 天、浮動歌詞互動（拖曳、鎖頭、面板設定對應）2–3 天、規則移植與對照測試 1–2 天、多螢幕／DPI／裝置遺失與實機驗收 2–3 天，合計約 2 週。
+
+## 風險
+
+- 兩套繪製（WebView 主視窗與原生歌詞）的外觀需持續對齊；新增歌詞外觀選項時要改兩邊。
+- 規則邏輯從 JS 複製到 Rust（加上既有 Kotlin），三份需要共用測試向量避免偏離。
+- DComp 動畫的時間基準是合成器套用時刻，與播放時鐘之間有約一幀的相位誤差；跳轉／暫停須立即重建。
+- 裝置遺失、Explorer 重啟、熱插拔要自己處理（Tauri 視窗原本會替我們處理部分生命週期）。
+- 位移取樣模式（最近鄰 vs 雙線性）對移動中文字的觀感需使用者實機判斷。
+- 量測的 DWM 合成幀數證明合成在每個 vblank 發生，但沒有用 PresentMon／擷取逐幀驗證文字確實每幀移動（dwm 在每幀計算動畫值是 DComp 的設計）。
+
+## 未驗證
+
+- 沒有 PresentMon／ETW（未安裝，未下載），WebView2 的實際 present 數沒有在本研究中量測；dwm.exe CPU 無權限讀取。
+- 沒有與 WebView 版做肉眼或像素並排比較；60 Hz 虛擬顯示器上的肉眼流暢度未由使用者確認。
+- 裝置遺失恢復、`WM_DPICHANGED`、拖曳與鎖頭互動、工作列自動隱藏與全螢幕遮蓋都未在原型實作。
+- 描邊用的自訂文字渲染器對彩色 emoji 只描外框輪廓（單色），與 Chromium 的 `-webkit-text-stroke` 對 emoji 的表現可能不同。
