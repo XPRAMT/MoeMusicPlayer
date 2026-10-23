@@ -16,13 +16,13 @@
   import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
   import {
     LYRIC_CUE_LEAD_MS,
+    LYRIC_OFFSET_GLIDE_MS,
     cueAnimationMs,
     displayCuePositions,
     findDisplayCueIndex,
     nextDisplayCuePosition,
   } from './lyrics-cue-timing';
   import {
-    LYRIC_OFFSET_GLIDE_MS,
     glidePosition,
     restingGlide,
     retargetGlide,

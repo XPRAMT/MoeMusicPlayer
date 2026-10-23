@@ -4,6 +4,9 @@
 
 export const LYRIC_CUE_LEAD_MS = 200;
 
+/** The Now Playing list's glide to a new line after the per-track delay changed: the same one lyric animation length. */
+export const LYRIC_OFFSET_GLIDE_MS = LYRIC_CUE_LEAD_MS;
+
 /**
  * Playback positions at which each line is shown (`startMs - offsetMs - lead`). The lead is LYRIC_CUE_LEAD_MS, shortened
  * to the gap from the previous line when that is smaller, and for the first line never before position 0. Without

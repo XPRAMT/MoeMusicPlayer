@@ -4,7 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  LYRIC_OFFSET_GLIDE_MS,
   glidePosition,
   glideVelocity,
   restingGlide,
@@ -12,7 +11,7 @@ import {
   snapToDevicePixel,
   timedNavigationKind,
 } from '../src/lib/lyrics-scroll-glide.ts';
-import { easeOutCubic } from '../src/lib/lyrics-cue-timing.ts';
+import { LYRIC_OFFSET_GLIDE_MS, easeOutCubic } from '../src/lib/lyrics-cue-timing.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
