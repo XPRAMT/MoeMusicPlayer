@@ -285,6 +285,7 @@ impl player_core::RemoteContent for RemoteFiles {
         Ok(player_core::RemoteStamp {
             len: entry.size,
             modified_ms: entry.modified_ms,
+            created_utc_100ns: entry.created_utc_100ns,
         })
     }
 
@@ -408,6 +409,7 @@ impl RemoteFiles {
         let expected = expected.map(|stamp| player_remote::fs::FileStamp {
             len: stamp.len,
             modified_ms: stamp.modified_ms,
+            created_utc_100ns: stamp.created_utc_100ns,
         });
         let entry = fs.replace_file(&full, &mut file, len, expected)?;
         // The song on the server is a new file now: what the cache holds of the old one is not served for it (its key
@@ -425,6 +427,7 @@ impl RemoteFiles {
         Ok(player_core::RemoteStamp {
             len: entry.size,
             modified_ms: entry.modified_ms,
+            created_utc_100ns: entry.created_utc_100ns,
         })
     }
 

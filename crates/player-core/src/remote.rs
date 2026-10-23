@@ -28,11 +28,13 @@ pub struct RemoteFileHandle {
     pub len: u64,
 }
 
-/// What a remote file looked like at one moment: its size and the server's modified time (UTC Unix milliseconds).
+/// What a remote file looked like at one moment: its size, modified time (UTC Unix milliseconds), and optional
+/// creation time (UTC Unix 100 ns ticks).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemoteStamp {
     pub len: u64,
     pub modified_ms: Option<i64>,
+    pub created_utc_100ns: Option<i64>,
 }
 
 pub trait RemoteContent: Send + Sync {
@@ -46,7 +48,7 @@ pub trait RemoteContent: Send + Sync {
         self.open(source_id, path)
     }
 
-    /// Ask the server for a file's size and modified time.
+    /// Ask the server for a file's size and available timestamps.
     fn stat(&self, source_id: SourceId, path: &str) -> io::Result<RemoteStamp> {
         let _ = (source_id, path);
         Err(io::Error::from(io::ErrorKind::Unsupported))

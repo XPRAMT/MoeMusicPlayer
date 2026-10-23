@@ -425,6 +425,7 @@ fn parse_multistatus(xml: &str, base_path: &str) -> Result<Vec<RawEntry>, Remote
                 is_dir,
                 size,
                 modified_ms,
+                created_utc_100ns: None,
             },
         });
     }

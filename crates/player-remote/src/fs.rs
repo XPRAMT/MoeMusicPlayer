@@ -12,6 +12,8 @@ pub struct RemoteEntry {
     pub size: u64,
     /// The server's modified time in UTC Unix milliseconds, when it gave one.
     pub modified_ms: Option<i64>,
+    /// The creation time in 100 ns steps since the Unix epoch, when the protocol exposes it.
+    pub created_utc_100ns: Option<i64>,
 }
 
 /// Why a remote operation failed. The kind decides what the user is told and whether a retry makes sense.
@@ -68,6 +70,7 @@ impl From<RemoteError> for io::Error {
 pub struct FileStamp {
     pub len: u64,
     pub modified_ms: Option<i64>,
+    pub created_utc_100ns: Option<i64>,
 }
 
 impl FileStamp {
@@ -75,6 +78,7 @@ impl FileStamp {
         Self {
             len: entry.size,
             modified_ms: entry.modified_ms,
+            created_utc_100ns: entry.created_utc_100ns,
         }
     }
 }

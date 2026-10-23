@@ -117,6 +117,25 @@ fn unix_ms(filetime: u64) -> Option<i64> {
     Some((filetime / 10_000) as i64 - EPOCH_DIFFERENCE_MS)
 }
 
+/// Converts SMB FILETIME ticks to UTC Unix ticks, preserving the full 100 ns precision.
+fn unix_100ns(filetime: u64) -> Option<i64> {
+    const EPOCH_DIFFERENCE_100NS: i128 = 116_444_736_000_000_000;
+    if filetime == 0 {
+        return None;
+    }
+    i64::try_from(i128::from(filetime) - EPOCH_DIFFERENCE_100NS).ok()
+}
+
+/// Converts UTC Unix ticks to the SMB FILETIME value used by basic-info requests.
+fn filetime_from_unix_100ns(
+    unix_100ns: i64,
+) -> Result<smb::binrw_util::prelude::FileTime, RemoteError> {
+    const EPOCH_DIFFERENCE_100NS: i128 = 116_444_736_000_000_000;
+    let ticks = u64::try_from(i128::from(unix_100ns) + EPOCH_DIFFERENCE_100NS)
+        .map_err(|_| RemoteError::Protocol("the SMB creation time is out of range".to_owned()))?;
+    Ok(smb::binrw_util::prelude::FileTime::from(ticks))
+}
+
 /// The shares a server offers to this account (administrative shares such as `C$` and `IPC$` are left out), so the
 /// user can pick one instead of typing its name.
 pub fn list_shares(
@@ -549,6 +568,7 @@ impl RemoteFs for SmbFs {
                             item.end_of_file
                         },
                         modified_ms: unix_ms(*item.last_write_time),
+                        created_utc_100ns: unix_100ns(*item.creation_time),
                     });
                 }
                 Ok(())
@@ -597,6 +617,7 @@ impl RemoteFs for SmbFs {
                 is_dir,
                 size: if is_dir { 0 } else { standard.end_of_file },
                 modified_ms: unix_ms(*basic.last_write_time),
+                created_utc_100ns: unix_100ns(*basic.creation_time),
             })
         })
     }
@@ -671,6 +692,38 @@ impl RemoteFs for SmbFs {
             })?;
             if size != len {
                 return Err(RemoteError::Protocol(format!("the server holds {size} of {len} bytes")));
+            }
+            // Restore creation time on the fully uploaded temporary file before rename. Otherwise the
+            // replacement inherits the time at which the temporary file was created.
+            if let Some(created_utc_100ns) = expected.and_then(|stamp| stamp.created_utc_100ns) {
+                let creation_time = filetime_from_unix_100ns(created_utc_100ns)?;
+                let handle = std::sync::Arc::clone(&file);
+                bounded(OPERATION_TIMEOUT, move || {
+                    let handle = handle.lock().unwrap_or_else(PoisonError::into_inner);
+                    handle
+                        .set_info(FileBasicInformation {
+                            creation_time,
+                            last_access_time: smb::binrw_util::prelude::FileTime::ZERO,
+                            last_write_time: smb::binrw_util::prelude::FileTime::ZERO,
+                            change_time: smb::binrw_util::prelude::FileTime::ZERO,
+                            file_attributes: FileAttributes::new(),
+                        })
+                        .map_err(|error| classify(&error))
+                })?;
+
+                let handle = std::sync::Arc::clone(&file);
+                let actual = bounded(OPERATION_TIMEOUT, move || {
+                    let handle = handle.lock().unwrap_or_else(PoisonError::into_inner);
+                    handle
+                        .query_info::<FileBasicInformation>()
+                        .map(|info| info.creation_time)
+                        .map_err(|error| classify(&error))
+                })?;
+                if actual != creation_time {
+                    return Err(RemoteError::Protocol(
+                        "the SMB server did not preserve the original creation time".to_owned(),
+                    ));
+                }
             }
             let handle = std::sync::Arc::clone(&file);
             bounded(OPERATION_TIMEOUT, move || {
@@ -863,6 +916,11 @@ mod tests {
         assert_eq!(unix_ms(116_444_736_000_000_000), Some(0));
         // 2026-10-20T00:00:00Z
         assert_eq!(unix_ms(134_369_280_000_000_000), Some(1_792_454_400_000));
+        assert_eq!(unix_100ns(0), None);
+        assert_eq!(
+            unix_100ns(*filetime_from_unix_100ns(1_792_454_400_123_456_789).unwrap()),
+            Some(1_792_454_400_123_456_789)
+        );
     }
 
     #[test]

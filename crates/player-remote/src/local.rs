@@ -41,6 +41,7 @@ fn entry_of(name: String, path: &Path) -> Result<RemoteEntry, RemoteError> {
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_millis() as i64),
+        created_utc_100ns: None,
     })
 }
 

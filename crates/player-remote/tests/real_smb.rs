@@ -329,6 +329,7 @@ fn a_scratch_file_is_replaced_through_a_temporary_file_and_removed() {
         .expect("create through a temporary file");
     assert_eq!(created.size, first.len() as u64);
     let stamp = FileStamp::of(&created);
+    let original_created_utc_100ns = created.created_utc_100ns;
 
     // Replaced by a different, shorter content when nothing changed meanwhile.
     let second: Vec<u8> = (0..1_000_000u32).map(|i| (i % 7) as u8).collect();
@@ -336,6 +337,10 @@ fn a_scratch_file_is_replaced_through_a_temporary_file_and_removed() {
         .replace_file(&name, &mut second.as_slice(), second.len() as u64, Some(stamp))
         .expect("replace");
     assert_eq!(replaced.size, second.len() as u64);
+    assert_eq!(
+        replaced.created_utc_100ns, original_created_utc_100ns,
+        "replacing an SMB file must preserve its original creation time"
+    );
     let mut reader = RangeReader::new(fs.open(&name).expect("open"));
     let mut read_back = Vec::new();
     reader.read_to_end(&mut read_back).unwrap();
