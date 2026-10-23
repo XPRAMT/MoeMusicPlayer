@@ -14,8 +14,10 @@
     estimatePlaybackPosition,
     msUntilPlaybackPosition,
     playbackProgressRun,
+    playbackProgressSteps,
     type PlaybackClock,
   } from './playback-clock';
+  import { watchDevicePixelRatio } from './device-pixel-steps.js';
 
   let {
     positionMs = 0,
@@ -77,15 +79,34 @@
   // CSS run of the bar: from the current ratio to 1 in the remaining time, linear. It restarts only when the clock
   // jumps (seek, new track, play/pause, deviation > 250 ms) or a drag ends; smooth corrections leave it running.
   // Two identical keyframe names alternate so that a restart is a change of animation-name.
-  let run = $state<{ ratio: number; remainingMs: number | null; name: string }>({ ratio: 0, remainingMs: null, name: 'playback-progress-run-a' });
+  // The run moves in whole device pixels (playbackProgressSteps, AGENTS.md device-pixel rule): the bar is never wider
+  // than the window, so the window's width bounds it. A resize or a new devicePixelRatio (another monitor's scale)
+  // restarts the run from where the bar is, with the steps for the new size.
+  let run = $state<{ ratio: number; remainingMs: number | null; name: string; steps: number }>({ ratio: 0, remainingMs: null, name: 'playback-progress-run-a', steps: 1 });
+  let barCssPx = $state(typeof window === 'undefined' ? 0 : window.innerWidth);
+  let pixelRatio = $state(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+  $effect(() => {
+    const onResize = () => {
+      barCssPx = window.innerWidth;
+      pixelRatio = window.devicePixelRatio || 1;
+    };
+    window.addEventListener('resize', onResize);
+    const stopRatio = watchDevicePixelRatio((ratio) => { pixelRatio = ratio; });
+    return () => {
+      window.removeEventListener('resize', onResize);
+      stopRatio();
+    };
+  });
   $effect(() => {
     const current = clock;
     current?.jumpId;
     current?.playing;
+    const width = barCssPx;
+    const ratio = pixelRatio;
     if (hasDraft) return;
     const next = playbackProgressRun(current, performance.now());
     const name = untrack(() => run.name) === 'playback-progress-run-a' ? 'playback-progress-run-b' : 'playback-progress-run-a';
-    run = { ...next, name };
+    run = { ...next, name, steps: playbackProgressSteps(next.ratio, width, ratio) };
   });
   const progressStyle = $derived.by(() => {
     if (hasDraft || !clock || durationMs == null || durationMs <= 0 || durationMs !== clock.durationMs) {
@@ -93,7 +114,7 @@
     }
     return run.remainingMs === null
       ? `--progress-ratio: ${run.ratio}; animation: none`
-      : `--progress-ratio: ${run.ratio}; --progress-run-ms: ${Math.round(run.remainingMs)}ms; animation: ${run.name} ${Math.round(run.remainingMs)}ms linear forwards`;
+      : `--progress-ratio: ${run.ratio}; --progress-run-ms: ${Math.round(run.remainingMs)}ms; animation: ${run.name} ${Math.round(run.remainingMs)}ms steps(${run.steps}, end) forwards`;
   });
   const seekEnabled = $derived(canControl && trackId !== null && isPlaybackSeekableDuration(durationMs));
   // Keep the range input enabled while non-seek commands are busy so :disabled opacity does not flash the timeline.

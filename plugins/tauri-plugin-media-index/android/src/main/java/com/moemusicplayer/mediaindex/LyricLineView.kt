@@ -105,6 +105,7 @@ internal class LyricLineView(context: Context) : View(context) {
     private var stripCells = FloatArray(0)
     private var stripWidths = FloatArray(0)
     private var stripOffset = 0f
+    private var stripRawOffset = 0f
     private var stripStarts = LongArray(0)
     private var stripLyricsMs = 0L
     private var stripNextStart = 0
@@ -142,7 +143,10 @@ internal class LyricLineView(context: Context) : View(context) {
             fading = nextStart != stripNextStart ||
                 (lyricsMs != stripLyricsMs && nextStart < starts.size && starts[nextStart] - lyricsMs < FloatingLyricsRules.STRIP_FADE_MS)
         }
-        if (changed || offset != stripOffset || fading) {
+        // Moves are drawn per whole pixel (FloatingLyricsRules.needsPixelRedraw).
+        val moved = FloatingLyricsRules.needsPixelRedraw(stripOffset, offset, stripRawOffset)
+        stripRawOffset = offset
+        if (changed || moved || fading) {
             stripTexts = texts
             stripCells = cells
             stripWidths = widths
@@ -155,6 +159,8 @@ internal class LyricLineView(context: Context) : View(context) {
         stripNextStart = nextStart
     }
 
+    private var rawProgress = 0f
+
     fun setLine(value: String, progress: Float) {
         if (stripTexts != null) {
             stripTexts = null
@@ -166,9 +172,14 @@ internal class LyricLineView(context: Context) : View(context) {
             this.progress = fraction
             invalidate()
         } else if (fraction != this.progress) {
-            this.progress = fraction
-            if (overflow() > 0f) invalidate()
+            // A long line slides by `progress` of its overflow: redraw only when that moves a whole pixel.
+            val overflow = overflow()
+            if (overflow > 0f && FloatingLyricsRules.needsPixelRedraw(overflow * this.progress, overflow * fraction, overflow * rawProgress)) {
+                this.progress = fraction
+                invalidate()
+            }
         }
+        rawProgress = fraction
     }
 
     /** True when the line is wider than the view and therefore slides. */

@@ -1,6 +1,7 @@
 ﻿package com.moemusicplayer.mediaindex
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -320,5 +321,25 @@ class FloatingLyricsRulesTest {
         assertEquals(0, FloatingLyricsRules.firstStartAfter(starts, 999))
         assertEquals(1, FloatingLyricsRules.firstStartAfter(starts, 1_000))
         assertEquals(3, FloatingLyricsRules.firstStartAfter(starts, 4_000))
+    }
+
+    @Test
+    fun aMoveIsRedrawnOnlyWhenItReachesAnotherPixelAndLandsExactly() {
+        assertFalse(FloatingLyricsRules.needsPixelRedraw(-10.2f, -10.7f, -10.4f))
+        assertTrue(FloatingLyricsRules.needsPixelRedraw(-10.2f, -11.1f, -10.7f))
+        assertTrue("stopped: the exact target", FloatingLyricsRules.needsPixelRedraw(-10.2f, -10.6f, -10.6f))
+        assertFalse(FloatingLyricsRules.needsPixelRedraw(-10.6f, -10.6f, -10.6f))
+        // 30 px over 120 frames: one redraw every 4 frames, evenly spaced, never more than a pixel behind.
+        var shown = 0f
+        var previous = 0f
+        val redraws = mutableListOf<Int>()
+        for (frame in 1..120) {
+            val raw = 30f * frame / 120f
+            if (FloatingLyricsRules.needsPixelRedraw(shown, raw, previous)) { shown = raw; redraws.add(frame) }
+            assertTrue(raw - shown < 1f)
+            previous = raw
+        }
+        assertEquals(30, redraws.size)
+        assertEquals(30f, shown)
     }
 }

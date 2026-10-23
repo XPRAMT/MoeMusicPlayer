@@ -48,6 +48,7 @@
     getTaskbarLyricsEffectRgb,
     normalizeTaskbarLyricsSettings,
   } from './taskbar-lyrics-settings.js';
+  import { devicePixelEasing, watchDevicePixelRatio } from './device-pixel-steps.js';
 
   // This window does not poll the player (ADR 0028): the main window forwards every playback sample it takes
   // (`taskbar-lyrics-playback`, every 500 ms and right after a command) and both run the same playback clock, so a
@@ -82,6 +83,10 @@
   let durationMs = $state<number | null>(null);
   let viewportHeight = $state(typeof window === 'undefined' ? 0 : window.innerHeight);
   let viewportWidth = $state(typeof window === 'undefined' ? 0 : window.innerWidth);
+  // Position animations move in whole device pixels (AGENTS.md device-pixel rule): the glide and the long-line scroll
+  // use steps() with one step per device pixel of their distance, so the window presents a frame only when the text
+  // moves a pixel. Recomputed when the scale changes (a taskbar on a monitor with another scale).
+  let pixelRatio = $state(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
   // How far past the window each line reaches (px); a line wider than the window scrolls by that much.
   let mainOverflow = $state(0);
   let translationOverflow = $state(0);
@@ -123,7 +128,7 @@
     const shift = `--scroll-shift: ${-overflow}px; --scroll-from: ${scrollRun.from};`;
     return scrollRun.remainingMs === null || overflow <= 0
       ? `${shift} transform: translateX(${-overflow * scrollRun.from}px)`
-      : `${shift} animation: ${scrollName} ${Math.round(scrollRun.remainingMs)}ms linear forwards`;
+      : `${shift} animation: ${scrollName} ${Math.round(scrollRun.remainingMs)}ms ${devicePixelEasing(overflow * (1 - scrollRun.from), pixelRatio)} forwards`;
   }
   $effect(() => {
     const current = clock;
@@ -193,7 +198,9 @@
   });
   let stripStyle = $derived(
     `height: ${lineHeight}em; --strip-from: ${stripRun.from}px; --strip-to: ${stripRun.to}px; `
-      + (stripRun.ms === null ? `transform: translateX(${stripRun.from}px)` : `animation: ${stripName} ${Math.round(stripRun.ms)}ms linear forwards`),
+      + (stripRun.ms === null
+        ? `transform: translateX(${stripRun.from}px)`
+        : `animation: ${stripName} ${Math.round(stripRun.ms)}ms ${devicePixelEasing(stripRun.to - stripRun.from, pixelRatio)} forwards`),
   );
   // Opacity of each line (ADR 0032): the window's own opacity setting is on the container; a line that is not the
   // current one is dimmed by the shared "not current line" opacity on top of it (main x not-current). The current line
@@ -313,12 +320,15 @@
   const onResize = () => {
     viewportHeight = window.innerHeight;
     viewportWidth = window.innerWidth;
+    pixelRatio = window.devicePixelRatio || 1;
   };
+  let stopPixelRatio = () => {};
 
   onMount(() => {
     document.documentElement.classList.add('taskbar-lyrics-window');
     window.addEventListener('resize', onResize);
     window.addEventListener('storage', onStorage);
+    stopPixelRatio = watchDevicePixelRatio((ratio) => { pixelRatio = ratio; });
     onResize();
     void listen<{ trackId: string; delaySec: number }>(LYRICS_TIMING_OFFSET_EVENT, (event) => {
       if (event.payload?.trackId === trackId) timingDelaySec = loadLyricsTimingOffsetSec(trackId);
@@ -367,6 +377,7 @@
   onDestroy(() => {
     window.removeEventListener('resize', onResize);
     window.removeEventListener('storage', onStorage);
+    stopPixelRatio();
     for (const unlisten of unlisteners) unlisten();
   });
 </script>
@@ -492,8 +503,8 @@
   .taskbar-lyrics-track {
     display: inline-block;
     white-space: nowrap;
-    /* The page reads the position every 100 ms: glide between readings. */
-    transition: transform 100ms linear;
+    /* No transform transition: the scroll is a stepped CSS animation from the playback clock (device-pixel rule), and
+       a still position (paused, a short line) is placed exactly. */
   }
 
   /* Continuous: the line spans the window and the strip slides inside its clips (the alignment is in the offset). */

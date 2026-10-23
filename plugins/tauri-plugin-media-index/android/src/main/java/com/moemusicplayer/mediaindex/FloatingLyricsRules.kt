@@ -275,6 +275,15 @@ object FloatingLyricsRules {
     }
 
     /**
+     * Device-pixel rule (AGENTS.md): a moving position is redrawn only when it crosses into another whole pixel, so the
+     * overlay draws nothing while the text has not visibly moved; once it stops (`raw` equal to the previous frame's
+     * `previousRaw`) the exact position is drawn, so every target is reached exactly. `shown` is the position last drawn;
+     * between redraws it lags `raw` by less than one pixel.
+     */
+    fun needsPixelRedraw(shown: Float, raw: Float, previousRaw: Float): Boolean =
+        kotlin.math.floor(raw) != kotlin.math.floor(shown) || (raw == previousRaw && raw != shown)
+
+    /**
      * Left edge of a line `textWidth` wide in `available`: by the alignment when it fits, otherwise starting at the left
      * and sliding left by `progress` of the overflow (the web marquee rule).
      */
