@@ -89,6 +89,23 @@ pub(crate) async fn remote_account_test(
     .map_err(|error| format!("測試連線失敗：{error}"))?
 }
 
+/// The SHA-256 (hex, lower case) of the certificate an https server presents, trusted or not: shown to the user
+/// before a self-signed certificate is pinned (ADR 0026). Only asked for when the form's own connection failed on
+/// the certificate; a pinned account whose certificate changed is not offered this (it reports the change).
+#[tauri::command]
+pub(crate) async fn remote_certificate_probe(host: String, port: Option<u16>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let host = host.trim().to_owned();
+        if host.is_empty() {
+            return Err("請輸入主機。".to_owned());
+        }
+        player_remote::tls::probe_certificate_sha256(&host, port.unwrap_or(443))
+            .map(|sha256| sha256.to_ascii_lowercase())
+    })
+    .await
+    .map_err(|error| format!("無法讀取伺服器憑證：{error}"))?
+}
+
 /// The shares an SMB server offers to the account in the form.
 #[tauri::command]
 pub(crate) async fn remote_smb_shares(
@@ -296,6 +313,15 @@ pub(crate) async fn remote_browse_draft(
         let vault = vault(&data_dir)?;
         let path = normalize_folder(&path);
         let mut input = input;
+        if input.protocol == player_remote::account::RemoteProtocol::Webdav {
+            // WebDAV has no shares: the picker walks the server's tree from `/`, and the folder it is in becomes the
+            // account's base path.
+            input.path = String::new();
+            let account = account_from_input(&state.settings, &vault, &input)?;
+            let fs = crate::remote_connections::connect_account(&data_dir, &account)
+                .map_err(|error| error.to_string())?;
+            return folders_of(fs.as_ref(), &path);
+        }
         if path.is_empty() {
             // The shares of the server.
             input.path = "x".to_owned();

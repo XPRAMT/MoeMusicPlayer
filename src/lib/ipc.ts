@@ -858,6 +858,10 @@ interface IpcContract {
     args: { input: RemoteAccountInput };
     result: RemoteTestView;
   };
+  remote_certificate_probe: {
+    args: { host: string; port: number | null };
+    result: string;
+  };
   remote_smb_shares: {
     args: { input: RemoteAccountInput };
     result: string[];
@@ -1400,7 +1404,8 @@ export type RemoteTlsMode = { mode: 'verify' } | { mode: 'pinned'; sha256: strin
 export type RemoteAccountView = {
   id: string;
   name: string;
-  protocol: 'webdav' | 'smb';
+  /** `unsupported`: written by a newer version (for example SFTP); kept and listed, but it cannot connect. */
+  protocol: 'webdav' | 'smb' | 'unsupported';
   host: string;
   port: number | null;
   path: string;
@@ -1414,7 +1419,7 @@ export type RemoteAccountInput = {
   /** Null creates a new account. */
   id: string | null;
   name: string;
-  protocol: 'webdav' | 'smb';
+  protocol: 'webdav' | 'smb' | 'unsupported';
   host: string;
   port: number | null;
   path: string;

@@ -134,7 +134,7 @@
   type Form = {
     id: string | null;
     name: string;
-    protocol: 'smb' | 'webdav';
+    protocol: 'smb' | 'webdav' | 'unsupported';
     host: string;
     port: string;
     path: string;
@@ -144,6 +144,8 @@
     hasPassword: boolean;
     clearPassword: boolean;
     useHttp: boolean;
+    /** The SHA-256 of the self-signed certificate the user trusts (WebDAV over https), or null to verify it normally. */
+    pin: string | null;
   };
 
   let formDialog = $state<HTMLDialogElement>();
@@ -162,7 +164,7 @@
   }
 
   function blankForm(): Form {
-    return { id: null, name: '', protocol: 'smb', host: '', port: '', path: '', username: '', password: '', hasPassword: false, clearPassword: false, useHttp: false };
+    return { id: null, name: '', protocol: 'smb', host: '', port: '', path: '', username: '', password: '', hasPassword: false, clearPassword: false, useHttp: false, pin: null };
   }
 
   function openForm(account: RemoteAccountView | null): void {
@@ -179,6 +181,7 @@
           hasPassword: account.hasPassword,
           clearPassword: false,
           useHttp: account.tls.mode === 'off',
+          pin: account.tls.mode === 'pinned' ? account.tls.sha256 : null,
         }
       : blankForm();
     formError = null;
@@ -244,9 +247,50 @@
       path: current.path,
       username: current.username,
       password,
-      tls: current.protocol === 'webdav' && current.useHttp ? { mode: 'off' } : { mode: 'verify' },
+      tls: current.protocol !== 'webdav' ? { mode: 'verify' } : current.useHttp ? { mode: 'off' } : current.pin ? { mode: 'pinned', sha256: current.pin } : { mode: 'verify' },
       onlyOnWifi: false,
     };
+  }
+
+  // ---- trusting a self-signed certificate (WebDAV over https): asked once, when the form's own connection fails on
+  // the certificate. An account that already trusts a certificate is not asked again when it changes: the error says
+  // so, and the account has to be edited (or recreated) on purpose.
+  let trustDialog = $state<HTMLDialogElement>();
+  let trustFingerprint = $state<string | null>(null);
+  let trustResolve: ((trusted: boolean) => void) | null = null;
+
+  function isUntrustedCertificate(text: string): boolean {
+    return text.startsWith('憑證不受信任') && !text.includes('與你先前接受的不同');
+  }
+
+  /** `ab12…` → `AB:12:…`, the way certificate viewers show it. */
+  function formatFingerprint(sha256: string): string {
+    return (sha256.toUpperCase().match(/.{1,2}/g) ?? []).join(':');
+  }
+
+  /** Ask whether to trust the certificate `current`'s server presents; true when the user accepted it (the form then pins it). */
+  async function offerCertificateTrust(current: Form, errorText: string): Promise<boolean> {
+    if (current.protocol !== 'webdav' || current.useHttp || current.pin || !isUntrustedCertificate(errorText)) return false;
+    const port = current.port.trim() === '' ? null : Number(current.port);
+    let sha256: string;
+    try {
+      sha256 = await invokeCommand('remote_certificate_probe', { host: current.host, port });
+    } catch {
+      return false;
+    }
+    trustFingerprint = sha256;
+    trustDialog?.showModal();
+    const trusted = await new Promise<boolean>((resolve) => { trustResolve = resolve; });
+    trustDialog?.close();
+    trustFingerprint = null;
+    if (trusted && form === current) current.pin = sha256;
+    return trusted && form === current;
+  }
+
+  function answerTrust(trusted: boolean): void {
+    const resolve = trustResolve;
+    trustResolve = null;
+    resolve?.(trusted);
   }
 
   async function testConnection(): Promise<void> {
@@ -261,7 +305,16 @@
         formError = localNetworkPermissionError();
         return;
       }
-      const result = await invokeCommand('remote_account_test', { input });
+      let result;
+      try {
+        result = await invokeCommand('remote_account_test', { input });
+      } catch (cause) {
+        const current = form;
+        if (!current || !await offerCertificateTrust(current, getErrorText(cause))) throw cause;
+        const trusted = inputOf(current);
+        if (typeof trusted === 'string') throw cause;
+        result = await invokeCommand('remote_account_test', { input: trusted });
+      }
       testResult = result.folders.length === 0
         ? tr('連線成功，但這個位置沒有資料夾。')
         : tr('連線成功。最上層的資料夾：{0}', [result.folders.slice(0, 8).join('、')]);
@@ -298,7 +351,12 @@
       pickFolders = result;
       pickPath = path;
     } catch (cause) {
-      if (serial === pickSerial) pickError = getErrorText(cause);
+      const text = getErrorText(cause);
+      if (serial === pickSerial && form && await offerCertificateTrust(form, text)) {
+        pickLoading = false;
+        return loadPick(path);
+      }
+      if (serial === pickSerial) pickError = text;
     } finally {
       if (serial === pickSerial) pickLoading = false;
     }
@@ -311,15 +369,22 @@
     formError = null;
     pickFolders = [];
     pickError = null;
-    pickPath = '';
+    // WebDAV: start in the folder already typed (relative to the server's /); SMB: at the list of shares.
+    const start = form.protocol === 'webdav' ? form.path.replace(/^\/+|\/+$/g, '') : '';
+    pickPath = start;
     shareDialog?.showModal();
-    void loadPick('');
+    void loadPick(start);
   }
 
   /** The folder the picker is in becomes the root of the account (not one of the folders listed in it). */
   function usePickedFolder(): void {
-    if (!form || pickPath === '') return;
-    form.path = pickPath;
+    if (!form) return;
+    if (form.protocol === 'webdav') {
+      form.path = pickPath === '' ? '' : `/${pickPath}`;
+    } else {
+      if (pickPath === '') return;
+      form.path = pickPath;
+    }
     shareDialog?.close();
   }
 
@@ -330,7 +395,21 @@
     saving = true;
     formError = null;
     try {
-      const saved = await invokeCommand('remote_account_save', { input });
+      let toSave = input;
+      if (form.protocol === 'webdav' && !form.useHttp && !form.pin) {
+        // Saving alone does not connect: try once so a self-signed certificate is offered before the account is stored
+        // without it (any other failure is left to the folder browser to report, as for SMB).
+        const current = form;
+        try {
+          await invokeCommand('remote_account_test', { input });
+        } catch (cause) {
+          if (await offerCertificateTrust(current, getErrorText(cause))) {
+            const trusted = inputOf(current);
+            if (typeof trusted !== 'string') toSave = trusted;
+          }
+        }
+      }
+      const saved = await invokeCommand('remote_account_save', { input: toSave });
       await loadAccounts();
       tab = saved.id;
       closeForm();
@@ -467,6 +546,7 @@
   }
 
   function protocolLabel(account: RemoteAccountView): string {
+    if (account.protocol === 'unsupported') return tr('不支援的通訊協定');
     return account.protocol === 'smb' ? 'SMB' : 'WebDAV';
   }
 
@@ -600,8 +680,23 @@
         <label class="remote-field remote-port"><span>{tr("連接埠")}</span><input type="text" inputmode="numeric" bind:value={form.port} placeholder={form.protocol === 'smb' ? '445' : '443'} /></label>
       </div>
       {#if form.protocol === 'webdav'}
-        <label class="remote-field"><span>{tr("WebDAV 路徑")}</span><input type="text" bind:value={form.path} placeholder="/remote.php/dav/files/me" autocapitalize="off" spellcheck="false" /></label>
+        <div class="remote-field">
+          <span>{tr("WebDAV 路徑")}</span>
+          <div class="remote-row">
+            <input class="remote-grow" type="text" bind:value={form.path} placeholder="/remote.php/dav/files/me" autocapitalize="off" spellcheck="false" />
+            <button class="soft-button" type="button" disabled={form.host.trim() === ''} onclick={openSharePicker}>{tr('選擇資料夾')}</button>
+          </div>
+        </div>
         <label class="remote-check"><input type="checkbox" bind:checked={form.useHttp} /><span>{tr("使用未加密的 http（不建議）")}</span></label>
+        {#if form.pin && !form.useHttp}
+          <div class="remote-field">
+            <span>{tr("信任的憑證（SHA-256）")}</span>
+            <div class="remote-row">
+              <div class="remote-picked remote-fingerprint">{formatFingerprint(form.pin)}</div>
+              <button class="soft-button" type="button" onclick={() => { if (form) form.pin = null; }}>{tr("不再信任")}</button>
+            </div>
+          </div>
+        {/if}
       {/if}
       <label class="remote-field"><span>{tr("帳號")}</span><input type="text" bind:value={form.username} autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" /></label>
       <label class="remote-field">
@@ -653,9 +748,21 @@
     </div>
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" onclick={() => shareDialog?.close()}>{tr("取消")}</button>
-      {#if pickPath !== ''}
+      {#if pickPath !== '' || form?.protocol === 'webdav'}
         <button class="soft-button" type="button" disabled={pickLoading} onclick={usePickedFolder}>{tr("使用這個資料夾")}</button>
       {/if}
+    </div>
+  </div>
+</dialog>
+
+<dialog bind:this={trustDialog} class="update-dialog remote-dialog floating-surface" aria-labelledby="remote-trust-title" oncancel={(event) => { event.preventDefault(); answerTrust(false); }}>
+  <div class="update-dialog-content">
+    <h2 id="remote-trust-title">{tr("信任這個伺服器的憑證？")}</h2>
+    <p>{tr("伺服器使用的憑證不是由受信任的機構簽發（例如 NAS 的自簽憑證）。請確認下方指紋與伺服器上顯示的相同；信任後只接受這張憑證，憑證改變時會停止連線並提示。")}</p>
+    {#if trustFingerprint}<div class="remote-picked remote-fingerprint">{formatFingerprint(trustFingerprint)}</div>{/if}
+    <div class="update-dialog-actions">
+      <button class="soft-button" type="button" onclick={() => answerTrust(false)}>{tr("取消")}</button>
+      <button class="soft-button" type="button" onclick={() => answerTrust(true)}>{tr("信任")}</button>
     </div>
   </div>
 </dialog>
@@ -715,6 +822,7 @@
   .remote-grow { flex: 1 1 auto; min-width: 0; }
   .remote-port { flex: 0 0 96px; }
   .remote-protocol { display: flex; gap: 8px; }
+  .remote-fingerprint { font-family: ui-monospace, monospace; word-break: break-all; white-space: normal; }
   .remote-check { display: flex; align-items: center; gap: 8px; font-size: 0.9em; }
   .remote-picked { flex: 1 1 auto; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid rgb(127 127 127 / 0.4); background: rgb(127 127 127 / 0.1); overflow-wrap: anywhere; }
   .remote-picked.is-empty { opacity: 0.55; }

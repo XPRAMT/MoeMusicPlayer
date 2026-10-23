@@ -3,8 +3,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { WEBDAV_ENTRY_VISIBLE } from '../src/lib/remote-protocols.js';
 
-test('the WebDAV add-entry is hidden for now', () => {
-  assert.equal(WEBDAV_ENTRY_VISIBLE, false);
+test('the WebDAV add-entry is offered (ADR 0035 P1)', () => {
+  assert.equal(WEBDAV_ENTRY_VISIBLE, true);
+});
+
+test('a WebDAV account keeps its pinned certificate when edited, and an untrusted one is offered for pinning', () => {
+  const source = readFileSync(new URL('../src/lib/RemoteSourcesSettings.svelte', import.meta.url), 'utf8');
+  assert.match(source, /pin: account\.tls\.mode === 'pinned' \? account\.tls\.sha256 : null/);
+  assert.match(source, /current\.pin \? \{ mode: 'pinned', sha256: current\.pin \}/);
+  assert.match(source, /invokeCommand\('remote_certificate_probe'/);
+  // A pinned account whose certificate changed is not asked again.
+  assert.match(source, /!text\.includes\('與你先前接受的不同'\)/);
 });
 
 test('the settings component gates the WebDAV choice on the flag', () => {

@@ -934,5 +934,11 @@
   "位置與面板": "Position and panel",
   "歌詞字體大小": "Lyrics font size",
   "譯文與羅馬拼音大小（相對原文）": "Translation and romanization size (relative to original)",
-  "顯示": "Display"
+  "顯示": "Display",
+  "不支援的通訊協定": "Unsupported protocol",
+  "不再信任": "Stop trusting",
+  "伺服器使用的憑證不是由受信任的機構簽發（例如 NAS 的自簽憑證）。請確認下方指紋與伺服器上顯示的相同；信任後只接受這張憑證，憑證改變時會停止連線並提示。": "The server's certificate was not issued by a trusted authority (for example, a self-signed NAS certificate). Check that the fingerprint below matches the one shown on the server. Once trusted, only this certificate is accepted; if it changes, the connection stops and you are told.",
+  "信任": "Trust",
+  "信任的憑證（SHA-256）": "Trusted certificate (SHA-256)",
+  "信任這個伺服器的憑證？": "Trust this server's certificate?"
 }

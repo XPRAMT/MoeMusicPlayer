@@ -12510,6 +12510,7 @@ pub fn run() {
             remote_accounts::remote_accounts_list,
             remote_accounts::remote_account_save,
             remote_sources::remote_account_test,
+            remote_sources::remote_certificate_probe,
             remote_sources::remote_smb_shares,
             remote_sources::remote_browse,
             remote_sources::remote_browse_playlists,
