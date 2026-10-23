@@ -13,6 +13,9 @@ test('main dock keeps its cover full size and hides controls in two ordered stag
   assert.match(baseArt, /max-width:\s*64px/);
   assert.match(baseArt, /max-height:\s*64px/);
   assert.match(baseArt, /flex:\s*0 0 64px/);
+  assert.match(baseArt, /border-radius:\s*0/);
+  assert.doesNotMatch(css, /\.app-shell\[data-active-view="(?:albums|album-detail)"\] \.dock-art/);
+  assert.doesNotMatch(css, /\.app-shell:not\(\.has-now-playing-backdrop\) \.dock-art-image\s*\{[^}]*border-radius/s);
 
   const stageOne = css.match(/\/\* Main dock stage 1:[\s\S]*?@media \(max-width: 720px\)\s*\{([^]*?)\n\}/)?.[1] ?? '';
   const stageTwo = css.match(/\/\* Main dock stage 2:[\s\S]*?@media \(max-width: 520px\)\s*\{([^]*?)\n\}/)?.[1] ?? '';
