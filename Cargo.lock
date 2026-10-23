@@ -3183,6 +3183,7 @@ dependencies = [
  "walkdir",
  "windows",
  "windows-registry",
+ "zeroize",
  "zip",
 ]
 
@@ -4099,6 +4100,14 @@ dependencies = [
 [[package]]
 name = "player-formats"
 version = "0.1.0"
+
+[[package]]
+name = "player-lyrics-rules"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "player-opus"
