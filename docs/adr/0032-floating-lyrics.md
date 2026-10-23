@@ -164,3 +164,40 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   still covers both sides.
   Windows runs each glide as a linear CSS animation re-planned at every line start and clock correction; Android
   redraws the strip in `LyricLineView` every display frame while playing. The strip is cut at the lyric area's sides.
+
+## Amendment (2026-10-23): continuous animation dims the lines that are not current
+
+- In the continuous animation the current line keeps the window's own 「透明度」 (taskbar / floating `opacityPercent`,
+  applied to the whole window as before). Every other line that can be seen (the previous and next one, and any
+  further ones in view) is also multiplied by the shared lyrics setting 「非目前歌詞透明度」
+  (`lyricsPreferences.inactiveOpacityPercent`, 10–100, default 50, the one Now Playing already uses; no new setting).
+  Example: main 80%, not-current 50% -> 40%. The translation strip follows its own line. The animation 「無」 is
+  unchanged (`lyricsLineOpacityFactor` returns 1 for it).
+- The fade is a function of the lyrics position, not an event timer. Over the last 200 ms before a line starts
+  (`LYRICS_FADE_MS`; shortened to the current line's own length when that is shorter) the current line fades linearly
+  from 1 to the not-current factor and the next from the factor to 1, so both finish at the very moment the glide
+  reaches the next line. Before the first line every line is dimmed and only the first fades in during the 200 ms
+  before it starts; from the last line's start nothing fades (it stays 1). Pure functions in `lyrics-strip.js`:
+  `lyricsStripFocus(startTimesMs, positionMs)` -> `{ current, incoming, progress, fadeStartMs, fadeMs }`,
+  `lyricsLineWeight(focus, index)` (0 not current ... 1 current) and
+  `lyricsLineOpacityFactor(weight, inactiveOpacityPercent, animation)` = `inactive + (1 - inactive) * weight` (the
+  percent goes through the existing normalize). A seek, a pause or a resume re-plans like the glide does: while
+  playing, the two cells in the fade get one opacity-only CSS animation (delay = fadeStart - position, negative when
+  already in progress, fill both; names alternate a/b so a re-plan restarts it); when paused the static value at
+  that position is shown. All other cells carry a static `opacity`.
+- Cost: opacity only (no layout, no text repaint); one `opacity` per cell of the already windowed strip (about 9
+  cells), no `will-change` per cell (no extra layer per line); the compositor makes a layer for the two animated
+  cells only during their 200 ms. The window opacity stays on the container, so main x not-current needs no second
+  multiplication.
+- How the value reaches the windows (Windows): the main window (the settings live there) broadcasts the event
+  `lyrics-inactive-opacity` (payload: the integer percent) whenever `lyricsPreferences.inactiveOpacityPercent`
+  changes (so the slider's unsaved preview shows live) and when a lyrics window may have opened; each window also reads
+  `settings_get_lyrics_preferences` once when it starts and runs the value through `normalizeLyricsPreferences`. No Rust
+  change.
+- Android contract (the overlay draws natively): the page sends `floating_lyrics_android` / `floatingLyricsUpdate` with
+  the payload `{ "inactiveOpacityPercent": <integer 10..100> }` as its own top-level key (next to `settings`, `data`,
+  `setLocked`...), on every change of the lyrics general setting and when the app starts (it is not part of
+  `settings`, which stays the floating look). Unknown to an older overlay, which ignores it. The overlay must run the
+  same rule on its own smoothed position (`position + offsetMs`): factor of a line = `inactive + (1 - inactive) *
+  weight`, weight from the focus above with a 200 ms fade ending at the next line's start, multiplied by the overlay's own
+  opacity.

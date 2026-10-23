@@ -1823,6 +1823,14 @@
     if (!isTauri() || !data || !isWindowsPlatform || !taskbarLyricsEnabled) return;
     void emit('taskbar-lyrics-data', data).catch(() => {});
   });
+  // The shared "not current line" opacity (lyrics general settings) for the continuous animation of those windows: sent
+  // as the slider moves (the preview, before it is saved) and again when a window can have opened. The windows also read
+  // the saved value themselves when they start.
+  $effect(() => {
+    const inactiveOpacityPercent = lyricsPreferences.inactiveOpacityPercent;
+    if (!isTauri() || !isWindowsPlatform || !taskbarLyricsEnabled) return;
+    void emit('lyrics-inactive-opacity', inactiveOpacityPercent).catch(() => {});
+  });
 
   // Android: the native overlay draws the lines itself from the playback service's position (so it keeps going while
   // this page is in the background); it gets the lyrics, with the per-track delay folded into one offset, whenever
@@ -1856,6 +1864,13 @@
     void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { settings } })
       .then(() => refreshFloatingLyricsAndroidStatus())
       .catch(() => {});
+  });
+  // The shared "not current line" opacity (10-100, the lyrics general setting) for the overlay's continuous animation,
+  // sent on its own so a slider tick does not resend the lyrics or the look settings.
+  $effect(() => {
+    const inactiveOpacityPercent = lyricsPreferences.inactiveOpacityPercent;
+    if (!isTauri() || !isAndroidPlatform) return;
+    void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { inactiveOpacityPercent } }).catch(() => {});
   });
   // The main window follows changes made from the floating window itself (its lock button).
   $effect(() => {

@@ -22,7 +22,7 @@
   floatingLyricsMarginPx,
   normalizeFloatingLyricsSettings,
 } from './floating-lyrics-settings.js';
-  import { getDisplayActiveLyricIndex } from './lyrics-preferences.js';
+  import { DEFAULT_LYRICS_PREFERENCES, getDisplayActiveLyricIndex, normalizeLyricsPreferences } from './lyrics-preferences.js';
   import { buildTimedLyricTimeline, findActiveLyricIndex } from './lyrics-window.js';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lyrics-timing-offset.js';
   import type { TaskbarLyricsData } from './taskbar-lyrics-data.js';
@@ -31,6 +31,9 @@
     LYRICS_STRIP_TARGET,
     buildLyricsStripLines,
     layoutLyricsStrip,
+    lyricsLineOpacityFactor,
+    lyricsLineWeight,
+    lyricsStripFocus,
     lyricsStripOffset,
     lyricsStripWindow,
     nextLyricsStripBreak,
@@ -164,8 +167,8 @@
     const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth, LYRICS_STRIP_TARGET);
     const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at) : null;
     const wait = next === null ? null : msUntilPlaybackPosition(clock, performance.now(), next - timingOffsetMs);
-    if (next === null || wait === null || wait <= 0) return { from, to: from, ms: null as number | null };
-    return { from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth, LYRICS_STRIP_TARGET), ms: wait };
+    if (next === null || wait === null || wait <= 0) return { at, from, to: from, ms: null as number | null };
+    return { at, from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth, LYRICS_STRIP_TARGET), ms: wait };
   });
   let stripName = $state('taskbar-lyrics-strip-a');
   $effect(() => {
@@ -176,6 +179,24 @@
     `height: ${lineHeight}em; --strip-from: ${stripRun.from}px; --strip-to: ${stripRun.to}px; `
       + (stripRun.ms === null ? `transform: translateX(${stripRun.from}px)` : `animation: ${stripName} ${Math.round(stripRun.ms)}ms linear forwards`),
   );
+  // Opacity of each line (ADR 0032): the window's own opacity setting is on the container; a line that is not the
+  // current one is dimmed by the shared "not current line" opacity on top of it (main x not-current). The current line
+  // and the next fade over the last 200 ms before the next line starts, ending with the glide; this is the same pure
+  // function of the lyrics position everywhere, run as an opacity-only CSS animation of those two cells from the
+  // same re-plan as the glide (a seek or pause re-plans, a pause shows the static value).
+  let inactiveOpacityPercent = $state<number>(DEFAULT_LYRICS_PREFERENCES.inactiveOpacityPercent);
+  let stripFocus = $derived(lyricsStripFocus(stripStarts, stripRun.at));
+  function cellFadeStyle(index: number): string {
+    const focus = stripFocus;
+    const factor = (weight: number) => lyricsLineOpacityFactor(weight, inactiveOpacityPercent, settings.animation);
+    const still = `opacity: ${factor(lyricsLineWeight(focus, index))}`;
+    if (stripRun.ms === null || focus.fadeStartMs === null || (index !== focus.current && index !== focus.incoming)) return still;
+    const outgoing = index === focus.current;
+    const from = factor(outgoing ? 1 : 0);
+    const to = factor(outgoing ? 0 : 1);
+    const name = stripName.endsWith('-a') ? 'taskbar-lyrics-fade-a' : 'taskbar-lyrics-fade-b';
+    return `opacity: ${from}; --fade-from: ${from}; --fade-to: ${to}; animation: ${name} ${Math.round(focus.fadeMs)}ms linear ${Math.round(focus.fadeStartMs - stripRun.at)}ms both`;
+  }
   // Only the lines that can show during this glide, plus one lyric area on each side, are in the DOM: a strip of the
   // whole song made every frame of the glide (and its shadow filter) cost the whole song, slowing the main window too
   // (one GPU process for all WebView2 windows). Each cell sits at its layout place, so the swap at a line change is
@@ -270,6 +291,16 @@
         taskbarIsLight = light;
       });
     }
+    // The shared "not current line" opacity (lyrics general settings): read once, then follow the main window's
+    // broadcast, which also carries the slider's unsaved preview.
+    let inactiveFromEvent = false;
+    void listen<unknown>('lyrics-inactive-opacity', (event) => {
+      inactiveFromEvent = true;
+      inactiveOpacityPercent = normalizeLyricsPreferences({ inactiveOpacityPercent: event.payload }).inactiveOpacityPercent;
+    }).then((unlisten) => unlisteners.push(unlisten));
+    void invokeCommand('settings_get_lyrics_preferences', {}).then((stored) => {
+      if (!inactiveFromEvent) inactiveOpacityPercent = normalizeLyricsPreferences(stored).inactiveOpacityPercent;
+    }).catch(() => {});
     void listen<unknown>(floating ? 'floating-lyrics-settings' : 'taskbar-lyrics-settings', (event) => {
       settings = normalizeSettings(event.payload);
     }).then((unlisten) => unlisteners.push(unlisten));
@@ -319,7 +350,7 @@
         <span class="taskbar-lyrics-main">
           <span class="taskbar-lyrics-strip" bind:this={stripMain} style={stripStyle}>
             {#each stripCells as cell (cell.index)}
-              <span class="taskbar-lyrics-strip-cell" style:left={`${stripLayout.starts[cell.index]}px`} style:width={`${stripLayout.widths[cell.index]}px`}><span class="taskbar-lyrics-strip-text">{cell.line.text}</span></span>
+              <span class="taskbar-lyrics-strip-cell" style:left={`${stripLayout.starts[cell.index]}px`} style:width={`${stripLayout.widths[cell.index]}px`} style={cellFadeStyle(cell.index)}><span class="taskbar-lyrics-strip-text">{cell.line.text}</span></span>
             {/each}
           </span>
         </span>
@@ -327,7 +358,7 @@
           <span class="taskbar-lyrics-translation">
             <span class="taskbar-lyrics-strip" bind:this={stripTranslation} style={stripStyle}>
               {#each stripCells as cell (cell.index)}
-                <span class="taskbar-lyrics-strip-cell" style:left={`${stripLayout.starts[cell.index]}px`} style:width={`${stripLayout.widths[cell.index]}px`}><span class="taskbar-lyrics-strip-text">{cell.line.translation}</span></span>
+                <span class="taskbar-lyrics-strip-cell" style:left={`${stripLayout.starts[cell.index]}px`} style:width={`${stripLayout.widths[cell.index]}px`} style={cellFadeStyle(cell.index)}><span class="taskbar-lyrics-strip-text">{cell.line.translation}</span></span>
               {/each}
             </span>
           </span>
@@ -368,6 +399,15 @@
   @keyframes -global-taskbar-lyrics-strip-b {
     from { transform: translateX(var(--strip-from)); }
     to { transform: translateX(var(--strip-to)); }
+  }
+  /* Opacity only (no layout, no repaint of text): the two lines in a fade, 200 ms before the next line starts. */
+  @keyframes -global-taskbar-lyrics-fade-a {
+    from { opacity: var(--fade-from); }
+    to { opacity: var(--fade-to); }
+  }
+  @keyframes -global-taskbar-lyrics-fade-b {
+    from { opacity: var(--fade-from); }
+    to { opacity: var(--fade-to); }
   }
   :global(html.taskbar-lyrics-window),
   :global(html.taskbar-lyrics-window body),

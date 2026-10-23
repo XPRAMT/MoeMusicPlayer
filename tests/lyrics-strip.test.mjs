@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
+  LYRICS_FADE_MS,
   LYRICS_STRIP_ALIGN,
   LYRICS_STRIP_TARGET,
   LYRICS_STRIP_SEPARATOR,
   buildLyricsStripLines,
   layoutLyricsStrip,
+  lyricsLineOpacityFactor,
+  lyricsLineWeight,
+  lyricsStripFocus,
   lyricsStripAnchor,
   lyricsStripOffset,
   lyricsStripWindow,
@@ -116,4 +121,129 @@ test('a line starts with its left edge on the lyric area centre and slides left 
   assert.equal(at(3000, 500), 250 - 120);
   // The left edge of the line at its start is exactly the centre.
   assert.equal(layout.starts[1] + at(3000), 150);
+});
+
+// Line fades (ADR 0032): lines start at 1000, 5000 and 9000 ms.
+const FADE_STARTS = [1000, 5000, 9000];
+const factorAt = (index, positionMs, inactive = 50, animation = 'continuous') =>
+  lyricsLineOpacityFactor(lyricsLineWeight(lyricsStripFocus(FADE_STARTS, positionMs), index), inactive, animation);
+
+test('the fade lasts 200 ms and ends exactly when the next line starts', () => {
+  assert.equal(LYRICS_FADE_MS, 200);
+  const before = lyricsStripFocus(FADE_STARTS, 4799);
+  assert.equal(before.progress, 0);
+  assert.equal(before.fadeStartMs, 4800);
+  assert.equal(before.fadeMs, 200);
+  assert.deepEqual([before.current, before.incoming], [0, 1]);
+  assert.equal(lyricsStripFocus(FADE_STARTS, 4800).progress, 0);
+  assert.equal(lyricsStripFocus(FADE_STARTS, 4900).progress, 0.5);
+  assert.equal(lyricsStripFocus(FADE_STARTS, 4999).progress, 0.995);
+  // At the start of the next line it has become the current one and nothing is half-way.
+  const at = lyricsStripFocus(FADE_STARTS, 5000);
+  assert.deepEqual([at.current, at.incoming, at.progress], [1, 2, 0]);
+});
+
+test('the current line fades to main x not-current and the next fades in to the main opacity', () => {
+  // Not in a fade: the current line is 1 (the container's main opacity), every other line the not-current opacity.
+  assert.equal(factorAt(0, 3000), 1);
+  assert.equal(factorAt(1, 3000), 0.5);
+  assert.equal(factorAt(2, 3000), 0.5);
+  // Start, middle and end of the fade.
+  assert.equal(factorAt(0, 4800), 1);
+  assert.equal(factorAt(1, 4800), 0.5);
+  assert.equal(factorAt(0, 4900), 0.75);
+  assert.equal(factorAt(1, 4900), 0.75);
+  assert.equal(factorAt(0, 5000), 0.5);
+  assert.equal(factorAt(1, 5000), 1);
+  // Lines further away never change.
+  assert.equal(factorAt(2, 4900), 0.5);
+});
+
+test('80% main opacity x 50% not-current gives 40% for the lines around the current one', () => {
+  const main = 0.8; // the window's own opacity setting, applied to the container
+  assert.equal(main * factorAt(1, 3000), 0.4);
+  assert.equal(main * factorAt(0, 3000), 0.8);
+  assert.equal(main * factorAt(0, 5000), 0.4);
+  assert.equal(main * factorAt(1, 5000), 0.8);
+});
+
+test('a not-current opacity of 100% does not dim anything, and the setting is normalized', () => {
+  for (const position of [0, 900, 950, 1000, 3000, 4900, 5000, 9000, 20000]) {
+    for (const index of [0, 1, 2]) assert.equal(factorAt(index, position, 100), 1);
+  }
+  assert.equal(lyricsLineOpacityFactor(0, 5), 0.1);
+  assert.equal(lyricsLineOpacityFactor(0, 250), 1);
+  assert.equal(lyricsLineOpacityFactor(0, 'x'), 0.5);
+  assert.equal(lyricsLineOpacityFactor(0, undefined), 0.5);
+  assert.equal(lyricsLineOpacityFactor(-3, 50), 0.5);
+  assert.equal(lyricsLineOpacityFactor(7, 50), 1);
+});
+
+test('the animation "none" applies no dimming', () => {
+  for (const position of [0, 3000, 4900, 5000, 20000]) {
+    for (const index of [0, 1, 2]) {
+      assert.equal(factorAt(index, position, 50, 'none'), 1);
+      assert.equal(factorAt(index, position, 50, 'bounce'), 1);
+    }
+  }
+});
+
+test('before the first line only the first fades in, in the 200 ms before it starts', () => {
+  const early = lyricsStripFocus(FADE_STARTS, 100);
+  assert.deepEqual([early.current, early.incoming, early.progress], [-1, 0, 0]);
+  assert.equal(early.fadeStartMs, 800);
+  assert.equal(factorAt(0, 0), 0.5);
+  assert.equal(factorAt(0, 800), 0.5);
+  assert.equal(factorAt(0, 900), 0.75);
+  assert.equal(factorAt(0, 1000), 1);
+  assert.equal(factorAt(1, 900), 0.5);
+  assert.equal(factorAt(1, -500), 0.5);
+});
+
+test('after the last line starts nothing fades and it stays the current line', () => {
+  const last = lyricsStripFocus(FADE_STARTS, 9000);
+  assert.deepEqual([last.current, last.incoming, last.progress, last.fadeStartMs], [2, -1, 0, null]);
+  assert.equal(factorAt(2, 9000), 1);
+  assert.equal(factorAt(2, 999999), 1);
+  assert.equal(factorAt(1, 9000), 0.5);
+  // The last line starts fading in 200 ms before it, like the others.
+  assert.equal(factorAt(2, 8900), 0.75);
+  assert.equal(factorAt(1, 8900), 0.75);
+});
+
+test('a seek lands on the same value as playing through (the function only looks at the position)', () => {
+  assert.equal(factorAt(1, 4900), factorAt(1, 4900));
+  assert.equal(factorAt(0, 7000), 0.5);
+  assert.equal(factorAt(1, 7000), 1);
+  assert.equal(factorAt(1, 1500), 0.5);
+  assert.equal(factorAt(0, 1500), 1);
+});
+
+test('a line shorter than 200 ms fades over its own length, so the previous fade ends where it starts', () => {
+  const starts = [0, 100, 1000];
+  const focus = lyricsStripFocus(starts, 50);
+  assert.deepEqual([focus.current, focus.incoming], [0, 1]);
+  assert.equal(focus.fadeStartMs, 0);
+  assert.equal(focus.fadeMs, 100);
+  assert.equal(focus.progress, 0.5);
+  // At line 1's start, line 1 is fully current again.
+  assert.equal(lyricsStripFocus(starts, 100).progress, 0);
+  assert.equal(lyricsLineWeight(lyricsStripFocus(starts, 100), 1), 1);
+  assert.equal(lyricsStripFocus([], 500).incoming, -1);
+});
+
+test('the views fade only two cells with an opacity-only animation, fed by the shared setting', () => {
+  const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  // Both strips (main and translation) use the same per-cell style, from the same pure functions.
+  assert.equal((view.match(/style=\{cellFadeStyle\(cell\.index\)\}/g) ?? []).length, 2);
+  assert.match(view, /lyricsLineOpacityFactor\(weight, inactiveOpacityPercent, settings\.animation\)/);
+  assert.match(view, /@keyframes -global-taskbar-lyrics-fade-a \{\s*from \{ opacity: var\(--fade-from\); \}\s*to \{ opacity: var\(--fade-to\); \}/);
+  // No will-change per cell (an own layer per line would cost more than the fade saves).
+  assert.doesNotMatch(view, /strip-cell\s*\{[^}]*will-change/);
+  // The shared setting reaches the windows by event (the preview too) and by one read at start-up.
+  assert.match(view, /listen<unknown>\('lyrics-inactive-opacity'/);
+  assert.match(view, /invokeCommand\('settings_get_lyrics_preferences'/);
+  assert.match(app, /emit\('lyrics-inactive-opacity', inactiveOpacityPercent\)/);
+  assert.match(app, /payload: \{ inactiveOpacityPercent \}/);
 });

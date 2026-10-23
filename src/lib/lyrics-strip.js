@@ -2,6 +2,8 @@
 // ideographic space (U+3000), that scrolls with playback so the current line sits at the chosen alignment. The
 // translation strip is laid out with the same cell widths, so each translation stays under its own line.
 
+import { normalizeLyricsPreferences } from './lyrics-preferences.js';
+
 /** The separator between lines (one em wide). */
 export const LYRICS_STRIP_SEPARATOR = '\u3000';
 export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
@@ -116,4 +118,57 @@ export function nextLyricsStripBreak(startTimesMs, positionMs) {
   if (startTimesMs.length < 2 || positionMs < startTimesMs[0]) return startTimesMs.length > 0 && positionMs < startTimesMs[0] ? startTimesMs[0] : null;
   for (const start of startTimesMs) if (start > positionMs) return start;
   return null;
+}
+
+/** How long a line takes to fade between "current" and "not current": it ends exactly when the next line starts. */
+export const LYRICS_FADE_MS = 200;
+
+/**
+ * Which lines are mid-fade at a lyrics position (ADR 0032). The current line fades out and the next one fades in over
+ * the last `fadeMs` before the next line starts (shortened to the current line's own length when it is shorter), so
+ * both finish at the very moment the glide reaches the next line. Before the first line only the first one fades in;
+ * after the last line's start nothing fades. A pure function of the position, so seeks and pauses need no event.
+ * @param {readonly number[]} startTimesMs one per strip line, sorted
+ * @param {number} positionMs lyrics time (playback position plus the display offset)
+ * @param {number} [fadeMs]
+ * @returns {{ current: number, incoming: number, progress: number, fadeStartMs: number | null, fadeMs: number }}
+ *   `current` is -1 before the first line; `incoming` is -1 after the last line starts.
+ */
+export function lyricsStripFocus(startTimesMs, positionMs, fadeMs = LYRICS_FADE_MS) {
+  let current = -1;
+  for (let i = 0; i < startTimesMs.length && startTimesMs[i] <= positionMs; i += 1) current = i;
+  const incoming = current + 1 < startTimesMs.length ? current + 1 : -1;
+  if (incoming < 0) return { current, incoming: -1, progress: 0, fadeStartMs: null, fadeMs: 0 };
+  const next = startTimesMs[incoming];
+  const length = current >= 0 ? next - startTimesMs[current] : Infinity;
+  const duration = Math.max(1, Math.min(Math.max(0, fadeMs), length));
+  const fadeStartMs = next - duration;
+  const progress = Math.min(1, Math.max(0, (positionMs - fadeStartMs) / duration));
+  return { current, incoming, progress, fadeStartMs, fadeMs: duration };
+}
+
+/**
+ * How "current" a line is, 0 (not current) to 1 (current): the fade progress for the two lines in the fade.
+ * @param {{ current: number, incoming: number, progress: number }} focus from `lyricsStripFocus`
+ * @param {number} index
+ */
+export function lyricsLineWeight(focus, index) {
+  if (index === focus.current) return 1 - focus.progress;
+  if (index === focus.incoming) return focus.progress;
+  return 0;
+}
+
+/**
+ * The opacity of a line relative to the window's own opacity setting (the container already applies that one, so the
+ * product is main x not-current): 1 for a current line, `inactiveOpacityPercent / 100` for a line that is not,
+ * linear in between. Only the continuous animation applies it; "none" leaves every line as it is.
+ * @param {number} weight from `lyricsLineWeight`
+ * @param {unknown} inactiveOpacityPercent the shared lyrics setting (10-100, normalized here)
+ * @param {unknown} [animation]
+ */
+export function lyricsLineOpacityFactor(weight, inactiveOpacityPercent, animation = 'continuous') {
+  if (normalizeLyricsAnimation(animation) !== 'continuous') return 1;
+  const inactive = normalizeLyricsPreferences({ inactiveOpacityPercent }).inactiveOpacityPercent / 100;
+  const clamped = Math.min(1, Math.max(0, weight));
+  return inactive + (1 - inactive) * clamped;
 }
