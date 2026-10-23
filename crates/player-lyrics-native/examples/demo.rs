@@ -51,23 +51,45 @@ fn main() {
         ),
         ("明日もきっと", "明天也一定"),
     ];
+    // `MOE_DEMO_LINE_MS`: time between lines (default 2500 ms).
+    let line_ms: f64 = std::env::var("MOE_DEMO_LINE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2500.0);
     let lines = texts
         .iter()
         .cycle()
         .take(texts.len() * 40)
         .enumerate()
         .map(|(i, (t, tr))| LyricLine {
-            start_ms: 500.0 + i as f64 * 2500.0,
+            start_ms: 500.0 + i as f64 * line_ms,
             // Unique lines, so every line change brings a line that was never rasterised.
             text: format!("{t} {i}"),
             translation: tr.to_string(),
         })
         .collect();
-    r.set_lyrics(Some(LyricsData {
+    // `MOE_DEMO_LYRICS_DELAY_MS`: open the windows first and load the lyrics later (to measure their memory).
+    let lyrics_delay: u64 = std::env::var("MOE_DEMO_LYRICS_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let lyrics = LyricsData {
         track_id: "demo".into(),
         lines,
         offset_ms: None,
-    }));
+    };
+    let load = {
+        let r = r.clone();
+        move || r.set_lyrics(Some(lyrics))
+    };
+    if lyrics_delay == 0 {
+        load();
+    } else {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(lyrics_delay));
+            load();
+        });
+    }
     // For sync checks against screen captures: the wall time playback position 0 is sent.
     println!(
         "playback-start-unix-us {}",

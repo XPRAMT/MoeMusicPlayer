@@ -281,3 +281,14 @@ windows on a 120 Hz display, dwm.exe used about 95% of one core and composed onl
 within noise of having no fade (about 25% vs 28% here, at full 120/60 Hz; see ADR 0034). Since 2026-10-24 the
 Windows renderer samples the glide, fades and scroll itself on every composition frame and commits only values that
 changed by at least one device pixel (or 1/255 opacity); see ADR 0034.
+
+## Placement clamp and width changes (2026-10-24)
+
+The floating panel is kept on screen by its lyric text area, not by the whole window: the transparent side margin
+left of the lyric area, the margin right of the padlock (so the padlock itself stays reachable) and the room above
+and below the lyric area may hang past the work area (Windows `place_on_monitors_with` with `text_insets`, used by
+every placement: drag check, saved position restore, nudge, centre-axis, reset and the 2 s monitor check; Android
+`FloatingLyricsRules.clampPosition` with insets, `textVerticalInset`). A width change (寬度) keeps the lyric area's
+horizontal centre (`resize_around_centre` / `resizeAroundCentre`, the centre that 水平置中 aligns), then the clamp
+shifts the panel just enough and the result is saved like a drag; on Android per orientation, and a rotation's own
+width change does not count as a resize.

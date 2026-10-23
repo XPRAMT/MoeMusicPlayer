@@ -185,18 +185,83 @@ pub fn unlock_button_rect(window: Rect, scale: f64, lock_css: f64, margin_css: f
     }
 }
 
+/// How far the window's transparent edges may hang past the work area (physical px): the side margin left of the
+/// lyric area, the side margin right of the lock column (so the padlock stays reachable) and the transparent room
+/// above and below the lyric area. The lyric text area itself always stays inside.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Insets {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl Insets {
+    pub const NONE: Insets = Insets {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+}
+
+/// The insets of a floating window `height` px tall with `settings` at `scale`: the lyric area is
+/// `FLOATING_LINE_HEIGHT / FLOATING_PANEL_LINE_HEIGHT` of the height, vertically centred (ADR 0032).
+pub fn text_insets(settings: &FloatingLyricsSettings, scale: f64, height: i32) -> Insets {
+    let margin = (side_margin_css(settings) * valid_scale(scale)).round() as i32;
+    let share = player_lyrics_native::FLOATING_LINE_HEIGHT
+        / player_lyrics_native::FLOATING_PANEL_LINE_HEIGHT;
+    let room = ((f64::from(height) * (1.0 - share)) / 2.0).floor() as i32;
+    Insets {
+        left: margin,
+        top: room.max(0),
+        right: margin,
+        bottom: room.max(0),
+    }
+}
+
+/// Where the lyric area's horizontal centre stays when the window's width changes: the new left edge for a window
+/// that was `old_width` wide at `left` and becomes `new_width` (gutters before and after).
+pub fn resize_around_centre(
+    left: i32,
+    old_width: i32,
+    old_gutter: Gutters,
+    new_width: i32,
+    new_gutter: Gutters,
+) -> i32 {
+    let centre2 = 2 * (left + old_gutter.lead.max(0)) + old_gutter.lyric_width(old_width);
+    (centre2 - new_gutter.lyric_width(new_width)) / 2 - new_gutter.lead.max(0)
+}
+
 /// Where the window goes: the saved position moved fully inside the work area it overlaps most, or, with no saved
-/// position or one on no monitor any more, at the centre of the first (primary) work area.
+/// position or one on no monitor any more, at the centre of the first (primary) work area (the whole window kept
+/// inside; the renderer uses `place_on_monitors_with` and its text insets).
+#[cfg(test)]
 pub fn place_on_monitors(
     position: Option<FloatingLyricsPosition>,
     size: (i32, i32),
     gutter: Gutters,
     work_areas: &[Rect],
 ) -> FloatingLyricsPosition {
+    place_on_monitors_with(position, size, gutter, Insets::NONE, work_areas)
+}
+
+/// As `place_on_monitors`, keeping only the lyric text area inside the work area: the `insets` (transparent margins
+/// and shadow room) may go past its edges.
+pub fn place_on_monitors_with(
+    position: Option<FloatingLyricsPosition>,
+    size: (i32, i32),
+    gutter: Gutters,
+    insets: Insets,
+    work_areas: &[Rect],
+) -> FloatingLyricsPosition {
     let (width, height) = size;
-    let clamp_into = |area: Rect, x: i32, y: i32| FloatingLyricsPosition {
-        x: x.clamp(area.left, (area.right - width).max(area.left)),
-        y: y.clamp(area.top, (area.bottom - height).max(area.top)),
+    let clamp_into = |area: Rect, x: i32, y: i32| {
+        let (low_x, low_y) = (area.left - insets.left, area.top - insets.top);
+        FloatingLyricsPosition {
+            x: x.clamp(low_x, (area.right - width + insets.right).max(low_x)),
+            y: y.clamp(low_y, (area.bottom - height + insets.bottom).max(low_y)),
+        }
     };
     let Some(primary) = work_areas.first().copied() else {
         return position.unwrap_or(FloatingLyricsPosition { x: 0, y: 0 });
@@ -443,8 +508,16 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     );
     crate::native_lyrics::apply_floating_chrome(app, settings);
     let (width, height) = window_size(window, settings);
+    // A width change (the 寬度 slider) keeps the lyric area's horizontal centre; the move event saves the result.
+    let resized = window.rect().filter(|r| r.width() != width).map(|r| {
+        let gutter = gutter_px(settings, window.scale());
+        FloatingLyricsPosition {
+            x: resize_around_centre(r.left, r.width(), gutter, width, gutter),
+            y: r.top,
+        }
+    });
     window.set_size(width, height);
-    place(window, settings.position);
+    place(window, resized.or(settings.position));
     renderer.set_click_through(WINDOW_LABEL, settings.locked);
     if !settings.locked {
         renderer.set_hover(WINDOW_LABEL, false);
@@ -575,7 +648,10 @@ fn place(window: Native, wanted: Option<FloatingLyricsPosition>) {
         let bounds = monitors().first()?.0;
         (bounds.width() > 0 && bounds.height() > 0).then(|| centre_on(bounds, size, gutter))
     });
-    let target = place_on_monitors(wanted, size, gutter, &work_areas());
+    let insets = current().map_or(Insets::NONE, |settings| {
+        text_insets(&settings, window.scale(), size.1)
+    });
+    let target = place_on_monitors_with(wanted, size, gutter, insets, &work_areas());
     if target.x != rect.left || target.y != rect.top {
         window.set_position(target.x, target.y);
     }
@@ -803,6 +879,79 @@ mod tests {
                 y: 10
             }
         );
+    }
+
+    #[test]
+    fn the_text_edge_may_touch_the_work_area_while_the_margins_go_past() {
+        let area = rect(0, 0, 1920, 1040);
+        let size = (1000, 150);
+        let insets = Insets {
+            left: 7,
+            top: 20,
+            right: 7,
+            bottom: 20,
+        };
+        // Dragged past the left/top: the window hangs out by exactly its margins, the text edge sits on 0.
+        let at = place_on_monitors_with(
+            Some(FloatingLyricsPosition { x: -300, y: -60 }),
+            size,
+            Gutters::NONE,
+            insets,
+            &[area],
+        );
+        assert_eq!(at, FloatingLyricsPosition { x: -7, y: -20 });
+        // Past the right/bottom: the lock column's right edge (window right less its margin) on 1920.
+        let at = place_on_monitors_with(
+            Some(FloatingLyricsPosition { x: 1500, y: 1000 }),
+            size,
+            Gutters::NONE,
+            insets,
+            &[area],
+        );
+        assert_eq!(at, FloatingLyricsPosition { x: 927, y: 910 });
+        assert_eq!(at.x + size.0 - insets.right, 1920);
+        assert_eq!(at.y + size.1 - insets.bottom, 1040);
+        // Without insets the old rule: the whole window inside.
+        assert_eq!(
+            place_on_monitors(
+                Some(FloatingLyricsPosition { x: -300, y: -60 }),
+                size,
+                Gutters::NONE,
+                &[area]
+            ),
+            FloatingLyricsPosition { x: 0, y: 0 }
+        );
+    }
+
+    #[test]
+    fn a_width_change_keeps_the_lyric_area_centre() {
+        let gutter = Gutters { lead: 7, trail: 77 };
+        let centre = |left: i32, width: i32| left + 7 + (width - 84) / 2;
+        let left = resize_around_centre(500, 1000, gutter, 1400, gutter);
+        assert_eq!(left, 300);
+        assert_eq!(centre(left, 1400), centre(500, 1000));
+        let left = resize_around_centre(500, 1000, gutter, 600, gutter);
+        assert_eq!(left, 700);
+        assert_eq!(centre(left, 600), centre(500, 1000));
+        // Odd differences round to within half a pixel.
+        let left = resize_around_centre(500, 1000, gutter, 1001, gutter);
+        assert!((centre(left, 1001) - centre(500, 1000)).abs() <= 1);
+        // Widened past the edge: the clamp shifts it just enough, the width is kept.
+        let area = rect(0, 0, 1920, 1040);
+        let wide = resize_around_centre(100, 1000, gutter, 1600, gutter);
+        let at = place_on_monitors_with(
+            Some(FloatingLyricsPosition { x: wide, y: 100 }),
+            (1600, 150),
+            gutter,
+            Insets {
+                left: 7,
+                top: 0,
+                right: 7,
+                bottom: 0,
+            },
+            &[area],
+        );
+        assert_eq!(at.x, -7);
     }
 
     #[test]

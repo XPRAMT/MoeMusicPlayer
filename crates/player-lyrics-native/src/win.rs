@@ -1076,7 +1076,10 @@ fn register_class() {
 
 /// Lines beyond the drawn ones that must be rasterised already, and how many are drawn ahead in one batch.
 const PREWARM_NEEDED: usize = 2;
-const PREWARM_LINES: usize = 8;
+const PREWARM_LINES: usize = 100;
+/// Later batches (while the strip glides) stay small: each line costs about 1 ms of CPU on top of the commit wait,
+/// and 100 at once stalled about 270 ms in the demo.
+const PREWARM_LATER_LINES: usize = 16;
 
 type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, f64);
 
@@ -1461,9 +1464,11 @@ impl Renderer {
             }
         }
         if count > 0 {
+            let bytes: u64 = self.windows.values().map(cache_bytes).sum();
             frame_log_line(&format!(
-                "prewarm {count} lines took {:.3} ms",
-                started.elapsed().as_secs_f64() * 1000.0
+                "prewarm {count} lines took {:.3} ms, all caches {:.1} MiB",
+                started.elapsed().as_secs_f64() * 1000.0,
+                bytes as f64 / 1048576.0
             ));
         }
     }
@@ -2008,6 +2013,8 @@ fn sample_window(win: &mut Win, frame: Instant) -> Result<bool> {
 }
 
 fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
+    // Nothing rasterised yet (new lyrics, look or size): the up-front batch is drawn in this refresh.
+    let fresh = win.cache.is_empty();
     win.wake_at = None;
     win.live.clear();
     win.moving_until = None;
@@ -2195,10 +2202,12 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             };
             cells.push((cached(gfx, win, &rows, style)?, *index, keys));
         }
-        // The lines that enter next are rasterised ahead (`prewarm_batch`, after a frame's commit), so a line change
-        // does not rasterise on its own frame. Drawing a composition surface makes the next commit wait about 30 ms
-        // (3–4 frames at 120 Hz) however many are drawn in that frame, so they are drawn in batches: when the next
-        // `PREWARM_NEEDED` lines are not cached yet, the next `PREWARM_LINES` are drawn together.
+        // The lines that enter next are rasterised ahead, so a line change never rasterises on its own frame.
+        // Drawing composition surfaces makes the next commit wait about 30 ms (3–4 frames at 120 Hz) however many
+        // are drawn in that frame, so they are drawn in large batches: right after the lyrics load (in this refresh,
+        // the same frame as the drawn cells: one stall, before or as the strip starts) up to `PREWARM_LINES` lines;
+        // later, when the next `PREWARM_NEEDED` lines are not cached, the next `PREWARM_LATER_LINES` together after a
+        // frame's commit (`prewarm_batch`).
         win.prewarm.clear();
         if let Some((_, last)) = planned.cells {
             let rows_of = |text: &str, tr: &str| {
@@ -2214,11 +2223,34 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 .take(PREWARM_NEEDED)
                 .any(|(_, text, tr)| !is_cached(win, &rows_of(text, tr), style));
             if needed {
-                for (_, text, tr) in lines.iter().skip(last + 1).take(PREWARM_LINES) {
+                let started = Instant::now();
+                let mut drawn = 0;
+                let batch = if fresh {
+                    PREWARM_LINES
+                } else {
+                    PREWARM_LATER_LINES
+                };
+                for (_, text, tr) in lines.iter().skip(last + 1).take(batch) {
                     let rows = rows_of(text, tr);
-                    if !is_cached(win, &rows, style) {
+                    if is_cached(win, &rows, style) {
+                        continue;
+                    }
+                    if fresh {
+                        let rows: Vec<(&str, f32)> =
+                            rows.iter().map(|(t, f)| (t.as_str(), *f)).collect();
+                        cached(gfx, win, &rows, style)?;
+                        drawn += 1;
+                    } else {
                         win.prewarm.push((rows, style));
                     }
+                }
+                if drawn > 0 {
+                    frame_log_line(&format!(
+                        "load batch {drawn} lines took {:.3} ms, cache {} surfaces {:.1} MiB",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        win.cache.len(),
+                        cache_bytes(win) as f64 / 1048576.0
+                    ));
                 }
             }
         }
@@ -2496,12 +2528,24 @@ fn is_cached(win: &Win, rows: &[(String, f32)], style: TextStyle) -> bool {
     win.cache.contains_key(&raster_key(&rows, style))
 }
 
+/// Bytes of the window's cached line surfaces (BGRA, 4 bytes per pixel).
+fn cache_bytes(win: &Win) -> u64 {
+    win.cache
+        .values()
+        .map(|r| r.surface.width as u64 * r.surface.height as u64 * 4)
+        .sum()
+}
+
 fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
     let key = raster_key(rows, style);
     if let Some(r) = win.cache.get(&key) {
         return Ok(r.clone());
     }
     let raster = Rc::new(rasterise(gfx, &RasterRequest { rows, style })?);
+    frame_log_line(&format!(
+        "raster {}x{}",
+        raster.surface.width, raster.surface.height
+    ));
     win.cache.insert(key, raster.clone());
     Ok(raster)
 }

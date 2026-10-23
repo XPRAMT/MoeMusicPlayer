@@ -384,8 +384,30 @@ object FloatingLyricsRules {
      * Keep the overlay fully on the whole display, status bar area included (sizes in px; a view larger than the
      * screen sticks to the top-left).
      */
-    fun clampPosition(x: Int, y: Int, width: Int, height: Int, screenWidth: Int, screenHeight: Int): Pair<Int, Int> =
-        Pair(x.coerceIn(0, maxOf(0, screenWidth - width)), y.coerceIn(0, maxOf(0, screenHeight - height)))
+    /**
+     * Keeps the panel's lyric text area on the screen; the transparent `inset`s (the side margin left of the lyric
+     * area, the margin right of the lock so it stays reachable, the room above and below the lyric area) may go past
+     * the edges.
+     */
+    fun clampPosition(
+        x: Int, y: Int, width: Int, height: Int, screenWidth: Int, screenHeight: Int,
+        insetLeft: Int = 0, insetTop: Int = 0, insetRight: Int = 0, insetBottom: Int = 0,
+    ): Pair<Int, Int> = Pair(
+        x.coerceIn(-insetLeft, maxOf(-insetLeft, screenWidth - width + insetRight)),
+        y.coerceIn(-insetTop, maxOf(-insetTop, screenHeight - height + insetBottom)),
+    )
+
+    /** Transparent room above (and below) the lyric area: the panel is text height × 1.5, the area × 1.1, centred. */
+    fun textVerticalInset(panelHeight: Int): Int = maxOf(0, panelHeight * 2 / 15)
+
+    /**
+     * A width change keeps the lyric area's horizontal centre: the new left edge of a panel that was `oldWidth` wide
+     * at `left` and becomes `newWidth` (`lead` = margin left of the lyric area, `trail` = lock column plus margin).
+     */
+    fun resizeAroundCentre(left: Int, oldWidth: Int, newWidth: Int, lead: Int, trail: Int): Int {
+        val centre2 = 2 * (left + lead) + maxOf(0, oldWidth - lead - trail)
+        return Math.floorDiv(centre2 - maxOf(0, newWidth - lead - trail), 2) - lead
+    }
 
     /**
      * Edge fade of the lyric area (same as `lyricsEdgeFadeWidth`, player-lyrics-rules): a square zone on each side,

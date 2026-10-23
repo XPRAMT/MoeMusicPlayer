@@ -295,7 +295,7 @@ object FloatingLyricsOverlay {
         val layout = params ?: return
         if (dx == 0 && dy == 0) return
         val (screenWidth, screenHeight) = screenSize(context)
-        val (x, y) = FloatingLyricsRules.clampPosition(
+        val (x, y) = clampToText(
             layout.x + dx.coerceIn(-1, 1), layout.y + dy.coerceIn(-1, 1), layout.width, view.height, screenWidth, screenHeight,
         )
         layout.x = x
@@ -319,6 +319,14 @@ object FloatingLyricsOverlay {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
         } catch (_: Exception) {
         }
+    }
+
+    /** `FloatingLyricsRules.clampPosition` with this panel's insets: only the lyric text area must stay on screen. */
+    private fun clampToText(x: Int, y: Int, width: Int, height: Int, screenWidth: Int, screenHeight: Int): Pair<Int, Int> {
+        val context = appContext ?: return FloatingLyricsRules.clampPosition(x, y, width, height, screenWidth, screenHeight)
+        val margin = marginPx(context)
+        val room = FloatingLyricsRules.textVerticalInset(height)
+        return FloatingLyricsRules.clampPosition(x, y, width, height, screenWidth, screenHeight, margin, room, margin, room)
     }
 
     private fun savePosition(context: Context, layout: WindowManager.LayoutParams) {
@@ -362,6 +370,9 @@ object FloatingLyricsOverlay {
     }
 
     /** After a rotation: that orientation's width and saved position, or the centre when it has none. */
+    /** Set while `applyOrientation` restyles, so a width change from the rotation is not taken for the slider. */
+    private var rotating = false
+
     private fun applyOrientation() {
         val view = root ?: return
         val layout = params ?: return
@@ -369,14 +380,19 @@ object FloatingLyricsOverlay {
         val landscape = isLandscape(context)
         if (shownLandscape == landscape) return
         shownLandscape = landscape
-        applyLook()
+        rotating = true
+        try {
+            applyLook()
+        } finally {
+            rotating = false
+        }
         layout.width = overlayWidth(context)
         val prefs = prefs(context)
         val (keyX, keyY) = positionKeys(context)
         if (prefs.contains(keyX) && prefs.contains(keyY)) {
             val (screenWidth, screenHeight) = screenSize(context)
             val height = if (view.height > 0) view.height else view.measuredHeight
-            val (x, y) = FloatingLyricsRules.clampPosition(
+            val (x, y) = clampToText(
                 prefs.getInt(keyX, 0), prefs.getInt(keyY, 0), layout.width, height, screenWidth, screenHeight,
             )
             layout.x = x
@@ -505,10 +521,20 @@ object FloatingLyricsOverlay {
         val layout = params
         if (view != null && layout != null) {
             val width = overlayWidth(context)
-            if (layout.width != width) {
+            if (layout.width != width && rotating) {
+                // A rotation: that orientation's own width; `applyOrientation` places it.
                 layout.width = width
-                val (screenWidth, _) = screenSize(context)
-                layout.x = layout.x.coerceIn(0, maxOf(0, screenWidth - width))
+            } else if (layout.width != width) {
+                // The 寬度 slider: grow or shrink around the lyric area's centre, then keep the text on screen; saved.
+                val margin = marginPx(context)
+                val x = FloatingLyricsRules.resizeAroundCentre(layout.x, layout.width, width, margin, lockPx(context) + margin)
+                layout.width = width
+                val (screenWidth, screenHeight) = screenSize(context)
+                val height = if (view.height > 0) view.height else view.measuredHeight
+                val (cx, cy) = clampToText(x, layout.y, width, height, screenWidth, screenHeight)
+                layout.x = cx
+                layout.y = cy
+                savePosition(context, layout)
                 try {
                     (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
                 } catch (_: Exception) {
@@ -706,7 +732,7 @@ object FloatingLyricsOverlay {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val (screenWidth, screenHeight) = screenSize(context)
-                    val (x, y) = FloatingLyricsRules.clampPosition(
+                    val (x, y) = clampToText(
                         startX + (event.rawX - touchX).toInt(),
                         startY + (event.rawY - touchY).toInt(),
                         view.width,

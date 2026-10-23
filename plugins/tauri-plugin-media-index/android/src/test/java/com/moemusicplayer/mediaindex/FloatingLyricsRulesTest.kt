@@ -260,6 +260,25 @@ class FloatingLyricsRulesTest {
         assertEquals(Pair(0, 10), FloatingLyricsRules.clampPosition(10, 10, 2_000, 200, 1_080, 2_400))
     }
 
+    @Test
+    fun theTextEdgeMayTouchTheScreenEdgeWhileTheMarginsGoPast() {
+        // 7 px side margins, 20 px room above and below: the panel hangs out by exactly that.
+        assertEquals(Pair(-7, -20), FloatingLyricsRules.clampPosition(-300, -300, 1_000, 150, 1_080, 2_400, 7, 20, 7, 20))
+        assertEquals(Pair(87, 2_270), FloatingLyricsRules.clampPosition(900, 3_000, 1_000, 150, 1_080, 2_400, 7, 20, 7, 20))
+        assertEquals(20, FloatingLyricsRules.textVerticalInset(150))
+    }
+
+    @Test
+    fun aWidthChangeKeepsTheLyricAreaCentre() {
+        val centre = { left: Int, width: Int -> left + 7 + (width - 84) / 2 }
+        val wider = FloatingLyricsRules.resizeAroundCentre(500, 1_000, 1_400, 7, 77)
+        assertEquals(300, wider)
+        assertEquals(centre(500, 1_000), centre(wider, 1_400))
+        val narrower = FloatingLyricsRules.resizeAroundCentre(500, 1_000, 600, 7, 77)
+        assertEquals(700, narrower)
+        assertEquals(centre(500, 1_000), centre(narrower, 600))
+    }
+
     // Continuous strip fade: lines start at 1 000, 2 000 and 4 000 ms; a line fades over the 200 ms before the next starts.
     private fun weights(lyricsMs: Long) = (0..2).map { FloatingLyricsRules.cellWeight(starts, it, lyricsMs) }
 
