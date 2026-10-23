@@ -40,7 +40,8 @@ struct Env {
 fn env() -> Option<Env> {
     let host = std::env::var("MOE_WEBDAV_HOST").ok()?;
     let port = std::env::var("MOE_WEBDAV_PORT").ok()?.parse().ok()?;
-    let creds = std::fs::read_to_string(std::env::var("MOE_WEBDAV_CRED_FILE").ok()?).ok()?;
+    let creds = std::fs::read_to_string(std::env::var("MOE_WEBDAV_CRED_FILE").ok()?)
+        .expect("MOE_WEBDAV_CRED_FILE is readable");
     let value = |key: &str| {
         creds.lines().find_map(|line| {
             line.trim()
@@ -50,7 +51,9 @@ fn env() -> Option<Env> {
     };
     let pin = match std::env::var("MOE_WEBDAV_CERT_SHA256") {
         Ok(pin) => pin.replace(':', "").to_ascii_lowercase(),
-        Err(_) => player_remote::tls::probe_certificate_sha256(&host, port).ok()?,
+        // Configured but unreachable is a failure, not a skip.
+        Err(_) => player_remote::tls::probe_certificate_sha256(&host, port)
+            .unwrap_or_else(|error| panic!("cannot reach {host}:{port}: {error}")),
     };
     Some(Env {
         host,
@@ -574,11 +577,19 @@ fn a_restarted_server_is_reconnected_and_a_frozen_one_is_found_within_seconds() 
         std::env::var("MOE_WEBDAV_STALL_CMD"),
         std::env::var("MOE_WEBDAV_RESUME_CMD"),
     ) {
+        // The server is thawed however this ends, even when a step panics: never leave it frozen.
+        struct Thaw(String);
+        impl Drop for Thaw {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("cmd").args(["/C", &self.0]).status();
+            }
+        }
+        let thaw = Thaw(resume);
         run(&stall);
         let started = Instant::now();
         let result = file.read_at(1024, &mut buf);
         let waited = started.elapsed();
-        run(&resume);
+        drop(thaw);
         assert!(matches!(result, Err(RemoteError::Network(_))), "{result:?}");
         assert!(waited < Duration::from_secs(25), "found in {waited:?}");
         println!(
