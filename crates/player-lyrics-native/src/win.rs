@@ -35,7 +35,7 @@ use windows::Win32::System::WinRT::{
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+    ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Color;
@@ -880,6 +880,8 @@ struct Shared {
     lock_rect: Cell<RECT>,
     mouse_inside: Cell<bool>,
     over_lock: Cell<bool>,
+    /// A mouse drag in move mode: (cursor at the button press, window top-left then), screen px.
+    drag: Cell<Option<(POINT, POINT)>>,
 }
 
 enum Pending {
@@ -887,6 +889,7 @@ enum Pending {
     LockClicked(String),
     Moved(String, i32, i32),
     Close(String),
+    DragEnded(String),
 }
 
 thread_local! {
@@ -961,21 +964,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if s.kind == Kind::Taskbar {
                 return LRESULT(HTTRANSPARENT as isize);
             }
-            let mut p = lparam_point(lparam);
-            let _ = ScreenToClient(hwnd, &mut p);
-            if in_rect(s.lock_rect.get(), p.x, p.y) || s.locked.get() {
-                LRESULT(HTCLIENT as isize)
-            } else {
-                LRESULT(HTCAPTION as isize)
-            }
+            // Move mode drags with our own capture (`WM_LBUTTONDOWN`), not the system caption drag: that one keeps
+            // the window on screen and stops before the transparent margins can leave it (ADR 0032 placement).
+            LRESULT(HTCLIENT as isize)
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_SETCURSOR => {
-            let hit = (lparam.0 & 0xffff) as u32;
-            let cursor = if hit == HTCAPTION {
-                IDC_SIZEALL
-            } else if s.over_lock.get() {
+            let cursor = if s.over_lock.get() {
                 IDC_HAND
+            } else if s.kind == Kind::Floating && !s.locked.get() {
+                IDC_SIZEALL
             } else {
                 IDC_ARROW
             };
@@ -985,7 +983,47 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(1)
         }
         WM_MOUSEMOVE => {
+            if let Some((cursor, origin)) = s.drag.get() {
+                let mut now = POINT::default();
+                if GetCursorPos(&mut now).is_ok() {
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        origin.x + now.x - cursor.x,
+                        origin.y + now.y - cursor.y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+                return LRESULT(0);
+            }
             mouse_at(hwnd, s, lparam_point(lparam), false);
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN if s.kind == Kind::Floating && !s.locked.get() => {
+            let p = lparam_point(lparam);
+            let mut cursor = POINT::default();
+            let mut r = RECT::default();
+            if !in_rect(s.lock_rect.get(), p.x, p.y)
+                && GetCursorPos(&mut cursor).is_ok()
+                && GetWindowRect(hwnd, &mut r).is_ok()
+            {
+                s.drag.set(Some((
+                    cursor,
+                    POINT {
+                        x: r.left,
+                        y: r.top,
+                    },
+                )));
+                SetCapture(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            if s.drag.take().is_some() {
+                push(Pending::DragEnded(s.id.clone()));
+            }
             LRESULT(0)
         }
         WM_NCMOUSEMOVE => {
@@ -1003,6 +1041,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            if s.drag.get().is_some() {
+                // WM_CAPTURECHANGED ends the drag.
+                let _ = ReleaseCapture();
+                return LRESULT(0);
+            }
             let p = lparam_point(lparam);
             if in_rect(s.lock_rect.get(), p.x, p.y) {
                 push(Pending::LockClicked(s.id.clone()));
@@ -1147,6 +1190,7 @@ fn create_window(id: &str, kind: Kind, owner: Option<isize>) -> Result<HWND> {
             lock_rect: Cell::new(RECT::default()),
             mouse_inside: Cell::new(false),
             over_lock: Cell::new(false),
+            drag: Cell::new(None),
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(shared) as isize);
         SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
@@ -1464,7 +1508,7 @@ impl Renderer {
             }
         }
         if count > 0 {
-            let bytes: u64 = self.windows.values().map(cache_bytes).sum();
+            let bytes = shared_bytes();
             frame_log_line(&format!(
                 "prewarm {count} lines took {:.3} ms, all caches {:.1} MiB",
                 started.elapsed().as_secs_f64() * 1000.0,
@@ -1775,11 +1819,13 @@ impl Renderer {
                 Pending::LockClicked(id) => self.events.lock_clicked(&id),
                 Pending::Moved(id, x, y) => self.events.moved(&id, x, y),
                 Pending::Close(id) => self.events.close_requested(&id),
+                Pending::DragEnded(id) => self.events.drag_ended(&id),
             }
         }
     }
 
     fn forget_surfaces(&mut self) {
+        SHARED.with(|s| s.borrow_mut().clear());
         for win in self.windows.values_mut() {
             win.cache.clear();
             win.measured = None;
@@ -2246,10 +2292,11 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 }
                 if drawn > 0 {
                     frame_log_line(&format!(
-                        "load batch {drawn} lines took {:.3} ms, cache {} surfaces {:.1} MiB",
+                        "load batch {drawn} lines took {:.3} ms, window holds {} surfaces {:.1} MiB, all                          windows {:.1} MiB (shared counted once)",
                         started.elapsed().as_secs_f64() * 1000.0,
                         win.cache.len(),
-                        cache_bytes(win) as f64 / 1048576.0
+                        cache_bytes(win) as f64 / 1048576.0,
+                        shared_bytes() as f64 / 1048576.0
                     ));
                 }
             }
@@ -2536,12 +2583,34 @@ fn cache_bytes(win: &Win) -> u64 {
         .sum()
 }
 
+thread_local! {
+    /// Line rasters shared by every window on the renderer thread (`shared_cache`): a key that matches another
+    /// window's (same text, font px at its DPI, colour, effect, line height) reuses its surface.
+    static SHARED: RefCell<crate::shared_cache::SharedCache<Raster>> =
+        RefCell::new(crate::shared_cache::SharedCache::default());
+}
+
+/// Bytes of all line surfaces some window still holds, each counted once.
+fn shared_bytes() -> u64 {
+    SHARED.with(|s| {
+        s.borrow()
+            .live()
+            .map(|r| r.surface.width as u64 * r.surface.height as u64 * 4)
+            .sum()
+    })
+}
+
 fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
     let key = raster_key(rows, style);
     if let Some(r) = win.cache.get(&key) {
         return Ok(r.clone());
     }
+    if let Some(r) = SHARED.with(|s| s.borrow_mut().get(&key)) {
+        win.cache.insert(key, r.clone());
+        return Ok(r);
+    }
     let raster = Rc::new(rasterise(gfx, &RasterRequest { rows, style })?);
+    SHARED.with(|s| s.borrow_mut().insert(key.clone(), &raster));
     frame_log_line(&format!(
         "raster {}x{}",
         raster.surface.width, raster.surface.height

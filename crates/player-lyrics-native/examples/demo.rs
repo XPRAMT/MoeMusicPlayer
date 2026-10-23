@@ -142,7 +142,15 @@ fn main() {
         let id = format!("taskbar-lyrics-{i}");
         let bar = r.create(&id, Kind::Taskbar, None).unwrap();
         r.set_look(&id, Some(look(20.0)));
-        place(bar, 200, 600 + 130 * i as i32, 1200, 96);
+        // `MOE_DEMO_SECOND_AT=x,y`: the second taskbar-style window there (e.g. on a monitor with another DPI).
+        let second = std::env::var("MOE_DEMO_SECOND_AT").ok().and_then(|v| {
+            let (x, y) = v.split_once(',')?;
+            Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+        });
+        match second {
+            Some((x, y)) if i == 1 => place(bar, x, y, 1200, 96),
+            _ => place(bar, 200, 600 + 130 * i as i32, 1200, 96),
+        }
     }
     std::thread::sleep(std::time::Duration::from_secs(seconds));
     r.shutdown();

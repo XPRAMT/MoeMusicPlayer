@@ -35,6 +35,11 @@ impl Events for AppEvents {
             }
         });
     }
+    fn drag_ended(&self, id: &str) {
+        if crate::floating_lyrics::is_window_label(id) {
+            crate::floating_lyrics::settle_after_drag();
+        }
+    }
     fn moved(&self, id: &str, x: i32, y: i32) {
         if crate::floating_lyrics::is_window_label(id) {
             crate::floating_lyrics::remember_position(&self.0, PhysicalPosition::new(x, y));

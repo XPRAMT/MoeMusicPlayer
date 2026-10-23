@@ -292,3 +292,9 @@ every placement: drag check, saved position restore, nudge, centre-axis, reset a
 horizontal centre (`resize_around_centre` / `resizeAroundCentre`, the centre that 水平置中 aligns), then the clamp
 shifts the panel just enough and the result is saved like a drag; on Android per orientation, and a rotation's own
 width change does not count as a resize.
+
+Mouse dragging in move mode (Windows, 2026-10-24) no longer goes through `HTCAPTION`: the system caption drag keeps the
+window on screen and stopped before the transparent margins could leave it. The window now captures the mouse on a
+button press outside the padlock and follows the cursor with `SetWindowPos`; on release (`WM_CAPTURECHANGED`) the app
+applies the placement rule once (`settle_after_drag`), and the move events still save the position 700 ms after moving
+stops. Android's drag already clamps with the text insets on every move.

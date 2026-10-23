@@ -579,6 +579,21 @@ pub fn nudge(_app: &AppHandle, dx: i32, dy: i32) {
     }
 }
 
+/// A mouse drag ended: apply the placement rule (only the lyric text area must stay in the work area) to where it
+/// was dropped; the move event saves the result.
+pub fn settle_after_drag() {
+    let Some(window) = window() else { return };
+    if let Some(rect) = window.rect() {
+        place(
+            window,
+            Some(FloatingLyricsPosition {
+                x: rect.left,
+                y: rect.top,
+            }),
+        );
+    }
+}
+
 /// Stop the watcher and close the window.
 pub fn shutdown(app: &AppHandle) {
     if let Some(stop) = STOP.lock().ok().and_then(|mut guard| guard.take()) {

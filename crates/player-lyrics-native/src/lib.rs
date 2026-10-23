@@ -13,6 +13,7 @@
 
 pub mod plan;
 pub mod sampling;
+pub mod shared_cache;
 
 pub use player_lyrics_rules::{Align, Animation, TextEffect};
 
@@ -133,6 +134,8 @@ pub trait Events: Send + Sync + 'static {
     fn has_translation(&self, id: &str, has: bool);
     /// Something asked the window to close (WM_CLOSE, e.g. logoff): close the app the normal way.
     fn close_requested(&self, id: &str);
+    /// A mouse drag of the window ended (move mode): the owner applies its placement rule to the final position.
+    fn drag_ended(&self, _id: &str) {}
 }
 
 /// Floating layout constants (`FLOATING_LYRICS_LAYOUT`, floating_lyrics.rs).
