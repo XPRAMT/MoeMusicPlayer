@@ -91,6 +91,7 @@ enum Cmd {
         delay_sec: f64,
     },
     Shutdown,
+    Clock(crate::ClockSource),
 }
 
 /// Handle to the renderer thread. Cheap to clone; every call only posts a command.
@@ -173,6 +174,11 @@ impl NativeLyrics {
             track_id: track_id.to_owned(),
             delay_sec,
         });
+    }
+    /// The audio engine's clock: while it is set, the glide follows it (page samples then only carry the track,
+    /// state and duration).
+    pub fn set_clock_source(&self, source: crate::ClockSource) {
+        self.send(Cmd::Clock(source));
     }
     pub fn shutdown(&self) {
         self.send(Cmd::Shutdown);
@@ -1242,6 +1248,9 @@ struct Renderer {
     delay: Option<(String, f64)>,
     events: Arc<dyn Events>,
     dirty: Vec<String>,
+    source: Option<crate::ClockSource>,
+    sync: plan::AudioSync,
+    last_reading: Option<Instant>,
     /// False on Windows older than 10 1809, or without a dispatcher queue: no lyrics windows at all.
     supported: bool,
 }
@@ -1285,6 +1294,9 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         delay: None,
         events,
         dirty: Vec::new(),
+        source: None,
+        sync: plan::AudioSync::default(),
+        last_reading: None,
     };
     let mut last_check = Instant::now();
     loop {
@@ -1316,6 +1328,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
                 r.rebuild_devices();
             }
         }
+        r.audio_sync();
         r.refresh_dirty();
         if r.windows.values().any(|w| w.moving_until.is_some()) {
             // Per-frame commit: sample every moving window for the next frame, commit (the message pump runs the
@@ -1356,9 +1369,27 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
     }
 }
 
-/// Diagnostics: with `MOE_LYRICS_FRAME_LOG=<file>` every sampled frame appends `id wake_ms sample_ms offset` (the
-/// first per-frame property, the strip or the first row, as written; ms since the first logged frame).
-fn frame_log(id: &str, woke: Instant, frame: Instant, win: &Win) {
+/// Diagnostics: with `MOE_LYRICS_FRAME_LOG=<file>` every sampled frame appends
+/// `<ms> frame <id> <wake_ms> <sample_ms> <clock_ms> <offset>` (the renderer's playback clock at the sample time and
+/// the first per-frame property, the strip or the first row, as written) and every new audio-clock reading
+/// `<ms> audio <dt_ms> <audio_ms> <predicted_ms> <error_ms>`; ms since the first logged line.
+fn frame_log(id: &str, woke: Instant, frame: Instant, clock_ms: f64, win: &Win) {
+    let Some(first) = win.live.first() else {
+        return;
+    };
+    let written = first.written;
+    frame_log_write(|ms| {
+        format!(
+            "{:.3} frame {id} {:.3} {:.3} {clock_ms:.3} {written}
+",
+            ms(woke),
+            ms(woke),
+            ms(frame)
+        )
+    });
+}
+
+fn frame_log_write(line: impl FnOnce(&dyn Fn(Instant) -> f64) -> String) {
     use std::io::Write;
     use std::sync::Mutex;
     type FrameLog = Mutex<(std::io::BufWriter<std::fs::File>, Instant)>;
@@ -1370,16 +1401,17 @@ fn frame_log(id: &str, woke: Instant, frame: Instant, win: &Win) {
     }) else {
         return;
     };
-    let Some(first) = win.live.first() else {
-        return;
-    };
     if let Ok(mut g) = log.lock() {
         let start = g.1;
-        let ms = |t: Instant| t.saturating_duration_since(start).as_secs_f64() * 1000.0;
-        let line = format!("{id} {:.3} {:.3} {}\n", ms(woke), ms(frame), first.written);
-        let _ = g.0.write_all(line.as_bytes());
+        let text = line(&|t: Instant| t.saturating_duration_since(start).as_secs_f64() * 1000.0);
+        let _ = g.0.write_all(text.as_bytes());
         let _ = g.0.flush();
     }
+}
+
+/// A free-form line in the frame log (`MOE_LYRICS_FRAME_LOG`).
+fn frame_log_line(line: &str) {
+    frame_log_write(|ms| format!("{} {line}\n", ms(Instant::now())));
 }
 
 /// Dispatches the thread's messages (window messages, the dispatcher queue and so the composition commit).
@@ -1412,7 +1444,7 @@ impl Renderer {
                 continue;
             }
             let result = sample_window(win, frame);
-            frame_log(id, woke, frame, win);
+            frame_log(id, woke, frame, self.clock.position(frame), win);
             match result {
                 Ok(_) => {}
                 Err(e) if is_device_loss(&e) => lost = true,
@@ -1421,6 +1453,68 @@ impl Renderer {
         }
         if lost {
             self.rebuild_devices();
+        }
+    }
+
+    /// Compares each new audio-clock reading with the renderer's clock; a window's mean error corrects the clock
+    /// gently (or jumps on a seek or stall).
+    fn audio_sync(&mut self) {
+        if self.clock.state != PlayState::Playing {
+            return;
+        }
+        let Some(reading) = self.source.as_ref().and_then(|s| s()) else {
+            return;
+        };
+        if !reading.playing || self.last_reading == Some(reading.at) {
+            return;
+        }
+        self.last_reading = Some(reading.at);
+        let dt = reading
+            .at
+            .saturating_duration_since(self.clock.at)
+            .as_secs_f64()
+            * 1000.0;
+        if reading.at < self.clock.at {
+            return;
+        }
+        let predicted = self.clock.motion.position(dt);
+        let error = reading.position_ms - predicted;
+        frame_log_line(&format!(
+            "audio {:.3} {:.3} {:.3} {:.3}",
+            dt, reading.position_ms, predicted, error
+        ));
+        let wall = reading
+            .at
+            .saturating_duration_since(self.clock.at)
+            .as_secs_f64()
+            * 1000.0;
+        let Some(mean) = self.sync.observe(wall, error) else {
+            return;
+        };
+        match self.clock.motion.audio_correct(dt, mean) {
+            plan::Correction::Keep => {}
+            plan::Correction::Slew(motion) => {
+                debug_log(&format!(
+                    "audio slew: mean error {mean:.1} rate {:.5}",
+                    motion.rate
+                ));
+                self.clock.motion = motion;
+                self.clock.at = reading.at;
+                self.sync.reset();
+                self.mark_all();
+            }
+            plan::Correction::Jump => {
+                let now = Instant::now();
+                let position = reading.position_ms
+                    + now.saturating_duration_since(reading.at).as_secs_f64() * 1000.0;
+                debug_log(&format!(
+                    "audio jump: mean error {mean:.1} to {position:.0}"
+                ));
+                self.clock.motion = plan::Motion::at(position);
+                self.clock.at = now;
+                self.sync.reset();
+                self.mark_all();
+            }
         }
     }
 
@@ -1496,8 +1590,23 @@ impl Renderer {
                 let same = self.clock.track_id == sample.track_id
                     && self.clock.state == sample.state
                     && self.clock.duration_ms == sample.duration_ms;
+                // The audio engine's clock, when there is one, is the position (the page's sample is up to
+                // 500 ms old and arrives with a variable latency).
+                let reading = self.source.as_ref().and_then(|s| s());
+                let mut sample = sample;
+                if let Some(r) = reading {
+                    sample.position_ms = r.position_ms
+                        + if r.playing && sample.state == PlayState::Playing {
+                            now.saturating_duration_since(r.at).as_secs_f64() * 1000.0
+                        } else {
+                            0.0
+                        };
+                }
                 let correction = if !same {
                     plan::Correction::Jump
+                } else if sample.state == PlayState::Playing && reading.is_some() {
+                    // Playing on: the audio clock keeps the glide in sync (`audio_sync`).
+                    plan::Correction::Keep
                 } else if sample.state == PlayState::Playing {
                     // Small drift is absorbed by a rate change from the current position (never a step).
                     self.clock
@@ -1530,6 +1639,7 @@ impl Renderer {
                             sample.state,
                             self.clock.track_id == sample.track_id
                         ));
+                        self.sync.reset();
                         self.clock = Clock {
                             track_id: sample.track_id,
                             state: sample.state,
@@ -1558,6 +1668,10 @@ impl Renderer {
                 }
             }
             Cmd::Shutdown => return false,
+            Cmd::Clock(source) => {
+                self.source = Some(source);
+                self.sync.reset();
+            }
         }
         true
     }

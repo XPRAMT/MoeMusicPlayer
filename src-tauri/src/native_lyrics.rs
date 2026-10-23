@@ -100,6 +100,22 @@ struct TipsPayload {
 
 static TIPS: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
 
+/// The audio engine's clock for the lyrics glide: the backend's played position and when it was read (shared
+/// mode: rodio's consumed samples minus the delay-line silence; exclusive WASAPI and DoP: frames taken from the ring
+/// minus the endpoint latency; DSD converts to PCM before either). Read from the player's snapshot, which the audio
+/// worker refreshes about every 40 ms; the renderer averages the readings, so their steps do not move the glide.
+fn audio_clock(app: AppHandle) -> player_lyrics_native::ClockSource {
+    Arc::new(move || {
+        let state = app.try_state::<crate::AppState>()?;
+        let snapshot = state.playback.as_ref()?.player.snapshot();
+        Some(player_lyrics_native::AudioClock {
+            position_ms: snapshot.position.as_secs_f64() * 1000.0,
+            at: snapshot.position_at?,
+            playing: snapshot.state == player_audio_windows::PlaybackState::Playing,
+        })
+    })
+}
+
 /// The renderer, started on first use (None when it could not start).
 pub fn renderer(app: &AppHandle) -> Option<&'static NativeLyrics> {
     RENDERER
@@ -108,6 +124,7 @@ pub fn renderer(app: &AppHandle) -> Option<&'static NativeLyrics> {
                 .map_err(|error| eprintln!("lyrics renderer: {error}"))
                 .ok()?;
             listen(app, renderer.clone());
+            renderer.set_clock_source(audio_clock(app.clone()));
             // Ask the main window for the current state now that we listen.
             let _ = app.emit("taskbar-lyrics-request", ());
             let _ = app.emit("taskbar-lyrics-playback-request", ());

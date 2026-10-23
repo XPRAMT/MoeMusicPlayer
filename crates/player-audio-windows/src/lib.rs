@@ -115,6 +115,9 @@ pub struct PlaybackSnapshot {
     pub last_error: Option<AudioError>,
     /// Sample-rate path of the current output; `None` without a backend.
     pub resampling: Option<ResamplingInfo>,
+    /// When `position` was last read from the backend (updates that change it stamp it), so a reader can
+    /// extrapolate the audio position to any instant (the native lyrics clock, ADR 0034).
+    pub position_at: Option<Instant>,
 }
 
 impl Default for PlaybackSnapshot {
@@ -126,6 +129,7 @@ impl Default for PlaybackSnapshot {
             volume: 1.0,
             last_error: None,
             resampling: None,
+            position_at: None,
         }
     }
 }
@@ -2203,7 +2207,12 @@ fn update_snapshot(
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous_state = state.state;
+        let previous_position = state.position;
         update(&mut state);
+        // Only an update that read a new position stamps it (a volume change keeps the old reading's time).
+        if state.position != previous_position || state.position_at.is_none() {
+            state.position_at = Some(Instant::now());
+        }
         (previous_state, state.state)
     };
     if current_state != previous_state {

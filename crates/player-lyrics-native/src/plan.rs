@@ -81,6 +81,63 @@ impl Motion {
     }
 }
 
+/// Audio-clock sync (ADR 0034): the mean error of the audio engine's position readings against the renderer's
+/// clock over this much wall time decides a correction. The readings step with the backend's buffer (a few ms to
+/// tens of ms); the mean over a window cancels that, so the correction is not driven by the steps.
+pub const AUDIO_SYNC_WINDOW_MS: f64 = 1000.0;
+/// A mean error under this is left alone; larger ones up to `CLOCK_JUMP_MS` are absorbed over `AUDIO_SLEW_MS`.
+pub const AUDIO_SYNC_TOLERANCE_MS: f64 = 3.0;
+/// Wall time over which an audio-clock error is absorbed: a 10 ms error changes the speed by 0.25 %.
+pub const AUDIO_SLEW_MS: f64 = 4000.0;
+
+/// The running mean of audio-clock errors over `AUDIO_SYNC_WINDOW_MS`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AudioSync {
+    started_ms: f64,
+    sum: f64,
+    count: usize,
+}
+
+impl AudioSync {
+    pub fn reset(&mut self) {
+        *self = AudioSync::default();
+    }
+
+    /// One reading `error_ms` (audio position minus the renderer's clock, both at the reading's instant) at wall
+    /// time `wall_ms`; returns the window's mean error when the window is complete.
+    pub fn observe(&mut self, wall_ms: f64, error_ms: f64) -> Option<f64> {
+        if self.count == 0 {
+            self.started_ms = wall_ms;
+        }
+        self.sum += error_ms;
+        self.count += 1;
+        if wall_ms - self.started_ms >= AUDIO_SYNC_WINDOW_MS && self.count >= 4 {
+            let mean = self.sum / self.count as f64;
+            self.reset();
+            return Some(mean);
+        }
+        None
+    }
+}
+
+impl Motion {
+    /// The audio-clock correction for a window's mean error `error_ms` at `dt_ms` after the base: keep, a slow
+    /// slew (`AUDIO_SLEW_MS`, so the speed changes by a fraction of a percent), or a jump (a seek or a stall).
+    pub fn audio_correct(&self, dt_ms: f64, error_ms: f64) -> Correction {
+        if error_ms.abs() < AUDIO_SYNC_TOLERANCE_MS {
+            Correction::Keep
+        } else if error_ms.abs() < CLOCK_JUMP_MS {
+            Correction::Slew(Motion {
+                base_ms: self.position(dt_ms),
+                rate: 1.0 + error_ms / AUDIO_SLEW_MS,
+                slew_ms: AUDIO_SLEW_MS,
+            })
+        } else {
+            Correction::Jump
+        }
+    }
+}
+
 /// How many glide breaks (line starts) one plan covers, so a late wake-up never stalls the strip.
 pub const HORIZON_BREAKS: usize = 3;
 
@@ -544,6 +601,44 @@ mod tests {
             }
             last = Some(x);
             w += 1.0;
+        }
+    }
+
+    /// Readings that step like a buffered backend (10 ms chunks, read every 40 ms at arbitrary phases) against an
+    /// exact clock: the window mean stays within the tolerance, so no correction is made; a real 20 ms offset is
+    /// found and absorbed by a speed change under 1 %.
+    #[test]
+    fn audio_sync_ignores_buffer_steps_and_absorbs_real_offsets() {
+        let stepped = |t: f64| (t / 10.0).floor() * 10.0 + 5.0;
+        let motion = Motion::at(0.0);
+        let mut sync = AudioSync::default();
+        let mut decisions = Vec::new();
+        let mut t = 0.0;
+        while t < 10_000.0 {
+            let at = t + (t * 0.37) % 7.0;
+            if let Some(e) = sync.observe(at, stepped(at) - motion.position(at)) {
+                decisions.push(motion.audio_correct(at, e));
+            }
+            t += 40.0;
+        }
+        assert!(decisions.len() >= 8);
+        assert!(
+            decisions.iter().all(|d| *d == Correction::Keep),
+            "{decisions:?}"
+        );
+        let mut sync = AudioSync::default();
+        let mut t = 0.0;
+        let found = loop {
+            let at = t + (t * 0.37) % 7.0;
+            if let Some(e) = sync.observe(at, stepped(at) + 20.0 - motion.position(at)) {
+                break e;
+            }
+            t += 40.0;
+        };
+        assert!((found - 20.0).abs() < 3.0, "{found}");
+        match motion.audio_correct(t, found) {
+            Correction::Slew(m) => assert!((m.rate - 1.0).abs() < 0.01),
+            other => panic!("{other:?}"),
         }
     }
 

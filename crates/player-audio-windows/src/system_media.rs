@@ -679,6 +679,7 @@ mod tests {
                 volume: 0.8,
                 last_error: None,
                 resampling: None,
+                position_at: None,
             },
             metadata: None,
             capabilities: MediaControlCapabilities::default(),

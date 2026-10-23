@@ -60,6 +60,17 @@ impl PlayState {
     }
 }
 
+/// A reading of the audio engine's own clock: the backend's played position `position_ms` as read at `at`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioClock {
+    pub position_ms: f64,
+    pub at: std::time::Instant,
+    pub playing: bool,
+}
+
+/// Reads the audio engine's clock (cheap; called on every frame while lyrics move).
+pub type ClockSource = std::sync::Arc<dyn Fn() -> Option<AudioClock> + Send + Sync>;
+
 /// One playback sample forwarded by the main window (ADR 0028).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackSample {
