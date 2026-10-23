@@ -345,7 +345,7 @@
     .album-detail-shell.scroll-driven-collapse { timeline-scope: --album-detail-scroll; }
 
     .album-detail-shell.scroll-driven-collapse .album-detail-art {
-      animation: album-detail-cover-collapse auto linear both, album-detail-cover-radius auto linear both;
+      animation: album-detail-cover-collapse auto linear both;
       animation-duration: 1s;
       animation-timeline: --album-detail-scroll;
       animation-range: 0px var(--album-detail-collapse-range);
@@ -363,15 +363,6 @@
       to { transform: scale(var(--album-detail-cover-end-scale, 1)); }
     }
 
-    /* Keeps the visual corner radius at 10px: layout radius = 10px / scale (paint only, no layout). */
-    @keyframes album-detail-cover-radius {
-      from { border-radius: 10px; }
-      25% { border-radius: calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * 0.25)); }
-      50% { border-radius: calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * 0.5)); }
-      75% { border-radius: calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * 0.75)); }
-      to { border-radius: calc(10px / var(--album-detail-cover-end-scale, 1)); }
-    }
-
     @keyframes album-detail-summary-collapse {
       from { transform: translate(0, 0); }
       to { transform: translate(calc(var(--album-detail-collapse-range, 0px) * -1), calc(var(--album-detail-collapse-range, 0px) * -0.5)); }
@@ -380,7 +371,7 @@
   .album-detail-heading > * { pointer-events:auto; }
   .album-detail-art {
     width:var(--album-detail-cover-base-size,200px); height:var(--album-detail-cover-base-size,200px); flex:0 0 var(--album-detail-cover-base-size,200px); aspect-ratio:1; overflow:hidden; background:#000;
-    border-radius:calc(10px / (1 - (1 - var(--album-detail-cover-end-scale, 1)) * var(--album-detail-collapse-progress, 0)));
+    border-radius:0;
     transform-origin:0 0;
     transform:scale(calc(1 - (1 - var(--album-detail-cover-end-scale, 1)) * var(--album-detail-collapse-progress, 0)));
     will-change:transform;

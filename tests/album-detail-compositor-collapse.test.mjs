@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const albumDetail = read('src/lib/AlbumDetail.svelte');
+const albumCard = read('src/lib/AlbumCard.svelte');
 const pagedList = read('src/lib/PagedVirtualList.svelte');
 
 /** Declaration names used inside `@keyframes <name> { ... }` (nested keyframe blocks included). */
@@ -32,8 +33,7 @@ test('album cover and heading collapse animate only transform (compositor), neve
   assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-cover-collapse')], ['transform']);
   assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-summary-collapse')], ['transform']);
   assert.deepEqual([...keyframeProperties(pagedList, 'album-detail-grid-header-collapse')], ['transform']);
-  // The only non-transform animation keeps the visual corner radius constant (paint only, no layout).
-  assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-cover-radius')], ['border-radius']);
+  assert.doesNotMatch(albumDetail, /album-detail-cover-radius/);
   assert.doesNotMatch(albumDetail, /@keyframes album-detail-heading-collapse/);
 });
 
@@ -44,9 +44,18 @@ test('album cover is laid out at its base size and only scaled from the top-left
   assert.match(art, /transform-origin:0 0/);
   assert.match(art, /will-change:transform/);
   assert.match(art, /transform:scale\(/);
+  assert.match(art, /border-radius:0/);
   assert.doesNotMatch(art, /--album-detail-cover-size/);
   assert.match(albumDetail, /\.album-detail-heading \{[^}]*height:var\(--album-detail-heading-base-height\)/);
   assert.doesNotMatch(albumDetail, /--album-detail-heading-height|--album-detail-cover-size|--album-detail-cover-min-size/);
+});
+
+test('album index cards and album detail cover use square corners', () => {
+  const cardArt = albumCard.match(/\.album-card-art \{([^}]*)\}/)?.[1] ?? '';
+  const detailArt = albumDetail.match(/\n  \.album-detail-art \{([^}]*)\}/)?.[1] ?? '';
+  assert.match(cardArt, /border-radius:0/);
+  assert.match(detailArt, /border-radius:0/);
+  assert.doesNotMatch(albumDetail, /album-detail-cover-radius/);
 });
 
 test('scroll events write no album heading styles when CSS scroll timelines are supported', () => {
