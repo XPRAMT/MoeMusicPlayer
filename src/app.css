@@ -3675,6 +3675,13 @@ input:focus-visible {
   object-fit: cover;
 }
 
+.app-shell[data-active-view="albums"] .dock-art,
+.app-shell[data-active-view="album-detail"] .dock-art,
+.app-shell[data-active-view="albums"] .dock-art-image,
+.app-shell[data-active-view="album-detail"] .dock-art-image {
+  border-radius: 0;
+}
+
 .dock-track-copy {
   display: flex;
   min-width: 0;

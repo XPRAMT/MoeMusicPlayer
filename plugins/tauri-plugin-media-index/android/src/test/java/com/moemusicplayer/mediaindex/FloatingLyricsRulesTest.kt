@@ -153,6 +153,14 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
+    fun finalContinuousLineArrivalUsesFiveHundredMillisecondsPerGraphemeAndTrackEndCap() {
+        assertEquals(7_000L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "最後一句", null))
+        assertEquals(6_200L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "最後一句", 6_200L))
+        assertEquals(6_500L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "Aか\u3099🙂", null))
+        assertEquals(5_500L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "", null))
+    }
+
+    @Test
     fun stripWindowDrawsOnlyNearbyCells() {
         val starts = FloatArray(100) { it * 110f }
         val widths = FloatArray(100) { 100f }

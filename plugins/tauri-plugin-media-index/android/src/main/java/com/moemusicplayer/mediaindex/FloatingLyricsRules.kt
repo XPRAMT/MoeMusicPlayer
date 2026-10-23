@@ -8,6 +8,19 @@
 object FloatingLyricsRules {
     /** How long the last line of a track is assumed to stay when the track length is unknown. */
     const val LAST_LINE_FALLBACK_MS = 5_000L
+    /** Terminal continuous-lyrics glide estimate per user-perceived character. */
+    const val LYRICS_MS_PER_GRAPHEME = 500L
+
+    /** Estimate the terminal glide end from the last line's graphemes, capped at track end when known. */
+    fun finalLineArrivalMs(lineStartMs: Long, text: String, trackEndMs: Long?): Long {
+        val iterator = java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
+        iterator.setText(text)
+        var graphemes = 0
+        iterator.first()
+        while (iterator.next() != java.text.BreakIterator.DONE) graphemes++
+        val estimated = lineStartMs + maxOf(1, graphemes) * LYRICS_MS_PER_GRAPHEME
+        return trackEndMs?.let { minOf(estimated, it) } ?: estimated
+    }
 
     /** Same range as settings.rs `OPACITY_RANGE_PERCENT`. */
     fun opacityPercent(value: Int): Int = value.coerceIn(1, 100)
@@ -87,8 +100,8 @@ object FloatingLyricsRules {
     /**
      * Shift of the strip (px) at lyrics time `lyricsMs` (position + offset): the current line's anchor on the alignment
      * point, gliding linearly to the next line's anchor until that line starts; rests on the first line before it and on
-     * the last one when track duration is unknown. When duration is known, the last main-text glyph centre reaches the
-     * alignment point at track end.
+       * the last one when there is no terminal glide interval. The final main-text glyph centre reaches the alignment
+       * point at the estimated terminal arrival (500 ms per grapheme, capped at track end).
      */
     fun stripOffset(
         startTimesMs: LongArray,
@@ -98,7 +111,7 @@ object FloatingLyricsRules {
         lyricsMs: Long,
         viewWidth: Float,
         targetAlign: String = align,
-        durationMs: Long? = null,
+        finalArrivalMs: Long? = null,
         mainTextWidths: FloatArray = cellWidths,
         lastGlyphCenters: FloatArray = FloatArray(0),
     ): Float {
@@ -116,9 +129,9 @@ object FloatingLyricsRules {
             index >= count - 1 -> {
                 val last = count - 1
                 val start = startTimesMs[last]
-                val duration = durationMs
-                if (duration != null && duration > start && lyricsMs > start) {
-                    val progress = ((lyricsMs - start).toDouble() / (duration - start).toDouble()).toFloat().coerceIn(0f, 1f)
+                val arrival = finalArrivalMs
+                if (arrival != null && arrival > start && lyricsMs > start) {
+                    val progress = ((lyricsMs - start).toDouble() / (arrival - start).toDouble()).toFloat().coerceIn(0f, 1f)
                     val mainWidth = maxOf(0f, mainTextWidths.getOrElse(last) { cellWidths.getOrElse(last) { 0f } })
                     val glyphCenter = lastGlyphCenters.getOrElse(last) { mainWidth }.coerceIn(0f, mainWidth)
                     val from = cellStarts.getOrElse(last) { 0f }

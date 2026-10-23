@@ -11,6 +11,22 @@ export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
 export const LYRICS_STRIP_ALIGN = 'left';
 /** ... on the lyric area's horizontal CENTRE, whatever the text alignment setting and the panel width. */
 export const LYRICS_STRIP_TARGET = 'center';
+/** The terminal line advances at an estimated 500 ms for each grapheme. */
+export const LYRICS_MS_PER_GRAPHEME = 500;
+
+/** @param {string} value */
+export function lyricsGraphemeCount(value) {
+  if (typeof Intl.Segmenter === 'function') {
+    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)).length;
+  }
+  return Array.from(value).length;
+}
+
+/** @param {number} lineStartMs @param {string} text @param {number|null} [trackEndMs] */
+export function lyricsStripFinalArrivalMs(lineStartMs, text, trackEndMs = null) {
+  const estimated = lineStartMs + Math.max(1, lyricsGraphemeCount(text)) * LYRICS_MS_PER_GRAPHEME;
+  return typeof trackEndMs === 'number' && Number.isFinite(trackEndMs) ? Math.min(estimated, trackEndMs) : estimated;
+}
 
 /** @param {unknown} value @returns {'none' | 'continuous'} */
 export function normalizeLyricsAnimation(value) {
@@ -80,7 +96,7 @@ export function lyricsStripAnchor(layout, index, align) {
  * @param {number} positionMs lyrics time (playback position plus the display offset)
  * @param {number} viewWidthPx
  * @param {'left'|'center'|'right'} [targetAlign] the point of the window the anchor sits on (default: the same as `align`)
- * @param {{durationMs?:number|null,lastGlyphCenter?:number}|null} [finalLine]
+ * @param {{endMs?:number|null,lastGlyphCenter?:number}|null} [finalLine]
  */
 export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign = align, finalLine = null) {
   const count = Math.min(startTimesMs.length, layout.starts.length);
@@ -93,10 +109,10 @@ export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewW
   else if (index >= count - 1) {
     const last = count - 1;
     const start = startTimesMs[last];
-    const duration = finalLine?.durationMs;
+    const endMs = finalLine?.endMs;
     const lastGlyphCenter = Math.max(0, finalLine?.lastGlyphCenter ?? layout.widths[last] ?? 0);
-    if (typeof duration === 'number' && Number.isFinite(duration) && duration > start && positionMs > start) {
-      const progress = Math.min(1, Math.max(0, (positionMs - start) / (duration - start)));
+    if (typeof endMs === 'number' && Number.isFinite(endMs) && endMs > start && positionMs > start) {
+      const progress = Math.min(1, Math.max(0, (positionMs - start) / (endMs - start)));
       const from = layout.starts[last] ?? 0;
       const to = from + lastGlyphCenter;
       anchor = from + (to - from) * progress;
@@ -135,14 +151,14 @@ export function lyricsStripWindow(layout, fromOffsetPx, toOffsetPx, viewWidthPx,
 
 /**
  * The next lyrics time at which the glide changes direction (the next line's start), or null when the strip rests.
- * @param {readonly number[]} startTimesMs @param {number} positionMs @param {number|null} [durationMs]
+ * @param {readonly number[]} startTimesMs @param {number} positionMs @param {number|null} [finalArrivalMs]
  */
-export function nextLyricsStripBreak(startTimesMs, positionMs, durationMs = null) {
+export function nextLyricsStripBreak(startTimesMs, positionMs, finalArrivalMs = null) {
   if (startTimesMs.length === 0) return null;
   if (positionMs < startTimesMs[0]) return startTimesMs[0];
   for (const start of startTimesMs) if (start > positionMs) return start;
   const lastStart = startTimesMs[startTimesMs.length - 1];
-  if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > lastStart && durationMs > positionMs) return durationMs;
+  if (typeof finalArrivalMs === 'number' && Number.isFinite(finalArrivalMs) && finalArrivalMs > lastStart && finalArrivalMs > positionMs) return finalArrivalMs;
   return null;
 }
 

@@ -660,12 +660,18 @@ object FloatingLyricsOverlay {
         if (sample == null || !sample.active || sample.trackId != trackId) return false
         val current = stripFor(main, translationText) ?: return false
         val lyricsMs = sample.positionMs + offsetMs
-        val durationAtLyricsMs = (sample.durationMs ?: trackDurationMs)?.plus(offsetMs)
-            ?: current.starts.lastOrNull()?.plus(FloatingLyricsRules.LAST_LINE_FALLBACK_MS)
+        val trackEndAtLyricsMs = (sample.durationMs ?: trackDurationMs)?.plus(offsetMs)
+        val finalArrivalAtLyricsMs = current.starts.lastOrNull()?.let { lastStart ->
+            FloatingLyricsRules.finalLineArrivalMs(
+                lastStart,
+                current.texts.lastOrNull().orEmpty(),
+                trackEndAtLyricsMs,
+            )
+        }
         val offset = FloatingLyricsRules.stripOffset(
             current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,
             lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET,
-            durationAtLyricsMs, current.mainWidths, current.lastGlyphCenters,
+            finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters,
         )
         view.visibility = View.VISIBLE
         main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)

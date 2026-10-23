@@ -32,6 +32,7 @@
     buildLyricsStripLines,
     effectiveLyricsTextEffect,
     layoutLyricsStrip,
+    lyricsStripFinalArrivalMs,
     lyricsLineOpacityFactor,
     lyricsLineWeight,
     lyricsStripFocus,
@@ -165,21 +166,22 @@
   let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, fitHeight, hasTranslation ? settings.translationScalePercent : 0, lineHeight));
   // One U+3000 is one em of the main line; the translation strip leaves the same gap so the cells line up.
   let stripLayout = $derived(layoutLyricsStrip(stripMainWidths, stripTranslationWidths, fontPx));
-  // Lyrics positions include the user's display delay, so the corresponding track-end point uses the same offset.
-  // Keep the existing five-second fallback only when the playback source has no duration.
-  let stripDurationAtLyricsTime = $derived(stripStarts.length === 0
+  // Finish the terminal glide after about 500 ms per grapheme, capped at the actual track end.
+  let stripFinalArrivalAtLyricsTime = $derived(stripStarts.length === 0
     ? null
-    : durationMs === null
-      ? stripStarts[stripStarts.length - 1] + LAST_LINE_FALLBACK_MS
-      : durationMs + timingOffsetMs);
-  let stripFinalLine = $derived(stripDurationAtLyricsTime === null ? null : {
-    durationMs: stripDurationAtLyricsTime,
+    : lyricsStripFinalArrivalMs(
+      stripStarts[stripStarts.length - 1],
+      stripLines[stripLines.length - 1]?.text ?? '',
+      durationMs === null ? null : durationMs + timingOffsetMs,
+    ));
+  let stripFinalLine = $derived(stripFinalArrivalAtLyricsTime === null ? null : {
+    endMs: stripFinalArrivalAtLyricsTime,
     lastGlyphCenter: stripLastGlyphCenters[stripLastGlyphCenters.length - 1] ?? 0,
   });
   let stripRun = $derived.by(() => {
     const at = positionMs + timingOffsetMs;
     const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth, LYRICS_STRIP_TARGET, stripFinalLine);
-    const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at, stripDurationAtLyricsTime) : null;
+    const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at, stripFinalArrivalAtLyricsTime) : null;
     const wait = next === null ? null : msUntilPlaybackPosition(clock, performance.now(), next - timingOffsetMs);
     if (next === null || wait === null || wait <= 0) return { at, from, to: from, ms: null as number | null };
     return { at, from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth, LYRICS_STRIP_TARGET, stripFinalLine), ms: wait };

@@ -8,6 +8,8 @@ import {
   LYRICS_STRIP_SEPARATOR,
   buildLyricsStripLines,
   effectiveLyricsTextEffect,
+  lyricsGraphemeCount,
+  lyricsStripFinalArrivalMs,
   layoutLyricsStrip,
   lyricsLineOpacityFactor,
   lyricsLineWeight,
@@ -95,12 +97,12 @@ test('the views anchor the continuous strip on the lyric area centre whatever th
   const { readFileSync } = await import('node:fs');
   const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
   assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,/g)?.length, 2);
-  assert.match(view, /nextLyricsStripBreak\(stripStarts, at, stripDurationAtLyricsTime\)/);
+  assert.match(view, /nextLyricsStripBreak\(stripStarts, at, stripFinalArrivalAtLyricsTime\)/);
   assert.match(view, /data-text-effect=\{effectiveTextEffect\}/);
   assert.doesNotMatch(view, /lyricsStripOffset\([^)]*settings\.align/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
   assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN,\s*lyricsMs, main\.availableWidth\(\), FloatingLyricsRules\.STRIP_TARGET,/);
-  assert.match(kotlin, /durationAtLyricsMs, current\.mainWidths, current\.lastGlyphCenters/);
+  assert.match(kotlin, /finalArrivalAtLyricsMs, current\.mainWidths, current\.lastGlyphCenters/);
 });
 
 test('the strip holds only the lines near the lyric area, never the whole song', () => {
@@ -137,7 +139,7 @@ test('a line starts with its left edge on the lyric area centre and slides left 
 test('the final line keeps gliding until its last grapheme centre reaches the lyric area centre at track end', () => {
   const layout = layoutLyricsStrip([120, 80], [160, 0], 20);
   const starts = [1000, 5000];
-  const finalLine = { durationMs: 11000, lastGlyphCenter: 70 };
+  const finalLine = { endMs: 11000, lastGlyphCenter: 70 };
   const at = (ms) => lyricsStripOffset(starts, layout, 'left', ms, 300, 'center', finalLine);
 
   // The line still starts with its left edge on the centre.
@@ -148,6 +150,13 @@ test('the final line keeps gliding until its last grapheme centre reaches the ly
   assert.equal(nextLyricsStripBreak(starts, 9000, 11000), 11000);
   assert.equal(nextLyricsStripBreak(starts, 11000, 11000), null);
   assert.equal(nextLyricsStripBreak(starts, 9000, null), null);
+});
+
+test('the final glide estimates 500 ms per grapheme and stops no later than track end', () => {
+  assert.equal(lyricsGraphemeCount('Aか\u3099🙂'), 3);
+  assert.equal(lyricsStripFinalArrivalMs(5000, '最後一句'), 7000);
+  assert.equal(lyricsStripFinalArrivalMs(5000, '最後一句', 6200), 6200);
+  assert.equal(lyricsStripFinalArrivalMs(5000, 'Aか\u3099🙂'), 6500);
 });
 
 // Line fades (ADR 0032): lines start at 1000, 5000 and 9000 ms.

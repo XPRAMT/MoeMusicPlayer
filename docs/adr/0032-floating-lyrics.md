@@ -231,9 +231,10 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   avoid re-rasterizing blur during motion. This is a rendering override only: the saved choice stays `shadow`; animation
   `none` and explicit `stroke`/`none` choices keep their selected appearance. Windows uses the existing stroke style;
   Android draws a stroke pass before the fill pass.
-- The last line keeps gliding from its left-edge anchor at line start until track duration. At track end, measure the
-  final grapheme's visual bounds and put that glyph-bounds centre at the lyric-area centre. Lyrics display offset is
-  included in the lyric-time duration. If a source has no duration, retain the existing five-second fallback.
-- Validation: JavaScript geometry tests cover line start, midpoint, end, grapheme-centre position and duration break;
-  Android `FloatingLyricsRulesTest` mirrors the geometry and effect selection. Release WebView2 / device runtime check is
-  tracked with the current build status in the project `AGENTS.md`.
+- The last line keeps gliding from its left-edge anchor at line start. Estimate its travel time as 500 ms per Unicode
+  grapheme (user decision); if the track ends sooner, cap the glide at track end. At arrival, measure the final
+  grapheme's visual bounds and put that glyph-bounds centre at the lyric-area centre. Lyrics display offset is included
+  in the lyric-time endpoint. When track duration is unknown, use the grapheme estimate without a duration cap.
+- Validation: JavaScript geometry tests cover line start, midpoint, estimated arrival, track-end cap and grapheme-centre
+  position; Android `FloatingLyricsRulesTest` covers the 500 ms estimate, cap, grapheme counting and effect selection.
+  Release WebView2 / device runtime check is tracked with the current build status in the project `AGENTS.md`.
