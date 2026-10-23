@@ -1,6 +1,6 @@
-﻿# 歌詞視窗改用原生 DirectComposition 繪製（研究）
+# 歌詞視窗改用原生 DirectComposition 繪製
 
-狀態：研究／提案，未採納
+狀態：已採納（2026-10-23，使用者決定「歌詞繪製採用原生視窗方案 不再使用 WebView2 方案」）
 
 日期：2026-10-23，Asia/Taipei (UTC+08:00)
 
@@ -108,3 +108,28 @@ powershell -File measure.ps1 -ProtoArgs "--windows 3 --mode anim --seconds 12 --
 - 沒有與 WebView 版做肉眼或像素並排比較；60 Hz 虛擬顯示器上的肉眼流暢度未由使用者確認。
 - 裝置遺失恢復、`WM_DPICHANGED`、拖曳與鎖頭互動、工作列自動隱藏與全螢幕遮蓋都未在原型實作。
 - 描邊用的自訂文字渲染器對彩色 emoji 只描外框輪廓（單色），與 Chromium 的 `-webkit-text-stroke` 對 emoji 的表現可能不同。
+
+## 決策與最終設計（2026-10-23）
+
+Windows 的工作列歌詞（每條工作列一個）與浮動歌詞改為原生繪製，WebView2 歌詞視窗（`?view=taskbar-lyrics`、`?view=floating-lyrics`、`TaskbarLyricsView.svelte`、`FloatingLyricsView.svelte`）已刪除。Android 浮動歌詞不變。
+
+- **規則**：`crates/player-lyrics-rules`（選句、`display_offset_ms`、連續條排版／位移／視窗化、末句 500 ms／字元叢集、200 ms 交叉淡化與第一行前導、非目前透明度、「無」模式長句捲動 90%）。`tests/fixtures/lyrics-rules-vectors.json` 由 `scripts/generate-lyrics-rules-vectors.mjs` 以 JS 規則（`lyrics-strip.js` 等，作為參考實作保留）產生，Rust（`tests/shared_vectors.rs`）、node（`tests/lyrics-rules-vectors.test.mjs`）、Kotlin（`LyricsRulesVectorsTest`）都對照同一份；Android 與 Windows 已知不同的前導情況以 `android: false` 標記。
+- **繪製**：`crates/player-lyrics-native`。一條 UI 執行緒（`moe-lyrics-native`，Per-Monitor V2）持有 D3D11（失敗退 WARP）、D2D、DWrite（Segoe UI＋Microsoft JhengHei＋系統備援、字重 500、行框依 CSS 規則置中）、DComp 裝置；每個視窗一個 target。每行（連續模式每格含譯文）點陣化一次並快取（鍵含文字、字級、顏色、效果）；陰影＝D2D Shadow σ 0.3 em、反色 α 0.75，描邊＝字形輪廓 0.08 em、反色 α 0.5、先描邊後填色。**連續模式選陰影時照樣畫陰影**（使用者 2026-10-23 決定：陰影已在快取點陣裡，沒有每幀成本；`native_text_effect`），不再改描邊；Android 仍改描邊。
+- **動畫**：`plan.rs` 由規則產生分段線性關鍵格：連續條位移（涵蓋接下來 3 個換行點）、每格不透明度（在各行開始與淡化起點取樣，保證與規則一致，單元測試逐 10 ms 比對）、「無」模式長句捲動。以 `IDCompositionAnimation`（`AddCubic`＋`End`）交給 DWM；位移視覺用最近鄰取樣（整數裝置像素）。只在換行點、跳轉、暫停／繼續、播放校正（> 30 ms）、新歌詞、設定、大小或 DPI 改變時重排（`MOE_LYRICS_NATIVE_LOG=<檔案>` 會記錄每次重排與原因）。
+- **裝置與 DPI**：每 2 秒（閒置時）檢查 `GetDeviceRemovedReason`，Commit／繪製回報裝置遺失也會重建全部裝置、target 與快取；`WM_DPICHANGED`（浮動視窗套用建議矩形）與 `WM_SIZE` 觸發重排。
+- **視窗**：`WS_EX_NOREDIRECTIONBITMAP | LAYERED | TOPMOST | TOOLWINDOW | NOACTIVATE`，工作列視窗另加 `TRANSPARENT`、`WM_NCHITTEST` 回 `HTTRANSPARENT`，擁有者為該條工作列；`taskbar_lyrics.rs` 的擺位、遮蓋、自動隱藏、熱插拔、Explorer 重啟重建（`IsWindow` 失效即重建）不變。浮動視窗：移動模式整窗 `HTCAPTION` 拖曳（游標 SizeAll），游標在窗上時歌詞區顯示 rgba(0,0,0,.28)、10 px 圓角底色與鎖頭；固定模式 `WS_EX_TRANSPARENT`，沿用 100 ms 游標監看，只在游標位於鎖頭上時取消穿透；鎖頭有原生 tooltip（`TOOLTIPS_CLASS`，文字由主視窗以 `tr()` 翻譯後經 `floating-lyrics-tips` 送來）。`WM_MOVE` → `remember_position`（700 ms 後存）；有無譯文 → `fit_lines`；`WM_CLOSE` → 主視窗正常關閉流程。
+- **資料流**：主視窗仍是唯一來源，沿用廣播事件 `taskbar-lyrics-data`、`taskbar-lyrics-playback`、`lyrics-inactive-opacity`，新增 `lyrics-native-delay`（每首延遲，換歌與變更時送）與 `floating-lyrics-tips`；`src-tauri/src/native_lyrics.rs` 以 `listen_any` 接收，渲染器啟動時送 `taskbar-lyrics-request`／`taskbar-lyrics-playback-request` 要一次。
+
+### 實測（2026-10-23，隔離測試執行檔：另一個 identifier、資料夾 `target/nativetest/`、音量 0、無聲 WAV＋自製 LRC；使用者的播放器與其 WebView 歌詞同時在跑）
+
+螢幕：DISPLAY1 3840×2160 240 DPI **120 Hz**；DISPLAY6（VDD 虛擬）2560×1440 192 DPI **60 Hz**。測試實例：2 個工作列歌詞＋浮動歌詞，全部「連續」＋陰影，主視窗開啟。
+
+| 項目 | 結果 |
+|---|---|
+| 測試主視窗 rAF（CDP，10 s） | 120.0 fps，最長間隔 9.1–9.2 ms |
+| DWM（`DCompositionGetTargetStatistics`，12 s） | 主螢幕 presents 120.0／refresh 120.0；副螢幕 58.9／60.1（關閉測試實例歌詞時為 120.1／58.1，因使用者播放器的 WebView 歌詞同時在動，DWM 數字無法單獨歸因） |
+| 原生渲染執行緒 CPU | 約 1.4%（10 s 內 141 ms；只在換行點約每 2.8 s 重排三個視窗） |
+| 測試行程總 CPU | 歌詞開 9.4%、關 1.0%；差額主要在其他執行緒（非渲染執行緒，推測為工作列 UI Automation 監看與事件處理），待細查 |
+| 獨立 demo（只有原生視窗） | 行程 CPU 0.00%，主螢幕 120.0、副螢幕 59.9 presents/s |
+
+未驗證：與 WebView 版的像素並排比較（兩者落在同一塊工作列空白，只有重疊截圖）、裝置遺失實際觸發、混合 DPI 拖曳、自動隱藏／全螢幕／Explorer 重啟、鎖頭 tooltip 與固定模式穿透的實機操作。

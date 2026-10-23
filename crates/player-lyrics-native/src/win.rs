@@ -37,6 +37,21 @@ use crate::{
 };
 
 const WM_WAKE: u32 = WM_APP + 41;
+
+/// Diagnostics: with `MOE_LYRICS_NATIVE_LOG=<file>` every re-plan and its reason is appended there.
+fn debug_log(line: &str) {
+    use std::io::Write;
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    if let Some(path) = PATH.get_or_init(|| std::env::var("MOE_LYRICS_NATIVE_LOG").ok()) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{:?} {line}", std::time::SystemTime::now());
+        }
+    }
+}
 /// How often an idle renderer checks that its GPU device still exists.
 const DEVICE_CHECK: Duration = Duration::from_secs(2);
 /// Playback samples within this of the running clock do not re-plan (ADR 0028).
@@ -1290,6 +1305,13 @@ impl Renderer {
                     && self.clock.duration_ms == sample.duration_ms
                     && (predicted - sample.position_ms).abs() < CLOCK_TOLERANCE_MS;
                 if !same {
+                    debug_log(&format!(
+                        "rebase: predicted {predicted:.0} sample {:.0} state {:?}->{:?} track same {}",
+                        sample.position_ms,
+                        self.clock.state,
+                        sample.state,
+                        self.clock.track_id == sample.track_id
+                    ));
                     self.clock = Clock {
                         track_id: sample.track_id,
                         state: sample.state,
@@ -1402,6 +1424,7 @@ impl Renderer {
         let mut ids = std::mem::take(&mut self.dirty);
         ids.sort();
         ids.dedup();
+        debug_log(&format!("refresh {ids:?}"));
         let Some(gfx) = self.gfx.as_ref() else { return };
         let mut lost = false;
         let ctx = Context {

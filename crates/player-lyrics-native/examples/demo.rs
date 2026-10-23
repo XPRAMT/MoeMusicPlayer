@@ -42,16 +42,32 @@ fn main() {
         ("夜空に浮かぶ星を数えて", "數著夜空中漂浮的星星"),
         ("君の声が聞こえた気がした", "彷彿聽見了你的聲音"),
         ("我們在風裡奔跑 🌙", "We ran through the wind"),
-        ("消えない光を抱きしめて ✨ とても長い歌詞の行がここで続いて画面からはみ出す", "擁抱永不熄滅的光"),
+        (
+            "消えない光を抱きしめて ✨ とても長い歌詞の行がここで続いて画面からはみ出す",
+            "擁抱永不熄滅的光",
+        ),
         ("明日もきっと", "明天也一定"),
     ];
     let lines = texts
         .iter()
         .enumerate()
-        .map(|(i, (t, tr))| LyricLine { start_ms: 500.0 + i as f64 * 2500.0, text: t.to_string(), translation: tr.to_string() })
+        .map(|(i, (t, tr))| LyricLine {
+            start_ms: 500.0 + i as f64 * 2500.0,
+            text: t.to_string(),
+            translation: tr.to_string(),
+        })
         .collect();
-    r.set_lyrics(Some(LyricsData { track_id: "demo".into(), lines, offset_ms: None }));
-    r.set_playback(PlaybackSample { track_id: Some("demo".into()), state: PlayState::Playing, position_ms: 0.0, duration_ms: Some(20000.0) });
+    r.set_lyrics(Some(LyricsData {
+        track_id: "demo".into(),
+        lines,
+        offset_ms: None,
+    }));
+    r.set_playback(PlaybackSample {
+        track_id: Some("demo".into()),
+        state: PlayState::Playing,
+        position_ms: 0.0,
+        duration_ms: Some(20000.0),
+    });
     let look = |font: f64| Look {
         align: Align::Center,
         font_size_px: font,
@@ -77,7 +93,11 @@ fn main() {
     r.set_look("floating-lyrics", Some(look(28.0)));
     r.set_chrome(
         "floating-lyrics",
-        Chrome { locked: false, unlock_tip: "解除鎖定（可移動）".into(), lock_tip: "鎖定位置（滑鼠穿透）".into() },
+        Chrome {
+            locked: false,
+            unlock_tip: "解除鎖定（可移動）".into(),
+            lock_tip: "鎖定位置（滑鼠穿透）".into(),
+        },
     );
     place(floating, 200, 300, 1800, 160);
     let bar = r.create("taskbar-lyrics-0", Kind::Taskbar, None).unwrap();

@@ -1,4 +1,4 @@
-﻿# Floating lyrics on Windows and Android
+# Floating lyrics on Windows and Android
 
 Status: Accepted and implemented on 2026-10-23
 
@@ -238,3 +238,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 - Validation: JavaScript geometry tests cover line start, midpoint, estimated arrival, track-end cap and grapheme-centre
   position; Android `FloatingLyricsRulesTest` covers the 500 ms estimate, cap, grapheme counting and effect selection.
   Release WebView2 / device runtime check is tracked with the current build status in the project `AGENTS.md`.
+
+## 更新（2026-10-23，ADR 0034）
+
+Windows 的浮動歌詞與工作列歌詞改為原生 DirectComposition 繪製（見 ADR 0034），WebView 視窗已移除；行為規則不變，唯一刻意的改變：連續模式選陰影時，Windows 原生版照畫陰影（點陣化一次，沒有每幀成本），Android 仍改描邊。
