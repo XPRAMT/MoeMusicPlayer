@@ -326,3 +326,9 @@ D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
 實測（隔離 demo，3 視窗，200 行）：兩個工作列視窗在同一台 240 DPI 螢幕時，第二個視窗的 100 行載入批次 0.8 ms（原本 94 ms），
 快取總量 111.6 MiB（原本 158 MiB，−46 MiB）；第二個工作列視窗放在 192 DPI 螢幕時兩者各自一份，總量 158.9 MiB，與原本相同。
 測試：`windows_with_the_same_key_share_and_the_last_user_frees`。
+
+## 目前設計細節（自 AGENTS.md 移入）
+
+以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
+
+原生繪製（ADR 0034）：Windows 工作列歌詞與浮動歌詞由 `crates/player-lyrics-native` 繪製（Windows.UI.Composition＋D2D／DWrite，單一 `moe-lyrics-native` 執行緒；`plan.rs`、`sampling.rs`、`win.rs`、`shared_cache.rs`）。每行點陣化一次進 `CompositionDrawingSurface`，所有視窗共用以完整點陣鍵（文字、該 DPI 的字級、顏色、效果、行高）為鍵的點陣登錄表；歌詞載入後第一次刷新畫出可見格與之後最多 100 行（`PREWARM_LINES`），之後每批預先點陣化；行寬量測依歌詞／尺寸／外觀快取。有視窗在動時每個合成幀（`DwmFlush`）在 DWM vblank 格線上的呈現時刻（`present_time`）取樣滑動／淡化／捲動，只提交有變的值：位置以 1/8 裝置像素為單位（`sampling::OFFSET_STEP_PX`，線性取樣），變動不到 1/8 px、不透明度不到 1/255 不寫入；閒置時不輪詢。播放時鐘取自音訊引擎（快照的 `position_at`），1 秒視窗平均誤差 < 3 ms 不動、較大以 4 秒慢速吸收（`AUDIO_SLEW_MS`）、≥ 250 ms／換歌／暫停才跳（`plan.rs`）。需要 Windows 10 1809 以上，更舊的系統不建立歌詞視窗。規則在 `crates/player-lyrics-rules`，與 JS（`lyrics-strip.js` 等，保留為參考實作）、Kotlin（`FloatingLyricsRules.kt`）以 `tests/fixtures/lyrics-rules-vectors.json` 共用向量（`node scripts/generate-lyrics-rules-vectors.mjs` 重產）。資料流：主視窗廣播 `taskbar-lyrics-data`／`taskbar-lyrics-playback`／`lyrics-inactive-opacity`，另送 `lyrics-native-delay`（每首延遲）與 `floating-lyrics-tips`（`tr()` 翻譯的鎖頭 tooltip），`src-tauri/src/native_lyrics.rs` 以 `listen_any` 接收，視窗需要時以 `taskbar-lyrics-request`／`taskbar-lyrics-playback-request` 要求主視窗重送。WM_CLOSE（例如登出）轉成主視窗正常關閉。診斷：`MOE_LYRICS_NATIVE_LOG=<檔案>`（每次重排）、`MOE_LYRICS_FRAME_LOG=<檔案>`（每幀取樣與音訊讀數）、`MOE_LYRICS_NO_FADE=1`（關淡出量測）；`cargo run --release -p player-lyrics-native --example measure -- <pid> <秒>` 量 DWM 統計與行程 CPU，`--example demo` 開示範視窗。待辦：使用者實機驗收（外觀、鎖頭 tooltip、固定模式穿透、拖曳存檔、自動隱藏／全螢幕／Explorer 重啟、熱插拔、DPI、裝置遺失重建）；歌詞開啟時行程其他執行緒多約 8% CPU 的來源待查。

@@ -4,6 +4,8 @@ Status: Accepted
 
 Decision date: 2026-10-18, Asia/Taipei (UTC+08:00)
 
+> **部分取代：** 本 ADR 中以 WebView2 繪製歌詞的部分（`taskbar-lyrics` WebView 視窗、`TaskbarLyricsView.svelte`、CSS 效果與捲動、視窗內的播放時鐘）已被 [ADR 0034](0034-native-lyrics-rendering-research.md) 的原生繪製取代；工作列空白偵測、擺位、隱藏條件、設定與「歌詞只有一份」的資料流仍有效。
+
 ## Context
 
 The user wants the current lyric line shown on the Windows taskbar, in the empty stretch between the taskbar buttons and the notification area, with its options on Settings → Lyrics. Windows has no API for putting content on the taskbar. Making a window a child of `Shell_TrayWnd` is fragile on Windows 11, where the buttons are drawn by XAML, and WebView2 inside such a child is worse. Measured on this machine (Windows 11, 240 DPI, 3840×2160): the taskbar is `Shell_TrayWnd` (0,2080 to 3840,2160 physical px), its buttons are UI Automation `Button` elements (widgets, start, search, one per task, the tray icons) with exact physical rectangles, and `TrayNotifyWnd` still exists as a window. The tasks are centred, so the free stretches are on both sides of them (here 395 to 1506 and 2334 to 3105).
@@ -24,3 +26,9 @@ The user wants the current lyric line shown on the Windows taskbar, in the empty
 - If Explorer restarts, the next probe finds the new `Shell_TrayWnd`.
 - Per-monitor taskbars (secondary monitors) are not used; only the primary taskbar gets lyrics.
 - Android has no taskbar; the settings section is hidden there.
+
+## 目前設計細節（自 AGENTS.md 移入）
+
+以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
+
+工作列歌詞（ADR 0018、0031，僅 Windows，預設啟用）：設定存在 `settings.json` 的 `taskbarLyrics`（`settings_get/set_taskbar_lyrics`，Rust `TaskbarLyricsSettings`，前端 `taskbar-lyrics-settings.js`，變更經 `taskbar-lyrics-settings` 事件廣播）：啟用、對齊、字體 1–50 px、自訂顏色或依工作列深淺色自動黑白（`SystemUsesLightTheme`，`taskbar-lyrics-theme` 事件）、顯示譯文、譯文大小為原文 1–100%、文字效果（陰影／描邊／關閉，`textEffect`，預設陰影；效果色為文字色的反色 `getTaskbarLyricsEffectRgb`；陰影 σ 0.3 em、75%，描邊 0.08 em、50%）、透明度 `opacityPercent`（1–100，預設 100）、動畫 `animation`。`src-tauri/src/taskbar_lyrics.rs` 的監看執行緒（約 400 ms 一輪）每輪以 `taskbar::list_taskbars` 列舉 `Shell_TrayWnd` 與每個 `Shell_SecondaryTrayWnd`（最多 16 條），每條工作列一個視窗（label `taskbar-lyrics-N`），擁有者是該工作列（工作列取得焦點時仍在其上），以 UI Automation 的 Button 矩形加 `TrayNotifyWnd` 算空白處（純函式 `free_stretches`／`pick_free_area`／`lyrics_area`：兩側各留 8 CSS px、至少 120 CSS px，依該螢幕 DPI 換算，一律取較寬的一段），`SetWindowPos` 實體像素擺位並重申 `HWND_TOPMOST`；工作列消失（拔螢幕、Explorer 重啟）就銷毀，新出現就建立。自動隱藏（全域）、直式工作列、空白太窄、全螢幕／簡報時隱藏（`SHQueryUserNotificationState` 的 D3D 全螢幕與簡報直接採信；「忙碌」與副工作列只在前景視窗蓋滿該螢幕時採信，`foreground_covers_monitor_of`）。`taskbarLyrics.displayMode`：`all`（預設）、`playerMonitor`（主視窗所在螢幕，不明時主螢幕）、`custom`（`customMonitors` 存 `QueryDisplayConfig` 的 `monitorDevicePath`，取不到用 GDI 裝置名稱；最多 32 個；清單空時不顯示）；設定頁的 1、2、3… 按鈕來自 `taskbar_lyrics_monitors`（變動時 `taskbar-lyrics-monitors` 事件），編號取 `QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS)` 路徑順序、失敗退回 `EnumDisplayMonitors`（`number_monitors`），只是貼近 Windows 的「識別」編號。只顯示同步歌詞（純歌詞、無歌詞、停止時不顯示）；比視窗寬的行依播放位置水平捲動，時間＝該句顯示時間（最後一句到曲目結束，未知長度 5 秒），最後 10% 停住（`getLyricScrollProgress`）。診斷：`cargo run -p player-platform-windows --example probe_taskbar`（非 DPI-aware，座標為虛擬化值）。待驗收：第二螢幕（2560×1440、200%）位置與字級、「識別」編號是否與按鈕一致、熱插拔、Explorer 重啟、playerMonitor 切換、Win10 工作列。

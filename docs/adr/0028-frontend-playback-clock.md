@@ -35,3 +35,9 @@ playback-state events, so the poll did two jobs at once: animating the position 
   stalls, then jumps back.
 - Later: a backend `playback-state-changed` event (position, rate, sequence) emitted on play/pause/seek/track change/
   buffering/output reopen for both Windows and Android would let the poll drop to a slow backstop.
+
+## 目前設計細節（自 AGENTS.md 移入）
+
+以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
+
+播放進度時鐘（ADR 0028）：主視窗每 500 ms 取播放快照（`App.svelte` 的 `PLAYBACK_POLL_MS`，最小化時照跑），之間由 `src/lib/playback-clock.ts` 推算（基準＋`performance.now()` 經過時間 × rate，限制在 0..曲長）；偏差 < 30 ms 忽略、30–250 ms 以 750 ms 微調速率（恆 > 0）、> 250 ms／換歌／狀態或曲長改變直接跳（`jumpId` +1）；送指令後、`visibilitychange`、focus、`audio-devices-changed`、推算到曲長時立即再取。進度條：`app.css` 以 `@property --progress-ratio` 註冊，`PlaybackProgress.svelte` 只在 `jumpId`／狀態改變或拖動結束時以 linear CSS 動畫走到 1（交替 `playback-progress-run-a/b`），暫停或拖動時固定；`prefers-reduced-motion` 下仍保留動畫時間（`--progress-run-ms`）；經過時間文字每整秒重讀。`LyricsView` 只在下一句開始時由計時器喚醒（`nextCuePosition`＋`msUntilPlaybackPosition`）。上一首 3 秒判斷與鍵盤／手把快轉用 `currentPlaybackPositionMs()`。後端事件推送尚未做。測試 `tests/playback-clock.test.mjs`。

@@ -23,3 +23,9 @@ Updates were described by JSON manifests (`moemusicplayer-update.json`, `moemusi
 - Two builds on one day cannot update each other; a second release the same day needs a new version (the next date).
 - Players older than this change look for the manifest and find none, so they report that no release is published; they must be updated by hand once.
 - The exact build time and commit are still embedded and shown in Settings → About, but they no longer take part in update decisions.
+
+## 目前設計細節（自 AGENTS.md 移入）
+
+以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
+
+自動更新（ADR 0022 版本辨識、ADR 0021 Windows 安裝、ADR 0015 Android）：版本號＝建置日期（`src-tauri/build-version.txt`），Release tag `v<版本>`，版本以數字比較；Release 只放 `moemusicplayer-windows-x86_64.zip`（內含 `moemusicplayer.exe`）與 `moemusicplayer-android-arm64.apk`，沒有 JSON 清單、沒有單獨的更新器，完整性靠 GitHub 回報的資產 SHA-256 digest（沒有 digest 就不自動更新）。啟動時檢查，有新版跳出 `UpdateCenter`：「忽略」（存 `settings.json` 的 `ignoredUpdateVersion`，同版本只在手動「檢查更新」`update_check` 的 `manual: true` 時再提示）、「自動安裝」（`nextLaunch`）、「自動安裝並重啟」（`restartNow`：先嚴格關閉，替換後以 `--update-relaunch <pid>` 啟動新版）。Windows 解出 `moemusicplayer.exe`（只取該 entry、有大小上限、須以 `MZ` 開頭），`install_in_place` 把目前 exe 改名為 `.moemusicplayer.previous.<id>.bak` 再換上新檔（失敗還原，只留最新一份，舊的 `moemusicplayer-updater.exe` 首次安裝時刪除）；Android 交給系統安裝程式。發布：`npm run release:windows`（產生 `release/update-assets/moemusicplayer-windows-x86_64.zip`，`scripts/package-windows-update.ps1`）、`npm run release:android`，只有加 `-Upload -ReleaseTag v<版本>` 才上傳。端到端更新要等有更新的 Release 才能驗證。

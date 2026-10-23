@@ -152,3 +152,15 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - Android SAF 無原子 rename，失敗時可能留下半寫檔；以先備份與寫後驗證緩解。
 - 長檔／高取樣率頻譜計算的 CPU 與電量（Android）：抽樣欄位、可取消、快取。
 - DB 投影與檔案不一致（寫成功但更新 DB 失敗）：以重讀檔案為準，下次掃描修正。
+
+## 目前設計細節（自 AGENTS.md 移入）
+
+以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
+
+播放頁頂欄資訊按鈕開啟 `TrackDetailsDialog`（portal 掛到 `.app-shell`，`.floating-surface`，z-index 1000+；單一捲動區）。欄位暫存，「儲存」（或 Ctrl+S）經確認面板後才 `track_details_save` 寫檔（`crates/player-tags`：同目錄 `.moetmp-<檔名>` 暫存→寫入→重讀驗證→rename；MP3 一律 ID3v2.4；演出者原樣；歌詞一律寫內嵌、不建 `.lrc`）。「清空」清歌詞欄（儲存後才移除，可 ↺ 還原）；「導入使用中歌詞」匯入目前使用的任何來源歌詞（LRC 時間戳，譯文／羅馬音以同時間戳額外行）；歌詞欄有改（`lyricsChanged`）時同一次儲存把手動列設為內嵌參照（`link_embedded_lyrics`）。版面：路徑列（頻譜圖、複製路徑、在資料夾中開啟）、屬性兩欄（格式｜標籤、時長｜位元率、取樣率｜位元深度、聲道｜修改時間、檔案大小｜建立時間，時間 `YYYY-MM-DD HH:mm (UTC+8)`）、封面區（選擇／匯出／複製／貼上／移除一列）、標題…類型各一列、錄音日期｜音軌號｜碟號三等寬；不顯示音軌／碟片總數（存檔沿用原值）。數值格式（`track-details-format.js`）：位元率全 App 一套 `formatBitrateKbps(kbps, mbpsDigits)`（< 1000 整數 kbps；≥ 1000 改 Mbps，詳情最多三位、頂欄與列表最多一位）；取樣率 kHz（DSD 為 MHz 四位）；時長到小數一位（`formatDetailsDuration`）。
+
+封面：`player_tags::cover` 的 `plan_cover`／`prepare_cover`（各容器相同）：一律 JPG，來源至少一個像素 alpha < 255 時改寫 PNG 保留透明（`has_transparency`）；不需縮放的 JPG 與有透明的 PNG 寫原始位元組，其餘重新編碼（先套 EXIF 方向並把方向改為 1，保留 ICC 與其餘 EXIF）。「儲存時：…」由 `track_details_cover_plan` 顯示同一份計畫。JPG 品質（預設 100）與縮放短邊（預設 2160）存 localStorage `moe.coverEditOptions.v2`。複製→貼上保留原檔（`src/lib/cover-clipboard.js`：記住原檔與解碼像素指紋，指紋相同就改用原檔）。剪貼簿：Windows 用 navigator.clipboard；Android 讀寫都走原生 ClipboardManager——`track_details_clipboard_has_image` 只讀 clip description（Android 的貼上按鈕一律可按）、`track_details_read_clipboard_image` 讀 content:// 或 file:// URI 並以檔頭判斷格式、`track_details_copy_cover` 經 FileProvider（`${applicationId}.moe.updates`）放 content URI。測試：`player-tags` 的 `cover` 單元測試與 `tests/cover_write.rs`。
+
+儲存後：`onSaved` 呼叫 `reloadAfterTrackDetailsSaved(trackId)`：後端只重讀這個檔案的標籤（Windows `MetadataReader::read`、Android `media_index().read_metadata`）並以 `Database::refresh_track_metadata` 寫入曲目列與 `track_embedded_lyrics`；頁面遞增 `libraryListRevision`（專輯卡快取以 `albumArtworkEpoch` 為鍵）；儲存前後以 `Database::album_index_key_for_track` 取專輯鍵，後端 `album_artwork_cache::forget_album_selections` 並送 `album-artwork-invalidated`，頁面 `forgetAlbumCardArtwork`；再 `playback_refresh_current_track`、廣播 `current-track-refreshed`、`artworkController.reload()`，歌詞以 `lyricsController.reload()` 重讀。Android 通知欄不跟著更新（下次切歌才更新）。
+
+平台：Android 曲目為實體路徑（ADR 0014），讀取／頻譜／`write_edit` 與 Windows 相同；殘留的 content:// 曲目經 `cacheContentUriNamed` 複製到 cache `track-details/` 編輯後以 `resolveDirectPath` 原地寫回並逐位元組比對；封面選擇／開啟音訊用 `pickOpenDocument`，匯出用 `pickCreateDocument`。「在資料夾中開啟」：`track_details_reveal` 以 ExternalStorageProvider 的資料夾 document URI＋MIME_TYPE_DIR 以 ACTION_VIEW 依序嘗試（不指定 App、Google DocumentsUI、AOSP DocumentsUI、resource/folder、無類型），直接 startActivity 並 catch，不加 FLAG_GRANT_READ_URI_PERMISSION；都失敗時提示「複製路徑」。原生 log tag `MoeMediaIndex`。Android WebView 停用頁面縮放（viewport `user-scalable=no`＋`setSupportZoom(false)`）。SMB 曲目：`track_details_get` 以伺服器 `stat` 取修改與建立時間（失敗則留空）；寫回以 `SmbFs::stat` 的 `FileBasicInformation.creation_time`（UTC 100 ns，存在 `RemoteEntry`／`RemoteStamp`／`FileStamp`），上傳 `.moetmp-*` 後在暫存檔設回原建立時間並核對才 rename。遠端曲目的讀取與儲存見「遠端來源」。

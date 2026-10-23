@@ -159,3 +159,9 @@ The second FLAC region is needed for the audio offset that the bitrate is comput
 
 - **Order reads by physical location.** Use `FSCTL_GET_RETRIEVAL_POINTERS` for each file's first extent, falling back to the path.
 - **Queue depth for an HDD.** Measure 4, 8 and 16 threads cold. Each truly cold run needs a reboot, or one disjoint subfolder set per setting after a single reboot. Flushing the standby list (RAMMap / EmptyStandbyList) needs administrator rights and the user's approval.
+
+## 目前設計細節（自 AGENTS.md 移入）
+
+以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
+
+冷建庫效能（ADR 0027）：設 `MOE_LIBRARY_PROFILE=<檔案.jsonl>`（可加 `MOE_LIBRARY_PROFILE_UTC_OFFSET_MINUTES=480`）後寫出 `enumerate_done`、`compare_done`、`tags_done`、`db_open`、`db_apply`、`persist_done`、`sync_done`，GUI `library_sync` 完成時寫 `library_ready` 與 `<檔案>.ready.json`。無 GUI 基準：`scripts\profile-cold-library.ps1 -MusicRoot D:\Music -Runs 5`（`profile_cold_library` example，每輪在 `%TEMP%\moe-cold-profile\...` 建新 DB，不碰播放器與 UserData）。批次模式（`player-db` 的 `BulkBuild`）：`source_mappings` 為空且寫入 ≥ 256 列時，交易外關 `foreign_keys`、交易內刪除再重建 `source_mappings_track_id`／`source_mappings_locator_exact`／`tracks_sort_title`、以 `pragma_foreign_key_check` 確認（有違反就回滾）、`cache_size` 64 MiB，結束後恢復；`MOE_LIBRARY_BULK`、`MOE_METADATA_READ_THREADS` 只供量測。冷 HDD 的瓶頸是尋軌（共享區塊快取已評估放棄）；工具 `cargo run --release -p player-track-metadata --example trace_tag_reads -- D:\Music 40`（`TRACE_RANGES=1`）。下一步：GUI 冷建庫量測、依磁碟實體位置排序讀取、冷狀態量 HDD 執行緒數。
