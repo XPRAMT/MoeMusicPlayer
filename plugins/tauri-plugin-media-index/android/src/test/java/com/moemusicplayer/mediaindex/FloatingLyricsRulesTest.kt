@@ -155,4 +155,118 @@ class FloatingLyricsRulesTest {
         assertEquals(Pair(80, 0), FloatingLyricsRules.clampPosition(500, -20, 1_000, 200, 1_080, 2_400))
         assertEquals(Pair(0, 10), FloatingLyricsRules.clampPosition(10, 10, 2_000, 200, 1_080, 2_400))
     }
+
+    // Continuous strip fade: lines start at 1 000, 2 000 and 4 000 ms; a line fades over the 200 ms before the next starts.
+    private fun weights(lyricsMs: Long) = (0..2).map { FloatingLyricsRules.cellWeight(starts, it, lyricsMs) }
+
+    @Test
+    fun inactiveOpacityIsClampedToTheSettingsRange() {
+        assertEquals(10, FloatingLyricsRules.inactiveOpacityPercent(0))
+        assertEquals(10, FloatingLyricsRules.inactiveOpacityPercent(-5))
+        assertEquals(37, FloatingLyricsRules.inactiveOpacityPercent(37))
+        assertEquals(100, FloatingLyricsRules.inactiveOpacityPercent(250))
+        assertEquals(50, FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT)
+    }
+
+    @Test
+    fun otherLinesAreMainOpacityTimesInactiveOpacity() {
+        // 80% main, 50% inactive: the current line stays 0.8, the others are 0.4.
+        assertEquals(0.8f, FloatingLyricsRules.cellOpacity("continuous", 80, 50, 1f), 0.0001f)
+        assertEquals(0.4f, FloatingLyricsRules.cellOpacity("continuous", 80, 50, 0f), 0.0001f)
+        // Relative to the main opacity, which dims the whole overlay.
+        assertEquals(0.5f, FloatingLyricsRules.inactiveFactor("continuous", 50, 0f), 0.0001f)
+        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 50, 1f), 0.0001f)
+    }
+
+    @Test
+    fun fullInactiveOpacityDoesNotFadeAnything() {
+        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 100, 0f), 0.0001f)
+        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 100, 0.5f), 0.0001f)
+        assertEquals(0.7f, FloatingLyricsRules.cellOpacity("continuous", 70, 100, 0f), 0.0001f)
+    }
+
+    @Test
+    fun noAnimationKeepsEveryLineAtTheMainOpacity() {
+        assertEquals(1f, FloatingLyricsRules.inactiveFactor("none", 10, 0f), 0.0001f)
+        assertEquals(0.8f, FloatingLyricsRules.cellOpacity("none", 80, 50, 0f), 0.0001f)
+    }
+
+    @Test
+    fun missingOrOutOfRangeInactiveOpacityFallsBackIntoRange() {
+        assertEquals(0.1f, FloatingLyricsRules.inactiveFactor("continuous", 0, 0f), 0.0001f)
+        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 999, 0f), 0.0001f)
+    }
+
+    @Test
+    fun fadeStartsTwoHundredMsBeforeTheNextLineAndEndsWhenItStarts() {
+        // Well inside line 0 (1 000..2 000), before the lead-in: it is current, the others are not.
+        assertEquals(listOf(1f, 0f, 0f), weights(1_500))
+        // Lead-in start (2 000 - 200): nothing has changed yet.
+        assertEquals(listOf(1f, 0f, 0f), weights(1_800))
+        // Midpoint: the old line is halfway down and the next halfway up.
+        assertEquals(listOf(0.5f, 0.5f, 0f), weights(1_900))
+        // The next line's start: the fade is exactly finished.
+        assertEquals(listOf(0f, 1f, 0f), weights(2_000))
+        // After it, it stays put.
+        assertEquals(listOf(0f, 1f, 0f), weights(3_000))
+    }
+
+    @Test
+    fun fadeQuarterPointsAreLinear() {
+        assertEquals(0.75f, FloatingLyricsRules.cellWeight(starts, 0, 1_850), 0.0001f)
+        assertEquals(0.25f, FloatingLyricsRules.cellWeight(starts, 1, 1_850), 0.0001f)
+        assertEquals(0.25f, FloatingLyricsRules.cellWeight(starts, 0, 1_950), 0.0001f)
+        assertEquals(0.75f, FloatingLyricsRules.cellWeight(starts, 1, 1_950), 0.0001f)
+    }
+
+    @Test
+    fun beforeTheFirstLineItFadesInAndTheLastLineStaysCurrent() {
+        // Before the first line's lead-in nothing is current.
+        assertEquals(listOf(0f, 0f, 0f), weights(0))
+        assertEquals(listOf(0f, 0f, 0f), weights(800))
+        // The first line fades in over the 200 ms before it starts, as the strip rests on it.
+        assertEquals(listOf(0.5f, 0f, 0f), weights(900))
+        assertEquals(listOf(1f, 0f, 0f), weights(1_000))
+        // The last line has no next line to hand over to: it stays at 1 to the end.
+        assertEquals(listOf(0f, 0f, 1f), weights(4_000))
+        assertEquals(listOf(0f, 0f, 1f), weights(900_000))
+        assertEquals(0.5f, FloatingLyricsRules.cellWeight(starts, 2, 3_900), 0.0001f)
+    }
+
+    @Test
+    fun fadeDependsOnlyOnTheTimeSoASeekNeedsNoSpecialCase() {
+        // Seeking to the middle of a fade, back out of it, or far ahead gives the same values as playing there.
+        assertEquals(listOf(0.5f, 0.5f, 0f), weights(1_900))
+        assertEquals(listOf(0f, 0f, 1f), weights(5_000))
+        assertEquals(listOf(1f, 0f, 0f), weights(1_100))
+        assertEquals(listOf(0f, 0f, 0f), weights(-3_000))
+    }
+
+    @Test
+    fun fadeEdgeCases() {
+        assertEquals(0f, FloatingLyricsRules.cellWeight(starts, -1, 2_000), 0f)
+        assertEquals(0f, FloatingLyricsRules.cellWeight(starts, 3, 2_000), 0f)
+        assertEquals(0f, FloatingLyricsRules.cellWeight(longArrayOf(), 0, 0), 0f)
+        // Lines sharing a start time: only the later one is ever current.
+        val same = longArrayOf(1_000, 1_000, 3_000)
+        assertEquals(0f, FloatingLyricsRules.cellWeight(same, 0, 1_500), 0f)
+        assertEquals(1f, FloatingLyricsRules.cellWeight(same, 1, 1_500), 0f)
+        // A line closer than the fade length to the next one still hands over, finishing at the next start.
+        val quick = longArrayOf(1_000, 1_100)
+        assertEquals(0f, FloatingLyricsRules.cellWeight(quick, 0, 1_100), 0f)
+        assertEquals(1f, FloatingLyricsRules.cellWeight(quick, 1, 1_100), 0f)
+    }
+
+    @Test
+    fun fadeIsOnlyActiveInTheLeadInBeforeALine() {
+        assertTrue(!FloatingLyricsRules.fadeActive(starts, 500))
+        assertTrue(FloatingLyricsRules.fadeActive(starts, 900))
+        assertTrue(!FloatingLyricsRules.fadeActive(starts, 1_500))
+        assertTrue(FloatingLyricsRules.fadeActive(starts, 1_900))
+        assertTrue(!FloatingLyricsRules.fadeActive(starts, 2_000 + 1))
+        assertTrue(!FloatingLyricsRules.fadeActive(starts, 9_000))
+        assertEquals(0, FloatingLyricsRules.firstStartAfter(starts, 999))
+        assertEquals(1, FloatingLyricsRules.firstStartAfter(starts, 1_000))
+        assertEquals(3, FloatingLyricsRules.firstStartAfter(starts, 4_000))
+    }
 }

@@ -72,6 +72,8 @@ object FloatingLyricsOverlay {
     )
     private var strip: Strip? = null
     private var opacityPercent = 100
+    /** lyricsPreferences.inactiveOpacityPercent, pushed by the page on its own; the continuous strip dims the other lines by it. */
+    private var inactiveOpacityPercent = FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT
     private var widthDp = 800
     private var landscapeWidthDp = 800
     private var rotationWatch: android.content.ComponentCallbacks? = null
@@ -140,6 +142,10 @@ object FloatingLyricsOverlay {
         appContext = context.applicationContext
         args.optJSONObject("settings")?.let(::applySettings)
         args.optJSONObject("data")?.let(::applyData)
+        // lyricsPreferences.inactiveOpacityPercent (10-100), pushed by the page whenever that setting changes.
+        if (args.has("inactiveOpacityPercent") && !args.isNull("inactiveOpacityPercent")) {
+            applyInactiveOpacity(args.optInt("inactiveOpacityPercent", FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT))
+        }
         if (args.has("setLocked") && !args.isNull("setLocked")) {
             prefs(context).edit().putBoolean("locked", args.optBoolean("setLocked")).apply()
         }
@@ -203,8 +209,14 @@ object FloatingLyricsOverlay {
         textEffect = settings.optString("textEffect", "shadow")
         animation = if (settings.optString("animation", "none") == "continuous") "continuous" else "none"
         opacityPercent = FloatingLyricsRules.opacityPercent(settings.optInt("opacityPercent", 100))
+        // The look settings do not carry it (it is a general lyrics setting, pushed on its own, see update): keep the last one.
+        if (settings.has("inactiveOpacityPercent")) applyInactiveOpacity(settings.optInt("inactiveOpacityPercent"))
         widthDp = FloatingLyricsRules.widthDp(settings.optInt("widthPx", 800))
         landscapeWidthDp = FloatingLyricsRules.widthDp(settings.optInt("landscapeWidthPx", 800))
+    }
+
+    private fun applyInactiveOpacity(percent: Int) {
+        inactiveOpacityPercent = FloatingLyricsRules.inactiveOpacityPercent(percent)
     }
 
     private fun applyData(data: JSONObject) {
@@ -528,6 +540,7 @@ object FloatingLyricsOverlay {
                 else -> 0f to 0
             }
             view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow)
+            view.setInactiveFactor(FloatingLyricsRules.inactiveFactor(animation, inactiveOpacityPercent, 0f))
         }
     }
 
@@ -643,11 +656,11 @@ object FloatingLyricsOverlay {
         val lyricsMs = sample.positionMs + offsetMs
         val offset = FloatingLyricsRules.stripOffset(current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN, lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET)
         view.visibility = View.VISIBLE
-        main.setStrip(current.texts, current.cells, current.widths, offset)
+        main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)
         translationText?.let {
             val any = current.translations.any { text -> text.isNotEmpty() }
             it.visibility = if (any) View.VISIBLE else View.GONE
-            if (any) it.setStrip(current.translations, current.cells, current.widths, offset)
+            if (any) it.setStrip(current.translations, current.cells, current.widths, offset, current.starts, lyricsMs)
         }
         return true
     }

@@ -169,6 +169,65 @@ object FloatingLyricsRules {
     /** Height of one drawn line: the text's own height (ascent to descent) with a 10% buffer. */
     fun lineHeightPx(ascent: Float, descent: Float): Int = Math.ceil(((descent - ascent) * 1.1f).toDouble()).toInt()
 
+    /** Same range as `lyricsPreferences.inactiveOpacityPercent` (lyrics-preferences.js); 50 is its default. */
+    const val DEFAULT_INACTIVE_OPACITY_PERCENT = 50
+    fun inactiveOpacityPercent(value: Int): Int = value.coerceIn(10, 100)
+
+    /** The continuous strip fades a line over this long, ending exactly when the next line starts. */
+    const val STRIP_FADE_MS = 200L
+
+    /**
+     * How much strip cell `index` is "the current line", 0..1, from the lyrics time alone (no timer, so a seek or the
+     * rest before the first / after the last line need no special case). A line ramps 0 to 1 over the `fadeMs` before
+     * its own start and ramps back down over the `fadeMs` before the next line's start, so the old line dims while
+     * the next brightens and both finish when the next line starts (as the strip's glide ends). The last line stays 1.
+     * Lines sharing a start time are never current (the later one is).
+     */
+    fun cellWeight(startTimesMs: LongArray, index: Int, lyricsMs: Long, fadeMs: Long = STRIP_FADE_MS): Float {
+        if (index < 0 || index >= startTimesMs.size) return 0f
+        val fade = maxOf(1L, fadeMs)
+        val start = startTimesMs[index]
+        val rise = ((lyricsMs - (start - fade)).toFloat() / fade).coerceIn(0f, 1f)
+        if (index + 1 >= startTimesMs.size) return rise
+        val next = startTimesMs[index + 1]
+        if (next <= start) return 0f
+        val fall = ((lyricsMs - (next - fade)).toFloat() / fade).coerceIn(0f, 1f)
+        return rise * (1f - fall)
+    }
+
+    /** Index of the first line starting after `lyricsMs` (the size when none does); lines are sorted. */
+    fun firstStartAfter(startTimesMs: LongArray, lyricsMs: Long): Int {
+        var low = 0
+        var high = startTimesMs.size
+        while (low < high) {
+            val middle = (low + high) ushr 1
+            if (startTimesMs[middle] <= lyricsMs) low = middle + 1 else high = middle
+        }
+        return low
+    }
+
+    /** True while some line is within its `fadeMs` lead-in, i.e. the cells' fades change from frame to frame. */
+    fun fadeActive(startTimesMs: LongArray, lyricsMs: Long, fadeMs: Long = STRIP_FADE_MS): Boolean {
+        val next = firstStartAfter(startTimesMs, lyricsMs)
+        return next < startTimesMs.size && startTimesMs[next] - lyricsMs < fadeMs
+    }
+
+    /**
+     * Opacity of a cell relative to the main opacity (which dims the whole overlay): 1 for the current line, the
+     * inactive opacity for the others, in between while fading. Only the continuous animation fades; "none" keeps 1.
+     */
+    fun inactiveFactor(animation: String, inactivePercent: Int, weight: Float): Float {
+        if (animation != "continuous") return 1f
+        return fadedFactor(inactiveOpacityPercent(inactivePercent) / 100f, weight)
+    }
+
+    /** `inactive` (the factor of a line that is not current) lifted toward 1 by `weight` (0..1). */
+    fun fadedFactor(inactive: Float, weight: Float): Float = inactive + (1f - inactive) * weight.coerceIn(0f, 1f)
+
+    /** What reaches the screen for a cell: main opacity times its factor (80% main, 50% inactive: 0.4). */
+    fun cellOpacity(animation: String, opacityPercent: Int, inactivePercent: Int, weight: Float): Float =
+        opacityPercent(opacityPercent) / 100f * inactiveFactor(animation, inactivePercent, weight)
+
     /** Window alpha from the opacity setting, capped by the system's touch-through limit when there is one. */
     fun windowAlpha(opacityPercent: Int, systemLimit: Float?): Float {
         val wanted = opacityPercent(opacityPercent) / 100f

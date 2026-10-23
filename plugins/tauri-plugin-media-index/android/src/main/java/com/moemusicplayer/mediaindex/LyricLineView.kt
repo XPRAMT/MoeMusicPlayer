@@ -20,16 +20,70 @@ internal class LyricLineView(context: Context) : View(context) {
     private var align = "center"
     private var progress = 0f
     private var shadowRadius = 0f
+    private var shadowColor = 0
+    private var color = 0
+
+    // Continuous animation: lines other than the current one are drawn at `inactiveFactor` of the main opacity (1: no
+    // dimming). `dimPaint` is the look at that opacity, `fadePaint` the one reused for the (at most two) cells that
+    // are fading, so a frame allocates nothing and re-styles a paint only when its opacity really changed.
+    private var inactiveFactor = 1f
+    private val dimPaint = Paint(paint)
+    private val fadePaint = Paint(paint)
+    private var fadeAlpha = -1
 
     fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int) {
         val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius
         paint.textSize = sizePx
         paint.color = color
+        this.color = color
+        this.shadowColor = shadowColor
         this.align = align
         this.shadowRadius = shadowRadius
         if (shadowRadius > 0f) paint.setShadowLayer(shadowRadius, 0f, 0f, shadowColor) else paint.clearShadowLayer()
+        styleDim()
+        fadeAlpha = -1
         if (resize) requestLayout()
         invalidate()
+    }
+
+    /** Opacity of the lines other than the current one in the continuous strip, relative to the main opacity (1 = none). */
+    fun setInactiveFactor(factor: Float) {
+        val value = factor.coerceIn(0f, 1f)
+        if (value == inactiveFactor) return
+        inactiveFactor = value
+        styleDim()
+        fadeAlpha = -1
+        invalidate()
+    }
+
+    private fun styleDim() {
+        if (inactiveFactor < 1f) style(dimPaint, inactiveFactor)
+    }
+
+    /** `target` as `paint` at `factor` of its opacity: the text and, as the shadow colour is not opaque, the shadow too. */
+    private fun style(target: Paint, factor: Float) {
+        target.textSize = paint.textSize
+        target.color = color
+        target.alpha = Math.round(android.graphics.Color.alpha(color) * factor)
+        if (shadowRadius > 0f) {
+            val shadow = Math.round(android.graphics.Color.alpha(shadowColor) * factor)
+            target.setShadowLayer(shadowRadius, 0f, 0f, (shadowColor and 0x00ffffff) or (shadow shl 24))
+        } else {
+            target.clearShadowLayer()
+        }
+    }
+
+    /** The paint for a cell of weight `weight` (how much it is the current line, 0..1). */
+    private fun paintFor(weight: Float): Paint {
+        if (inactiveFactor >= 1f || weight >= 1f) return paint
+        if (weight <= 0f) return dimPaint
+        val factor = FloatingLyricsRules.fadedFactor(inactiveFactor, weight)
+        val alpha = Math.round(255 * factor)
+        if (alpha != fadeAlpha) {
+            fadeAlpha = alpha
+            style(fadePaint, factor)
+        }
+        return fadePaint
     }
 
     // Continuous animation (ADR 0032): every line in one strip; `stripTexts` null means one line at a time.
@@ -37,6 +91,9 @@ internal class LyricLineView(context: Context) : View(context) {
     private var stripCells = FloatArray(0)
     private var stripWidths = FloatArray(0)
     private var stripOffset = 0f
+    private var stripStarts = LongArray(0)
+    private var stripLyricsMs = 0L
+    private var stripNextStart = 0
 
     /** Width of `value` in this line's font (for the strip layout). */
     fun textWidth(value: String): Float = if (value.isEmpty()) 0f else paint.measureText(value)
@@ -44,10 +101,22 @@ internal class LyricLineView(context: Context) : View(context) {
     /** Usable width (the alignment point is measured in it). */
     fun availableWidth(): Float = (width - paddingLeft - paddingRight).toFloat()
 
-    /** Draw the whole strip: each text aligned in its cell (`cells` left edges, `widths`), all shifted by `offset`. */
-    fun setStrip(texts: List<String>, cells: FloatArray, widths: FloatArray, offset: Float) {
+    /**
+     * Draw the whole strip: each text aligned in its cell (`cells` left edges, `widths`), all shifted by `offset`.
+     * `starts` are the lines' start times and `lyricsMs` the lyrics time of this frame: the cells' fades follow from
+     * them (FloatingLyricsRules.cellWeight), so redrawing is wanted when the offset moves, and while a fade is running
+     * or another line became the next one (a seek) even if the strip itself stays put.
+     */
+    fun setStrip(texts: List<String>, cells: FloatArray, widths: FloatArray, offset: Float, starts: LongArray, lyricsMs: Long) {
         val changed = texts !== stripTexts || !cells.contentEquals(stripCells) || !widths.contentEquals(stripWidths)
-        if (changed || offset != stripOffset) {
+        var fading = false
+        var nextStart = 0
+        if (inactiveFactor < 1f) {
+            nextStart = FloatingLyricsRules.firstStartAfter(starts, lyricsMs)
+            fading = nextStart != stripNextStart ||
+                (lyricsMs != stripLyricsMs && nextStart < starts.size && starts[nextStart] - lyricsMs < FloatingLyricsRules.STRIP_FADE_MS)
+        }
+        if (changed || offset != stripOffset || fading) {
             stripTexts = texts
             stripCells = cells
             stripWidths = widths
@@ -55,6 +124,9 @@ internal class LyricLineView(context: Context) : View(context) {
             text = ""
             invalidate()
         }
+        stripStarts = starts
+        stripLyricsMs = lyricsMs
+        stripNextStart = nextStart
     }
 
     fun setLine(value: String, progress: Float) {
@@ -119,7 +191,8 @@ internal class LyricLineView(context: Context) : View(context) {
             val cellWidth = stripWidths.getOrElse(index) { 0f }
             if (cell > width || cell + cellWidth < 0f) continue
             val textWidth = paint.measureText(value)
-            canvas.drawText(value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, paint)
+            val weight = if (inactiveFactor < 1f) FloatingLyricsRules.cellWeight(stripStarts, index, stripLyricsMs) else 1f
+            canvas.drawText(value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, paintFor(weight))
         }
         canvas.restore()
     }
