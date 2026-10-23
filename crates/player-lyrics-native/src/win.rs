@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use player_lyrics_rules as rules;
 use windows::core::{implement, w, Interface, Ref, Result, BOOL, HSTRING, PCWSTR, PWSTR};
 use windows::Foundation::Metadata::ApiInformation;
-use windows::Foundation::{Size, TimeSpan, TypedEventHandler};
+use windows::Foundation::{Size, TypedEventHandler};
 use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
 use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::*;
@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows::Win32::Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
+use windows::Win32::Graphics::Dwm::{DwmFlush, DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -43,8 +43,8 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Matrix3x2, Vector2, Vector3};
 
-use crate::keyframes::{self, Ease, Track};
 use crate::plan;
+use crate::sampling::{self, Curve};
 use crate::{
     effect_rgb, fit_font_size, floating_lock_css, floating_margin_css, Chrome, Events, Kind, Look,
     LyricsData, PlayState, PlaybackSample, FLOATING_LINE_HEIGHT, FLOATING_PANEL_LINE_HEIGHT,
@@ -189,7 +189,6 @@ struct Gfx {
     fallback: IDWriteFontFallback,
     compositor: Compositor,
     graphics: CompositionGraphicsDevice,
-    linear: CompositionEasingFunction,
     /// Set by `CompositionGraphicsDevice.RenderingDeviceReplaced`: every drawing surface must be drawn again.
     replaced: Arc<AtomicBool>,
     /// Segoe UI ascent and descent in em: the line box of every row (CSS uses the primary font's metrics).
@@ -264,7 +263,6 @@ fn create_gfx() -> Result<Gfx> {
             let _ = PostThreadMessageW(thread, WM_WAKE, WPARAM(0), LPARAM(0));
             Ok(())
         }))?;
-        let linear: CompositionEasingFunction = compositor.CreateLinearEasingFunction()?.cast()?;
         let dwrite: IDWriteFactory2 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         // 'Segoe UI', 'Microsoft JhengHei', sans-serif (app.css): CJK and kana go to JhengHei, then the system
         // fallback (Segoe UI Emoji for colour emoji).
@@ -307,7 +305,6 @@ fn create_gfx() -> Result<Gfx> {
             fallback,
             compositor,
             graphics,
-            linear,
             replaced,
             ascent_em,
             descent_em,
@@ -842,48 +839,30 @@ fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<Sur
 
 // ---------------------------------------------------------------- animations
 
-/// Runs `track` on `property` of `object` as a `ScalarKeyFrameAnimation` the compositor evaluates every frame (no
-/// work in this process); does nothing when it does not move (the caller set the static value).
-fn animate(gfx: &Gfx, object: &CompositionObject, property: &str, track: &Track) -> Result<()> {
-    if !track.is_animated() {
-        return Ok(());
-    }
-    let a = gfx.compositor.CreateScalarKeyFrameAnimation()?;
-    a.InsertKeyFrame(0.0, track.first_value() as f32)?;
-    for frame in &track.frames[1..] {
-        let easing = match frame.ease {
-            Ease::Linear => gfx.linear.clone(),
-            Ease::Cubic(y1, y2) => gfx
-                .compositor
-                .CreateCubicBezierEasingFunction(
-                    Vector2 {
-                        X: 1.0 / 3.0,
-                        Y: y1 as f32,
-                    },
-                    Vector2 {
-                        X: 2.0 / 3.0,
-                        Y: y2 as f32,
-                    },
-                )?
-                .cast()?,
+/// One property the renderer thread samples every frame (`sampling`): the strip's or a row's Offset.X, or a
+/// cell's Opacity, from its plan's curve. `written` is the device value last set (NaN before the first write).
+struct Live {
+    visual: Visual,
+    kind: sampling::Kind,
+    curve: Curve,
+    /// Offset.Y kept with every Offset write.
+    y: f64,
+    written: f64,
+}
+
+impl Live {
+    /// Writes the value at `t` seconds after the plan's instant if its device value changed; true when it wrote.
+    fn sample(&mut self, t: f64) -> Result<bool> {
+        let Some(v) = sampling::changed(self.kind, &self.curve, t, self.written) else {
+            return Ok(false);
         };
-        a.InsertKeyFrameWithEasingFunction(frame.progress as f32, frame.value as f32, &easing)?;
+        match self.kind {
+            sampling::Kind::OffsetX => set_offset(&self.visual, v, self.y)?,
+            sampling::Kind::Opacity => self.visual.SetOpacity(v as f32)?,
+        }
+        self.written = v;
+        Ok(true)
     }
-    a.SetDuration(TimeSpan {
-        Duration: (track.duration_secs * 1e7).round() as i64,
-    })?;
-    object.StartAnimation(&HSTRING::from(property), &a)
-}
-
-/// Offset.X from `track` (its first value until the animation starts), Y fixed.
-fn place_x(gfx: &Gfx, visual: &Visual, track: &Track, y: f64) -> Result<()> {
-    set_offset(visual, track.first_value(), y)?;
-    animate(gfx, &visual.cast()?, "Offset.X", track)
-}
-
-fn fade(gfx: &Gfx, visual: &Visual, track: &Track) -> Result<()> {
-    visual.SetOpacity(track.first_value() as f32)?;
-    animate(gfx, &visual.cast()?, "Opacity", track)
 }
 
 // ---------------------------------------------------------------- windows
@@ -1109,6 +1088,11 @@ struct Win {
     area_cache: HashMap<(u32, u32, u32), Surface>,
     wake_at: Option<Instant>,
     has_translation: Option<bool>,
+    /// The properties sampled every frame and the instant their plan's time 0 stands for.
+    live: Vec<Live>,
+    plan_at: Instant,
+    /// Until when any of them still moves (`None` = nothing moves).
+    moving_until: Option<Instant>,
 }
 
 fn create_window(id: &str, kind: Kind, owner: Option<isize>) -> Result<HWND> {
@@ -1312,15 +1296,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
                 return;
             }
         }
-        let mut msg = MSG::default();
-        unsafe {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message != WM_WAKE {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-            }
-        }
+        pump_messages();
         r.pending();
         if r.gfx
             .as_ref()
@@ -1343,6 +1319,29 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
             }
         }
         r.refresh_dirty();
+        if r.windows.values().any(|w| w.moving_until.is_some()) {
+            // Per-frame commit: sample every moving window for the next frame, commit (the message pump runs the
+            // implicit commit), then wait for DWM's next composition. One loop for all windows, paced by DWM.
+            r.sample_frame();
+            pump_messages();
+            let waited = Instant::now();
+            unsafe {
+                let _ = DwmFlush();
+            }
+            // DwmFlush returns at once while DWM has nothing to compose: never spin, wait about a frame instead.
+            if waited.elapsed() < Duration::from_millis(1) {
+                let lead = frame_lead().max(Duration::from_millis(4));
+                unsafe {
+                    let _ = MsgWaitForMultipleObjects(
+                        None,
+                        false,
+                        lead.as_millis() as u32,
+                        QS_ALLINPUT,
+                    );
+                }
+            }
+            continue;
+        }
         let next = r.windows.values().filter_map(|w| w.wake_at).min();
         let mut timeout = DEVICE_CHECK.saturating_sub(last_check.elapsed());
         if let Some(at) = next {
@@ -1359,7 +1358,45 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
     }
 }
 
+/// Dispatches the thread's messages (window messages, the dispatcher queue and so the composition commit).
+fn pump_messages() {
+    let mut msg = MSG::default();
+    unsafe {
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            if msg.message != WM_WAKE {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+}
+
+/// How long after a value is set it reaches the screen: the implicit commit, DWM's composition of the window's
+/// visual tree and the present. Measured with per-frame screen captures against the DirectComposition renderer
+/// (ADR 0034, 2026-10-24): about 39 ms on a 120 Hz display and 22 ms on a 60 Hz one; 32 ms keeps line arrivals
+/// within a frame of the playback clock on both. Values are sampled for that moment.
+const PRESENT_LATENCY: Duration = Duration::from_millis(32);
+
 impl Renderer {
+    /// Writes the changed per-frame values of every moving window for the coming frame.
+    fn sample_frame(&mut self) {
+        let frame = Instant::now() + PRESENT_LATENCY;
+        let mut lost = false;
+        for (id, win) in self.windows.iter_mut() {
+            if win.moving_until.is_none() {
+                continue;
+            }
+            match sample_window(win, frame) {
+                Ok(_) => {}
+                Err(e) if is_device_loss(&e) => lost = true,
+                Err(e) => eprintln!("lyrics window {id}: {e}"),
+            }
+        }
+        if lost {
+            self.rebuild_devices();
+        }
+    }
+
     fn mark_all(&mut self) {
         self.dirty.extend(self.windows.keys().cloned());
     }
@@ -1529,6 +1566,9 @@ impl Renderer {
             area_cache: HashMap::new(),
             wake_at: None,
             has_translation: None,
+            live: Vec::new(),
+            plan_at: Instant::now(),
+            moving_until: None,
         };
         if let Some(gfx) = &self.gfx {
             attach(gfx, &mut win);
@@ -1600,7 +1640,8 @@ impl Renderer {
             clock: &self.clock,
             inactive: self.inactive,
             delay: self.delay.as_ref(),
-            now: Instant::now() + commit_lead(),
+            now: Instant::now(),
+            frame: Instant::now() + PRESENT_LATENCY,
         };
         let mut reports = Vec::new();
         for id in &ids {
@@ -1627,9 +1668,9 @@ impl Renderer {
     }
 }
 
-/// The compositor starts the animations of a commit at the composition frame that picks it up, not now: plan for
-/// that frame (the next vblank DWM reports) so a re-plan continues the running glide instead of lagging by a frame.
-fn commit_lead() -> Duration {
+/// Values set now are committed when the thread returns to its message loop and composed at the next DWM frame:
+/// sample them for that frame's vblank, so the strip shows where the playback clock is when it reaches the screen.
+fn frame_lead() -> Duration {
     unsafe {
         let mut info = DWM_TIMING_INFO {
             cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,
@@ -1690,7 +1731,10 @@ struct Context<'a> {
     clock: &'a Clock,
     inactive: u32,
     delay: Option<&'a (String, f64)>,
+    /// The plan's time 0 (when the plan is made).
     now: Instant,
+    /// When the values this refresh sets reach the screen (`PRESENT_LATENCY`).
+    frame: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -1702,8 +1746,50 @@ struct Area {
 }
 
 /// Rebuilds one window's visual tree; returns whether it draws a translation line.
+/// Registers a per-frame property of this plan and writes its value for the coming frame.
+fn live(
+    win: &mut Win,
+    ctx: &Context,
+    visual: Visual,
+    kind: sampling::Kind,
+    curve: Curve,
+    y: f64,
+) -> Result<()> {
+    let end = curve.end();
+    let mut l = Live {
+        visual,
+        kind,
+        curve,
+        y,
+        written: f64::NAN,
+    };
+    l.sample(ctx.frame.saturating_duration_since(ctx.now).as_secs_f64())?;
+    if ctx.clock.state == PlayState::Playing && end > 0.0 {
+        let until = ctx.now + Duration::from_secs_f64(end);
+        win.moving_until = Some(win.moving_until.map_or(until, |u| u.max(until)));
+    }
+    win.live.push(l);
+    Ok(())
+}
+
+/// Samples every per-frame property of a window for the frame presented at `frame`; true when any changed.
+fn sample_window(win: &mut Win, frame: Instant) -> Result<bool> {
+    let t = frame.saturating_duration_since(win.plan_at).as_secs_f64();
+    let mut any = false;
+    for l in &mut win.live {
+        any |= l.sample(t)?;
+    }
+    if win.moving_until.is_some_and(|u| frame > u) {
+        win.moving_until = None;
+    }
+    Ok(any)
+}
+
 fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
     win.wake_at = None;
+    win.live.clear();
+    win.moving_until = None;
+    win.plan_at = ctx.now;
     let Some(root) = win.root.clone() else {
         return Ok(false);
     };
@@ -1891,14 +1977,19 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             opacity,
             font as f64 * clip_room,
         )?;
-        // The strip glides (Offset.X key frames) and every cell fades (Opacity key frames); the compositor evaluates
-        // both on each frame. The cells sample whole device pixels (AGENTS.md device-pixel rule).
+        // The strip glides and every cell fades: sampled per frame from the plan (`Live`), in whole device pixels
+        // and 1/255 opacity steps.
         let strip = gfx.compositor.CreateContainerVisual()?;
         let strip_visual: Visual = strip.cast()?;
-        place_x(
-            gfx,
-            &strip_visual,
-            &keyframes::cubic(&planned.offset, area.left),
+        live(
+            win,
+            ctx,
+            strip_visual,
+            sampling::Kind::OffsetX,
+            Curve::Cubic {
+                keys: planned.offset.clone(),
+                add: area.left,
+            },
             0.0,
         )?;
         content.Children()?.InsertAtTop(&strip)?;
@@ -1909,8 +2000,19 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 layout.starts[*index] - raster.margin as f64,
                 (top - raster.margin as f64).round(),
             )?;
-            fade(gfx, &cell, &keyframes::linear(keys, 0.0, 1.0))?;
             strip.Children()?.InsertAtTop(&cell)?;
+            live(
+                win,
+                ctx,
+                cell,
+                sampling::Kind::Opacity,
+                Curve::Linear {
+                    keys: (*keys).clone(),
+                    add: 0.0,
+                    factor: 1.0,
+                },
+                0.0,
+            )?;
         }
         win.wake_at = planned
             .wake_ms
@@ -1989,13 +2091,19 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         )?;
         for (raster, base, overflow, y) in &placed {
             let visual: Visual = sprite(gfx, &raster.surface, true)?.cast()?;
-            place_x(
-                gfx,
-                &visual,
-                &keyframes::linear(&planned.scroll, base - raster.margin as f64, -overflow),
+            content.Children()?.InsertAtTop(&visual)?;
+            live(
+                win,
+                ctx,
+                visual,
+                sampling::Kind::OffsetX,
+                Curve::Linear {
+                    keys: planned.scroll.clone(),
+                    add: base - raster.margin as f64,
+                    factor: -overflow,
+                },
                 (y - raster.margin as f64).round(),
             )?;
-            content.Children()?.InsertAtTop(&visual)?;
         }
     }
     Ok(has_translation)
@@ -2009,7 +2117,7 @@ fn edge_fade_enabled() -> bool {
 
 /// The edge-fade host of one window: the lyric visuals go into `content`, which a `CompositionVisualSurface` renders
 /// offscreen; `shown` paints that surface through a `CompositionMaskBrush` whose mask is a static horizontal
-/// `CompositionLinearGradientBrush` (`keyframes::edge_fade_stops`, the rule `edge_fade_opacity`). One copy of the
+/// `CompositionLinearGradientBrush` (`sampling::edge_fade_stops`, the rule `edge_fade_opacity`). One copy of the
 /// content per window, and the mask is a single pass in DWM.
 struct FadeHost {
     key: [i64; 4],
@@ -2050,7 +2158,7 @@ fn build_fade_host(
     // Clamp: transparent beyond the lyric area on both sides (as the zones end there).
     gradient.SetExtendMode(CompositionGradientExtendMode::Clamp)?;
     let stops = gradient.ColorStops()?;
-    for (offset, alpha) in keyframes::edge_fade_stops(area.width, area.height) {
+    for (offset, alpha) in sampling::edge_fade_stops(area.width, area.height) {
         let stop = c.CreateColorGradientStopWithOffsetAndColor(
             offset as f32,
             Color {

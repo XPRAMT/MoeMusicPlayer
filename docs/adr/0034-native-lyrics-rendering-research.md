@@ -140,7 +140,7 @@ Windows 的工作列歌詞（每條工作列一個）與浮動歌詞改為原生
 連續條位移不再是分段線性：`plan.rs` 的 `StripPlan.offset` 改為 `Cubics`（每段 `(秒, [c0, c1, c2, c3])`），由
 `player_lyrics_rules::strip_cubic` 取得各換行點之間那一段的單調 C1 三次 Hermite 多項式（規則見 ADR 0032 的
 2026-10-23 修訂），把毫秒係數換成秒，`win.rs` 的 `set_offset_x_cubic` 每段呼叫一次
-`IDCompositionAnimation::AddCubic(時間, c0, c1, c2, c3)`，最後 `End`；DWM 仍自己逐幀計算，我們不做每幀工作。換行點就是
+`IDCompositionAnimation::AddCubic(時間, c0, c1, c2, c3)`，最後 `End`；DWM 自己逐幀計算（2026-10-24 起改為本程序每幀提交，見文末）。換行點就是
 曲線的節點，所以一個計畫（接下來 3 個換行點）剛好是 3 段；切線只看相鄰節點，重排時取樣的是同一條全域曲線，前後計畫
 銜接沒有折角。位移視覺仍用最近鄰取樣（整數裝置像素）。不透明度關鍵格仍是分段線性。單元測試
 `the_cubic_keys_match_the_curve_every_10_ms_for_uneven_lines` 逐 10 ms 比對計畫與規則。
@@ -151,7 +151,7 @@ DirectComposition 不能以漸層遮罩 visual：`IDCompositionDevice3` 的濾�
 surface，所以無法放靜態漸層當 DestinationIn；`MIN_BLEND` 合成模式不是乘法，且無中間層時會與桌面混合；
 `CompositionMaskBrush` 需要把整個渲染器改到 Windows.UI.Composition（Desktop 互通 1803+）。採用的做法：`edge_faded`
 依 `edge_fade_bands` 把歌詞內容切成垂直條帶，每條是靜態 `SetClip2`（整數裝置像素，相鄰條不重疊、不留縫）加靜態
-`SetOpacity2`，條帶內各建一份歌詞（同一份快取 surface、同一組計畫出的動畫），DWM 仍每幀自行求值，本程序沒有逐幀工作；
+`SetOpacity2`，條帶內各建一份歌詞（同一份快取 surface、同一組計畫出的動畫），由 DWM 每幀求值；
 只在重排（換行、跳轉、設定、尺寸／DPI）時重建，裝置遺失重建沿用原流程。每側最多 64 條：淡出區 ≤ 64 裝置像素時每條
 1 px（精確的逐像素斜坡），更寬時每階 1/64。代價是 visual 數量約為 (2×64＋1)×（每條的歌詞格數＋1）；若實測 DWM 成本
 過高，下一步是改用 Windows.UI.Composition 的 `CompositionMaskBrush`。
@@ -170,17 +170,17 @@ D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
   （視窗樣式、擁有者、置頂、不搶焦點、點擊穿透、鎖頭與拖曳都沒改），`ICompositorInterop::CreateGraphicsDevice`
   把既有 D2D 裝置包成 `CompositionGraphicsDevice`，每行（含陰影／描邊）只畫一次進快取的 `CompositionDrawingSurface`。
   變更由 dispatcher queue 隱式提交（不再呼叫 `Commit`）。
-- 動畫：`keyframes.rs`（平台中立、有單元測試）把計畫轉成 `ScalarKeyFrameAnimation`。滑動的每段三次多項式
+- 動畫（已由下節「每幀提交」取代）：`keyframes.rs` 把計畫轉成 `ScalarKeyFrameAnimation`。滑動的每段三次多項式
   ＝時間控制點固定 1/3、2/3 的 `CubicBezierEasingFunction`（此時貝茲的時間座標對參數是線性的，進度就是時間的三次
   多項式），數值控制點由段兩端斜率算出，所以與 `plan.rs` 的分段單調三次曲線（同樣的節點、漂移修正的節點）完全相同；
-  淡化與長句捲動是線性關鍵格。全部由合成器每幀求值，本程序沒有逐幀工作。測試每 10 ms 比對計畫（含漂移修正、
+  淡化與長句捲動是線性關鍵格，由合成器每幀求值。測試每 10 ms 比對計畫（含漂移修正、
   行首錨點與規則一致）。動畫的起點仍提前到下一個合成幀：改用 `DwmGetCompositionTimingInfo` 的下一個 vblank
   （取代 DComp 的 `GetFrameStatistics`）。
 - 整數裝置像素：所有歌詞 sprite 的 `CompositionSurfaceBrush` 用 `NearestNeighbor` 取樣、`Stretch::None`，滑動中的
   小數位移照樣落在整數像素上（與 DComp 的最近鄰相同；沒有用 `SnapToPixels`）。
 - 淡出：每窗一個 `ContainerVisual`（歌詞內容）交給 `CompositionVisualSurface` 離屏繪製，畫面上的 `SpriteVisual` 用
   `CompositionMaskBrush`（source＝該 visual surface 的 surface brush，mask＝靜態水平 `CompositionLinearGradientBrush`，
-  Absolute 座標、Clamp），漸層停駐點由 `keyframes::edge_fade_stops`（與 `edge_fade_opacity` 相同的分段線性）產生；
+  Absolute 座標、Clamp），漸層停駐點由 `sampling::edge_fade_stops`（與 `edge_fade_opacity` 相同的分段線性）產生；
   只在視窗尺寸、DPI 或歌詞區改變時重建，重排時只換內容。每窗只有一份歌詞 visual。窗透明度設在遮罩 sprite 上。
   診斷用 `MOE_LYRICS_NO_FADE=1` 關閉淡出（內容改為剪裁到歌詞區＋效果餘量）。
 - 裝置遺失：每 2 秒檢查 D3D 裝置，遺失或繪製失敗即關閉 target、整組重建（新 compositor 與 target）；
@@ -205,3 +205,47 @@ D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
 
 遮罩淡出的 DWM 成本在量測雜訊內（與淡出關閉相同）。截圖確認淡出平滑、外緣全透明。未驗證：真實裝置遺失、
 1809 以前系統的退路（只在本機 Windows 11 執行過）、鎖頭懸停外觀、Release 播放器內的實機外觀。
+
+## 每幀提交（2026-10-24，取代關鍵格動畫）
+
+問題：使用者回報連續歌詞又會跳動（aedd5e1 在 DComp 上修好過）。逐幀螢幕擷取（`DwmFlush` 節奏、60 Hz 擷取）證實：
+286b893 的關鍵格版本在每次重排時向前跳約 11 px。原因有兩層：(1) WUC 的關鍵格動畫在合成器拿到批次的那一幀才開始，
+本程序無法得知確切時間，每次重排都早或晚 0–2 幀；(2) 本機的 WUC 合成器時間比牆鐘慢約 4%（5 秒動畫實際 5,216 ms、
+2 秒 2,090 ms，與 120 Hz／8.333 ms 的 DWM 計時不符；`GlobalPlaybackRate` 讀到 0、設為 1 也一樣；探測延遲在斜率擬合
+中抵消），所以由合成器時鐘驅動的動畫會越來越落後播放時間（擷取：每行約 +100 ms）。原因仍不明。曾試過共用合成器時鐘
+（`CompositionPropertySet` 加 `ExpressionAnimation`）加完成探測估計速率與原點，能同步，但複雜且依賴未明的合成器
+行為；使用者決定改為每幀提交，該方案已移除。
+
+做法（`sampling.rs`、`win.rs`）：
+- 計畫（`plan.rs`，含漂移修正的分段單調三次曲線、200 ms 淡化）完全不變，仍只在換行、跳轉、暫停／繼續、播放校正、
+  新歌詞、設定、尺寸／DPI 改變時重排；每行仍只點陣化一次（快取的 `CompositionDrawingSurface`），淡出遮罩不變。
+- 渲染執行緒有視窗在動時，每個合成幀：依本程序的播放時鐘在計畫上取樣每個視窗的條位移、各格不透明度與長句捲動
+  （`Live`），**只有裝置值改變時才寫入**——位移一律是整數裝置像素、變動至少 1 px 才寫；不透明度量化到 1/255、變了才寫；
+  都沒變就不寫，也就沒有提交。寫完立刻處理訊息（隱式提交），再以 `DwmFlush` 等下一個 DWM 合成。`DwmFlush` 在 DWM
+  沒東西可合成時會立刻返回，所以返回不到 1 ms 時改等約一幀，不會空轉；沒有視窗在動（暫停、沒歌詞、行尾停住）時
+  回到原本的訊息等待，完全不輪詢。
+- 節奏選擇：一個迴圈、以 `DwmFlush` 對齊 DWM 的合成（在 120／60 Hz 混合時跟著較快的合成，實測主螢幕 120 presents/s）。
+  60 Hz 螢幕上的視窗也每個合成幀都更新，該螢幕每個 vblank 取到最新值，等於 60 fps；不需要每台螢幕各自的 vblank 等待
+  （`D3DKMTWaitForVerticalBlankEvent`／`DCompositionWaitForCompositorClock` 會讓多螢幕時序複雜很多）。
+- 取樣時間：寫入的值約在 `PRESENT_LATENCY`（32 ms）後出現在螢幕上（隱式提交、DWM 合成與 present）；以逐幀擷取對照
+  DComp 版（ef1ce35）量得 120 Hz 約 39 ms、60 Hz 約 22 ms，取 32 ms 讓兩台都在約一幀內。這是一台機器上的實測值。
+- 已移除：`keyframes.rs`、關鍵格／運算式動畫、`commit_lead`、緩動函式。`Cargo.lock` 不變。
+
+規則（取代先前「本程序零每幀工作」的說法）：每幀 CPU 越低越好。每幀只做兩件事：依播放時鐘計算位置，以及提交有變的值；
+不在每幀點陣化、排版或模糊，能快取的都快取；位置沒移動至少 1 個裝置像素（不透明度 1/255）就不寫入、不提交；閒置時睡眠。
+
+測試：`sampling.rs` 的 `per_frame_samples_never_step_or_go_back`（120 Hz 取樣兩分鐘，換行與每 500 ms 的播放取樣都重排，
+漂移修正 ±5–240 ms：寫入的位移永不後退，重排前後同一瞬間差 ≤ 1 px，每幀移動不超過曲線本身的移動＋1 px）、
+`writes_only_on_device_changes`、`the_edge_fade_stops_match_the_rule`；`plan.rs` 既有的 60 秒 1 ms 模擬照舊。
+
+實測（2026-10-24，隔離 demo；使用者播放器同時執行，dwm 閒置約 7%）：
+
+| 版本 | dwm.exe | 測試行程 CPU | presents/s（120／60 Hz） |
+| --- | --- | --- | --- |
+| 關鍵格＋遮罩（286b893） | 15.6% | 3.5% | 120.0／32.0 |
+| 每幀提交＋遮罩 | 17.0% | 4.9% | 117.3／37.5 |
+
+（3 個視窗、連續、陰影、20 秒；60 Hz 欄是該螢幕的全部 present，三個視窗都在主螢幕。117 < 120 是位移不到 1 px 的幀不提交。）
+行首到達（每行左緣到歌詞區中心的時刻，逐幀擷取、各 2 分鐘，相對 DComp 參考版同一量法）：120 Hz 主螢幕 −14 ms
+（標準差 3.7 ms），60 Hz 虛擬螢幕 −7 ms（標準差 6.6 ms），前後半段相同（不漂移）；量法本身每次相差約 ±8 ms。
+60 Hz 擷取 20 秒沒有任何後退。未驗證：Release 播放器內、真實裝置遺失、120 Hz 逐幀（擷取只有 60 Hz）。

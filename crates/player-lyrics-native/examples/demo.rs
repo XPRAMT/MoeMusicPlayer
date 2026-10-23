@@ -1,6 +1,7 @@
 //! Manual check of the native renderer: a floating window and a taskbar-style window with sample lyrics.
 //! `cargo run -p player-lyrics-native --example demo -- [continuous|none] [shadow|stroke|none] [seconds] [windows]`
-//! (`windows` = how many lyrics windows: the floating one plus taskbar-style ones; default 2.)
+//! `[x y]` (`windows` = how many lyrics windows: the floating one plus taskbar-style ones; default 2; `x y` = where
+//! the floating one goes, default 200 300.)
 
 #[cfg(not(windows))]
 fn main() {}
@@ -66,6 +67,14 @@ fn main() {
         lines,
         offset_ms: None,
     }));
+    // For sync checks against screen captures: the wall time playback position 0 is sent.
+    println!(
+        "playback-start-unix-us {}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    );
     r.set_playback(PlaybackSample {
         track_id: Some("demo".into()),
         state: PlayState::Playing,
@@ -103,7 +112,9 @@ fn main() {
             lock_tip: "鎖定位置（滑鼠穿透）".into(),
         },
     );
-    place(floating, 200, 300, 1800, 160);
+    let fx: i32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(200);
+    let fy: i32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(300);
+    place(floating, fx, fy, 1800, 160);
     for i in 0..count - 1 {
         let id = format!("taskbar-lyrics-{i}");
         let bar = r.create(&id, Kind::Taskbar, None).unwrap();

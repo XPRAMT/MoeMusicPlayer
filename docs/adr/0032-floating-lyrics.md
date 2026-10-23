@@ -278,4 +278,6 @@ and paints it through a `CompositionMaskBrush` whose mask is a static horizontal
 needs Windows.UI.Composition and so Windows 10 1809 or later (older systems get no lyrics windows). The first Windows
 version used static clipped bands, each with its own copy of the lyrics (about 1,300 visuals per window). With 3
 windows on a 120 Hz display, dwm.exe used about 95% of one core and composed only 33 frames/s. With the mask it is
-within noise of having no fade (about 25% vs 28% here, at full 120/60 Hz; see ADR 0034).
+within noise of having no fade (about 25% vs 28% here, at full 120/60 Hz; see ADR 0034). Since 2026-10-24 the
+Windows renderer samples the glide, fades and scroll itself on every composition frame and commits only values that
+changed by at least one device pixel (or 1/255 opacity); see ADR 0034.
