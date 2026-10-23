@@ -8,6 +8,7 @@
   import TaskbarLyricsView from './TaskbarLyricsView.svelte';
   import { invokeCommand } from './ipc';
   import { tr } from './i18n.js';
+  import { floatingLyricsLockPath } from './floating-lyrics-lock-icon.js';
   import {
     FLOATING_LYRICS_AREA_SHARE,
     floatingLyricsLockPx,
@@ -89,11 +90,7 @@
     >
       <svg viewBox="0 0 24 24" width="62%" height="62%" aria-hidden="true">
         <rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor" />
-        {#if locked}
-          <path d="M8 11V8a4 4 0 0 1 7.6-1.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-        {:else}
-          <path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-        {/if}
+        <path d={floatingLyricsLockPath(locked)} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       </svg>
     </button>
   {/if}
