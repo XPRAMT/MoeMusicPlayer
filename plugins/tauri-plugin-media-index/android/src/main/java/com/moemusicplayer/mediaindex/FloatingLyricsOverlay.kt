@@ -416,7 +416,7 @@ object FloatingLyricsOverlay {
             marginEnd = button
         })
         val lock = ImageButton(context).apply {
-            setImageResource(R.drawable.floating_lyrics_lock_open)
+            setImageResource(R.drawable.floating_lyrics_lock_closed)
             setColorFilter(Color.WHITE)
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x8C000000.toInt()) }
             contentDescription = "Lock"
