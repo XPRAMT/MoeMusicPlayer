@@ -144,3 +144,14 @@ Windows 的工作列歌詞（每條工作列一個）與浮動歌詞改為原生
 曲線的節點，所以一個計畫（接下來 3 個換行點）剛好是 3 段；切線只看相鄰節點，重排時取樣的是同一條全域曲線，前後計畫
 銜接沒有折角。位移視覺仍用最近鄰取樣（整數裝置像素）。不透明度關鍵格仍是分段線性。單元測試
 `the_cubic_keys_match_the_curve_every_10_ms_for_uneven_lines` 逐 10 ms 比對計畫與規則。
+
+## 邊緣淡出（2026-10-23）
+
+DirectComposition 不能以漸層遮罩 visual：`IDCompositionDevice3` 的濾鏡效果輸入只能是其他效果或 visual 自身內容，不接受
+surface，所以無法放靜態漸層當 DestinationIn；`MIN_BLEND` 合成模式不是乘法，且無中間層時會與桌面混合；
+`CompositionMaskBrush` 需要把整個渲染器改到 Windows.UI.Composition（Desktop 互通 1803+）。採用的做法：`edge_faded`
+依 `edge_fade_bands` 把歌詞內容切成垂直條帶，每條是靜態 `SetClip2`（整數裝置像素，相鄰條不重疊、不留縫）加靜態
+`SetOpacity2`，條帶內各建一份歌詞（同一份快取 surface、同一組計畫出的動畫），DWM 仍每幀自行求值，本程序沒有逐幀工作；
+只在重排（換行、跳轉、設定、尺寸／DPI）時重建，裝置遺失重建沿用原流程。每側最多 64 條：淡出區 ≤ 64 裝置像素時每條
+1 px（精確的逐像素斜坡），更寬時每階 1/64。代價是 visual 數量約為 (2×64＋1)×（每條的歌詞格數＋1）；若實測 DWM 成本
+過高，下一步是改用 Windows.UI.Composition 的 `CompositionMaskBrush`。

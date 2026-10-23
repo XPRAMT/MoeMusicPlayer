@@ -257,3 +257,29 @@ export function lyricsLineOpacityFactor(weight, inactiveOpacityPercent, animatio
   const clamped = Math.min(1, Math.max(0, weight));
   return inactive + (1 - inactive) * clamped;
 }
+
+/**
+ * The edge fade of the taskbar and floating lyric areas: a square zone on each side (as wide as the area is high,
+ * at most half the area width) where the lyrics fade linearly from opaque (inner edge) to transparent (outer edge).
+ * @param {number} areaWidth
+ * @param {number} areaHeight
+ * @returns {number}
+ */
+export function lyricsEdgeFadeWidth(areaWidth, areaHeight) {
+  if (!(areaWidth > 0) || !(areaHeight > 0)) return 0;
+  return Math.min(areaHeight, areaWidth / 2);
+}
+
+/**
+ * Opacity factor (0–1) of the edge fade at `x` px from the lyric area's left edge.
+ * @param {number} x
+ * @param {number} areaWidth
+ * @param {number} areaHeight
+ * @returns {number}
+ */
+export function lyricsEdgeFadeOpacity(x, areaWidth, areaHeight) {
+  const zone = lyricsEdgeFadeWidth(areaWidth, areaHeight);
+  if (!(zone > 0)) return 0;
+  const edge = Math.min(x, areaWidth - x);
+  return Math.min(1, Math.max(0, edge / zone));
+}

@@ -1663,11 +1663,6 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         effect: look.effect,
         line_height: line_height as f32,
     };
-    let clip_room = match look.effect {
-        rules::TextEffect::Shadow => 0.6,
-        rules::TextEffect::Stroke => 0.04,
-        rules::TextEffect::None => 0.0,
-    };
 
     let content = unsafe { gfx.dcomp.CreateVisual()? };
     unsafe {
@@ -1709,15 +1704,6 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         );
         let font = (font_css * scale) as f32;
         let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
-        let clip = font as f64 * clip_room;
-        unsafe {
-            content.SetClip2(&D2D_RECT_F {
-                left: (area.left - clip) as f32,
-                top: 0.0,
-                right: (area.left + area.width + clip) as f32,
-                bottom: h as f32,
-            })?;
-        }
         // Measure every line (DirectWrite layouts; cheap, no rasterising).
         let mut main_widths = Vec::new();
         let mut trans_widths = Vec::new();
@@ -1769,15 +1755,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 0.0
             };
         let top = area.top + (area.height - rows_h) / 2.0;
-        let strip = unsafe { gfx.dcomp.CreateVisual()? };
-        set_offset_x_cubic(gfx, &strip, &planned.offset, area.left)?;
-        unsafe {
-            // Whole device pixels while gliding (AGENTS.md device-pixel rule).
-            strip.SetBitmapInterpolationMode(
-                DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-            )?;
-            content.AddVisual(&strip, true, None)?;
-        }
+        let mut cells = Vec::new();
         for (index, keys) in &planned.opacity {
             let (_, text, tr) = lines[*index];
             let rows: Vec<(&str, f32)> = if has_translation {
@@ -1785,18 +1763,34 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             } else {
                 vec![(text, font)]
             };
-            let raster = cached(gfx, win, &rows, style)?;
-            let cell = unsafe { gfx.dcomp.CreateVisual()? };
-            let fade = unsafe { gfx.dcomp.CreateEffectGroup()? };
-            set_opacity(gfx, &fade, keys)?;
-            unsafe {
-                cell.SetContent(&raster.surface)?;
-                cell.SetOffsetX2((layout.starts[*index] - raster.margin as f64) as f32)?;
-                cell.SetOffsetY2((top - raster.margin as f64).round() as f32)?;
-                cell.SetEffect(&fade)?;
-                strip.AddVisual(&cell, true, None)?;
-            }
+            cells.push((cached(gfx, win, &rows, style)?, *index, keys));
         }
+        // One copy of the strip per edge-fade band; every copy runs the same planned animations, so DWM keeps them
+        // in step and this process still does no per-frame work.
+        edge_faded(gfx, &content, area, h, |band| {
+            let strip = unsafe { gfx.dcomp.CreateVisual()? };
+            set_offset_x_cubic(gfx, &strip, &planned.offset, area.left)?;
+            unsafe {
+                // Whole device pixels while gliding (AGENTS.md device-pixel rule).
+                strip.SetBitmapInterpolationMode(
+                    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                )?;
+                band.AddVisual(&strip, true, None)?;
+            }
+            for (raster, index, keys) in &cells {
+                let cell = unsafe { gfx.dcomp.CreateVisual()? };
+                let fade = unsafe { gfx.dcomp.CreateEffectGroup()? };
+                set_opacity(gfx, &fade, keys)?;
+                unsafe {
+                    cell.SetContent(&raster.surface)?;
+                    cell.SetOffsetX2((layout.starts[*index] - raster.margin as f64) as f32)?;
+                    cell.SetOffsetY2((top - raster.margin as f64).round() as f32)?;
+                    cell.SetEffect(&fade)?;
+                    strip.AddVisual(&cell, true, None)?;
+                }
+            }
+            Ok(())
+        })?;
         win.wake_at = planned
             .wake_ms
             .map(|ms| ctx.now + Duration::from_secs_f64(ms.max(1.0) / 1000.0));
@@ -1839,21 +1833,13 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         );
         let font = (font_css * scale) as f32;
         let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
-        let clip = font as f64 * clip_room;
-        unsafe {
-            content.SetClip2(&D2D_RECT_F {
-                left: (area.left - clip) as f32,
-                top: 0.0,
-                right: (area.left + area.width + clip) as f32,
-                bottom: h as f32,
-            })?;
-        }
         let mut rows = vec![(text, font)];
         if has_translation {
             rows.push((tr, trans_font));
         }
         let rows_h: f64 = rows.iter().map(|r| r.1 as f64 * line_height).sum();
         let mut y = area.top + (area.height - rows_h) / 2.0;
+        let mut placed = Vec::new();
         for row in rows {
             let raster = cached(gfx, win, &[row], style)?;
             let width = raster.row_widths[0] as f64;
@@ -1867,26 +1853,74 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     rules::Align::Right => area.left + area.width - width,
                 }
             };
-            let visual = unsafe { gfx.dcomp.CreateVisual()? };
-            set_offset_x(
-                gfx,
-                &visual,
-                &planned.scroll,
-                base - raster.margin as f64,
-                -overflow,
-            )?;
-            unsafe {
-                visual.SetBitmapInterpolationMode(
-                    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                )?;
-                visual.SetContent(&raster.surface)?;
-                visual.SetOffsetY2((y - raster.margin as f64).round() as f32)?;
-                content.AddVisual(&visual, true, None)?;
-            }
+            placed.push((raster, base, overflow, y));
             y += row.1 as f64 * line_height;
         }
+        edge_faded(gfx, &content, area, h, |band| {
+            for (raster, base, overflow, y) in &placed {
+                let visual = unsafe { gfx.dcomp.CreateVisual()? };
+                set_offset_x(
+                    gfx,
+                    &visual,
+                    &planned.scroll,
+                    base - raster.margin as f64,
+                    -overflow,
+                )?;
+                unsafe {
+                    visual.SetBitmapInterpolationMode(
+                        DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                    )?;
+                    visual.SetContent(&raster.surface)?;
+                    visual.SetOffsetY2((y - raster.margin as f64).round() as f32)?;
+                    band.AddVisual(&visual, true, None)?;
+                }
+            }
+            Ok(())
+        })?;
     }
     Ok(has_translation)
+}
+
+/// Most bands per edge-fade zone: one device pixel wide up to this, so each opacity step is at most 1/64.
+pub(crate) const EDGE_FADE_MAX_BANDS: f64 = 64.0;
+
+/// The left/right edge fade (`rules::edge_fade_bands`). DirectComposition cannot mask a visual with a gradient (its
+/// filter effects take no surface input, and `CompositionMaskBrush` needs Windows.UI.Composition), so the lyric
+/// content is built once per vertical band: each band is a static clip with a static opacity, and the content in it
+/// moves by the same DWM-evaluated animations. Rebuilt only when the window is re-planned.
+fn edge_faded(
+    gfx: &Gfx,
+    parent: &IDCompositionVisual2,
+    area: Area,
+    h: f64,
+    mut build: impl FnMut(&IDCompositionVisual2) -> Result<()>,
+) -> Result<()> {
+    let zone = rules::edge_fade_width(area.width, area.height);
+    let band_px = (zone / EDGE_FADE_MAX_BANDS).max(1.0);
+    for (l, r, opacity) in rules::edge_fade_bands(area.width, area.height, band_px) {
+        // Whole device pixels so neighbouring bands neither overlap nor leave a seam.
+        let (left, right) = ((area.left + l).round(), (area.left + r).round());
+        if right <= left || opacity <= 0.0 {
+            continue;
+        }
+        let band = unsafe { gfx.dcomp.CreateVisual()? };
+        unsafe {
+            band.SetClip2(&D2D_RECT_F {
+                left: left as f32,
+                top: 0.0,
+                right: right as f32,
+                bottom: h as f32,
+            })?;
+            if opacity < 1.0 {
+                let effect = gfx.dcomp.CreateEffectGroup()?;
+                effect.SetOpacity2(opacity as f32)?;
+                band.SetEffect(&effect)?;
+            }
+            parent.AddVisual(&band, true, None)?;
+        }
+        build(&band)?;
+    }
+    Ok(())
 }
 
 fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {

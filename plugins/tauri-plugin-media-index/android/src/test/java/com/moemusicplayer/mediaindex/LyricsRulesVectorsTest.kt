@@ -79,4 +79,15 @@ class LyricsRulesVectorsTest {
                 FloatingLyricsRules.inactiveFactor(c.getString("animation"), c.getInt("inactive"), c.getDouble("weight").toFloat()), 0.0001f)
         }
     }
+
+    @Test
+    fun edgeFade() {
+        for (c in vectors.cases("edgeFade")) {
+            val w = c.getDouble("areaWidth").toFloat()
+            val h = c.getDouble("areaHeight").toFloat()
+            assertEquals(c.toString(), c.getDouble("width").toFloat(), FloatingLyricsRules.edgeFadeWidth(w, h), 0.0001f)
+            assertEquals(c.toString(), c.getDouble("expected").toFloat(),
+                FloatingLyricsRules.edgeFadeOpacity(c.getDouble("x").toFloat(), w, h), 0.0001f)
+        }
+    }
 }

@@ -113,6 +113,15 @@ fn rules_match_the_shared_vectors() {
             close(line_weight(&focus, i), expected, &c.to_string());
         }
     }
+    for c in cases(&v, "edgeFade") {
+        let (w, h) = (f(&c["areaWidth"]), f(&c["areaHeight"]));
+        close(edge_fade_width(w, h), f(&c["width"]), &c.to_string());
+        close(
+            edge_fade_opacity(f(&c["x"]), w, h),
+            f(&c["expected"]),
+            &c.to_string(),
+        );
+    }
     for c in cases(&v, "opacity") {
         let inactive = normalize_inactive_opacity_percent(f(&c["inactive"]));
         let actual = line_opacity_factor(

@@ -371,4 +371,18 @@ object FloatingLyricsRules {
      */
     fun clampPosition(x: Int, y: Int, width: Int, height: Int, screenWidth: Int, screenHeight: Int): Pair<Int, Int> =
         Pair(x.coerceIn(0, maxOf(0, screenWidth - width)), y.coerceIn(0, maxOf(0, screenHeight - height)))
+
+    /**
+     * Edge fade of the lyric area (same as `lyricsEdgeFadeWidth`, player-lyrics-rules): a square zone on each side,
+     * as wide as the area is high, at most half the area width.
+     */
+    fun edgeFadeWidth(areaWidth: Float, areaHeight: Float): Float =
+        if (!(areaWidth > 0f) || !(areaHeight > 0f)) 0f else minOf(areaHeight, areaWidth / 2f)
+
+    /** The edge fade's opacity (0..1) at `x` px from the area's left edge (`lyricsEdgeFadeOpacity`). */
+    fun edgeFadeOpacity(x: Float, areaWidth: Float, areaHeight: Float): Float {
+        val zone = edgeFadeWidth(areaWidth, areaHeight)
+        if (!(zone > 0f)) return 0f
+        return (minOf(x, areaWidth - x) / zone).coerceIn(0f, 1f)
+    }
 }

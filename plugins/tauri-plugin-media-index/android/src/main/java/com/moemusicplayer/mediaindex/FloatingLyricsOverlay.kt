@@ -397,7 +397,7 @@ object FloatingLyricsOverlay {
         val button = lockPx(context)
         // The shadow / glow may draw past the lyric area into the transparent room around it.
         val frame = FrameLayout(context).apply { clipChildren = false; clipToPadding = false }
-        val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
+        val column = EdgeFadeLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
         // The panel is text height x 1.5: the room above and below the area (text height x 1.1) tracks its height
         // (the translation line comes and goes).
         column.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->

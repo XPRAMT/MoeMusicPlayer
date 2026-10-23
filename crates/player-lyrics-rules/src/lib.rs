@@ -411,8 +411,82 @@ pub fn line_opacity_factor(
     inactive + (1.0 - inactive) * weight.clamp(0.0, 1.0)
 }
 
+/// `lyricsEdgeFadeWidth`: the square edge-fade zone on each side of a lyric area (as wide as the area is high, at most
+/// half the area width).
+pub fn edge_fade_width(area_width: f64, area_height: f64) -> f64 {
+    if area_width.is_nan() || area_height.is_nan() || area_width <= 0.0 || area_height <= 0.0 {
+        return 0.0;
+    }
+    area_height.min(area_width / 2.0)
+}
+
+/// `lyricsEdgeFadeOpacity`: the edge fade's opacity factor at `x` px from the lyric area's left edge (1 inside, falling
+/// linearly to 0 at either outer edge).
+pub fn edge_fade_opacity(x: f64, area_width: f64, area_height: f64) -> f64 {
+    let zone = edge_fade_width(area_width, area_height);
+    if zone <= 0.0 {
+        return 0.0;
+    }
+    (x.min(area_width - x) / zone).clamp(0.0, 1.0)
+}
+
+/// The edge fade as vertical bands for a renderer that cannot draw a gradient mask: `(left, right, opacity)` relative to
+/// the area's left edge, `band_px` wide (the last band of a zone may be narrower), each with the opacity at its centre;
+/// the middle band (opacity 1) spans between the zones. Empty when the area is empty.
+pub fn edge_fade_bands(area_width: f64, area_height: f64, band_px: f64) -> Vec<(f64, f64, f64)> {
+    let zone = edge_fade_width(area_width, area_height);
+    if zone <= 0.0 {
+        return Vec::new();
+    }
+    let band = band_px.max(0.25);
+    let mut left = Vec::new();
+    let mut x = 0.0;
+    while x < zone - 1e-9 {
+        let r = (x + band).min(zone);
+        left.push((
+            x,
+            r,
+            edge_fade_opacity((x + r) / 2.0, area_width, area_height),
+        ));
+        x = r;
+    }
+    let mut out = left.clone();
+    if area_width - 2.0 * zone > 1e-9 {
+        out.push((zone, area_width - zone, 1.0));
+    }
+    out.extend(
+        left.iter()
+            .rev()
+            .map(|&(l, r, o)| (area_width - r, area_width - l, o)),
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edge_fade_zones_are_square_and_clamped() {
+        use super::*;
+        assert_eq!(edge_fade_width(400.0, 40.0), 40.0);
+        assert_eq!(edge_fade_width(60.0, 40.0), 30.0);
+        assert_eq!(edge_fade_width(0.0, 40.0), 0.0);
+        assert_eq!(edge_fade_opacity(0.0, 400.0, 40.0), 0.0);
+        assert_eq!(edge_fade_opacity(20.0, 400.0, 40.0), 0.5);
+        assert_eq!(edge_fade_opacity(200.0, 400.0, 40.0), 1.0);
+        assert_eq!(edge_fade_opacity(390.0, 400.0, 40.0), 0.25);
+        assert_eq!(edge_fade_opacity(-3.0, 400.0, 40.0), 0.0);
+        let bands = edge_fade_bands(400.0, 4.0, 1.0);
+        assert_eq!(bands.len(), 9);
+        assert_eq!(bands[0], (0.0, 1.0, 0.125));
+        assert_eq!(bands[4], (4.0, 396.0, 1.0));
+        assert_eq!(bands[8], (399.0, 400.0, 0.125));
+        // Narrow area: two zones meet in the middle, no middle band.
+        let bands = edge_fade_bands(6.0, 40.0, 1.0);
+        assert_eq!(bands.len(), 6);
+        assert!(bands.iter().all(|b| b.2 < 1.0));
+        assert!(edge_fade_bands(0.0, 4.0, 1.0).is_empty());
+    }
+
     use super::*;
 
     #[test]

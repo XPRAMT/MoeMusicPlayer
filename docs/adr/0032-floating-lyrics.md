@@ -263,3 +263,14 @@ monotone C1 cubic Hermite (`lyricsStripCubic` / `strip_cubic` / `FloatingLyricsR
   starts) samples the same curve at every re-plan, so hand-overs have no kink.
 - The 200 ms opacity crossfades are unchanged. Non-left anchors (not used by the app) take
   max(last anchor, last cell start + glyph centre) as the terminal value so the curve stays monotone.
+
+## Edge fade (2026-10-23)
+
+The taskbar and floating lyric areas (Windows and Android, both animation modes) fade out at the left and right: a
+square zone on each side, as wide as the area is high (half the width when the area is narrower than twice its height),
+where everything the lyrics draw (main line, translation, shadow, outline) falls linearly from opaque at the inner
+edge to transparent at the outer edge. The padlock column and the move-mode background are not faded. Since the outer
+edge is transparent, the horizontal clip room kept for the shadow at the area's sides is gone. Rules:
+`player-lyrics-rules::edge_fade_*`, `lyricsEdgeFade*` (lyrics-strip.js, shared vectors `edgeFade`),
+`FloatingLyricsRules.edgeFade*`. Android masks the lyric column (`EdgeFadeLayout`) with a `LinearGradient` in
+`DST_IN` on a saved layer.
