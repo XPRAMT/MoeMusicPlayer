@@ -110,6 +110,12 @@ fn network(error: reqwest::Error) -> RemoteError {
     if let Some(reason) = tls_error {
         return RemoteError::Tls(reason);
     }
+    // The pinned verifier's refusal (`tls.rs`); the error chain does not always let it be downcast (the TLS
+    // connector boxes it), but its text is in the debug chain.
+    const PIN_CHANGED: &str = "伺服器的憑證與你先前接受的不同";
+    if chain.contains(PIN_CHANGED) {
+        return RemoteError::Tls(PIN_CHANGED.to_owned());
+    }
     if chain.contains("certificate")
         || chain.contains("InvalidCertificate")
         || chain.contains("UnknownIssuer")

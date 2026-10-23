@@ -531,7 +531,8 @@ fn playlist_write_back_edits_the_file_on_the_server() {
     let a = text.find("a.flac").unwrap();
     let b = text.find("b.flac").unwrap();
     let c = text.find("c.flac").unwrap();
-    assert!(a < b && b < c, "added in path order");
+    // As with local favorites: after the last entry of the same folder.
+    assert!(a < c && c < b, "added after the folder's last entry: {text:?}");
     let _ = fs.remove_file(&name);
     let _ = fs.remove_file(&format!("{name}.bak"));
 }
