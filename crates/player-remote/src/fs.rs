@@ -16,6 +16,14 @@ pub struct RemoteEntry {
     pub created_utc_100ns: Option<i64>,
 }
 
+impl RemoteEntry {
+    /// The creation time in UTC Unix milliseconds (rounded down, like the local scanners), when the protocol exposes
+    /// it. The library's 新增時間 is this value, so a scan has it from the listing without asking the server again.
+    pub fn created_ms(&self) -> Option<i64> {
+        self.created_utc_100ns.map(|ticks| ticks.div_euclid(10_000))
+    }
+}
+
 /// Why a remote operation failed. The kind decides what the user is told and whether a retry makes sense.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteError {

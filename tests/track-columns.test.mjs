@@ -565,3 +565,15 @@ test('every list shows the source column and playlist rows format their source n
   assert.equal(formatTrackColumnValue('source', row, () => ''), 'smb1');
   assert.notEqual(formatTrackColumnValue('modifiedAt', row, () => ''), '—');
 });
+
+test('a remote track shows its creation and modified times in the columns like a local file', () => {
+  // As the list summary of an SMB song arrives after a sync: the times come from the server's listing.
+  const created = new Date(2025, 2, 7, 8, 30).getTime();
+  const modified = new Date(2026, 9, 21, 22, 5).getTime();
+  const remote = { title: 'Song', sourceName: '我的smb', createdAtUtcMs: created, modifiedAtUtcMs: modified };
+  const local = { title: 'Song', sourceName: '本地', createdAtUtcMs: created, modifiedAtUtcMs: modified };
+  assert.equal(formatTrackColumnValue('createdAt', remote, formatDuration), '2025-03-07');
+  assert.equal(formatTrackColumnValue('modifiedAt', remote, formatDuration), '2026-10-21');
+  assert.equal(formatTrackColumnValue('createdAt', remote, formatDuration), formatTrackColumnValue('createdAt', local, formatDuration));
+  assert.equal(formatTrackColumnValue('createdAt', { ...remote, createdAtUtcMs: null }, formatDuration), '—');
+});

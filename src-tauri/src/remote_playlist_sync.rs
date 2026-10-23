@@ -450,6 +450,81 @@ mod tests {
             let _ = fs::remove_dir_all(root);
         }
 
+        /// A server that gives each file a creation time in its `stat` (as SMB does).
+        struct WithCreationTimes(DirFs);
+
+        fn fake_creation_ticks(path: &str) -> i64 {
+            let days: i64 = path.bytes().map(i64::from).sum();
+            (1_700_000_000_000 + days * 86_400_000) * 10_000 + 6_789
+        }
+
+        impl RemoteFs for WithCreationTimes {
+            fn list(&self, dir: &str) -> Result<Vec<player_remote::fs::RemoteEntry>, RemoteError> {
+                self.0.list(dir)
+            }
+            fn stat(&self, path: &str) -> Result<player_remote::fs::RemoteEntry, RemoteError> {
+                let mut entry = self.0.stat(path)?;
+                if !entry.is_dir {
+                    entry.created_utc_100ns = Some(fake_creation_ticks(path.trim_matches('/')));
+                }
+                Ok(entry)
+            }
+            fn open(
+                &self,
+                path: &str,
+            ) -> Result<Box<dyn player_remote::fs::RemoteFile>, RemoteError> {
+                self.0.open(path)
+            }
+        }
+
+        #[test]
+        fn the_songs_of_a_remote_playlist_get_their_creation_time_from_the_scan() {
+            let root = tree("created");
+            fs::write(
+                root.join("Lists/mix.m3u8"),
+                "#EXTM3U\n../Artist/Album/01 s16.wv\n../Other/f32.wv\n",
+            )
+            .unwrap();
+            let id = SourceId::new();
+            let resolver: Arc<dyn RemoteResolver> = Arc::new(Resolver {
+                fs: Arc::new(WithCreationTimes(DirFs::new(&root))),
+                bases: HashMap::from([(id, String::new())]),
+            });
+            let source = playlist_source(id, "Lists/mix.m3u8");
+            let mut database = Database::open_in_memory().unwrap();
+            sync_list(&mut database, &resolver, &source, 1_000);
+            let page = database
+                .list_tracks_page(ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::CreatedAt,
+                        direction: TrackSortDirection::Asc,
+                    },
+                })
+                .unwrap();
+            assert_eq!(page.items.len(), 2);
+            let mut expected: Vec<i64> = ["Artist/Album/01 s16.wv", "Other/f32.wv"]
+                .iter()
+                .map(|path| fake_creation_ticks(path).div_euclid(10_000))
+                .collect();
+            expected.sort_unstable();
+            assert_eq!(
+                page.items
+                    .iter()
+                    .map(|item| item.created_at_utc_ms)
+                    .collect::<Vec<_>>(),
+                expected.into_iter().map(Some).collect::<Vec<_>>()
+            );
+            assert!(page
+                .items
+                .iter()
+                .all(|item| item.modified_at_utc_ms.is_some()));
+            let _ = fs::remove_dir_all(root);
+        }
+
         fn folder_root(id: SourceId, base: &str) -> LibraryRoot {
             LibraryRoot {
                 id,

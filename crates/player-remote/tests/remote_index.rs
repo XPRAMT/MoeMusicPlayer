@@ -453,3 +453,203 @@ fn the_sync_stores_the_lrc_beside_a_song_with_its_fingerprint_and_follows_change
     assert_eq!(lookup(&db, "Artist/Album One/01 s16.wv"), LyricSidecarLookup::Absent);
     let _ = fs::remove_dir_all(tree);
 }
+/// A server that reports creation times (SMB does, in its directory listing and in `stat`), or holds them back like
+/// an older build of the scanner that did not keep them. It counts the requests, so a test can see that the times
+/// come with the listing and cost nothing extra.
+struct WithCreationTimes {
+    inner: DirFs,
+    report: std::sync::atomic::AtomicBool,
+    lists: std::sync::atomic::AtomicU64,
+    stats: std::sync::atomic::AtomicU64,
+}
+
+/// The creation time the fake server gives a file, in 100 ns ticks since the Unix epoch: whole days apart by path, and
+/// 1.2345 ms past the millisecond so the rounding is visible.
+fn fake_creation_ticks(path: &str) -> i64 {
+    let days: i64 = path.bytes().map(i64::from).sum();
+    (1_700_000_000_000 + days * 86_400_000) * 10_000 + 12_345
+}
+
+impl WithCreationTimes {
+    fn new(root: &Path) -> Self {
+        Self {
+            inner: DirFs::new(root),
+            report: std::sync::atomic::AtomicBool::new(true),
+            lists: Default::default(),
+            stats: Default::default(),
+        }
+    }
+
+    fn with_time(&self, path: &str, mut entry: RemoteEntry) -> RemoteEntry {
+        if !entry.is_dir && self.report.load(std::sync::atomic::Ordering::SeqCst) {
+            entry.created_utc_100ns = Some(fake_creation_ticks(path.trim_matches('/')));
+        }
+        entry
+    }
+}
+
+impl RemoteFs for WithCreationTimes {
+    fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, RemoteError> {
+        self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self
+            .inner
+            .list(dir)?
+            .into_iter()
+            .map(|entry| {
+                let path = if dir.trim_matches('/').is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{}/{}", dir.trim_matches('/'), entry.name)
+                };
+                self.with_time(&path, entry)
+            })
+            .collect())
+    }
+    fn stat(&self, path: &str) -> Result<RemoteEntry, RemoteError> {
+        self.stats.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let entry = self.inner.stat(path)?;
+        Ok(self.with_time(path, entry))
+    }
+    fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
+        self.inner.open(path)
+    }
+}
+
+fn created_by_path(db: &Database, root: &LibraryRoot) -> Vec<(String, Option<i64>, Option<i64>)> {
+    let page = db
+        .list_tracks_page(ListTracksQuery {
+            offset: 0,
+            limit: 20,
+            query: None,
+            field_filter: None,
+            sort: player_core::TrackListSort {
+                field: player_core::TrackSortField::CreatedAt,
+                direction: player_core::TrackSortDirection::Asc,
+            },
+        })
+        .expect("page");
+    page.items
+        .iter()
+        .map(|item| {
+            let path = db
+                .track_locators(item.id)
+                .expect("locators")
+                .into_iter()
+                .find_map(|locator| match locator {
+                    MediaLocator::Remote { source_id, path } if source_id == root.id => Some(path),
+                    _ => None,
+                })
+                .expect("a remote locator");
+            (path, item.created_at_utc_ms, item.modified_at_utc_ms)
+        })
+        .collect()
+}
+
+#[test]
+fn a_scan_keeps_the_creation_time_the_listing_gives_and_fills_it_in_for_unchanged_tracks() {
+    let tree = make_tree("created");
+    let server = Arc::new(WithCreationTimes::new(&tree));
+    // A library made before the scan kept creation times: the server gives none.
+    server
+        .report
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut db = Database::open_in_memory().expect("database");
+    let root = root_for("");
+    db.save_library_root(&root).expect("save the root");
+    let mut index = index_over(Arc::clone(&server) as Arc<dyn RemoteFs>, "");
+    SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_000_000).expect("sync");
+    let before = created_by_path(&db, &root);
+    assert_eq!(before.len(), 5);
+    assert!(before
+        .iter()
+        .all(|(_, created, modified)| created.is_none() && modified.is_some()));
+    let lists_without = server.lists.load(std::sync::atomic::Ordering::SeqCst);
+
+    // The next sync sees the times. Nothing else changed, so no tag is read again, and the listing is all it asks.
+    server
+        .report
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    server.lists.store(0, std::sync::atomic::Ordering::SeqCst);
+    let again = SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_100_000).expect("again");
+    assert_eq!(again.metadata_reads, 0);
+    assert_eq!(again.unchanged, 5);
+    assert_eq!(
+        server.lists.load(std::sync::atomic::Ordering::SeqCst),
+        lists_without
+    );
+    assert_eq!(
+        server.stats.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no stat per file"
+    );
+    let after = created_by_path(&db, &root);
+    for (path, created, modified) in &after {
+        // 100 ns ticks to milliseconds, rounded down like the local scanners.
+        assert_eq!(
+            *created,
+            Some(fake_creation_ticks(path).div_euclid(10_000)),
+            "{path}"
+        );
+        let on_disk = fs::metadata(tree.join(path)).unwrap().modified().unwrap();
+        let on_disk = on_disk
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert_eq!(*modified, Some(on_disk), "{path}");
+    }
+    // The list sorted by 新增時間 follows the server's creation times.
+    let mut expected: Vec<i64> = after
+        .iter()
+        .map(|(_, created, _)| created.unwrap())
+        .collect();
+    expected.sort_unstable();
+    assert_eq!(
+        after
+            .iter()
+            .map(|(_, created, _)| created.unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+
+    // The queue and every other list read the same summary.
+    let first = db
+        .resolve_track_id_for_locator(&MediaLocator::Remote {
+            source_id: root.id,
+            path: after[0].0.clone(),
+        })
+        .expect("resolve")
+        .expect("in the library");
+    let summary = db.get_track_summaries(&[first]).expect("summaries")[0]
+        .clone()
+        .expect("summary");
+    assert_eq!(summary.created_at_utc_ms, after[0].1);
+    assert_eq!(summary.modified_at_utc_ms, after[0].2);
+
+    // A third sync finds every time already stored and changes nothing.
+    let third = SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_200_000).expect("third");
+    assert_eq!(third.metadata_reads, 0);
+    assert_eq!(created_by_path(&db, &root), after);
+    let _ = fs::remove_dir_all(tree);
+}
+
+#[test]
+fn songs_looked_up_by_path_carry_the_creation_time_of_their_stat() {
+    let tree = make_tree("created-paths");
+    let server = Arc::new(WithCreationTimes::new(&tree));
+    let index = index_over(Arc::clone(&server) as Arc<dyn RemoteFs>, "");
+    let wanted = vec![
+        "Artist/Album One/01 s16.wv".to_owned(),
+        "Other/f32.wv".to_owned(),
+    ];
+    let scan = index.scan_paths(SourceId::new(), &wanted);
+    assert_eq!(scan.tracks.len(), 2);
+    for track in &scan.tracks {
+        assert_eq!(
+            track.fingerprint.created_at_utc_ms,
+            Some(fake_creation_ticks(&track.identity.source_item_id).div_euclid(10_000))
+        );
+    }
+    // One stat per song, as before: the time comes with it.
+    assert_eq!(server.stats.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let _ = fs::remove_dir_all(tree);
+}

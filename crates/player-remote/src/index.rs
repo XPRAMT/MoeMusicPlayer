@@ -213,7 +213,7 @@ impl RemoteMediaIndex {
                     fingerprint: FileFingerprint {
                         size_bytes: entry.size,
                         modified_at_utc_ms: entry.modified_ms,
-                        created_at_utc_ms: None,
+                        created_at_utc_ms: entry.created_ms(),
                     },
                     metadata: None,
                 }),
@@ -667,7 +667,7 @@ fn handle_entries(
                 fingerprint: FileFingerprint {
                     size_bytes: entry.size,
                     modified_at_utc_ms: entry.modified_ms,
-                    created_at_utc_ms: None,
+                    created_at_utc_ms: entry.created_ms(),
                 },
                 metadata: None,
             });
