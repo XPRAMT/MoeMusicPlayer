@@ -323,7 +323,7 @@ pub(crate) fn read_remote_details(
     // details remain available if a server cannot answer this optional metadata request.
     let stamp =
         player_core::remote_content().and_then(|content| content.stat(source_id, path).ok());
-    let (modified, created) = remote_file_times(stamp, cfg!(target_os = "windows"));
+    let (modified, created) = remote_file_times(stamp);
     details.file_size = length;
     details.modified_unix_ms = modified;
     details.created_unix_ms = created;
@@ -333,19 +333,15 @@ pub(crate) fn read_remote_details(
     Ok(details)
 }
 
-fn remote_file_times(
-    stamp: Option<player_core::RemoteStamp>,
-    include_creation: bool,
-) -> (Option<u64>, Option<u64>) {
+fn remote_file_times(stamp: Option<player_core::RemoteStamp>) -> (Option<u64>, Option<u64>) {
     let Some(stamp) = stamp else {
         return (None, None);
     };
     let modified = stamp
         .modified_ms
         .and_then(|value| u64::try_from(value).ok());
-    let created = include_creation
-        .then_some(stamp.created_utc_100ns)
-        .flatten()
+    let created = stamp
+        .created_utc_100ns
         .and_then(|value| u64::try_from(value).ok())
         .map(|value| value / 10_000);
     (modified, created)
@@ -1321,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_details_use_server_modified_time_and_only_windows_creation_time() {
+    fn remote_details_use_both_server_timestamps_on_all_clients() {
         let stamp = player_core::RemoteStamp {
             len: 1,
             modified_ms: Some(1_798_000_000_123),
@@ -1329,16 +1325,11 @@ mod tests {
         };
 
         assert_eq!(
-            remote_file_times(Some(stamp), false),
-            (Some(1_798_000_000_123), None),
-            "Android details display server modification time but leave creation time blank"
-        );
-        assert_eq!(
-            remote_file_times(Some(stamp), true),
+            remote_file_times(Some(stamp)),
             (Some(1_798_000_000_123), Some(179_800_000_012)),
-            "desktop details display both timestamps reported by the server"
+            "Android and desktop both display timestamps reported by the server"
         );
-        assert_eq!(remote_file_times(None, true), (None, None));
+        assert_eq!(remote_file_times(None), (None, None));
     }
 }
 
