@@ -180,7 +180,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   that the first line's start is no jump, the same 200 ms rule applies to it: in the 200 ms before the first line
   starts (shortened so it never begins before position 0) every line except the first fades from 1 to the
   not-current factor, and the first stays 1; at its start it is the current line and the others are already at the
-  factor. From the last line's start nothing fades (it stays 1). Pure functions in `lyrics-strip.js`:
+  factor. From the last line's start nothing fades (it stays 1). Android computes the same weights from its own position (`FloatingLyricsRules.cellWeight`), so a prelude shorter than 200 ms starts already part-way through the first-line lead-in at position 0, whereas Windows shortens the fade so it never begins before position 0. Pure functions in `lyrics-strip.js`:
   `lyricsStripFocus(startTimesMs, positionMs)` -> `{ current, incoming, progress, fadeStartMs, fadeMs }`,
   `lyricsLineWeight(focus, index)` (0 not current ... 1 current) and
   `lyricsLineOpacityFactor(weight, inactiveOpacityPercent, animation)` = `inactive + (1 - inactive) * weight` (the
@@ -204,3 +204,23 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   same rule on its own smoothed position (`position + offsetMs`): factor of a line = `inactive + (1 - inactive) *
   weight`, weight from the focus above with a 200 ms fade ending at the next line's start, multiplied by the overlay's own
   opacity.
+
+## Amendment (2026-10-23): text-shadow on the text, no parent filter
+
+- Decision: the text shadow of the taskbar lyrics and the Windows floating lyrics (one component,
+  `src/lib/TaskbarLyricsView.svelte`) is a single-layer `text-shadow` on the text elements themselves
+  (`.taskbar-lyrics-track`, `.taskbar-lyrics-strip-text`); there is no `filter` / `drop-shadow` on any parent. The blur radius
+  is `--taskbar-lyrics-shadow-blur` (0.3em, the old filter's standard deviation) x 2 to keep the old look. In shadow mode
+  the clipping containers (`.taskbar-lyrics-main`, `-translation`) use `overflow: clip` with `overflow-clip-margin` equal
+  to the shadow radius and no padding (scrolling and alignment measure `clientWidth`).
+  `tests/taskbar-lyrics-single-shadow.test.mjs` checks: no filter / drop-shadow, a single `text-shadow` layer, the animated
+  cells are not under a filter, no new `will-change`.
+- Reason: in the continuous animation a parent filter recomputes the blur of the whole area on every frame (and whenever the
+  fading opacity changes), and all WebView2 windows share one GPU process. The maintainer measured that, with continuous
+  lyrics open, the album-detail cover collapse in the main window dropped frames badly (one lyrics window: low frame rate;
+  two: frozen), while animation 「無」 was fine.
+- Trade-off: the shadow shape differs slightly from the old filter; the shadow at a clipped edge is kept at most 0.6em.
+  Android is not affected (native drawing).
+- Status: not yet verified on the maintainer's machine. If it still drops frames, the next candidates are giving the lyrics
+  windows their own `data_directory` (a separate WebView2 process group including its own GPU process) and lowering the lyrics
+  windows' update rate.
