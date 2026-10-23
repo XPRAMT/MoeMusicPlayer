@@ -50,6 +50,7 @@
     findActiveLyricIndex,
     getPlainLyricWindow,
     getTimedLyricWindow,
+    sameLyricWindow,
     getLyricsOffset,
     updateLyricsRowHeight,
   } from './lyrics-window.js';
@@ -203,6 +204,8 @@
   function runCueGlide(element: HTMLDivElement, glide: ScrollGlide): void {
     cueGlide = glide;
     timedSmoothScrolling = true;
+    // Rows the glide brings in are rendered before it moves (union of the view and the glide's range).
+    refreshTimedWindow();
     if (cueScrollFrame) return; // the running frame loop picks up the new glide
     const step = (now: number) => {
       const current = cueGlide;
@@ -311,9 +314,30 @@
   let timedCanvasHeight = $derived(timedTotalHeight + timedViewportHeight);
   let timedEdgePadding = $derived(timedViewportHeight / 2);
   let plainTotalHeight = $derived.by(() => { layoutRevision; return plainLayout.totalHeight; });
-  let timedWindow = $derived.by(() => {
+  // Rendered by scroll position (plus overscan and a running glide's range), not by the active line, so hand
+  // scrolling never shows blank spacers. Reassigned only when the rows or spacer heights actually change.
+  let timedWindow = $state<ReturnType<typeof getTimedLyricWindow>>({ start: 0, end: 0, beforeHeight: 0, afterHeight: 0, rows: [] });
+  function refreshTimedWindow(extraScrollTops: number[] = []): void {
+    const element = timedViewport;
+    const glide = cueGlide;
+    const tops = glide ? [glide.from, glide.to, ...extraScrollTops] : extraScrollTops;
+    const next = getTimedLyricWindow(
+      timedLayout,
+      element ? element.scrollTop : 0,
+      element ? element.clientHeight || timedViewportHeight : timedViewportHeight,
+      timedEdgePadding,
+      tops,
+    );
+    const current = untrack(() => timedWindow);
+    if (!sameLyricWindow(current, next) || current.rows.length !== next.rows.length) timedWindow = next;
+  }
+  $effect(() => {
     layoutRevision;
-    return getTimedLyricWindow(timedLayout, displayTimedIndex);
+    timedLayout;
+    timedViewportHeight;
+    timedEdgePadding;
+    timedViewport;
+    untrack(() => refreshTimedWindow());
   });
   let timedRenderedRows = $derived(timedWindow.rows.filter((index) => timedLayout.heights[index] > 0));
   let plainWindow = $derived.by(() => {
@@ -360,12 +384,29 @@
     if (Math.abs(element.scrollTop - targetTop) > 1) element.scrollTo({ top: targetTop, behavior: 'instant' });
   }
 
+  /** Whether correctTimedCenter would recenter now; otherwise a measured row keeps the top row in place instead. */
+  function timedCenterFollows(): boolean {
+    return displayActiveTimedIndex >= 0 && !timedSmoothScrolling && !timedUserScrolling;
+  }
+  /** Row under the top edge and the distance into it, so re-measured rows above it do not shift the view. */
+  function captureScrollAnchor(layout: ReturnType<typeof buildLyricsLayout>, viewport: HTMLDivElement, timed: boolean) {
+    if (timed && timedCenterFollows()) return null;
+    const pad = timed ? timedEdgePadding : 0;
+    const top = viewport.scrollTop - pad;
+    if (timed && top < 0) return null;
+    const index = findLyricsRowAtOffset(layout, top);
+    return index < 0 ? null : { index, offset: top - getLyricsOffset(layout, index), pad };
+  }
+  function restoreScrollAnchor(layout: ReturnType<typeof buildLyricsLayout>, viewport: HTMLDivElement, anchor: { index: number; offset: number; pad: number } | null): void {
+    if (!anchor) return;
+    viewport.scrollTop = anchor.pad + getLyricsOffset(layout, anchor.index) + anchor.offset;
+  }
+
   const rowObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((entries) => {
     const layout = isTimed ? timedLayout : plainLayout;
     const viewport = isTimed ? timedViewport : plainViewport;
     if (!viewport) return;
-    const anchorIndex = isTimed ? -1 : findLyricsRowAtOffset(layout, viewport.scrollTop);
-    const anchorOffset = anchorIndex < 0 ? 0 : viewport.scrollTop - getLyricsOffset(layout, anchorIndex);
+    const anchor = captureScrollAnchor(layout, viewport, isTimed);
     let changed = false;
     for (const entry of entries) {
       const row = entry.target as HTMLElement;
@@ -376,10 +417,8 @@
     if (!changed) return;
     layoutRevision += 1;
     if (isTimed) correctTimedCenter();
-    if (anchorIndex >= 0 && !isTimed) {
-      viewport.scrollTop = getLyricsOffset(layout, anchorIndex) + anchorOffset;
-      plainScrollTop = viewport.scrollTop;
-    }
+    restoreScrollAnchor(layout, viewport, anchor);
+    if (!isTimed && anchor) plainScrollTop = viewport.scrollTop;
   });
 
   function observeLyricRow(node: HTMLElement, index: number) {
@@ -400,8 +439,7 @@
       const layout = isTimed ? timedLayout : plainLayout;
       const viewport = isTimed ? timedViewport : plainViewport;
       if (!viewport || generation !== layout.generation) return;
-      const anchorIndex = isTimed ? -1 : findLyricsRowAtOffset(layout, viewport.scrollTop);
-      const anchorOffset = anchorIndex < 0 ? 0 : viewport.scrollTop - getLyricsOffset(layout, anchorIndex);
+      const anchor = captureScrollAnchor(layout, viewport, isTimed);
       let changed = false;
       for (const row of viewport.querySelectorAll<HTMLElement>(`.lyric-line[data-layout-generation="${generation}"]`)) {
         changed = updateLyricsRowHeight(layout, Number(row.dataset.layoutIndex), row.getBoundingClientRect().height) || changed;
@@ -409,10 +447,8 @@
       if (!changed) return;
       layoutRevision += 1;
       if (isTimed) correctTimedCenter();
-      if (anchorIndex >= 0 && !isTimed) {
-        viewport.scrollTop = getLyricsOffset(layout, anchorIndex) + anchorOffset;
-        plainScrollTop = viewport.scrollTop;
-      }
+      restoreScrollAnchor(layout, viewport, anchor);
+      if (!isTimed && anchor) plainScrollTop = viewport.scrollTop;
     });
   }
 
@@ -561,6 +597,7 @@
       else if (plan === 'instant') {
         stopCueScroll();
         element.scrollTo({ top: targetTop, behavior: 'instant' });
+        refreshTimedWindow();
       }
     });
     return () => cancelAnimationFrame(frame);
@@ -584,11 +621,14 @@
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
       userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; }, 300);
     };
+    const onScroll = () => refreshTimedWindow();
+    element.addEventListener('scroll', onScroll, { passive: true });
     element.addEventListener('scrollend', onScrollEnd);
     element.addEventListener('wheel', onUserScroll, { passive: true });
     element.addEventListener('pointerdown', onUserScroll, { passive: true });
     element.addEventListener('touchstart', onUserScroll, { passive: true });
     return () => {
+      element.removeEventListener('scroll', onScroll);
       element.removeEventListener('scrollend', onScrollEnd);
       element.removeEventListener('wheel', onUserScroll);
       element.removeEventListener('pointerdown', onUserScroll);

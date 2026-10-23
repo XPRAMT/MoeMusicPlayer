@@ -30,6 +30,8 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 連續歌詞掉幀的根因（2026-10-23，Release＋CDP 實測，RTX 螢幕 120 Hz、虛擬螢幕 60 Hz）：所有 WebView2 視窗共用一個 GPU 行程，它的 GPU 主執行緒在 `DXGISwapChainImageBacking::Present` 上每個 vsync 只能送出約 3 個有畫面變動的 present（約 340–360 次／秒，所有視窗合計；超過時 present 輪流阻塞約 7.4 ms 等 vsync，GPU 主執行緒 98% 忙）。每個持續動畫的視窗每幀占一個：工作列歌詞每條工作列一個視窗（本機 2 個）、浮動歌詞 1 個、主視窗播放中（進度條）與捲動時 1 個。量測（viz `Surface::CommitFrame` 依 FrameSinkId 計）：2 工作列＋浮動＋主視窗（連續）時所有視窗含主視窗都是 89 fps；少任何一個動畫視窗就回到 120。步進後：主視窗進度條 89 → 17–22 次／秒，歌詞視窗 113–114（滑動速度 110–180 實體 px/s，本來就需要約 110–120 幀），合計 357 次／秒仍在上限，浮動歌詞 113 未達 120，主視窗一捲動就再超過上限——所以單一 GPU 行程無法達成全更新率，60 Hz 時上限約 180 次／秒更不夠（60 Hz 量測留到修正方案的驗收）。另外開的 Edge（暫存 profile，另一個 GPU 行程）3 個動畫視窗同時跑時，播放器的數字完全不變（113／113／113／22），而 Edge 自己另有約 265–275 次／秒：上限是每個 GPU 行程各自的，不是 DWM 全系統的。待使用者決定的方案：(a) 歌詞視窗用獨立的 WebView2 `data_directory`（自己的 browser＋GPU 行程；主視窗獨享一份 present 額度，歌詞 3 視窗合計約需 348／357；成本：約 +440 MB private（Edge 實測值，含 browser 116、GPU 122、renderer 與 utility），不共用 localStorage——每首歌詞延遲、語言等要改由事件／IPC 傳）；工作列與浮動再各分一組可再多一份額度但再加一組行程。(b) Windows 歌詞視窗改原生 DirectComposition＋DirectWrite 繪製，滑動用 DComp 動畫由 DWM 合成，每幀不需要任何 present，任何更新率都滿速；成本是重寫繪製（陰影／描邊、淡化、多螢幕 DPI），工作量大。
 
+播放頁同步歌詞的虛擬視窗（2026-10-23）：改依捲動位置繪製（`lyrics-window.js` 的 `getTimedLyricWindow(layout, scrollTop, 視窗高, 頭部留白, 額外 scrollTop[], overscan=6)`，與純歌詞同一套 overscan），不再是目前行 ±20，手動捲動不會看到空白；換行與延遲滑動進行中，範圍取目前視窗與滑動起點／終點的聯集，滑入的行事先已繪製。`LyricsView` 只在列範圍或留白高度改變時（`sameLyricWindow`）才更新視窗；滑動不跟隨中心時，重新量測的列以頂端列為錨點保持捲動位置。測試在 `tests/lyrics-controller.test.mjs`；Release 實機未驗收。
+
 頻譜圖的色階上限固定為 0 dB，不再提供上限輸入；舊 localStorage 的 `dbCeiling` 會在正規化時忽略，繪圖請求同樣固定送出 0。dB 下限仍可調整。
 
 頻譜圖設定工具列依實際項目寬度自動換行，預設只顯示第一行；有溢出項目時，第一行右側的 ▼／▲ 按鈕展開／收合所有後續行，可延伸至任意行數。按鈕以 grid 置中，左右內距為 0，專屬選擇器優先於一般按鈕內距，避免 30px 寬的內容被擠向右方。收合的設定項目設為 inert，避免鍵盤聚焦看不到的控件；視窗縮放與比較模式增減控件時重新量測。

@@ -7,6 +7,8 @@ import {
   findActiveLyricIndex,
   getPlainLyricWindow,
   getTimedLyricWindow,
+  getLyricsOffset,
+  sameLyricWindow,
 } from '../src/lib/lyrics-window.js';
 import {
   DEFAULT_LYRICS_PREFERENCES,
@@ -61,26 +63,44 @@ test('timed lyric timeline follows forward seek, backward seek, and per-track of
   assert.equal(findActiveLyricIndex(timeline, -1), -1);
 });
 
-test('timed lyric viewport keeps at most the active line and twenty neighbors on each side', () => {
+test('timed lyric window follows the scroll viewport with overscan, not the active line', () => {
   const preferences = DEFAULT_LYRICS_PREFERENCES;
-  const timeline = buildTimedLyricTimeline(Array.from({ length: 100_000 }, (_, index) => ({
+  const timeline = buildTimedLyricTimeline(Array.from({ length: 1_000 }, (_, index) => ({
     startMs: index * 1_000,
     text: index % 7 === 0 ? '  ' : `歌詞 ${index}`,
     translation: null,
     romanization: null,
   })));
   const layout = buildLyricsLayout(timeline, preferences, preferences.lineGapPx);
-  const middle = getTimedLyricWindow(layout, 50_000);
-  const beginning = getTimedLyricWindow(layout, -1);
-  const ending = getTimedLyricWindow(layout, timeline.length - 1);
+  const pad = 200;
+  const viewport = 400;
+  const rowAt = (offset) => findLyricsRowAtOffset(layout, offset);
+  const top = getLyricsOffset(layout, 500);
+  const middle = getTimedLyricWindow(layout, top + pad, viewport, pad);
+  const visible = Array.from(layout.visibleIndices);
+  const firstPos = visible.indexOf(rowAt(top));
+  const lastPos = visible.indexOf(rowAt(top + viewport - 0.001));
+  assert.deepEqual(middle.rows, visible.slice(firstPos - 6, lastPos + 7));
+  assert.ok(middle.rows.every((index) => index % 7 !== 0), 'hidden rows of height 0 are never rendered');
+  assert.equal(middle.beforeHeight, getLyricsOffset(layout, middle.start));
+  assert.equal(middle.afterHeight, layout.totalHeight - getLyricsOffset(layout, middle.end));
 
-  assert.ok(middle.rows.length <= 41);
-  assert.ok(middle.rows.includes(50_000));
-  assert.equal(middle.beforeHeight, layout.offsets[middle.start]);
-  assert.equal(middle.afterHeight, layout.totalHeight - layout.offsets[middle.end]);
-  assert.ok(beginning.rows.length <= 41);
-  assert.ok(ending.rows.length <= 41);
-  assert.ok(middle.rows.length < timeline.length);
+  // In the head padding the first rows render; past the end the last rows render.
+  const beginning = getTimedLyricWindow(layout, 0, viewport, pad);
+  assert.equal(beginning.rows[0], visible[0]);
+  assert.equal(beginning.beforeHeight, 0);
+  const ending = getTimedLyricWindow(layout, layout.totalHeight + 2 * pad, viewport, pad);
+  assert.equal(ending.rows.at(-1), visible.at(-1));
+  assert.equal(ending.afterHeight, 0);
+
+  // A glide target widens the window to the union, so rows it brings in are already rendered.
+  const target = getLyricsOffset(layout, 520) + pad;
+  const gliding = getTimedLyricWindow(layout, top + pad, viewport, pad, [target]);
+  const atTarget = getTimedLyricWindow(layout, target, viewport, pad);
+  assert.equal(gliding.start, middle.start);
+  assert.equal(gliding.end, atTarget.end);
+  assert.ok(sameLyricWindow(middle, getTimedLyricWindow(layout, top + pad + 1, viewport, pad)));
+  assert.ok(!sameLyricWindow(middle, gliding));
 });
 
 test('plain lyrics use a bounded scroll window without claiming synchronized timing', () => {

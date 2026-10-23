@@ -4,7 +4,6 @@
 /** @typedef {{ index: number, startMs: number, line: LyricLine }} TimedLyric */
 /** @typedef {{ heights: Float64Array, gaps: Float64Array, visibleIndices: Uint32Array, tree: Float64Array, offsets: Float64Array, totalHeight: number, generation: number }} LyricsLayout */
 
-export const TIMED_LYRIC_RADIUS = 20;
 export const PLAIN_LYRIC_OVERSCAN = 6;
 export const LYRICS_ROW_GAP_PX = 2;
 /** 2 x --lyric-shadow-blur (3px) in LyricsView.svelte: row padding equals the first shadow radius. */
@@ -163,19 +162,26 @@ export function findLyricsRowAtOffset(layout, offset) {
   return visiblePosition < 0 ? -1 : layout.visibleIndices[visiblePosition];
 }
 
-/** @param {LyricsLayout} layout @param {number} activeIndex @param {number} [radius] */
-export function getTimedLyricWindow(layout, activeIndex, radius = TIMED_LYRIC_RADIUS) {
-  const count = layout.heights.length;
-  if (!count) return { start: 0, end: 0, beforeHeight: 0, afterHeight: 0, rows: [] };
-  const center = activeIndex < 0 ? findLyricsRowAtOffset(layout, 0) : Math.min(activeIndex, count - 1);
-  if (center < 0) return { start: 0, end: 0, beforeHeight: 0, afterHeight: 0, rows: [] };
-  const start = Math.max(0, center - Math.max(0, radius));
-  const end = Math.min(count, center + Math.max(0, radius) + 1);
-  const rows = [];
-  for (let index = start; index < end; index += 1) if (layout.heights[index] > 0) rows.push(index);
-  const first = rows[0] ?? end;
-  const last = rows.length ? rows[rows.length - 1] + 1 : first;
-  return { start: first, end: last, beforeHeight: getLyricsOffset(layout, first), afterHeight: layout.totalHeight - getLyricsOffset(layout, last), rows };
+/**
+ * Timed lyrics window by scroll position (not by the active line), so hand scrolling never shows blank spacers.
+ * Scroll positions are in the viewport's coordinates; `edgePadding` is the head spacer above the first row.
+ * `extraScrollTops` (a running glide's start and target) widen the range to their union with the current view,
+ * so rows the glide brings in are rendered before it moves.
+ * @param {LyricsLayout} layout @param {number} scrollTop @param {number} viewportHeight @param {number} [edgePadding]
+ * @param {number[]} [extraScrollTops] @param {number} [overscan]
+ */
+export function getTimedLyricWindow(layout, scrollTop, viewportHeight, edgePadding = 0, extraScrollTops = [], overscan = PLAIN_LYRIC_OVERSCAN) {
+  const tops = [scrollTop, ...extraScrollTops].filter((value) => Number.isFinite(value));
+  const low = (tops.length ? Math.min(...tops) : 0) - (Number.isFinite(edgePadding) ? edgePadding : 0);
+  const high = (tops.length ? Math.max(...tops) : 0) - (Number.isFinite(edgePadding) ? edgePadding : 0);
+  return getPlainLyricWindow(layout, low, high - low + Math.max(1, viewportHeight), overscan);
+}
+
+/** True when two windows render the same rows with the same spacer heights. */
+/** @param {{ start: number, end: number, beforeHeight: number, afterHeight: number }} left @param {{ start: number, end: number, beforeHeight: number, afterHeight: number }} right */
+export function sameLyricWindow(left, right) {
+  return left.start === right.start && left.end === right.end
+    && left.beforeHeight === right.beforeHeight && left.afterHeight === right.afterHeight;
 }
 
 /** @param {LyricsLayout} layout @param {number} scrollTop @param {number} viewportHeight @param {number} [overscan] */
