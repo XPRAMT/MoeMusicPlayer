@@ -1663,6 +1663,11 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         effect: look.effect,
         line_height: line_height as f32,
     };
+    let clip_room = match look.effect {
+        rules::TextEffect::Shadow => 0.6,
+        rules::TextEffect::Stroke => 0.04,
+        rules::TextEffect::None => 0.0,
+    };
 
     let content = unsafe { gfx.dcomp.CreateVisual()? };
     unsafe {
@@ -1765,9 +1770,9 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             };
             cells.push((cached(gfx, win, &rows, style)?, *index, keys));
         }
-        // One copy of the strip per edge-fade band; every copy runs the same planned animations, so DWM keeps them
-        // in step and this process still does no per-frame work.
-        edge_faded(gfx, &content, area, h, |band| {
+        // One copy of the strip per edge-fade band (a single band while the fade is off); every copy runs the
+        // same planned animations, so DWM keeps them in step and this process still does no per-frame work.
+        edge_faded(gfx, &content, area, h, font as f64 * clip_room, |band| {
             let strip = unsafe { gfx.dcomp.CreateVisual()? };
             set_offset_x_cubic(gfx, &strip, &planned.offset, area.left)?;
             unsafe {
@@ -1856,7 +1861,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             placed.push((raster, base, overflow, y));
             y += row.1 as f64 * line_height;
         }
-        edge_faded(gfx, &content, area, h, |band| {
+        edge_faded(gfx, &content, area, h, font as f64 * clip_room, |band| {
             for (raster, base, overflow, y) in &placed {
                 let visual = unsafe { gfx.dcomp.CreateVisual()? };
                 set_offset_x(
@@ -1884,17 +1889,38 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
 /// Most bands per edge-fade zone: one device pixel wide up to this, so each opacity step is at most 1/64.
 pub(crate) const EDGE_FADE_MAX_BANDS: f64 = 64.0;
 
+/// Whether the band-based edge fade is built (see `edge_faded`). Off: its cost in dwm.exe was too high.
+const EDGE_FADE_BANDS: bool = false;
+
 /// The left/right edge fade (`rules::edge_fade_bands`). DirectComposition cannot mask a visual with a gradient (its
 /// filter effects take no surface input, and `CompositionMaskBrush` needs Windows.UI.Composition), so the lyric
 /// content is built once per vertical band: each band is a static clip with a static opacity, and the content in it
 /// moves by the same DWM-evaluated animations. Rebuilt only when the window is re-planned.
+///
+/// Disabled (`EDGE_FADE_BANDS`): about 1,300 visuals per window kept dwm.exe near one full core with three windows
+/// animating at 120 Hz. While off, the content is built once in a single visual clipped to the lyric area plus
+/// `clip` (room for the shadow or outline), as before the fade.
 fn edge_faded(
     gfx: &Gfx,
     parent: &IDCompositionVisual2,
     area: Area,
     h: f64,
+    clip: f64,
     mut build: impl FnMut(&IDCompositionVisual2) -> Result<()>,
 ) -> Result<()> {
+    if !EDGE_FADE_BANDS {
+        let band = unsafe { gfx.dcomp.CreateVisual()? };
+        unsafe {
+            band.SetClip2(&D2D_RECT_F {
+                left: (area.left - clip) as f32,
+                top: 0.0,
+                right: (area.left + area.width + clip) as f32,
+                bottom: h as f32,
+            })?;
+            parent.AddVisual(&band, true, None)?;
+        }
+        return build(&band);
+    }
     let zone = rules::edge_fade_width(area.width, area.height);
     let band_px = (zone / EDGE_FADE_MAX_BANDS).max(1.0);
     for (l, r, opacity) in rules::edge_fade_bands(area.width, area.height, band_px) {

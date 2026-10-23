@@ -510,7 +510,7 @@ mod tests {
         };
         let mut plan = plan_at(&motion, base_wall, 0.0);
         let mut plan_wall = 0.0;
-        let mut wake = plan.wake_ms.map(|ms| ms);
+        let mut wake = plan.wake_ms;
         let mut next_sample = 500.0 + rand() * 25.0;
         let mut last: Option<f64> = None;
         let mut w = 0.0;
