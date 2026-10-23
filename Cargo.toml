@@ -11,6 +11,7 @@ members = [
     "crates/player-db",
     "crates/player-zh",
     "crates/player-lyrics-rules",
+    "crates/player-lyrics-native",
     "crates/player-platform-windows",
     "crates/player-audio-windows",
     "crates/player-tags",

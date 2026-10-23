@@ -4102,6 +4102,17 @@ name = "player-formats"
 version = "0.1.0"
 
 [[package]]
+name = "player-lyrics-native"
+version = "0.1.0"
+dependencies = [
+ "player-lyrics-rules",
+ "unicode-segmentation",
+ "windows",
+ "windows-core",
+ "windows-numerics",
+]
+
+[[package]]
 name = "player-lyrics-rules"
 version = "0.1.0"
 dependencies = [

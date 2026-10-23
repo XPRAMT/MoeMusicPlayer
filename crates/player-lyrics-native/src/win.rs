@@ -1,0 +1,1882 @@
+//! The Windows renderer thread (see the crate docs).
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use player_lyrics_rules as rules;
+use windows::core::{implement, w, Interface, Ref, Result, BOOL, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::Common::*;
+use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::Direct3D::*;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::DirectComposition::*;
+use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Controls::*;
+use windows::Win32::UI::HiDpi::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+};
+use windows::Win32::UI::WindowsAndMessaging::*;
+use windows_numerics::{Matrix3x2, Vector2};
+
+use crate::plan::{self, Keys};
+use crate::{
+    effect_rgb, fit_font_size, floating_lock_css, floating_margin_css, Chrome, Events, Kind, Look,
+    LyricsData, PlayState, PlaybackSample, FLOATING_LINE_HEIGHT, FLOATING_PANEL_LINE_HEIGHT,
+    TASKBAR_LINE_HEIGHT, TASKBAR_SIDE_PADDING_CSS,
+};
+
+const WM_WAKE: u32 = WM_APP + 41;
+/// How often an idle renderer checks that its GPU device still exists.
+const DEVICE_CHECK: Duration = Duration::from_secs(2);
+/// Playback samples within this of the running clock do not re-plan (ADR 0028).
+const CLOCK_TOLERANCE_MS: f64 = 30.0;
+
+enum Cmd {
+    Create {
+        id: String,
+        kind: Kind,
+        owner: Option<isize>,
+        reply: Sender<Option<isize>>,
+    },
+    Destroy(String),
+    Look(String, Option<Look>),
+    Chrome(String, Chrome),
+    /// Fixed mode: the cursor is over the window (the watcher tells, the window itself ignores the mouse).
+    Hover(String, bool),
+    ClickThrough(String, bool),
+    Lyrics(Option<LyricsData>),
+    Playback(PlaybackSample),
+    Inactive(u32),
+    Delay {
+        track_id: String,
+        delay_sec: f64,
+    },
+    Shutdown,
+}
+
+/// Handle to the renderer thread. Cheap to clone; every call only posts a command.
+#[derive(Clone)]
+pub struct NativeLyrics {
+    tx: Sender<Cmd>,
+    thread: u32,
+}
+
+impl NativeLyrics {
+    pub fn start(events: Arc<dyn Events>) -> std::io::Result<Self> {
+        let (tx, rx) = channel();
+        let (ready_tx, ready_rx) = channel();
+        std::thread::Builder::new()
+            .name("moe-lyrics-native".into())
+            .spawn(move || {
+                let thread = unsafe { GetCurrentThreadId() };
+                // Make the thread's message queue exist before anyone posts to it.
+                let mut msg = MSG::default();
+                unsafe {
+                    let _ = PeekMessageW(&mut msg, None, WM_USER, WM_USER, PM_NOREMOVE);
+                }
+                let _ = ready_tx.send(thread);
+                run(rx, events);
+            })?;
+        let thread = ready_rx
+            .recv()
+            .map_err(|_| std::io::Error::other("lyrics renderer did not start"))?;
+        Ok(Self { tx, thread })
+    }
+
+    fn send(&self, cmd: Cmd) {
+        if self.tx.send(cmd).is_ok() {
+            unsafe {
+                let _ = PostThreadMessageW(self.thread, WM_WAKE, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+
+    /// Creates a hidden window; returns its HWND (the caller places and shows it with SetWindowPos).
+    pub fn create(&self, id: &str, kind: Kind, owner: Option<isize>) -> Option<isize> {
+        let (reply, rx) = channel();
+        self.send(Cmd::Create {
+            id: id.to_owned(),
+            kind,
+            owner,
+            reply,
+        });
+        rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+    }
+    pub fn destroy(&self, id: &str) {
+        self.send(Cmd::Destroy(id.to_owned()));
+    }
+    /// `None` hides the text (e.g. disabled settings) without destroying the window.
+    pub fn set_look(&self, id: &str, look: Option<Look>) {
+        self.send(Cmd::Look(id.to_owned(), look));
+    }
+    pub fn set_chrome(&self, id: &str, chrome: Chrome) {
+        self.send(Cmd::Chrome(id.to_owned(), chrome));
+    }
+    pub fn set_hover(&self, id: &str, hover: bool) {
+        self.send(Cmd::Hover(id.to_owned(), hover));
+    }
+    pub fn set_click_through(&self, id: &str, through: bool) {
+        self.send(Cmd::ClickThrough(id.to_owned(), through));
+    }
+    pub fn set_lyrics(&self, lyrics: Option<LyricsData>) {
+        self.send(Cmd::Lyrics(lyrics));
+    }
+    pub fn set_playback(&self, sample: PlaybackSample) {
+        self.send(Cmd::Playback(sample));
+    }
+    pub fn set_inactive_opacity(&self, percent: u32) {
+        self.send(Cmd::Inactive(rules::normalize_inactive_opacity_percent(
+            percent as f64,
+        )));
+    }
+    pub fn set_timing_delay(&self, track_id: &str, delay_sec: f64) {
+        self.send(Cmd::Delay {
+            track_id: track_id.to_owned(),
+            delay_sec,
+        });
+    }
+    pub fn shutdown(&self) {
+        self.send(Cmd::Shutdown);
+    }
+}
+
+// ---------------------------------------------------------------- devices
+
+struct Gfx {
+    d3d: ID3D11Device,
+    d2d_factory: ID2D1Factory1,
+    _d2d_device: ID2D1Device,
+    dwrite: IDWriteFactory2,
+    fallback: IDWriteFontFallback,
+    dcomp: IDCompositionDesktopDevice,
+    /// Segoe UI ascent and descent in em: the line box of every row (CSS uses the primary font's metrics).
+    ascent_em: f32,
+    descent_em: f32,
+}
+
+fn create_gfx() -> Result<Gfx> {
+    unsafe {
+        let mut d3d: Option<ID3D11Device> = None;
+        let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        let hardware = D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            flags,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut d3d),
+            None,
+            None,
+        );
+        if hardware.is_err() {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut d3d),
+                None,
+                None,
+            )?;
+        }
+        let d3d = d3d.ok_or_else(|| windows::core::Error::from(E_FAIL))?;
+        let dxgi: IDXGIDevice = d3d.cast()?;
+        let d2d_factory: ID2D1Factory1 =
+            D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+        let d2d_device = d2d_factory.CreateDevice(&dxgi)?;
+        let dcomp: IDCompositionDesktopDevice = DCompositionCreateDevice2(&d2d_device)?;
+        let dwrite: IDWriteFactory2 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+        // 'Segoe UI', 'Microsoft JhengHei', sans-serif (app.css): CJK and kana go to JhengHei, then the system
+        // fallback (Segoe UI Emoji for colour emoji).
+        let builder = dwrite.CreateFontFallbackBuilder()?;
+        let cjk = [
+            DWRITE_UNICODE_RANGE {
+                first: 0x2E80,
+                last: 0x9FFF,
+            },
+            DWRITE_UNICODE_RANGE {
+                first: 0xF900,
+                last: 0xFAFF,
+            },
+            DWRITE_UNICODE_RANGE {
+                first: 0xFF00,
+                last: 0xFFEF,
+            },
+            DWRITE_UNICODE_RANGE {
+                first: 0x20000,
+                last: 0x2FFFF,
+            },
+        ];
+        let family = HSTRING::from("Microsoft JhengHei");
+        builder.AddMapping(
+            &cjk,
+            &[family.as_ptr()],
+            None,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            1.0,
+        )?;
+        builder.AddMappings(&dwrite.GetSystemFontFallback()?)?;
+        let fallback = builder.CreateFontFallback()?;
+        let (ascent_em, descent_em) = segoe_metrics(&dwrite).unwrap_or((1.0, 0.25));
+        Ok(Gfx {
+            d3d,
+            d2d_factory,
+            _d2d_device: d2d_device,
+            dwrite,
+            fallback,
+            dcomp,
+            ascent_em,
+            descent_em,
+        })
+    }
+}
+
+fn segoe_metrics(dwrite: &IDWriteFactory2) -> Result<(f32, f32)> {
+    unsafe {
+        let mut collection = None;
+        dwrite.GetSystemFontCollection(&mut collection, false)?;
+        let collection = collection.ok_or_else(|| windows::core::Error::from(E_FAIL))?;
+        let mut index = 0;
+        let mut exists = FALSE;
+        collection.FindFamilyName(w!("Segoe UI"), &mut index, &mut exists)?;
+        if !exists.as_bool() {
+            return Err(E_FAIL.into());
+        }
+        let font = collection.GetFontFamily(index)?.GetFirstMatchingFont(
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            DWRITE_FONT_STRETCH_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+        )?;
+        let mut m = DWRITE_FONT_METRICS::default();
+        font.GetMetrics(&mut m);
+        let em = m.designUnitsPerEm as f32;
+        Ok((m.ascent as f32 / em, m.descent as f32 / em))
+    }
+}
+
+fn device_lost(gfx: &Gfx) -> bool {
+    unsafe { gfx.d3d.GetDeviceRemovedReason().is_err() }
+}
+
+fn is_device_loss(error: &windows::core::Error) -> bool {
+    let code = error.code();
+    code == DXGI_ERROR_DEVICE_REMOVED
+        || code == DXGI_ERROR_DEVICE_RESET
+        || code == D2DERR_RECREATE_TARGET
+}
+
+// ---------------------------------------------------------------- glyph outlines (for the stroke effect)
+
+#[implement(IDWriteTextRenderer)]
+struct OutlineCollector {
+    factory: ID2D1Factory1,
+    geometries: Rc<RefCell<Vec<ID2D1Geometry>>>,
+}
+
+impl IDWritePixelSnapping_Impl for OutlineCollector_Impl {
+    fn IsPixelSnappingDisabled(&self, _: *const core::ffi::c_void) -> Result<BOOL> {
+        Ok(TRUE)
+    }
+    fn GetCurrentTransform(
+        &self,
+        _: *const core::ffi::c_void,
+        transform: *mut DWRITE_MATRIX,
+    ) -> Result<()> {
+        unsafe {
+            *transform = DWRITE_MATRIX {
+                m11: 1.0,
+                m12: 0.0,
+                m21: 0.0,
+                m22: 1.0,
+                dx: 0.0,
+                dy: 0.0,
+            };
+        }
+        Ok(())
+    }
+    fn GetPixelsPerDip(&self, _: *const core::ffi::c_void) -> Result<f32> {
+        Ok(1.0)
+    }
+}
+
+impl IDWriteTextRenderer_Impl for OutlineCollector_Impl {
+    fn DrawGlyphRun(
+        &self,
+        _: *const core::ffi::c_void,
+        x: f32,
+        y: f32,
+        _: DWRITE_MEASURING_MODE,
+        run: *const DWRITE_GLYPH_RUN,
+        _: *const DWRITE_GLYPH_RUN_DESCRIPTION,
+        _: Ref<windows::core::IUnknown>,
+    ) -> Result<()> {
+        unsafe {
+            let run = &*run;
+            let face = run
+                .fontFace
+                .as_ref()
+                .ok_or(windows::core::Error::from(E_POINTER))?;
+            let path = self.factory.CreatePathGeometry()?;
+            let sink = path.Open()?;
+            face.GetGlyphRunOutline(
+                run.fontEmSize,
+                run.glyphIndices,
+                Some(run.glyphAdvances),
+                if run.glyphOffsets.is_null() {
+                    None
+                } else {
+                    Some(run.glyphOffsets)
+                },
+                run.glyphCount,
+                run.isSideways.as_bool(),
+                run.bidiLevel % 2 == 1,
+                &sink,
+            )?;
+            sink.Close()?;
+            let moved = self
+                .factory
+                .CreateTransformedGeometry(&path, &Matrix3x2::translation(x, y))?;
+            self.geometries.borrow_mut().push(moved.cast()?);
+        }
+        Ok(())
+    }
+    fn DrawUnderline(
+        &self,
+        _: *const core::ffi::c_void,
+        _: f32,
+        _: f32,
+        _: *const DWRITE_UNDERLINE,
+        _: Ref<windows::core::IUnknown>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn DrawStrikethrough(
+        &self,
+        _: *const core::ffi::c_void,
+        _: f32,
+        _: f32,
+        _: *const DWRITE_STRIKETHROUGH,
+        _: Ref<windows::core::IUnknown>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn DrawInlineObject(
+        &self,
+        _: *const core::ffi::c_void,
+        _: f32,
+        _: f32,
+        _: Ref<IDWriteInlineObject>,
+        _: BOOL,
+        _: BOOL,
+        _: Ref<windows::core::IUnknown>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------- text
+
+#[derive(Clone, Copy, PartialEq)]
+struct TextStyle {
+    color: [u8; 3],
+    effect: rules::TextEffect,
+    /// Line box in em.
+    line_height: f32,
+}
+
+fn rgba(c: [u8; 3], a: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: c[0] as f32 / 255.0,
+        g: c[1] as f32 / 255.0,
+        b: c[2] as f32 / 255.0,
+        a,
+    }
+}
+
+fn text_layout(gfx: &Gfx, text: &str, size: f32, line_height: f32) -> Result<IDWriteTextLayout> {
+    unsafe {
+        let format = gfx.dwrite.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            size,
+            w!("zh-TW"),
+        )?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        // CSS line box: the content box (ascent + descent) centred in line-height x font size.
+        let box_h = line_height * size;
+        let baseline =
+            (box_h - (gfx.ascent_em + gfx.descent_em) * size) / 2.0 + gfx.ascent_em * size;
+        format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, box_h, baseline)?;
+        let f1: IDWriteTextFormat1 = format.cast()?;
+        f1.SetFontFallback(&gfx.fallback)?;
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        gfx.dwrite.CreateTextLayout(&wide, &format, 1.0e6, box_h)
+    }
+}
+
+fn text_width(layout: &IDWriteTextLayout) -> f32 {
+    let mut m = DWRITE_TEXT_METRICS::default();
+    unsafe {
+        let _ = layout.GetMetrics(&mut m);
+    }
+    m.widthIncludingTrailingWhitespace.ceil()
+}
+
+/// The centre of the last grapheme of a row (px from its left edge), for the terminal glide.
+fn last_glyph_centre(layout: &IDWriteTextLayout, text: &str) -> f32 {
+    use unicode_segmentation::UnicodeSegmentation;
+    let prefix = text
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(i, _)| i);
+    let start = text[..prefix].encode_utf16().count();
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut m = DWRITE_HIT_TEST_METRICS::default();
+    unsafe {
+        if layout
+            .HitTestTextPosition(start as u32, false, &mut x, &mut y, &mut m)
+            .is_ok()
+        {
+            return m.left + m.width / 2.0;
+        }
+    }
+    text_width(layout)
+}
+
+/// Rows drawn into one surface, stacked: `(text, font px)`.
+struct RasterRequest<'a> {
+    rows: &'a [(&'a str, f32)],
+    style: TextStyle,
+}
+
+struct Raster {
+    surface: IDCompositionSurface,
+    /// Room around the text for the effect (px on every side).
+    margin: f32,
+    row_widths: Vec<f32>,
+}
+
+fn effect_margin(font_px: f32) -> f32 {
+    // 3 sigma of the 0.3 em shadow (covers the outline too).
+    (font_px * 0.9).ceil().max(1.0)
+}
+
+fn rasterise(gfx: &Gfx, request: &RasterRequest) -> Result<Raster> {
+    unsafe {
+        let font = request.rows.first().map(|r| r.1).unwrap_or(1.0);
+        let margin = effect_margin(font);
+        let layouts: Vec<IDWriteTextLayout> = request
+            .rows
+            .iter()
+            .map(|(text, px)| text_layout(gfx, text, *px, request.style.line_height))
+            .collect::<Result<_>>()?;
+        let row_widths: Vec<f32> = layouts.iter().map(text_width).collect();
+        let width = row_widths.iter().copied().fold(1.0f32, f32::max);
+        let height: f32 = request
+            .rows
+            .iter()
+            .map(|r| r.1 * request.style.line_height)
+            .sum();
+        let sw = (width + 2.0 * margin).ceil().max(1.0) as u32;
+        let sh = (height + 2.0 * margin).ceil().max(1.0) as u32;
+        let surface = gfx.dcomp.CreateSurface(
+            sw,
+            sh,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+        )?;
+        let mut offset = POINT::default();
+        let dc: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+        dc.SetDpi(96.0, 96.0);
+        dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        let base = Matrix3x2::translation(offset.x as f32, offset.y as f32);
+        dc.SetTransform(&base);
+        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
+        let mut origins = Vec::new();
+        let mut y = margin;
+        for (_, px) in request.rows {
+            origins.push(Vector2 { X: margin, Y: y });
+            y += px * request.style.line_height;
+        }
+        let text_brush = dc.CreateSolidColorBrush(&rgba(request.style.color, 1.0), None)?;
+        let effect_color = effect_rgb(request.style.color);
+        let options = D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_NO_SNAP;
+        match request.style.effect {
+            rules::TextEffect::None => {}
+            rules::TextEffect::Shadow => {
+                // text-shadow: 0 0 0.6em rgba(effect, 0.75) — a CSS blur radius is 2 sigma, so sigma = 0.3 em.
+                let list = dc.CreateCommandList()?;
+                let target = dc.GetTarget()?;
+                dc.SetTarget(&list);
+                dc.SetTransform(&Matrix3x2::identity());
+                for (layout, origin) in layouts.iter().zip(&origins) {
+                    dc.DrawTextLayout(*origin, layout, &text_brush, options);
+                }
+                list.Close()?;
+                dc.SetTarget(&target);
+                let shadow = dc.CreateEffect(&CLSID_D2D1Shadow)?;
+                shadow.SetInput(0, &list, true);
+                let sigma = font * 0.3;
+                shadow.SetValue(
+                    D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &sigma.to_le_bytes(),
+                )?;
+                let colour = rgba(effect_color, 0.75);
+                let mut bytes = Vec::new();
+                for v in [colour.r, colour.g, colour.b, colour.a] {
+                    bytes.extend_from_slice(&v.to_le_bytes());
+                }
+                shadow.SetValue(
+                    D2D1_SHADOW_PROP_COLOR.0 as u32,
+                    D2D1_PROPERTY_TYPE_VECTOR4,
+                    &bytes,
+                )?;
+                let output = shadow.GetOutput()?;
+                dc.SetTransform(&base);
+                dc.DrawImage(
+                    &output,
+                    None,
+                    None,
+                    D2D1_INTERPOLATION_MODE_LINEAR,
+                    D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                );
+            }
+            rules::TextEffect::Stroke => {
+                // -webkit-text-stroke: 0.08em rgba(effect, 0.5), stroke under the fill.
+                let geometries = Rc::new(RefCell::new(Vec::new()));
+                let collector: IDWriteTextRenderer = OutlineCollector {
+                    factory: gfx.d2d_factory.clone(),
+                    geometries: geometries.clone(),
+                }
+                .into();
+                for (layout, origin) in layouts.iter().zip(&origins) {
+                    layout.Draw(None, &collector, origin.X, origin.Y)?;
+                }
+                let stroke = dc.CreateSolidColorBrush(&rgba(effect_color, 0.5), None)?;
+                for g in geometries.borrow().iter() {
+                    dc.DrawGeometry(g, &stroke, font * 0.08, None);
+                }
+            }
+        }
+        for (layout, origin) in layouts.iter().zip(&origins) {
+            dc.DrawTextLayout(*origin, layout, &text_brush, options);
+        }
+        surface.EndDraw()?;
+        Ok(Raster {
+            surface,
+            margin,
+            row_widths,
+        })
+    }
+}
+
+/// The padlock button (floating window): a dark circle with a thin light ring and the lock glyph.
+fn rasterise_lock(
+    gfx: &Gfx,
+    size: u32,
+    scale: f32,
+    locked: bool,
+    pressed_hover: bool,
+) -> Result<IDCompositionSurface> {
+    unsafe {
+        let surface = gfx.dcomp.CreateSurface(
+            size.max(1),
+            size.max(1),
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+        )?;
+        let mut offset = POINT::default();
+        let dc: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+        dc.SetDpi(96.0, 96.0);
+        dc.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
+        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
+        let s = size as f32;
+        let r = s / 2.0;
+        let fill = dc.CreateSolidColorBrush(
+            &rgba([0, 0, 0], if pressed_hover { 0.75 } else { 0.55 }),
+            None,
+        )?;
+        let ellipse = D2D1_ELLIPSE {
+            point: Vector2 { X: r, Y: r },
+            radiusX: r,
+            radiusY: r,
+        };
+        dc.FillEllipse(&ellipse, &fill);
+        let ring = dc.CreateSolidColorBrush(&rgba([255, 255, 255], 0.35), None)?;
+        let border = scale;
+        let inner = D2D1_ELLIPSE {
+            point: Vector2 { X: r, Y: r },
+            radiusX: r - border / 2.0,
+            radiusY: r - border / 2.0,
+        };
+        dc.DrawEllipse(&inner, &ring, border, None);
+        // The 24x24 icon at 62 % of the button, centred.
+        let icon = s * 0.62;
+        let unit = icon / 24.0;
+        let origin = (s - icon) / 2.0;
+        dc.SetTransform(
+            &(Matrix3x2 {
+                M11: unit,
+                M12: 0.0,
+                M21: 0.0,
+                M22: unit,
+                M31: origin + offset.x as f32,
+                M32: origin + offset.y as f32,
+            }),
+        );
+        let white = dc.CreateSolidColorBrush(&rgba([255, 255, 255], 1.0), None)?;
+        let body = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: 5.0,
+                top: 11.0,
+                right: 19.0,
+                bottom: 21.0,
+            },
+            radiusX: 2.0,
+            radiusY: 2.0,
+        };
+        dc.FillRoundedRectangle(&body, &white);
+        // M8 11V8a4 4 0 0 1 8 0v3 (closed) / M8 11V8a4 4 0 0 1 7.6-1.7 (open), floating-lyrics-lock-icon.js.
+        let path = gfx.d2d_factory.CreatePathGeometry()?;
+        let sink = path.Open()?;
+        sink.BeginFigure(Vector2 { X: 8.0, Y: 11.0 }, D2D1_FIGURE_BEGIN_HOLLOW);
+        sink.AddLine(Vector2 { X: 8.0, Y: 8.0 });
+        let end = if locked {
+            Vector2 { X: 16.0, Y: 8.0 }
+        } else {
+            Vector2 { X: 15.6, Y: 6.3 }
+        };
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: end,
+            size: D2D_SIZE_F {
+                width: 4.0,
+                height: 4.0,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        if locked {
+            sink.AddLine(Vector2 { X: 16.0, Y: 11.0 });
+        }
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        sink.Close()?;
+        let props = D2D1_STROKE_STYLE_PROPERTIES1 {
+            startCap: D2D1_CAP_STYLE_ROUND,
+            endCap: D2D1_CAP_STYLE_ROUND,
+            dashCap: D2D1_CAP_STYLE_ROUND,
+            lineJoin: D2D1_LINE_JOIN_ROUND,
+            miterLimit: 10.0,
+            dashStyle: D2D1_DASH_STYLE_SOLID,
+            dashOffset: 0.0,
+            transformType: D2D1_STROKE_TRANSFORM_TYPE_NORMAL,
+        };
+        let style = gfx.d2d_factory.CreateStrokeStyle(&props, None)?;
+        dc.DrawGeometry(&path, &white, 2.0, &style);
+        surface.EndDraw()?;
+        Ok(surface)
+    }
+}
+
+/// The move-mode highlight behind the lyric area: rgba(0,0,0,0.28), 10 CSS px corners.
+fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<IDCompositionSurface> {
+    unsafe {
+        let surface = gfx.dcomp.CreateSurface(
+            width.max(1),
+            height.max(1),
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+        )?;
+        let mut offset = POINT::default();
+        let dc: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+        dc.SetDpi(96.0, 96.0);
+        dc.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
+        dc.Clear(Some(&rgba([0, 0, 0], 0.0)));
+        let brush = dc.CreateSolidColorBrush(&rgba([0, 0, 0], 0.28), None)?;
+        let rect = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: width as f32,
+                bottom: height as f32,
+            },
+            radiusX: radius,
+            radiusY: radius,
+        };
+        dc.FillRoundedRectangle(&rect, &brush);
+        surface.EndDraw()?;
+        Ok(surface)
+    }
+}
+
+// ---------------------------------------------------------------- animations
+
+fn animation(
+    gfx: &Gfx,
+    keys: &Keys,
+    add: f64,
+    factor: f64,
+) -> Result<Option<IDCompositionAnimation>> {
+    if keys.len() < 2 {
+        return Ok(None);
+    }
+    unsafe {
+        let a = gfx.dcomp.CreateAnimation()?;
+        for pair in keys.windows(2) {
+            let ((t0, v0), (t1, v1)) = (pair[0], pair[1]);
+            let slope = if t1 > t0 { (v1 - v0) / (t1 - t0) } else { 0.0 };
+            a.AddCubic(
+                t0,
+                (add + v0 * factor) as f32,
+                (slope * factor) as f32,
+                0.0,
+                0.0,
+            )?;
+        }
+        let (t, v) = *keys.last().unwrap();
+        a.End(t, (add + v * factor) as f32)?;
+        Ok(Some(a))
+    }
+}
+
+fn set_offset_x(
+    gfx: &Gfx,
+    visual: &IDCompositionVisual2,
+    keys: &Keys,
+    add: f64,
+    factor: f64,
+) -> Result<()> {
+    unsafe {
+        match animation(gfx, keys, add, factor)? {
+            Some(a) => visual.SetOffsetX(&a),
+            None => visual.SetOffsetX2((add + keys.first().map_or(0.0, |k| k.1) * factor) as f32),
+        }
+    }
+}
+
+fn set_opacity(gfx: &Gfx, effect: &IDCompositionEffectGroup, keys: &Keys) -> Result<()> {
+    unsafe {
+        match animation(gfx, keys, 0.0, 1.0)? {
+            Some(a) => effect.SetOpacity(&a),
+            None => effect.SetOpacity2(keys.first().map_or(1.0, |k| k.1) as f32),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- windows
+
+/// State the window procedure reads and writes (never the renderer state, which may be borrowed).
+struct Shared {
+    id: String,
+    kind: Kind,
+    locked: Cell<bool>,
+    /// Client rect of the padlock (floating), empty when hidden.
+    lock_rect: Cell<RECT>,
+    mouse_inside: Cell<bool>,
+    over_lock: Cell<bool>,
+}
+
+enum Pending {
+    Dirty(String),
+    LockClicked(String),
+    Moved(String, i32, i32),
+    Close(String),
+}
+
+thread_local! {
+    static PENDING: RefCell<Vec<Pending>> = const { RefCell::new(Vec::new()) };
+}
+
+fn push(p: Pending) {
+    PENDING.with(|q| q.borrow_mut().push(p));
+}
+
+fn shared(hwnd: HWND) -> Option<&'static Shared> {
+    unsafe {
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Shared;
+        ptr.as_ref()
+    }
+}
+
+fn in_rect(r: RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
+fn cursor_in_window(hwnd: HWND) -> bool {
+    unsafe {
+        let mut p = POINT::default();
+        let mut r = RECT::default();
+        GetCursorPos(&mut p).is_ok() && GetWindowRect(hwnd, &mut r).is_ok() && in_rect(r, p.x, p.y)
+    }
+}
+
+fn track_leave(hwnd: HWND, nonclient: bool) {
+    let mut t = TRACKMOUSEEVENT {
+        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: if nonclient {
+            TME_LEAVE | TME_NONCLIENT
+        } else {
+            TME_LEAVE
+        },
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    unsafe {
+        let _ = TrackMouseEvent(&mut t);
+    }
+}
+
+fn mouse_at(hwnd: HWND, s: &Shared, client: POINT, nonclient: bool) {
+    if !s.mouse_inside.get() {
+        s.mouse_inside.set(true);
+        push(Pending::Dirty(s.id.clone()));
+    }
+    let over = in_rect(s.lock_rect.get(), client.x, client.y);
+    if over != s.over_lock.get() {
+        s.over_lock.set(over);
+        push(Pending::Dirty(s.id.clone()));
+    }
+    track_leave(hwnd, nonclient);
+}
+
+fn lparam_point(lparam: LPARAM) -> POINT {
+    POINT {
+        x: (lparam.0 & 0xffff) as i16 as i32,
+        y: ((lparam.0 >> 16) & 0xffff) as i16 as i32,
+    }
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let Some(s) = shared(hwnd) else {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    };
+    match msg {
+        WM_NCHITTEST => {
+            if s.kind == Kind::Taskbar {
+                return LRESULT(HTTRANSPARENT as isize);
+            }
+            let mut p = lparam_point(lparam);
+            let _ = ScreenToClient(hwnd, &mut p);
+            if in_rect(s.lock_rect.get(), p.x, p.y) || s.locked.get() {
+                LRESULT(HTCLIENT as isize)
+            } else {
+                LRESULT(HTCAPTION as isize)
+            }
+        }
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_SETCURSOR => {
+            let hit = (lparam.0 & 0xffff) as u32;
+            let cursor = if hit == HTCAPTION {
+                IDC_SIZEALL
+            } else if s.over_lock.get() {
+                IDC_HAND
+            } else {
+                IDC_ARROW
+            };
+            if let Ok(c) = LoadCursorW(None, cursor) {
+                SetCursor(Some(c));
+            }
+            LRESULT(1)
+        }
+        WM_MOUSEMOVE => {
+            mouse_at(hwnd, s, lparam_point(lparam), false);
+            LRESULT(0)
+        }
+        WM_NCMOUSEMOVE => {
+            let mut p = lparam_point(lparam);
+            let _ = ScreenToClient(hwnd, &mut p);
+            mouse_at(hwnd, s, p, true);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_MOUSELEAVE | WM_NCMOUSELEAVE => {
+            if !cursor_in_window(hwnd) {
+                s.mouse_inside.set(false);
+                s.over_lock.set(false);
+                push(Pending::Dirty(s.id.clone()));
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            let p = lparam_point(lparam);
+            if in_rect(s.lock_rect.get(), p.x, p.y) {
+                push(Pending::LockClicked(s.id.clone()));
+            }
+            LRESULT(0)
+        }
+        WM_MOVE if s.kind == Kind::Floating => {
+            let mut r = RECT::default();
+            if GetWindowRect(hwnd, &mut r).is_ok() {
+                push(Pending::Moved(s.id.clone(), r.left, r.top));
+            }
+            LRESULT(0)
+        }
+        WM_DPICHANGED => {
+            if s.kind == Kind::Floating {
+                let r = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    r.left,
+                    r.top,
+                    r.right - r.left,
+                    r.bottom - r.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            push(Pending::Dirty(s.id.clone()));
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            push(Pending::Dirty(s.id.clone()));
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            push(Pending::Close(s.id.clone()));
+            LRESULT(0)
+        }
+        WM_NCDESTROY => {
+            let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut Shared;
+            if !ptr.is_null() {
+                drop(Box::from_raw(ptr));
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+const CLASS: PCWSTR = w!("MoeLyricsNative");
+
+fn register_class() {
+    unsafe {
+        let Ok(instance) = GetModuleHandleW(None) else {
+            return;
+        };
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(wndproc),
+            hInstance: instance.into(),
+            lpszClassName: CLASS,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+        let icc = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_WIN95_CLASSES,
+        };
+        let _ = InitCommonControlsEx(&icc);
+    }
+}
+
+struct Win {
+    hwnd: HWND,
+    kind: Kind,
+    target: Option<IDCompositionTarget>,
+    root: Option<IDCompositionVisual2>,
+    look: Option<Look>,
+    chrome: Chrome,
+    /// Fixed mode hover from the watcher.
+    hover: bool,
+    tooltip: Option<HWND>,
+    tooltip_text: Vec<u16>,
+    cache: HashMap<String, Rc<Raster>>,
+    lock_cache: HashMap<(u32, bool, bool), IDCompositionSurface>,
+    area_cache: HashMap<(u32, u32, u32), IDCompositionSurface>,
+    wake_at: Option<Instant>,
+    has_translation: Option<bool>,
+}
+
+fn create_window(id: &str, kind: Kind, owner: Option<isize>) -> Result<HWND> {
+    unsafe {
+        let instance = GetModuleHandleW(None)?;
+        let mut ex = WS_EX_NOREDIRECTIONBITMAP
+            | WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_NOACTIVATE
+            | WS_EX_LAYERED;
+        if kind == Kind::Taskbar {
+            ex |= WS_EX_TRANSPARENT;
+        }
+        let owner = owner.map(|h| HWND(h as *mut _));
+        let title = HSTRING::from(id);
+        let hwnd = CreateWindowExW(
+            ex,
+            CLASS,
+            &title,
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            owner,
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        let shared = Box::new(Shared {
+            id: id.to_owned(),
+            kind,
+            locked: Cell::new(false),
+            lock_rect: Cell::new(RECT::default()),
+            mouse_inside: Cell::new(false),
+            over_lock: Cell::new(false),
+        });
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(shared) as isize);
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+        Ok(hwnd)
+    }
+}
+
+fn create_tooltip(hwnd: HWND) -> Option<HWND> {
+    unsafe {
+        let tip = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            TOOLTIPS_CLASSW,
+            None,
+            WINDOW_STYLE(WS_POPUP.0 | TTS_ALWAYSTIP | TTS_NOPREFIX),
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            Some(hwnd),
+            None,
+            GetModuleHandleW(None).ok().map(|m| m.into()),
+            None,
+        )
+        .ok()?;
+        let mut info = TTTOOLINFOW {
+            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+            uFlags: TTF_SUBCLASS,
+            hwnd,
+            uId: 1,
+            ..Default::default()
+        };
+        info.lpszText = PWSTR(w!("").as_ptr() as *mut _);
+        SendMessageW(
+            tip,
+            TTM_ADDTOOLW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+        Some(tip)
+    }
+}
+
+fn update_tooltip(win: &mut Win, rect: RECT, text: &str) {
+    let Some(tip) = win.tooltip else { return };
+    win.tooltip_text = text.encode_utf16().chain(Some(0)).collect();
+    let mut info = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        uFlags: TTF_SUBCLASS,
+        hwnd: win.hwnd,
+        uId: 1,
+        rect,
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tip,
+            TTM_NEWTOOLRECTW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+        info.lpszText = PWSTR(win.tooltip_text.as_mut_ptr());
+        SendMessageW(
+            tip,
+            TTM_UPDATETIPTEXTW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+    }
+}
+
+// ---------------------------------------------------------------- renderer state
+
+struct Clock {
+    track_id: Option<String>,
+    state: PlayState,
+    base_ms: f64,
+    at: Instant,
+    duration_ms: Option<f64>,
+}
+
+impl Clock {
+    fn position(&self, now: Instant) -> f64 {
+        let mut p = self.base_ms;
+        if self.state == PlayState::Playing {
+            p += now.saturating_duration_since(self.at).as_secs_f64() * 1000.0;
+        }
+        match self.duration_ms {
+            Some(d) if d > 0.0 => p.clamp(0.0, d),
+            _ => p.max(0.0),
+        }
+    }
+}
+
+struct Renderer {
+    gfx: Option<Gfx>,
+    windows: HashMap<String, Win>,
+    lyrics: Option<LyricsData>,
+    clock: Clock,
+    inactive: u32,
+    delay: Option<(String, f64)>,
+    events: Arc<dyn Events>,
+    dirty: Vec<String>,
+}
+
+fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
+    unsafe {
+        let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    register_class();
+    let mut r = Renderer {
+        gfx: create_gfx()
+            .map_err(|e| eprintln!("lyrics renderer: {e}"))
+            .ok(),
+        windows: HashMap::new(),
+        lyrics: None,
+        clock: Clock {
+            track_id: None,
+            state: PlayState::Stopped,
+            base_ms: 0.0,
+            at: Instant::now(),
+            duration_ms: None,
+        },
+        inactive: rules::DEFAULT_INACTIVE_OPACITY_PERCENT,
+        delay: None,
+        events,
+        dirty: Vec::new(),
+    };
+    let mut last_check = Instant::now();
+    loop {
+        while let Ok(cmd) = rx.try_recv() {
+            if !r.command(cmd) {
+                r.destroy_all();
+                return;
+            }
+        }
+        let mut msg = MSG::default();
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message != WM_WAKE {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+        r.pending();
+        let now = Instant::now();
+        for (id, win) in &r.windows {
+            if win.wake_at.is_some_and(|at| at <= now) {
+                r.dirty.push(id.clone());
+            }
+        }
+        if now.duration_since(last_check) >= DEVICE_CHECK {
+            last_check = now;
+            if r.gfx.as_ref().is_none_or(device_lost) {
+                r.rebuild_devices();
+            }
+        }
+        r.refresh_dirty();
+        let next = r.windows.values().filter_map(|w| w.wake_at).min();
+        let mut timeout = DEVICE_CHECK.saturating_sub(last_check.elapsed());
+        if let Some(at) = next {
+            timeout = timeout.min(at.saturating_duration_since(Instant::now()));
+        }
+        unsafe {
+            let _ = MsgWaitForMultipleObjects(
+                None,
+                false,
+                timeout.as_millis().min(u32::MAX as u128) as u32,
+                QS_ALLINPUT,
+            );
+        }
+    }
+}
+
+impl Renderer {
+    fn mark_all(&mut self) {
+        self.dirty.extend(self.windows.keys().cloned());
+    }
+
+    fn command(&mut self, cmd: Cmd) -> bool {
+        match cmd {
+            Cmd::Create {
+                id,
+                kind,
+                owner,
+                reply,
+            } => {
+                let created = self.create(&id, kind, owner);
+                let _ = reply.send(created.map(|h| h.0 as isize));
+            }
+            Cmd::Destroy(id) => {
+                if let Some(win) = self.windows.remove(&id) {
+                    destroy(win);
+                }
+            }
+            Cmd::Look(id, look) => {
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if win.look != look {
+                        win.look = look;
+                        win.cache.clear();
+                        self.dirty.push(id);
+                    }
+                }
+            }
+            Cmd::Chrome(id, chrome) => {
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if let Some(s) = shared(win.hwnd) {
+                        s.locked.set(chrome.locked);
+                    }
+                    win.chrome = chrome;
+                    self.dirty.push(id);
+                }
+            }
+            Cmd::Hover(id, hover) => {
+                if let Some(win) = self.windows.get_mut(&id) {
+                    if win.hover != hover {
+                        win.hover = hover;
+                        self.dirty.push(id);
+                    }
+                }
+            }
+            Cmd::ClickThrough(id, through) => {
+                if let Some(win) = self.windows.get(&id) {
+                    unsafe {
+                        let ex = GetWindowLongPtrW(win.hwnd, GWL_EXSTYLE);
+                        let flag = WS_EX_TRANSPARENT.0 as isize;
+                        let next = if through { ex | flag } else { ex & !flag };
+                        if next != ex {
+                            SetWindowLongPtrW(win.hwnd, GWL_EXSTYLE, next);
+                        }
+                    }
+                }
+            }
+            Cmd::Lyrics(lyrics) => {
+                if self.lyrics != lyrics {
+                    self.lyrics = lyrics;
+                    for win in self.windows.values_mut() {
+                        win.cache.clear();
+                    }
+                    self.mark_all();
+                }
+            }
+            Cmd::Playback(sample) => {
+                let now = Instant::now();
+                let predicted = self.clock.position(now);
+                let same = self.clock.track_id == sample.track_id
+                    && self.clock.state == sample.state
+                    && self.clock.duration_ms == sample.duration_ms
+                    && (predicted - sample.position_ms).abs() < CLOCK_TOLERANCE_MS;
+                if !same {
+                    self.clock = Clock {
+                        track_id: sample.track_id,
+                        state: sample.state,
+                        base_ms: sample.position_ms,
+                        at: now,
+                        duration_ms: sample.duration_ms,
+                    };
+                    self.mark_all();
+                }
+            }
+            Cmd::Inactive(percent) => {
+                if self.inactive != percent {
+                    self.inactive = percent;
+                    self.mark_all();
+                }
+            }
+            Cmd::Delay {
+                track_id,
+                delay_sec,
+            } => {
+                let next = Some((track_id, rules::clamp_timing_delay_sec(delay_sec)));
+                if self.delay != next {
+                    self.delay = next;
+                    self.mark_all();
+                }
+            }
+            Cmd::Shutdown => return false,
+        }
+        true
+    }
+
+    fn create(&mut self, id: &str, kind: Kind, owner: Option<isize>) -> Option<HWND> {
+        if let Some(old) = self.windows.remove(id) {
+            destroy(old);
+        }
+        let hwnd = create_window(id, kind, owner)
+            .map_err(|e| eprintln!("lyrics window {id}: {e}"))
+            .ok()?;
+        let tooltip = if kind == Kind::Floating {
+            create_tooltip(hwnd)
+        } else {
+            None
+        };
+        let mut win = Win {
+            hwnd,
+            kind,
+            target: None,
+            root: None,
+            look: None,
+            chrome: Chrome::default(),
+            hover: false,
+            tooltip,
+            tooltip_text: Vec::new(),
+            cache: HashMap::new(),
+            lock_cache: HashMap::new(),
+            area_cache: HashMap::new(),
+            wake_at: None,
+            has_translation: None,
+        };
+        if let Some(gfx) = &self.gfx {
+            attach(gfx, &mut win);
+        }
+        self.windows.insert(id.to_owned(), win);
+        Some(hwnd)
+    }
+
+    fn destroy_all(&mut self) {
+        for (_, win) in self.windows.drain() {
+            destroy(win);
+        }
+    }
+
+    fn pending(&mut self) {
+        let items: Vec<Pending> = PENDING.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        for item in items {
+            match item {
+                Pending::Dirty(id) => self.dirty.push(id),
+                Pending::LockClicked(id) => self.events.lock_clicked(&id),
+                Pending::Moved(id, x, y) => self.events.moved(&id, x, y),
+                Pending::Close(id) => self.events.close_requested(&id),
+            }
+        }
+    }
+
+    fn rebuild_devices(&mut self) {
+        for win in self.windows.values_mut() {
+            win.target = None;
+            win.root = None;
+            win.cache.clear();
+            win.lock_cache.clear();
+            win.area_cache.clear();
+        }
+        self.gfx = None;
+        match create_gfx() {
+            Ok(gfx) => {
+                for win in self.windows.values_mut() {
+                    attach(&gfx, win);
+                }
+                self.gfx = Some(gfx);
+                self.mark_all();
+            }
+            Err(e) => eprintln!("lyrics renderer devices: {e}"),
+        }
+    }
+
+    fn refresh_dirty(&mut self) {
+        if self.dirty.is_empty() {
+            return;
+        }
+        let mut ids = std::mem::take(&mut self.dirty);
+        ids.sort();
+        ids.dedup();
+        let Some(gfx) = self.gfx.as_ref() else { return };
+        let mut lost = false;
+        let ctx = Context {
+            lyrics: self.lyrics.as_ref(),
+            clock: &self.clock,
+            inactive: self.inactive,
+            delay: self.delay.as_ref(),
+            now: Instant::now(),
+        };
+        let mut reports = Vec::new();
+        for id in &ids {
+            if let Some(win) = self.windows.get_mut(id) {
+                match refresh(gfx, win, &ctx) {
+                    Ok(has) => {
+                        if win.kind == Kind::Floating && win.has_translation != Some(has) {
+                            win.has_translation = Some(has);
+                            reports.push((id.clone(), has));
+                        }
+                    }
+                    Err(e) if is_device_loss(&e) => lost = true,
+                    Err(e) => eprintln!("lyrics window {id}: {e}"),
+                }
+            }
+        }
+        if let Err(e) = unsafe { gfx.dcomp.Commit() } {
+            lost |= is_device_loss(&e);
+        }
+        for (id, has) in reports {
+            self.events.has_translation(&id, has);
+        }
+        if lost {
+            self.rebuild_devices();
+        }
+    }
+}
+
+fn attach(gfx: &Gfx, win: &mut Win) {
+    unsafe {
+        let made = (|| -> Result<(IDCompositionTarget, IDCompositionVisual2)> {
+            let target = gfx.dcomp.CreateTargetForHwnd(win.hwnd, true)?;
+            let root = gfx.dcomp.CreateVisual()?;
+            target.SetRoot(&root)?;
+            Ok((target, root))
+        })();
+        match made {
+            Ok((target, root)) => {
+                win.target = Some(target);
+                win.root = Some(root);
+            }
+            Err(e) => eprintln!("lyrics window target: {e}"),
+        }
+    }
+}
+
+fn destroy(win: Win) {
+    unsafe {
+        if let Some(tip) = win.tooltip {
+            let _ = DestroyWindow(tip);
+        }
+        let _ = DestroyWindow(win.hwnd);
+    }
+}
+
+struct Context<'a> {
+    lyrics: Option<&'a LyricsData>,
+    clock: &'a Clock,
+    inactive: u32,
+    delay: Option<&'a (String, f64)>,
+    now: Instant,
+}
+
+#[derive(Clone, Copy)]
+struct Area {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Rebuilds one window's visual tree; returns whether it draws a translation line.
+fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
+    win.wake_at = None;
+    let Some(root) = win.root.clone() else {
+        return Ok(false);
+    };
+    unsafe {
+        root.RemoveAllVisuals()?;
+    }
+    let mut client = RECT::default();
+    unsafe {
+        GetClientRect(win.hwnd, &mut client)?;
+    }
+    let (w, h) = (
+        (client.right - client.left) as f64,
+        (client.bottom - client.top) as f64,
+    );
+    let scale = unsafe { GetDpiForWindow(win.hwnd) }.max(96) as f64 / 96.0;
+    let Some(look) = win.look.clone() else {
+        return Ok(false);
+    };
+    if w < 1.0 || h < 1.0 {
+        return Ok(false);
+    }
+    let floating = win.kind == Kind::Floating;
+    let line_height = if floating {
+        FLOATING_LINE_HEIGHT
+    } else {
+        TASKBAR_LINE_HEIGHT
+    };
+
+    // The lyric area (physical px) inside the window.
+    let area = if floating {
+        let margin = floating_margin_css(look.font_size_px) * scale;
+        let lock = floating_lock_css(look.font_size_px) * scale;
+        let share = FLOATING_LINE_HEIGHT / FLOATING_PANEL_LINE_HEIGHT;
+        Area {
+            left: margin,
+            top: h * (1.0 - share) / 2.0,
+            width: (w - margin * 2.0 - lock).max(1.0),
+            height: h * share,
+        }
+    } else {
+        let pad = TASKBAR_SIDE_PADDING_CSS * scale;
+        Area {
+            left: pad,
+            top: 0.0,
+            width: (w - 2.0 * pad).max(1.0),
+            height: h,
+        }
+    };
+
+    // Window opacity on the root; the content sits in a container clipped to the area (plus the effect's room).
+    let window_effect = unsafe { gfx.dcomp.CreateEffectGroup()? };
+    unsafe {
+        window_effect.SetOpacity2((look.opacity_percent.clamp(1.0, 100.0) / 100.0) as f32)?;
+    }
+
+    if floating {
+        chrome(gfx, win, &root, area, w, h, scale, &look)?;
+    }
+
+    let lyrics = ctx
+        .lyrics
+        .filter(|l| ctx.clock.track_id.as_deref() == Some(l.track_id.as_str()));
+    let state = ctx.clock.state;
+    let Some(lyrics) = lyrics.filter(|_| state.shows_lyrics()) else {
+        return Ok(false);
+    };
+    let delay = ctx
+        .delay
+        .filter(|(t, _)| *t == lyrics.track_id)
+        .map_or(0.0, |d| d.1);
+    let offset = rules::display_offset_ms(lyrics.offset_ms, delay);
+    let position = ctx.clock.position(ctx.now);
+    let playing = state == PlayState::Playing;
+    let style = TextStyle {
+        color: look.color,
+        effect: look.effect,
+        line_height: line_height as f32,
+    };
+    let clip_room = match look.effect {
+        rules::TextEffect::Shadow => 0.6,
+        rules::TextEffect::Stroke => 0.04,
+        rules::TextEffect::None => 0.0,
+    };
+
+    let content = unsafe { gfx.dcomp.CreateVisual()? };
+    unsafe {
+        content.SetEffect(&window_effect)?;
+        root.AddVisual(&content, true, None)?;
+    }
+
+    let has_translation;
+    if look.animation == rules::Animation::Continuous {
+        let lines: Vec<_> = lyrics
+            .lines
+            .iter()
+            .map(|l| {
+                (
+                    l.start_ms,
+                    l.text.trim(),
+                    if look.show_translation {
+                        l.translation.trim()
+                    } else {
+                        ""
+                    },
+                )
+            })
+            .filter(|(_, t, tr)| !t.is_empty() || !tr.is_empty())
+            .collect();
+        has_translation = lines.iter().any(|l| !l.2.is_empty());
+        if lines.is_empty() {
+            return Ok(false);
+        }
+        let font_css = fit_font_size(
+            look.font_size_px,
+            area.height / scale,
+            if has_translation {
+                look.translation_scale_percent
+            } else {
+                0.0
+            },
+            line_height,
+        );
+        let font = (font_css * scale) as f32;
+        let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
+        let clip = font as f64 * clip_room;
+        unsafe {
+            content.SetClip2(&D2D_RECT_F {
+                left: (area.left - clip) as f32,
+                top: 0.0,
+                right: (area.left + area.width + clip) as f32,
+                bottom: h as f32,
+            })?;
+        }
+        // Measure every line (DirectWrite layouts; cheap, no rasterising).
+        let mut main_widths = Vec::new();
+        let mut trans_widths = Vec::new();
+        let mut last_centre = 0.0;
+        for (i, (_, text, tr)) in lines.iter().enumerate() {
+            let main = text_layout(gfx, text, font, style.line_height)?;
+            main_widths.push(if text.is_empty() {
+                0.0
+            } else {
+                text_width(&main) as f64
+            });
+            if i + 1 == lines.len() {
+                last_centre = if text.is_empty() {
+                    0.0
+                } else {
+                    last_glyph_centre(&main, text) as f64
+                };
+            }
+            trans_widths.push(if tr.is_empty() {
+                0.0
+            } else {
+                text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
+            });
+        }
+        let starts: Vec<f64> = lines.iter().map(|l| l.0).collect();
+        let layout = rules::layout_strip(&main_widths, &trans_widths, font as f64);
+        let last = lines.last().unwrap();
+        let arrival =
+            rules::final_arrival_ms(last.0, last.1, ctx.clock.duration_ms.map(|d| d + offset));
+        let input = plan::StripInput {
+            starts: &starts,
+            layout: &layout,
+            view_width: area.width,
+            final_line: Some(rules::FinalLine {
+                end_ms: Some(arrival),
+                last_glyph_center: Some(last_centre),
+            }),
+            at_ms: position + offset,
+            playing,
+            inactive_percent: ctx.inactive,
+        };
+        let planned = plan::plan_strip(&input);
+        let rows_h = font as f64 * line_height
+            + if has_translation {
+                trans_font as f64 * line_height
+            } else {
+                0.0
+            };
+        let top = area.top + (area.height - rows_h) / 2.0;
+        let strip = unsafe { gfx.dcomp.CreateVisual()? };
+        set_offset_x(gfx, &strip, &planned.offset, area.left, 1.0)?;
+        unsafe {
+            // Whole device pixels while gliding (AGENTS.md device-pixel rule).
+            strip.SetBitmapInterpolationMode(
+                DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            )?;
+            content.AddVisual(&strip, true, None)?;
+        }
+        for (index, keys) in &planned.opacity {
+            let (_, text, tr) = lines[*index];
+            let rows: Vec<(&str, f32)> = if has_translation {
+                vec![(text, font), (tr, trans_font)]
+            } else {
+                vec![(text, font)]
+            };
+            let raster = cached(gfx, win, &rows, style)?;
+            let cell = unsafe { gfx.dcomp.CreateVisual()? };
+            let fade = unsafe { gfx.dcomp.CreateEffectGroup()? };
+            set_opacity(gfx, &fade, keys)?;
+            unsafe {
+                cell.SetContent(&raster.surface)?;
+                cell.SetOffsetX2((layout.starts[*index] - raster.margin as f64) as f32)?;
+                cell.SetOffsetY2((top - raster.margin as f64).round() as f32)?;
+                cell.SetEffect(&fade)?;
+                strip.AddVisual(&cell, true, None)?;
+            }
+        }
+        win.wake_at = planned
+            .wake_ms
+            .map(|ms| ctx.now + Duration::from_secs_f64(ms.max(1.0) / 1000.0));
+    } else {
+        let starts: Vec<f64> = lyrics.lines.iter().map(|l| l.start_ms).collect();
+        let planned = plan::plan_line(
+            &starts,
+            position,
+            offset,
+            ctx.clock.duration_ms,
+            true,
+            playing,
+        );
+        win.wake_at = planned
+            .wake_ms
+            .map(|ms| ctx.now + Duration::from_secs_f64(ms.max(1.0) / 1000.0));
+        let Some(index) = planned.index else {
+            return Ok(false);
+        };
+        let line = &lyrics.lines[index];
+        let text = line.text.trim();
+        let tr = if look.show_translation {
+            line.translation.trim()
+        } else {
+            ""
+        };
+        has_translation = !tr.is_empty();
+        if text.is_empty() {
+            return Ok(has_translation);
+        }
+        let font_css = fit_font_size(
+            look.font_size_px,
+            area.height / scale,
+            if has_translation {
+                look.translation_scale_percent
+            } else {
+                0.0
+            },
+            line_height,
+        );
+        let font = (font_css * scale) as f32;
+        let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
+        let clip = font as f64 * clip_room;
+        unsafe {
+            content.SetClip2(&D2D_RECT_F {
+                left: (area.left - clip) as f32,
+                top: 0.0,
+                right: (area.left + area.width + clip) as f32,
+                bottom: h as f32,
+            })?;
+        }
+        let mut rows = vec![(text, font)];
+        if has_translation {
+            rows.push((tr, trans_font));
+        }
+        let rows_h: f64 = rows.iter().map(|r| r.1 as f64 * line_height).sum();
+        let mut y = area.top + (area.height - rows_h) / 2.0;
+        for row in rows {
+            let raster = cached(gfx, win, &[row], style)?;
+            let width = raster.row_widths[0] as f64;
+            let overflow = (width - area.width).max(0.0).ceil();
+            let base = if overflow > 0.0 {
+                area.left
+            } else {
+                match look.align {
+                    rules::Align::Left => area.left,
+                    rules::Align::Center => area.left + (area.width - width) / 2.0,
+                    rules::Align::Right => area.left + area.width - width,
+                }
+            };
+            let visual = unsafe { gfx.dcomp.CreateVisual()? };
+            set_offset_x(
+                gfx,
+                &visual,
+                &planned.scroll,
+                base - raster.margin as f64,
+                -overflow,
+            )?;
+            unsafe {
+                visual.SetBitmapInterpolationMode(
+                    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                )?;
+                visual.SetContent(&raster.surface)?;
+                visual.SetOffsetY2((y - raster.margin as f64).round() as f32)?;
+                content.AddVisual(&visual, true, None)?;
+            }
+            y += row.1 as f64 * line_height;
+        }
+    }
+    Ok(has_translation)
+}
+
+fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
+    let key = format!(
+        "{:?}|{:?}|{}|{}",
+        rows, style.color, style.effect as u8, style.line_height
+    );
+    if let Some(r) = win.cache.get(&key) {
+        return Ok(r.clone());
+    }
+    let raster = Rc::new(rasterise(gfx, &RasterRequest { rows, style })?);
+    win.cache.insert(key, raster.clone());
+    Ok(raster)
+}
+
+/// The floating window's padlock (and its tooltip) and the move-mode highlight.
+#[allow(clippy::too_many_arguments)]
+fn chrome(
+    gfx: &Gfx,
+    win: &mut Win,
+    root: &IDCompositionVisual2,
+    area: Area,
+    w: f64,
+    h: f64,
+    scale: f64,
+    look: &Look,
+) -> Result<()> {
+    let Some(s) = shared(win.hwnd) else {
+        return Ok(());
+    };
+    let locked = win.chrome.locked;
+    let show = if locked {
+        win.hover
+    } else {
+        s.mouse_inside.get()
+    };
+    // floating_lyrics::unlock_button_rect.
+    let size = (floating_lock_css(look.font_size_px) * scale)
+        .round()
+        .max(1.0) as i32;
+    let right = w as i32 - (floating_margin_css(look.font_size_px) * scale).round() as i32;
+    let top = (h as i32 - size) / 2;
+    let rect = RECT {
+        left: right - size,
+        top,
+        right,
+        bottom: top + size,
+    };
+    s.lock_rect.set(if show { rect } else { RECT::default() });
+    let tip = if locked {
+        win.chrome.unlock_tip.clone()
+    } else {
+        win.chrome.lock_tip.clone()
+    };
+    update_tooltip(win, if show { rect } else { RECT::default() }, &tip);
+    if !locked && show {
+        let (aw, ah) = (area.width.round() as u32, area.height.round() as u32);
+        let radius = (10.0 * scale) as f32;
+        let key = (aw, ah, radius as u32);
+        let surface = match win.area_cache.get(&key) {
+            Some(s) => s.clone(),
+            None => {
+                let s = rasterise_area(gfx, aw, ah, radius)?;
+                win.area_cache.insert(key, s.clone());
+                s
+            }
+        };
+        unsafe {
+            let v = gfx.dcomp.CreateVisual()?;
+            v.SetContent(&surface)?;
+            v.SetOffsetX2(area.left.round() as f32)?;
+            v.SetOffsetY2(area.top.round() as f32)?;
+            root.AddVisual(&v, false, None)?;
+        }
+    }
+    if show {
+        let over = s.over_lock.get();
+        let key = (size as u32, locked, over);
+        let surface = match win.lock_cache.get(&key) {
+            Some(s) => s.clone(),
+            None => {
+                let s = rasterise_lock(gfx, size as u32, scale as f32, locked, over)?;
+                win.lock_cache.insert(key, s.clone());
+                s
+            }
+        };
+        unsafe {
+            let v = gfx.dcomp.CreateVisual()?;
+            v.SetContent(&surface)?;
+            v.SetOffsetX2(rect.left as f32)?;
+            v.SetOffsetY2(rect.top as f32)?;
+            root.AddVisual(&v, true, None)?;
+        }
+    }
+    Ok(())
+}
