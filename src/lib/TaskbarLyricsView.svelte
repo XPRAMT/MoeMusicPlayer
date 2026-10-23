@@ -30,6 +30,7 @@
     LYRICS_STRIP_ALIGN,
     LYRICS_STRIP_TARGET,
     buildLyricsStripLines,
+    effectiveLyricsTextEffect,
     layoutLyricsStrip,
     lyricsLineOpacityFactor,
     lyricsLineWeight,
@@ -141,7 +142,8 @@
   let translation = $derived(settings.showTranslation ? (activeLine?.translation?.trim() ?? '') : '');
 
   // Continuous animation (ADR 0032): every line joined into one strip (U+3000 between lines) that scrolls with the
-  // playback clock, so the current line's right edge sits on the lyric area's right edge (always, whatever the alignment setting) and glides to the next line until it starts. The
+  // playback clock, so each line's left edge sits on the lyric area's centre and glides to the next line until it starts.
+  // The final line continues to the track end, placing its last glyph's centre on that same point. The
   // translation strip uses the same cells, so each translation stays under its line. The glide runs as a linear CSS
   // animation to the next line's place, re-planned at each line start and on every clock correction (seek, pause).
   let continuous = $derived(settings.animation === 'continuous');
@@ -150,6 +152,7 @@
   let stripHasTranslation = $derived(stripLines.some((line) => line.translation !== ''));
   let stripVisible = $derived(stripLines.length > 0 && (playbackState === 'playing' || playbackState === 'paused' || playbackState === 'buffering'));
   let stripMainWidths = $state<number[]>([]);
+  let stripLastGlyphCenters = $state<number[]>([]);
   let stripTranslationWidths = $state<number[]>([]);
   let stripViewWidth = $state(0);
   let stripMain = $state<HTMLElement | null>(null);
@@ -162,13 +165,24 @@
   let fontPx = $derived(fitTaskbarLyricsFontSize(settings.fontSizePx, fitHeight, hasTranslation ? settings.translationScalePercent : 0, lineHeight));
   // One U+3000 is one em of the main line; the translation strip leaves the same gap so the cells line up.
   let stripLayout = $derived(layoutLyricsStrip(stripMainWidths, stripTranslationWidths, fontPx));
+  // Lyrics positions include the user's display delay, so the corresponding track-end point uses the same offset.
+  // Keep the existing five-second fallback only when the playback source has no duration.
+  let stripDurationAtLyricsTime = $derived(stripStarts.length === 0
+    ? null
+    : durationMs === null
+      ? stripStarts[stripStarts.length - 1] + LAST_LINE_FALLBACK_MS
+      : durationMs + timingOffsetMs);
+  let stripFinalLine = $derived(stripDurationAtLyricsTime === null ? null : {
+    durationMs: stripDurationAtLyricsTime,
+    lastGlyphCenter: stripLastGlyphCenters[stripLastGlyphCenters.length - 1] ?? 0,
+  });
   let stripRun = $derived.by(() => {
     const at = positionMs + timingOffsetMs;
-    const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth, LYRICS_STRIP_TARGET);
-    const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at) : null;
+    const from = lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, at, stripViewWidth, LYRICS_STRIP_TARGET, stripFinalLine);
+    const next = clock?.playing ? nextLyricsStripBreak(stripStarts, at, stripDurationAtLyricsTime) : null;
     const wait = next === null ? null : msUntilPlaybackPosition(clock, performance.now(), next - timingOffsetMs);
     if (next === null || wait === null || wait <= 0) return { at, from, to: from, ms: null as number | null };
-    return { at, from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth, LYRICS_STRIP_TARGET), ms: wait };
+    return { at, from, to: lyricsStripOffset(stripStarts, stripLayout, LYRICS_STRIP_ALIGN, next, stripViewWidth, LYRICS_STRIP_TARGET, stripFinalLine), ms: wait };
   });
   let stripName = $state('taskbar-lyrics-strip-a');
   $effect(() => {
@@ -230,6 +244,26 @@
         return lines.map((line) => (pick(line) === '' ? 0 : Math.ceil(context.measureText(pick(line)).width)));
       };
       stripMainWidths = widths(main, (line) => line.text);
+      if (main && context) {
+        context.font = getComputedStyle(main).font;
+        const segmenter = typeof Intl.Segmenter === 'function'
+          ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+          : null;
+        stripLastGlyphCenters = lines.map((line) => {
+          const value = line.text;
+          if (value === '') return 0;
+          const segments = segmenter ? Array.from(segmenter.segment(value)) : [];
+          const finalSegment = segments[segments.length - 1];
+          const fallbackLast = Array.from(value).at(-1) ?? '';
+          const prefixLength = finalSegment?.index ?? Math.max(0, value.length - fallbackLast.length);
+          const glyphMetrics = context.measureText(finalSegment?.segment ?? fallbackLast);
+          const prefixWidth = context.measureText(value.slice(0, prefixLength)).width;
+          const visualCenter = (glyphMetrics.actualBoundingBoxRight - glyphMetrics.actualBoundingBoxLeft) / 2;
+          return Math.max(0, prefixWidth + visualCenter);
+        });
+      } else {
+        stripLastGlyphCenters = [];
+      }
       stripTranslationWidths = widths(second, (line) => line.translation);
       stripViewWidth = main?.parentElement?.clientWidth ?? 0;
     });
@@ -240,6 +274,7 @@
   });
   let color = $derived(getTaskbarLyricsColor(settings, taskbarIsLight));
   let effectRgb = $derived(getTaskbarLyricsEffectRgb(settings, taskbarIsLight));
+  let effectiveTextEffect = $derived(effectiveLyricsTextEffect(settings.animation, settings.textEffect));
   let alignItems = $derived(settings.align === 'center' ? 'center' : settings.align === 'right' ? 'flex-end' : 'flex-start');
 
   // Measure how far each line reaches past the window (after the text, the font size or the window size changed).
@@ -339,7 +374,7 @@
   style:align-items={alignItems}
   style:text-align={settings.align}
   style:color
-  data-text-effect={settings.textEffect}
+  data-text-effect={effectiveTextEffect}
   style:--taskbar-lyrics-effect-rgb={effectRgb}
   style:--taskbar-lyrics-size={`${fontPx}px`}
   style:--taskbar-lyrics-translation-scale={settings.translationScalePercent / 100}

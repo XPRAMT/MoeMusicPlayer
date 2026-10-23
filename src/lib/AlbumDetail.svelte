@@ -346,12 +346,14 @@
 
     .album-detail-shell.scroll-driven-collapse .album-detail-art {
       animation: album-detail-cover-collapse auto linear both, album-detail-cover-radius auto linear both;
+      animation-duration: 1s;
       animation-timeline: --album-detail-scroll;
       animation-range: 0px var(--album-detail-collapse-range);
     }
 
     .album-detail-shell.scroll-driven-collapse .album-detail-summary {
       animation: album-detail-summary-collapse auto linear both;
+      animation-duration: 1s;
       animation-timeline: --album-detail-scroll;
       animation-range: 0px var(--album-detail-collapse-range);
     }

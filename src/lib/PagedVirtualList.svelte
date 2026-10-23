@@ -968,6 +968,7 @@
 
     .paged-virtual-frame.leading-overlay.scroll-driven-collapse .paged-virtual-header {
       animation: album-detail-grid-header-collapse auto linear both;
+      animation-duration: 1s;
       animation-timeline: --album-detail-scroll;
       animation-range: 0px var(--paged-collapse-range);
     }

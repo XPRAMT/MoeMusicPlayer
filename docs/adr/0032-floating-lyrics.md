@@ -224,3 +224,16 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 - Status: not yet verified on the maintainer's machine. If it still drops frames, the next candidates are giving the lyrics
   windows their own `data_directory` (a separate WebView2 process group including its own GPU process) and lowering the lyrics
   windows' update rate.
+
+## Amendment (2026-10-23): continuous-mode outline and terminal line glide
+
+- When the selected text effect is `shadow` and animation is `continuous`, render a crisp outline instead of a blur to
+  avoid re-rasterizing blur during motion. This is a rendering override only: the saved choice stays `shadow`; animation
+  `none` and explicit `stroke`/`none` choices keep their selected appearance. Windows uses the existing stroke style;
+  Android draws a stroke pass before the fill pass.
+- The last line keeps gliding from its left-edge anchor at line start until track duration. At track end, measure the
+  final grapheme's visual bounds and put that glyph-bounds centre at the lyric-area centre. Lyrics display offset is
+  included in the lyric-time duration. If a source has no duration, retain the existing five-second fallback.
+- Validation: JavaScript geometry tests cover line start, midpoint, end, grapheme-centre position and duration break;
+  Android `FloatingLyricsRulesTest` mirrors the geometry and effect selection. Release WebView2 / device runtime check is
+  tracked with the current build status in the project `AGENTS.md`.

@@ -5,6 +5,8 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.view.View
+import java.text.BreakIterator
+import java.util.Locale
 
 /**
  * One line of the Android floating lyrics, drawn directly (ADR 0032). A line that fits is placed by the alignment; a
@@ -16,11 +18,18 @@ internal class LyricLineView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
         typeface = Typeface.DEFAULT
     }
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+        typeface = Typeface.DEFAULT
+        style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+    }
     private var text = ""
     private var align = "center"
     private var progress = 0f
     private var shadowRadius = 0f
     private var shadowColor = 0
+    private var strokeWidth = 0f
+    private var strokeColor = 0
     private var color = 0
 
     // Continuous animation: lines other than the current one are drawn at `inactiveFactor` of the main opacity (1: no
@@ -31,14 +40,19 @@ internal class LyricLineView(context: Context) : View(context) {
     private val fadePaint = Paint(paint)
     private var fadeAlpha = -1
 
-    fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int) {
-        val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius
+    fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int, strokeWidth: Float, strokeColor: Int) {
+        val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius || this.strokeWidth != strokeWidth
         paint.textSize = sizePx
         paint.color = color
         this.color = color
         this.shadowColor = shadowColor
         this.align = align
         this.shadowRadius = shadowRadius
+        this.strokeWidth = strokeWidth
+        this.strokeColor = strokeColor
+        outlinePaint.textSize = sizePx
+        outlinePaint.color = strokeColor
+        outlinePaint.strokeWidth = strokeWidth
         if (shadowRadius > 0f) paint.setShadowLayer(shadowRadius, 0f, 0f, shadowColor) else paint.clearShadowLayer()
         styleDim()
         fadeAlpha = -1
@@ -97,6 +111,18 @@ internal class LyricLineView(context: Context) : View(context) {
 
     /** Width of `value` in this line's font (for the strip layout). */
     fun textWidth(value: String): Float = if (value.isEmpty()) 0f else paint.measureText(value)
+
+    /** X coordinate of the final grapheme's visual bounds centre, relative to the start of the complete line. */
+    fun lastGlyphCenter(value: String): Float {
+        if (value.isEmpty()) return 0f
+        val iterator = BreakIterator.getCharacterInstance(Locale.ROOT)
+        iterator.setText(value)
+        val prefixEnd = iterator.preceding(value.length).coerceAtLeast(0)
+        val bounds = android.graphics.Rect()
+        paint.getTextBounds(value, prefixEnd, value.length, bounds)
+        val prefixWidth = paint.measureText(value, 0, prefixEnd)
+        return maxOf(0f, prefixWidth + (bounds.left + bounds.right) / 2f)
+    }
 
     /** Usable width (the alignment point is measured in it). */
     fun availableWidth(): Float = (width - paddingLeft - paddingRight).toFloat()
@@ -172,7 +198,7 @@ internal class LyricLineView(context: Context) : View(context) {
         // always (the panel's transparent room; the parents do not clip).
         val sides = if (textWidth > available) 0 else width
         canvas.clipRect(-sides, -height, width + sides, 2 * height)
-        canvas.drawText(text, x, baseline, paint)
+        drawText(canvas, text, x, baseline, 1f)
         canvas.restore()
     }
 
@@ -192,8 +218,19 @@ internal class LyricLineView(context: Context) : View(context) {
             if (cell > width || cell + cellWidth < 0f) continue
             val textWidth = paint.measureText(value)
             val weight = if (inactiveFactor < 1f) FloatingLyricsRules.cellWeight(stripStarts, index, stripLyricsMs) else 1f
-            canvas.drawText(value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, paintFor(weight))
+            drawText(canvas, value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, weight)
         }
         canvas.restore()
+    }
+
+    private fun drawText(canvas: Canvas, value: String, x: Float, baseline: Float, weight: Float) {
+        val fill = paintFor(weight)
+        if (strokeWidth > 0f) {
+            val baseAlpha = android.graphics.Color.alpha(color)
+            val opacity = if (baseAlpha == 0) 0f else fill.alpha.toFloat() / baseAlpha
+            outlinePaint.alpha = Math.round(android.graphics.Color.alpha(strokeColor) * opacity).coerceIn(0, 255)
+            canvas.drawText(value, x, baseline, outlinePaint)
+        }
+        canvas.drawText(value, x, baseline, fill)
     }
 }

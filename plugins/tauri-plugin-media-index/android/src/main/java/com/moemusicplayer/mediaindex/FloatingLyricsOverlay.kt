@@ -20,6 +20,8 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import java.text.BreakIterator
+import java.util.Locale
 
 import org.json.JSONObject
 
@@ -69,6 +71,8 @@ object FloatingLyricsOverlay {
         val translations: List<String>,
         val cells: FloatArray,
         val widths: FloatArray,
+        val mainWidths: FloatArray,
+        val lastGlyphCenters: FloatArray,
     )
     private var strip: Strip? = null
     private var opacityPercent = 100
@@ -534,12 +538,12 @@ object FloatingLyricsOverlay {
         for ((view, scale) in listOf(mainText to 100, translationText to translationScalePercent)) {
             view ?: continue
             val px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
-            val (radius, shadow) = when (textEffect) {
-                "shadow" -> maxOf(1f, px * 0.25f) to (0x99000000.toInt() or effect)
-                "stroke" -> maxOf(1f, px * 0.08f) to (0xE6000000.toInt() or effect)
-                else -> 0f to 0
-            }
-            view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow)
+            val effectiveEffect = FloatingLyricsRules.effectiveTextEffect(animation, textEffect)
+            val radius = if (effectiveEffect == "shadow") maxOf(1f, px * 0.25f) else 0f
+            val shadow = if (effectiveEffect == "shadow") 0x99000000.toInt() or effect else 0
+            val strokeWidth = if (effectiveEffect == "stroke") maxOf(1f, px * 0.08f) else 0f
+            val strokeColor = if (effectiveEffect == "stroke") 0x80000000.toInt() or effect else 0
+            view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor)
             view.setInactiveFactor(FloatingLyricsRules.inactiveFactor(animation, inactiveOpacityPercent, 0f))
         }
     }
@@ -640,12 +644,14 @@ object FloatingLyricsOverlay {
         if (kept.isEmpty()) return null
         val texts = kept.map { it.second }
         val translations = kept.map { it.third }
+        val mainWidths = FloatArray(kept.size) { main.textWidth(texts[it]) }
+        val lastGlyphCenters = FloatArray(kept.size) { index -> main.lastGlyphCenter(texts[index]) }
         val (cells, widths) = FloatingLyricsRules.stripLayout(
-            FloatArray(kept.size) { main.textWidth(texts[it]) },
+            mainWidths,
             FloatArray(kept.size) { second?.textWidth(translations[it]) ?: 0f },
             main.textWidth("\u3000"),
         )
-        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths).also { strip = it }
+        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths, mainWidths, lastGlyphCenters).also { strip = it }
     }
 
     /** Continuous animation: draw both strips at the current place; false when there is nothing to draw as a strip. */
@@ -654,7 +660,13 @@ object FloatingLyricsOverlay {
         if (sample == null || !sample.active || sample.trackId != trackId) return false
         val current = stripFor(main, translationText) ?: return false
         val lyricsMs = sample.positionMs + offsetMs
-        val offset = FloatingLyricsRules.stripOffset(current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN, lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET)
+        val durationAtLyricsMs = (sample.durationMs ?: trackDurationMs)?.plus(offsetMs)
+            ?: current.starts.lastOrNull()?.plus(FloatingLyricsRules.LAST_LINE_FALLBACK_MS)
+        val offset = FloatingLyricsRules.stripOffset(
+            current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,
+            lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET,
+            durationAtLyricsMs, current.mainWidths, current.lastGlyphCenters,
+        )
         view.visibility = View.VISIBLE
         main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)
         translationText?.let {

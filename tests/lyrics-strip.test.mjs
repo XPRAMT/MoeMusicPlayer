@@ -7,6 +7,7 @@ import {
   LYRICS_STRIP_TARGET,
   LYRICS_STRIP_SEPARATOR,
   buildLyricsStripLines,
+  effectiveLyricsTextEffect,
   layoutLyricsStrip,
   lyricsLineOpacityFactor,
   lyricsLineWeight,
@@ -27,6 +28,13 @@ test('the animation setting falls back to none', () => {
   // Continuous always anchors right, whatever the text alignment setting.
   assert.equal(LYRICS_STRIP_ALIGN, 'left');
   assert.equal(LYRICS_STRIP_TARGET, 'center');
+});
+
+test('continuous motion replaces a selected shadow with a stroke, while other looks stay selected', () => {
+  assert.equal(effectiveLyricsTextEffect('continuous', 'shadow'), 'stroke');
+  assert.equal(effectiveLyricsTextEffect('continuous', 'stroke'), 'stroke');
+  assert.equal(effectiveLyricsTextEffect('continuous', 'none'), 'none');
+  assert.equal(effectiveLyricsTextEffect('none', 'shadow'), 'shadow');
 });
 
 test('strip lines skip empty lines and drop translations when hidden', () => {
@@ -86,10 +94,13 @@ test('the next break is the next line start', () => {
 test('the views anchor the continuous strip on the lyric area centre whatever the alignment setting', async () => {
   const { readFileSync } = await import('node:fs');
   const view = readFileSync(new URL('../src/lib/TaskbarLyricsView.svelte', import.meta.url), 'utf8');
-  assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,[^)]*LYRICS_STRIP_TARGET\)/g)?.length, 2);
+  assert.equal(view.match(/lyricsStripOffset\(stripStarts, stripLayout, LYRICS_STRIP_ALIGN,/g)?.length, 2);
+  assert.match(view, /nextLyricsStripBreak\(stripStarts, at, stripDurationAtLyricsTime\)/);
+  assert.match(view, /data-text-effect=\{effectiveTextEffect\}/);
   assert.doesNotMatch(view, /lyricsStripOffset\([^)]*settings\.align/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
-  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN, lyricsMs, [\s\S]{0,40}FloatingLyricsRules\.STRIP_TARGET\)/);
+  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN,\s*lyricsMs, main\.availableWidth\(\), FloatingLyricsRules\.STRIP_TARGET,/);
+  assert.match(kotlin, /durationAtLyricsMs, current\.mainWidths, current\.lastGlyphCenters/);
 });
 
 test('the strip holds only the lines near the lyric area, never the whole song', () => {
@@ -121,6 +132,22 @@ test('a line starts with its left edge on the lyric area centre and slides left 
   assert.equal(at(3000, 500), 250 - 120);
   // The left edge of the line at its start is exactly the centre.
   assert.equal(layout.starts[1] + at(3000), 150);
+});
+
+test('the final line keeps gliding until its last grapheme centre reaches the lyric area centre at track end', () => {
+  const layout = layoutLyricsStrip([120, 80], [160, 0], 20);
+  const starts = [1000, 5000];
+  const finalLine = { durationMs: 11000, lastGlyphCenter: 70 };
+  const at = (ms) => lyricsStripOffset(starts, layout, 'left', ms, 300, 'center', finalLine);
+
+  // The line still starts with its left edge on the centre.
+  assert.equal(at(5000), 150 - 180);
+  assert.equal(at(8000), 150 - (180 + 35));
+  // At the track end, the final glyph occupies [140, 160], centred at x=150.
+  assert.equal(at(11000), 150 - (180 + 70));
+  assert.equal(nextLyricsStripBreak(starts, 9000, 11000), 11000);
+  assert.equal(nextLyricsStripBreak(starts, 11000, 11000), null);
+  assert.equal(nextLyricsStripBreak(starts, 9000, null), null);
 });
 
 // Line fades (ADR 0032): lines start at 1000, 5000 and 9000 ms.

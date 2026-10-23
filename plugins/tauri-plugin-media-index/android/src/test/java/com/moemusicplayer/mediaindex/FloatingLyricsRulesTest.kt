@@ -136,6 +136,23 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
+    fun lastContinuousLineGlidesUntilItsFinalGlyphIsCentredAtTrackEnd() {
+        val (cells, widths) = FloatingLyricsRules.stripLayout(floatArrayOf(120f, 80f), floatArrayOf(160f, 0f), 20f)
+        val times = longArrayOf(1_000, 5_000)
+        val mainWidths = floatArrayOf(120f, 80f)
+        val lastGlyphCenters = floatArrayOf(0f, 70f)
+        val at = { ms: Long -> FloatingLyricsRules.stripOffset(times, cells, widths, "left", ms, 300f, "center", 11_000, mainWidths, lastGlyphCenters) }
+
+        assertEquals(150f - 180f, at(5_000), 0.001f)
+        assertEquals(150f - 180f - 35f, at(8_000), 0.001f)
+        // Final glyph occupies [140, 160], placing its centre at x=150.
+        assertEquals(150f - 180f - 70f, at(11_000), 0.001f)
+        assertEquals("stroke", FloatingLyricsRules.effectiveTextEffect("continuous", "shadow"))
+        assertEquals("none", FloatingLyricsRules.effectiveTextEffect("continuous", "none"))
+        assertEquals("shadow", FloatingLyricsRules.effectiveTextEffect("none", "shadow"))
+    }
+
+    @Test
     fun stripWindowDrawsOnlyNearbyCells() {
         val starts = FloatArray(100) { it * 110f }
         val widths = FloatArray(100) { 100f }

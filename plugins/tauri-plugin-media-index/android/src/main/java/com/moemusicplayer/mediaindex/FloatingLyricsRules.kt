@@ -87,7 +87,8 @@ object FloatingLyricsRules {
     /**
      * Shift of the strip (px) at lyrics time `lyricsMs` (position + offset): the current line's anchor on the alignment
      * point, gliding linearly to the next line's anchor until that line starts; rests on the first line before it and on
-     * the last one after it.
+     * the last one when track duration is unknown. When duration is known, the last main-text glyph centre reaches the
+     * alignment point at track end.
      */
     fun stripOffset(
         startTimesMs: LongArray,
@@ -97,6 +98,9 @@ object FloatingLyricsRules {
         lyricsMs: Long,
         viewWidth: Float,
         targetAlign: String = align,
+        durationMs: Long? = null,
+        mainTextWidths: FloatArray = cellWidths,
+        lastGlyphCenters: FloatArray = FloatArray(0),
     ): Float {
         val count = minOf(startTimesMs.size, cellStarts.size)
         if (count == 0) return 0f
@@ -109,7 +113,21 @@ object FloatingLyricsRules {
         while (index + 1 < count && startTimesMs[index + 1] <= lyricsMs) index++
         val anchor = when {
             index < 0 -> stripAnchor(cellStarts, cellWidths, 0, align)
-            index >= count - 1 -> stripAnchor(cellStarts, cellWidths, count - 1, align)
+            index >= count - 1 -> {
+                val last = count - 1
+                val start = startTimesMs[last]
+                val duration = durationMs
+                if (duration != null && duration > start && lyricsMs > start) {
+                    val progress = ((lyricsMs - start).toDouble() / (duration - start).toDouble()).toFloat().coerceIn(0f, 1f)
+                    val mainWidth = maxOf(0f, mainTextWidths.getOrElse(last) { cellWidths.getOrElse(last) { 0f } })
+                    val glyphCenter = lastGlyphCenters.getOrElse(last) { mainWidth }.coerceIn(0f, mainWidth)
+                    val from = cellStarts.getOrElse(last) { 0f }
+                    val to = from + glyphCenter
+                    from + (to - from) * progress
+                } else {
+                    stripAnchor(cellStarts, cellWidths, last, align)
+                }
+            }
             else -> {
                 val span = startTimesMs[index + 1] - startTimesMs[index]
                 val fraction = if (span > 0) ((lyricsMs - startTimesMs[index]).toFloat() / span).coerceIn(0f, 1f) else 1f
@@ -119,6 +137,10 @@ object FloatingLyricsRules {
         }
         return target - anchor
     }
+
+    /** Use a crisp outline instead of a blur while continuous text is moving; keep other selected effects unchanged. */
+    fun effectiveTextEffect(animation: String, preference: String): String =
+        if (animation == "continuous" && preference == "shadow") "stroke" else preference
 
     /** Suffix of the saved position keys: portrait and landscape are saved apart. */
     fun orientationKey(landscape: Boolean): String = if (landscape) "landscape" else "portrait"

@@ -17,6 +17,14 @@ export function normalizeLyricsAnimation(value) {
   return value === 'continuous' ? 'continuous' : 'none';
 }
 
+/** Avoid blur rasterization on the moving strip while preserving the selected effect in other modes.
+ * @param {string} animation
+ * @param {string} textEffect
+ */
+export function effectiveLyricsTextEffect(animation, textEffect) {
+  return animation === 'continuous' && textEffect === 'shadow' ? 'stroke' : textEffect;
+}
+
 /**
  * The lines of the strip: timed lines with some text (main or translation), in time order.
  * @param {{ startMs: number, line: { text?: string | null, translation?: string | null } }[]} timeline sorted
@@ -63,16 +71,18 @@ export function lyricsStripAnchor(layout, index, align) {
 
 /**
  * Horizontal shift of the strip (px) at a lyrics position: the current line's anchor on the window's alignment point,
- * gliding linearly to the next line's anchor until the next line starts. Before the first line it rests on the first;
- * the last line rests where it is.
+ * gliding linearly to the next line's anchor until the next line starts. Before the first line it rests on the first.
+ * When the track duration and last main-text glyph centre are known, the final line glides until that glyph's centre
+ * reaches the target at track end.
  * @param {readonly number[]} startTimesMs one per strip line, sorted
  * @param {{ starts: number[], widths: number[] }} layout
  * @param {'left'|'center'|'right'} align
  * @param {number} positionMs lyrics time (playback position plus the display offset)
  * @param {number} viewWidthPx
  * @param {'left'|'center'|'right'} [targetAlign] the point of the window the anchor sits on (default: the same as `align`)
+ * @param {{durationMs?:number|null,lastGlyphCenter?:number}|null} [finalLine]
  */
-export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign = align) {
+export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewWidthPx, targetAlign = align, finalLine = null) {
   const count = Math.min(startTimesMs.length, layout.starts.length);
   if (count === 0) return 0;
   const target = targetAlign === 'right' ? viewWidthPx : targetAlign === 'center' ? viewWidthPx / 2 : 0;
@@ -80,7 +90,20 @@ export function lyricsStripOffset(startTimesMs, layout, align, positionMs, viewW
   for (let i = 0; i < count && startTimesMs[i] <= positionMs; i += 1) index = i;
   let anchor;
   if (index < 0) anchor = lyricsStripAnchor(layout, 0, align);
-  else if (index >= count - 1) anchor = lyricsStripAnchor(layout, count - 1, align);
+  else if (index >= count - 1) {
+    const last = count - 1;
+    const start = startTimesMs[last];
+    const duration = finalLine?.durationMs;
+    const lastGlyphCenter = Math.max(0, finalLine?.lastGlyphCenter ?? layout.widths[last] ?? 0);
+    if (typeof duration === 'number' && Number.isFinite(duration) && duration > start && positionMs > start) {
+      const progress = Math.min(1, Math.max(0, (positionMs - start) / (duration - start)));
+      const from = layout.starts[last] ?? 0;
+      const to = from + lastGlyphCenter;
+      anchor = from + (to - from) * progress;
+    } else {
+      anchor = lyricsStripAnchor(layout, last, align);
+    }
+  }
   else {
     const span = startTimesMs[index + 1] - startTimesMs[index];
     const fraction = span > 0 ? Math.min(1, Math.max(0, (positionMs - startTimesMs[index]) / span)) : 1;
@@ -112,11 +135,14 @@ export function lyricsStripWindow(layout, fromOffsetPx, toOffsetPx, viewWidthPx,
 
 /**
  * The next lyrics time at which the glide changes direction (the next line's start), or null when the strip rests.
- * @param {readonly number[]} startTimesMs @param {number} positionMs
+ * @param {readonly number[]} startTimesMs @param {number} positionMs @param {number|null} [durationMs]
  */
-export function nextLyricsStripBreak(startTimesMs, positionMs) {
-  if (startTimesMs.length < 2 || positionMs < startTimesMs[0]) return startTimesMs.length > 0 && positionMs < startTimesMs[0] ? startTimesMs[0] : null;
+export function nextLyricsStripBreak(startTimesMs, positionMs, durationMs = null) {
+  if (startTimesMs.length === 0) return null;
+  if (positionMs < startTimesMs[0]) return startTimesMs[0];
   for (const start of startTimesMs) if (start > positionMs) return start;
+  const lastStart = startTimesMs[startTimesMs.length - 1];
+  if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > lastStart && durationMs > positionMs) return durationMs;
   return null;
 }
 
