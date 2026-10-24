@@ -13,7 +13,7 @@ export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, 
  * D10). Each lyrics tab saves its own pair; the former `opacityPercent` is ignored.
  */
 export const LYRICS_MAIN_OPACITY_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
-export const LYRICS_SECONDARY_OPACITY_PERCENT = Object.freeze({ min: 10, max: 100, default: 50 });
+export const LYRICS_SECONDARY_OPACITY_PERCENT = Object.freeze({ min: 1, max: 100, default: 50 });
 
 /** @param {unknown} value @param {{ min: number, max: number, default: number }} range */
 export function normalizeLyricsOpacity(value, range) {

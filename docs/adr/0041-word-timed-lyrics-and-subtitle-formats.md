@@ -271,7 +271,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 
 ### 5.4 修訂：主要／次要透明度取代視窗透明度與共用的非目前透明度（使用者核准）
 
-- 設定：播放頁（`lyricsPreferences`）、工作列（`taskbarLyrics`）、浮動（`floatingLyrics`）各自儲存 `mainOpacityPercent`（1–100，預設 100）與 `secondaryOpacityPercent`（10–100，預設 50）。數值是絕對百分比，互不夾限（次要可大於主要），介面不灰化任何一個。舊鍵 `opacityPercent`（工作列、浮動）與 `inactiveOpacityPercent`（共用）不遷移，載入時忽略；缺少新欄位時取預設。「外觀」群組改名「文字效果」（群組內的選擇器不再顯示同名小標，只留 aria-label），分頁「一般」改名「播放頁」。
+- 設定：播放頁（`lyricsPreferences`）、工作列（`taskbarLyrics`）、浮動（`floatingLyrics`）各自儲存 `mainOpacityPercent`（1–100，預設 100）與 `secondaryOpacityPercent`（1–100，預設 50）。數值是絕對百分比，互不夾限（次要可大於主要），介面不灰化任何一個。舊鍵 `opacityPercent`（工作列、浮動）與 `inactiveOpacityPercent`（共用）不遷移，載入時忽略；缺少新欄位時取預設。「外觀」群組改名「文字效果」（群組內的選擇器不再顯示同名小標，只留 aria-label），分頁「一般」改名「播放頁」。
 - 播放頁：目前行 `mainOpacityPercent`，其餘行 `secondaryOpacityPercent`（`getLyricLineOpacity`）；沒有目前行時（尚未到第一句）全部以主要透明度顯示；換行的 CSS 淡化過渡不變。
 - 視窗，動畫「無」：顯示中的那一行以主要透明度繪製，次要透明度無作用（滑桿照常可用）。動畫「連續」：遮罩 `centre_mask_stops(W, em, main, secondary)`：0 → 次要（兩端 1 em）→ 主要（到中心 1 em 的平台），Rust／JS／Kotlin 共用向量 `centreMask`（含次要大於主要、主要很小、窄寬度）；所有格與容器的不透明度為 1。
 - 資料流：移除 `lyrics-inactive-opacity` 廣播與 Android `floatingLyricsUpdate` 的獨立 `inactiveOpacityPercent`；兩個值跟著各視窗自己的設定進入 Windows 的 `Look`（`main_opacity_percent`／`secondary_opacity_percent`）與 Android 的 settings。`lyricsLineOpacityFactor`／`line_opacity_factor` 與 Kotlin 的 `inactiveFactor`／`cellOpacity` 已無用途而移除。

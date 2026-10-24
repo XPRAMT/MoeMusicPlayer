@@ -34,7 +34,7 @@ test('floating lyrics settings repair field by field with their own defaults', (
   assert.equal(normalizeFloatingLyricsSettings({ mainOpacityPercent: 40 }).mainOpacityPercent, 40);
   assert.equal(normalizeFloatingLyricsSettings({ mainOpacityPercent: 1 }).mainOpacityPercent, 1);
   assert.equal(normalizeFloatingLyricsSettings({ mainOpacityPercent: 0 }).mainOpacityPercent, 1);
-  assert.equal(normalizeFloatingLyricsSettings({ secondaryOpacityPercent: 0 }).secondaryOpacityPercent, 10);
+  assert.equal(normalizeFloatingLyricsSettings({ secondaryOpacityPercent: 0 }).secondaryOpacityPercent, 1);
   // The former key is ignored, not converted; the secondary may exceed the main.
   assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 40 }).mainOpacityPercent, 100);
   const crossed = normalizeFloatingLyricsSettings({ mainOpacityPercent: 30, secondaryOpacityPercent: 90 });

@@ -302,9 +302,9 @@ impl LyricsPreferences {
                 "mainOpacityPercent must be between 1 and 100".into(),
             ));
         }
-        if !(10..=100).contains(&self.secondary_opacity_percent) {
+        if !(1..=100).contains(&self.secondary_opacity_percent) {
             return Err(SettingsError::InvalidData(
-                "secondaryOpacityPercent must be between 10 and 100".into(),
+                "secondaryOpacityPercent must be between 1 and 100".into(),
             ));
         }
         if !(1..=50).contains(&self.primary_font_size_px) {
@@ -1058,7 +1058,7 @@ impl TaskbarLyricsSettings {
     pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 100;
     pub const DEFAULT_CUSTOM_COLOR: &'static str = "#00e1ff";
     pub const MAIN_OPACITY_RANGE_PERCENT: (u8, u8) = (1, 100);
-    pub const SECONDARY_OPACITY_RANGE_PERCENT: (u8, u8) = (10, 100);
+    pub const SECONDARY_OPACITY_RANGE_PERCENT: (u8, u8) = (1, 100);
 
     pub fn normalized(mut self) -> Self {
         self.font_size_px = self
@@ -3726,7 +3726,7 @@ mod tests {
         ));
         assert_eq!(
             (faint.main_opacity_percent, faint.secondary_opacity_percent),
-            (1, 10),
+            (1, 1),
             "never fully invisible"
         );
         let over = lenient_taskbar_lyrics(Some(
@@ -4369,7 +4369,7 @@ mod tests {
         line_gap.line_gap_px = 51;
         assert!(line_gap.validate().is_err());
 
-        minimum.secondary_opacity_percent = 9;
+        minimum.secondary_opacity_percent = 0;
         assert!(minimum.validate().is_err());
         minimum.secondary_opacity_percent = 101;
         assert!(minimum.validate().is_err());

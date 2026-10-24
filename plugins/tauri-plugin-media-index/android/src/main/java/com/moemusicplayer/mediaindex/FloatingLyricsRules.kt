@@ -26,9 +26,9 @@ object FloatingLyricsRules {
     const val DEFAULT_MAIN_OPACITY_PERCENT = 100
     fun mainOpacityPercent(value: Int): Int = value.coerceIn(1, 100)
 
-    /** Secondary opacity: settings.rs `SECONDARY_OPACITY_RANGE_PERCENT` (10-100, 50). May exceed the main one. */
+    /** Secondary opacity: settings.rs `SECONDARY_OPACITY_RANGE_PERCENT` (1-100, 50). May exceed the main one. */
     const val DEFAULT_SECONDARY_OPACITY_PERCENT = 50
-    fun secondaryOpacityPercent(value: Int): Int = value.coerceIn(10, 100)
+    fun secondaryOpacityPercent(value: Int): Int = value.coerceIn(1, 100)
 
     /**
      * What the two line views draw at (their own alpha): animation "none" shows the line at the main opacity;

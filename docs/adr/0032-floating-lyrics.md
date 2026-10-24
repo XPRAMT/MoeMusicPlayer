@@ -315,7 +315,7 @@ stops. Android's drag already clamps with the text insets on every move.
 ## Amendment: main and secondary opacity
 
 `opacityPercent` and the shared `inactiveOpacityPercent` described above are replaced by a per-tab pair,
-`mainOpacityPercent` (1-100, default 100) and `secondaryOpacityPercent` (10-100, default 50), saved separately for the
+`mainOpacityPercent` (1-100, default 100) and `secondaryOpacityPercent` (1-100, default 50), saved separately for the
 playing page, the taskbar lyrics and the floating lyrics (old keys are ignored, nothing is migrated; see ADR 0041 5.4).
 Animation none draws the line at the main opacity; continuous passes both into the static mask. The
 `lyrics-inactive-opacity` broadcast and Android's separate `inactiveOpacityPercent` payload are gone: the pair rides

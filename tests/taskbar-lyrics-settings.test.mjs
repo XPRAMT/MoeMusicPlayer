@@ -27,7 +27,7 @@ test('taskbar lyrics settings are repaired field by field', () => {
   assert.equal(normalizeTaskbarLyricsSettings({ mainOpacityPercent: 64.6 }).mainOpacityPercent, 65);
   assert.equal(normalizeTaskbarLyricsSettings({ mainOpacityPercent: 500 }).mainOpacityPercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ mainOpacityPercent: 'x' }).mainOpacityPercent, 100);
-  assert.equal(normalizeTaskbarLyricsSettings({ secondaryOpacityPercent: 0 }).secondaryOpacityPercent, 10);
+  assert.equal(normalizeTaskbarLyricsSettings({ secondaryOpacityPercent: 0 }).secondaryOpacityPercent, 1);
   assert.equal(normalizeTaskbarLyricsSettings({ secondaryOpacityPercent: 500 }).secondaryOpacityPercent, 100);
   assert.equal(normalizeTaskbarLyricsSettings({ secondaryOpacityPercent: 'x' }).secondaryOpacityPercent, 50);
   // The former key is ignored, not converted; the secondary may exceed the main.

@@ -47,7 +47,7 @@ class FloatingLyricsRulesTest {
         assertEquals(1f, FloatingLyricsRules.windowAlpha(1.5f), 0.0001f)
         assertEquals(100, FloatingLyricsRules.mainOpacityPercent(250))
         assertEquals(1, FloatingLyricsRules.mainOpacityPercent(0))
-        assertEquals(10, FloatingLyricsRules.secondaryOpacityPercent(0))
+        assertEquals(1, FloatingLyricsRules.secondaryOpacityPercent(0))
         assertEquals(37, FloatingLyricsRules.secondaryOpacityPercent(37))
         assertEquals(100, FloatingLyricsRules.secondaryOpacityPercent(250))
         assertEquals(100, FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT)

@@ -250,7 +250,7 @@ pub fn container_opacity(animation: rules::Animation, main_percent: f64) -> f32 
     }
 }
 
-/// The mask's `(main, secondary)` opacities as whole percents: main 1–100, secondary 10–100, each on its own (the
+/// The mask's `(main, secondary)` opacities as whole percents: main 1–100, secondary 1–100, each on its own (the
 /// secondary may exceed the main).
 pub fn mask_percents(main_percent: f64, secondary_percent: f64) -> (u32, u32) {
     let whole = |v: f64, lo: f64| {
@@ -260,7 +260,7 @@ pub fn mask_percents(main_percent: f64, secondary_percent: f64) -> (u32, u32) {
             100
         }
     };
-    (whole(main_percent, 1.0), whole(secondary_percent, 10.0))
+    (whole(main_percent, 1.0), whole(secondary_percent, 1.0))
 }
 
 /// Every cell's opacity factor: 1. In continuous mode the opacity comes only from the static mask fixed to the lyric
@@ -781,7 +781,7 @@ mod tests {
             (30, 80),
             "secondary may exceed main"
         );
-        assert_eq!(mask_percents(0.0, 0.0), (1, 10));
+        assert_eq!(mask_percents(0.0, 0.0), (1, 1));
         assert_eq!(mask_percents(300.0, 300.0), (100, 100));
         assert_eq!(mask_percents(f64::NAN, f64::NAN), (100, 100));
     }
