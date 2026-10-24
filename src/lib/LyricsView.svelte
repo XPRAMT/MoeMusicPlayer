@@ -821,9 +821,9 @@
     <p class="lyrics-placeholder" role="status">{tr("正在讀取本機與已保存的歌詞…")}</p>
   {:else}
     {#if timingPanelOpen && isTimed}
-      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label={tr("歌詞同步延遲")} data-testid="lyrics-timing-panel">
+      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label={tr("歌詞平移")} data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
-          <strong>{tr("同步歌詞延遲")}</strong>
+          <strong>{tr("歌詞平移")}</strong>
           <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
           <button type="button" class="soft-button" onclick={resetTimingOffset}>{tr("重設")}</button>
         </div>

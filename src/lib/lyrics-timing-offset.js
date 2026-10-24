@@ -1,5 +1,6 @@
 import { tr } from './i18n.js';
-/** Per-track lyrics display delay (seconds). Positive delays lyrics relative to audio. */
+/** Per-track lyrics shift (歌詞平移, seconds). +N s is added to every lyric timestamp (lines show N s later);
+ * −N s shows them earlier. */
 
 export const LYRICS_TIMING_OFFSET_MIN_SEC = -10;
 export const LYRICS_TIMING_OFFSET_MAX_SEC = 10;
