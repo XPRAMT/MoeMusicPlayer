@@ -723,13 +723,6 @@
     return tr('網易雲');
   }
 
-  function confidenceLabel(confidence: LyricsCandidate['confidence']): string {
-    switch (confidence) {
-      case 'high': return tr('高信心');
-      case 'medium': return tr('中信心');
-      case 'low': return tr('低信心');
-    }
-  }
 
   function formatCandidateDuration(durationMs: number | null): string {
     if (durationMs === null || !Number.isFinite(durationMs) || durationMs < 0) return tr('長度未知');
@@ -974,7 +967,7 @@
               <div class="candidate-copy">
                 <strong>{candidate.title}</strong>
                 <span>{candidate.artist}{candidate.album ? ` · ${candidate.album}` : ''}</span>
-                <small>{providerLabel(candidate.provider)} · {confidenceLabel(candidate.confidence)} {tr("· 分數")} {candidate.score.toFixed(2)} · {formatCandidateDuration(candidate.durationMs)} · {presentation.formatLabel}</small>
+                <small>{providerLabel(candidate.provider)} {tr("· 分數")} {candidate.score.toFixed(2)} · {formatCandidateDuration(candidate.durationMs)} · {presentation.formatLabel}</small>
                 {#if candidate.previewLines.length > 0}
                   <span class="candidate-preview">{candidate.previewLines.slice(0, 2).join(' / ')}</span>
                 {:else if presentation.previewNotice}
