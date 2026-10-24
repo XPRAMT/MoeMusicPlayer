@@ -110,9 +110,9 @@
 </section>
 
 <section class="quick-settings-group" aria-labelledby="{idPrefix}-look-heading">
-  <h3 id="{idPrefix}-look-heading">{tr("外觀")}</h3>
-  <div class="cover-corner-setting" role="group" aria-labelledby="{idPrefix}-effect-label">
-    <span id="{idPrefix}-effect-label" class="cover-corner-setting-label"><strong>{tr("文字效果")}</strong></span>
+  <h3 id="{idPrefix}-look-heading">{tr("文字效果")}</h3>
+  <!-- The group heading already says 文字效果: the control keeps only an accessible name, no visible caption. -->
+  <div class="cover-corner-setting" role="group" aria-label={tr("文字效果")}>
     <div class="layout-choice-row lyrics-text-effect-row">
       {#each [['shadow', tr('陰影'), tr('歌詞陰影')], ['stroke', tr('描邊'), tr('歌詞描邊')], ['none', tr('關閉'), tr('關閉歌詞外觀')]] as [value, label, description] (value)}
         <button
