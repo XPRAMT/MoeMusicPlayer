@@ -1,6 +1,6 @@
 // Now-playing cover zoom: wheel (mouse over the cover) or two-finger pinch scales the cover itself (CSS transform on
 // the cover element); double click / double tap restores. The layout reserves the zoomed cover size so the lyrics
-// area is squeezed by the cover instead of scaling with it (see --np-cover-zoom in app.css). Pure math is exported
+// area is squeezed by the cover instead of scaling with it (see --np-cover-reserve in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
 export const COVER_ZOOM_MIN = 0.5;
@@ -10,6 +10,12 @@ export const COVER_ZOOM_WHEEL_STEP = 0.0015;
 export const COVER_DOUBLE_TAP_MS = 300;
 export const COVER_DOUBLE_TAP_SLOP_PX = 24;
 export const COVER_PAN_SLOP_PX = 6;
+/** No zoom input for this long = the zoom gesture is over: the lyrics re-wrap and re-centre once. */
+export const COVER_ZOOM_SETTLE_MS = 150;
+/** The cover keeps its own compositor layer (will-change) this long after the last input, then is re-rasterised. */
+export const COVER_LAYER_IDLE_MS = 200;
+const COVER_RESET_MS = 160;
+const COVER_WHEEL_ANCHOR_SLOP_PX = 2;
 
 /** @typedef {{ scale: number, x: number, y: number }} CoverZoomState */
 /** @type {CoverZoomState} */
@@ -97,113 +103,236 @@ export function isDoubleTap(previous, next) {
 }
 
 /**
- * use:coverZoom={{ enabled, onZoom, initial, syncScale }} on the cover element, which is the element that gets transformed. Mouse: wheel
- * over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one finger pans while zoomed.
- * Double click / double tap restores the original size. `onZoom` receives the current state
- * ({ scale, x, y }; scale 1 = not zoomed). The cover element is re-created on track changes (the artwork pane is removed
- * while the next cover loads), so the owner keeps the last state and passes it back as `initial` to restore it.
+ * The cover's geometry from ONE getBoundingClientRect() taken while the layout is clean (start of an animation
+ * frame, before any write): visual centre, un-transformed (layout) centre and un-scaled size. `state` is the transform
+ * that was applied when the rect was read.
+ * @param {{ left: number, top: number, width: number, height: number }} rect @param {CoverZoomState} state
+ */
+export function coverGeometry(rect, state) {
+  const scale = state.scale > 0 ? state.scale : 1;
+  const centreX = rect.left + rect.width / 2;
+  const centreY = rect.top + rect.height / 2;
+  return { centreX, centreY, layoutX: centreX - state.x, layoutY: centreY - state.y, width: rect.width / scale, height: rect.height / scale };
+}
+
+/**
+ * Content offset from the cover centre (cover px) of the point currently at client (x, y).
+ * @param {ReturnType<typeof coverGeometry>} geometry @param {CoverZoomState} state @param {number} clientX @param {number} clientY
+ */
+export function contentOffsetAt(geometry, state, clientX, clientY) {
+  const scale = state.scale > 0 ? state.scale : 1;
+  return { x: (clientX - geometry.centreX) / scale, y: (clientY - geometry.centreY) / scale };
+}
+
+/**
+ * The transform that puts the content point `u` (cover px from its centre) at client `target` at `nextScale`, given the
+ * cover's CURRENT layout centre. Absolute, so a layout shift caused by the previous step (the column grows or shrinks)
+ * is corrected in the same write and the point under the fingers/cursor never drifts.
+ * @param {ReturnType<typeof coverGeometry>} geometry @param {{ x: number, y: number }} u @param {{ x: number, y: number }} target @param {number} nextScale
+ * @returns {CoverZoomState}
+ */
+export function anchoredZoom(geometry, u, target, nextScale) {
+  const scale = clamp(nextScale, COVER_ZOOM_MIN, COVER_ZOOM_MAX);
+  return clampCoverZoom({ scale, x: target.x - geometry.layoutX - u.x * scale, y: target.y - geometry.layoutY - u.y * scale }, geometry.width, geometry.height);
+}
+
+/**
+ * An activity flag that turns on at the first `poke()` and off `idleMs` after the last one (or `end()` at once);
+ * `hold()` keeps it on until `release()`. `onChange(active)` fires only on a real change.
+ * @param {number} idleMs @param {(active: boolean) => void} onChange
+ * @param {{ set: (fn: () => void, ms: number) => unknown, clear: (id: unknown) => void }} [timers]
+ */
+export function createIdleGate(idleMs, onChange, timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(/** @type {any} */ (id)) }) {
+  let active = false;
+  let held = false;
+  /** @type {unknown} */
+  let timer = null;
+  const stop = () => { if (timer !== null) { timers.clear(timer); timer = null; } };
+  const set = (/** @type {boolean} */ value) => { if (active !== value) { active = value; onChange(value); } };
+  const arm = () => {
+    stop();
+    if (held) return;
+    timer = timers.set(() => { timer = null; if (!held) set(false); }, idleMs);
+  };
+  return {
+    poke() { set(true); arm(); },
+    hold() { held = true; set(true); stop(); },
+    release() { held = false; if (active) arm(); },
+    end() { held = false; stop(); set(false); },
+    dispose() { held = false; stop(); },
+    get active() { return active; },
+  };
+}
+
+/**
+ * use:coverZoom={{ enabled, onZoom, onZoomingChange, initial, syncScale }} on the cover element, which is the element that gets
+ * transformed. Mouse: wheel over the cover zooms at the cursor, drag pans while zoomed. Touch/pen: pinch zooms, one
+ * finger pans while zoomed. Double click / double tap restores the original size. `onZoom` receives the current state
+ * ({ scale, x, y }; scale 1 = not zoomed). `onZoomingChange(true)` fires at the first wheel/pinch step and
+ * `onZoomingChange(false)` COVER_ZOOM_SETTLE_MS after the last one: the lyrics freeze their text layout between the two
+ * and re-wrap once at the end. The cover element is re-created on track changes (the artwork pane is removed while the
+ * next cover loads), so the owner keeps the last state and passes it back as `initial` to restore it.
+ *
+ * Cost per animation frame (ADR 0036): all input (wheel factors, both fingers, pan) is accumulated and applied by ONE
+ * requestAnimationFrame callback, which reads the cover rect once at the very start (layout is clean there, so the read
+ * forces nothing), then only writes (transform, data attributes, onZoom).
  * @param {HTMLElement} node
- * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
+ * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, onZoomingChange?: (zooming: boolean) => void, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
  */
 export function coverZoom(node, params) {
   let options = params;
   /** @type {CoverZoomState} */
   let state = { ...COVER_ZOOM_IDENTITY };
+  let size = { width: 0, height: 0 };
   /** @type {Map<number, { x: number, y: number }>} */
   const pointers = new Map();
-  /** @type {{ distance: number, scale: number, midX: number, midY: number } | null} */
+  /** @type {{ distance: number, scale: number, startX: number, startY: number, u: { x: number, y: number } | null, dirty: boolean } | null} */
   let pinch = null;
-  /** @type {{ x: number, y: number, ox: number, oy: number, moved: boolean } | null} */
+  /** @type {{ x: number, y: number, ox: number, oy: number, cx: number, cy: number, moved: boolean, dirty: boolean } | null} */
   let pan = null;
+  /** @type {{ factor: number, x: number, y: number } | null} */
+  let wheelPending = null;
+  /** The content point under the cursor for the current wheel run; reused until the cursor really moves. @type {{ u: { x: number, y: number }, x: number, y: number } | null} */
+  let wheelAnchor = null;
+  /** After a scale change the layout moved: one more frame re-pins the anchor. @type {{ u: { x: number, y: number }, x: number, y: number } | null} */
+  let settle = null;
   /** @type {{ x: number, y: number, t: number } | null} */
   let lastTap = null;
   let suppressClick = false;
   let dispatchingCancel = false;
+  let resetting = false;
+  let frameId = 0;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let resetTimer = null;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const active = () => options.enabled !== false;
+  const hasRaf = () => typeof requestAnimationFrame === 'function';
+  const raf = (/** @type {() => void} */ fn) => (hasRaf() ? requestAnimationFrame(fn) : (fn(), 0));
 
-  function layerSize() {
-    return { width: node.offsetWidth, height: node.offsetHeight };
-  }
+  // will-change: transform only while a gesture runs. Left on, Chromium keeps the raster scale it had when the
+  // layer was promoted, so a cover zoomed in afterwards stays blurry; dropping it re-rasters at the settled scale.
+  const layerGate = createIdleGate(COVER_LAYER_IDLE_MS, (on) => {
+    if (on) node.dataset.coverGesture = '';
+    else delete node.dataset.coverGesture;
+  });
+  const zoomGate = createIdleGate(COVER_ZOOM_SETTLE_MS, (on) => {
+    if (!on) wheelAnchor = null;
+    options.onZoomingChange?.(on);
+  });
 
   /** @param {CoverZoomState} next @param {boolean} animate @param {boolean} [notify] */
   function apply(next, animate, notify = true) {
     state = next;
-    node.style.transition = animate && !reduced() ? 'transform 160ms ease' : 'none';
+    node.style.transition = animate && !reduced() ? `transform ${COVER_RESET_MS}ms ease` : 'none';
     node.style.transform = coverZoomTransform(state);
     // A data attribute, not a class: Svelte rewrites the class list of this element when `has-artwork` toggles
     // (track change), which would drop a class added from here.
     if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
     else delete node.dataset.coverZoomed;
-    if (notify) options.onZoom?.(state, { width: node.offsetWidth, height: node.offsetHeight });
+    if (notify) options.onZoom?.(state, size);
   }
 
-  /** Anchor relative to the cover's visual centre. @param {number} clientX @param {number} clientY */
-  function anchorOf(clientX, clientY) {
-    const rect = node.getBoundingClientRect();
-    return { x: clientX - (rect.left + rect.width / 2), y: clientY - (rect.top + rect.height / 2) };
+  function schedule() {
+    if (frameId) return;
+    frameId = raf(frame);
   }
 
-  let settleFrame = 0;
-
-  /**
-   * Zooming changes the layout (the cover's column grows/shrinks, the lyrics get squeezed), which moves the cover's
-   * un-transformed centre. After the layout settles, shift the translation so the content point `u` (offset from the
-   * cover centre, in cover px) is again under `target` (client coords).
-   * @param {{ x: number, y: number }} target @param {{ x: number, y: number }} u
-   */
-  function settleAnchor(target, u) {
-    if (typeof requestAnimationFrame !== 'function') return;
-    cancelAnimationFrame(settleFrame);
-    settleFrame = requestAnimationFrame(() => {
-      settleFrame = 0;
-      if (state.scale === COVER_ZOOM_REST) return;
-      const rect = node.getBoundingClientRect();
-      const centreX = rect.left + rect.width / 2;
-      const centreY = rect.top + rect.height / 2;
-      const { width, height } = layerSize();
-      const dx = target.x - u.x * state.scale - centreX;
-      const dy = target.y - u.y * state.scale - centreY;
-      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
-      apply(clampCoverZoom({ scale: state.scale, x: state.x + dx, y: state.y + dy }, width, height), false);
-    });
+  function frame() {
+    frameId = 0;
+    if (resetting || !active()) { wheelPending = null; return; }
+    // The only layout read of the frame: first, so nothing written yet can have dirtied the layout.
+    const geo = coverGeometry(node.getBoundingClientRect(), state);
+    size = { width: geo.width, height: geo.height };
+    /** @type {CoverZoomState | null} */
+    let next = null;
+    /** @type {{ u: { x: number, y: number }, x: number, y: number } | null} */
+    let pin = null;
+    if (wheelPending) {
+      const { factor, x, y } = wheelPending;
+      wheelPending = null;
+      if (!wheelAnchor || Math.hypot(x - wheelAnchor.x, y - wheelAnchor.y) > COVER_WHEEL_ANCHOR_SLOP_PX) {
+        wheelAnchor = { u: contentOffsetAt(geo, state, x, y), x, y };
+      }
+      pin = { u: wheelAnchor.u, x, y };
+      next = anchoredZoom(geo, pin.u, pin, state.scale * factor);
+    } else if (pinch && pointers.size >= 2) {
+      if (!pinch.dirty && !settle) return;
+      const [a, b] = [...pointers.values()];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      if (!pinch.u) pinch.u = contentOffsetAt(geo, state, pinch.startX, pinch.startY);
+      pinch.dirty = false;
+      pin = { u: pinch.u, x: mid.x, y: mid.y };
+      next = anchoredZoom(geo, pin.u, pin, pinch.scale * (pointerDistance(a, b) / pinch.distance));
+    } else if (pan && pointers.size === 1 && pan.dirty) {
+      pan.dirty = false;
+      next = clampCoverZoom({ scale: state.scale, x: pan.ox + (pan.cx - pan.x), y: pan.oy + (pan.cy - pan.y) }, geo.width, geo.height);
+    } else if (settle) {
+      next = anchoredZoom(geo, settle.u, settle, state.scale);
+    }
+    const scaleChanged = next !== null && next.scale !== state.scale;
+    settle = null;
+    if (next && (scaleChanged || Math.abs(next.x - state.x) >= 0.01 || Math.abs(next.y - state.y) >= 0.01)) apply(next, false);
+    // The scale change moves the layout (squeeze) after this write: re-pin the anchor in one more frame.
+    if (scaleChanged && pin) { settle = pin; schedule(); }
   }
 
-  /** Content offset from the cover centre (cover px) of the point currently at client (x, y). @param {number} clientX @param {number} clientY */
-  function contentOffsetAt(clientX, clientY) {
-    const a = anchorOf(clientX, clientY);
-    return { x: a.x / state.scale, y: a.y / state.scale };
-  }
-
-  /** @param {number} scale @param {number} clientX @param {number} clientY */
-  function zoomTo(scale, clientX, clientY) {
-    const { width, height } = layerSize();
-    const a = anchorOf(clientX, clientY);
-    const u = contentOffsetAt(clientX, clientY);
-    apply(zoomCoverAt(state, scale, a.x, a.y, width, height), false);
-    settleAnchor({ x: clientX, y: clientY }, u);
-  }
-
+  /** Back to the original size: the transform glides first, the layout (and onZoom) follows when it ends, and the cover is
+   *  carried from where it was to where the new layout puts it. */
   function reset() {
-    if (state.scale !== COVER_ZOOM_REST) apply({ ...COVER_ZOOM_IDENTITY }, true);
+    if (state.scale === COVER_ZOOM_REST || resetting) return;
+    wheelPending = null; wheelAnchor = null; settle = null;
+    if (reduced() || !hasRaf()) {
+      apply({ ...COVER_ZOOM_IDENTITY }, false);
+      return;
+    }
+    resetting = true;
+    layerGate.hold();
+    node.style.transition = `transform ${COVER_RESET_MS}ms ease`;
+    node.style.transform = '';
+    resetTimer = setTimeout(() => {
+      resetTimer = null;
+      const before = node.getBoundingClientRect(); // identity transform: the old layout centre (the one forced read)
+      zoomGate.poke();
+      apply({ ...COVER_ZOOM_IDENTITY }, false);
+      raf(() => {
+        const after = node.getBoundingClientRect(); // the new layout centre, after the owner's update
+        const dx = (before.left + before.width / 2) - (after.left + after.width / 2);
+        const dy = (before.top + before.height / 2) - (after.top + after.height / 2);
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) { resetting = false; layerGate.release(); return; }
+        node.style.transition = 'none';
+        node.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
+        raf(() => {
+          node.style.transition = `transform ${COVER_RESET_MS}ms ease`;
+          node.style.transform = '';
+          resetTimer = setTimeout(() => { resetTimer = null; resetting = false; layerGate.release(); }, COVER_RESET_MS + 20);
+        });
+      });
+    }, COVER_RESET_MS + 20);
   }
 
   /** @param {WheelEvent} event */
   function wheel(event) {
     if (!active()) return;
     event.preventDefault();
-    zoomTo(state.scale * getWheelZoomFactor(event.deltaY, event.deltaMode), event.clientX, event.clientY);
+    if (resetting) return;
+    const factor = getWheelZoomFactor(event.deltaY, event.deltaMode);
+    wheelPending = { factor: (wheelPending?.factor ?? 1) * factor, x: event.clientX, y: event.clientY };
+    zoomGate.poke();
+    layerGate.poke();
+    schedule();
   }
 
   /** @param {PointerEvent} event */
   function down(event) {
-    if (!active()) return;
+    if (!active() || resetting) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
-      pinch = { distance: Math.max(1, pointerDistance(a, b)), scale: state.scale, midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 };
+      pinch = { distance: Math.max(1, pointerDistance(a, b)), scale: state.scale, startX: (a.x + b.x) / 2, startY: (a.y + b.y) / 2, u: null, dirty: false };
       pan = null;
       lastTap = null;
+      zoomGate.hold();
+      layerGate.hold();
       // Let the swipe-to-skip gesture on the same element drop the first finger (it ignores pointercancel dismissals).
       const [firstId] = [...pointers.keys()];
       // Our own up() listens for pointercancel too, so mark this one as synthetic and ignore it there.
@@ -214,7 +343,7 @@ export function coverZoom(node, params) {
         try { node.setPointerCapture(id); } catch { /* gone */ }
       }
     } else if (pointers.size === 1 && event.pointerType === 'mouse' && state.scale > COVER_ZOOM_REST) {
-      pan = { x: event.clientX, y: event.clientY, ox: state.x, oy: state.y, moved: false };
+      pan = { x: event.clientX, y: event.clientY, ox: state.x, oy: state.y, cx: event.clientX, cy: event.clientY, moved: false, dirty: false };
       try { node.setPointerCapture(event.pointerId); } catch { /* gone */ }
     }
   }
@@ -224,29 +353,22 @@ export function coverZoom(node, params) {
     if (!pointers.has(event.pointerId)) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pinch && pointers.size >= 2) {
-      const [a, b] = [...pointers.values()];
-      const midX = (a.x + b.x) / 2;
-      const midY = (a.y + b.y) / 2;
-      const mid = anchorOf(midX, midY);
-      const u = contentOffsetAt(pinch.midX, pinch.midY);
-      const { width, height } = layerSize();
-      const zoomed = zoomCoverAt(state, pinch.scale * (pointerDistance(a, b) / pinch.distance), mid.x, mid.y, width, height);
-      // Two fingers moving together pan the zoomed cover.
-      apply(clampCoverZoom({ scale: zoomed.scale, x: zoomed.x + (midX - pinch.midX), y: zoomed.y + (midY - pinch.midY) }, width, height), false);
-      pinch.midX = midX;
-      pinch.midY = midY;
-      settleAnchor({ x: midX, y: midY }, u);
+      pinch.dirty = true;
       suppressClick = true;
       if (event.cancelable) event.preventDefault();
+      schedule();
     } else if (pan && pointers.size === 1) {
       const dx = event.clientX - pan.x;
       const dy = event.clientY - pan.y;
       if (!pan.moved && Math.hypot(dx, dy) < COVER_PAN_SLOP_PX) return;
       pan.moved = true;
+      pan.cx = event.clientX;
+      pan.cy = event.clientY;
+      pan.dirty = true;
       suppressClick = true;
-      const { width, height } = layerSize();
-      apply(clampCoverZoom({ scale: state.scale, x: pan.ox + dx, y: pan.oy + dy }, width, height), false);
+      layerGate.poke();
       if (event.cancelable) event.preventDefault();
+      schedule();
     }
   }
 
@@ -256,7 +378,7 @@ export function coverZoom(node, params) {
     const wasPinching = pinch !== null;
     const moved = pan?.moved === true;
     pointers.delete(event.pointerId);
-    if (pointers.size < 2) pinch = null;
+    if (pointers.size < 2 && pinch) { pinch = null; zoomGate.release(); layerGate.release(); }
     if (pointers.size === 0) pan = null;
 
     if (wasPinching || moved) {
@@ -290,7 +412,10 @@ export function coverZoom(node, params) {
   const initial = typeof options.initial === 'function' ? options.initial(node) : options.initial;
   // Restoring the owner's saved state must not report it back (it would overwrite the saved pan while the cover
   // has no size yet).
-  if (initial && initial.scale !== COVER_ZOOM_REST) apply({ ...initial }, false, false);
+  if (initial && initial.scale !== COVER_ZOOM_REST) {
+    size = { width: node.offsetWidth, height: node.offsetHeight };
+    apply({ ...initial }, false, false);
+  }
 
   node.addEventListener('wheel', wheel, { passive: false });
   node.addEventListener('pointerdown', down);
@@ -306,15 +431,19 @@ export function coverZoom(node, params) {
       options = next;
       // The owner can drop the zoom from outside (an enlarged cover is reset when the track changes): when it says
       // the scale is back at 1 while this element is still zoomed, follow it.
-      if (next.syncScale === COVER_ZOOM_REST && state.scale !== COVER_ZOOM_REST) {
-        pointers.clear(); pinch = null; pan = null; lastTap = null;
+      if (next.syncScale === COVER_ZOOM_REST && state.scale !== COVER_ZOOM_REST && !resetting) {
+        pointers.clear(); pinch = null; pan = null; lastTap = null; wheelPending = null; wheelAnchor = null; settle = null;
         apply({ ...COVER_ZOOM_IDENTITY }, false, false);
+        layerGate.end();
       }
       // A disabled cover (the Now Playing page is closed) keeps its zoom: only a double click restores it.
-      if (!active()) { pointers.clear(); pinch = null; pan = null; }
+      if (!active()) { pointers.clear(); pinch = null; pan = null; wheelPending = null; zoomGate.release(); layerGate.release(); }
     },
     destroy() {
-      cancelAnimationFrame(settleFrame);
+      if (frameId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
+      if (resetTimer) clearTimeout(resetTimer);
+      zoomGate.end();
+      layerGate.end();
       node.removeEventListener('wheel', wheel);
       node.removeEventListener('pointerdown', down);
       node.removeEventListener('pointermove', move);

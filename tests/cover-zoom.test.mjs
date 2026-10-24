@@ -90,3 +90,124 @@ test('the browser image drag is cancelled so a mouse drag can pan the zoomed cov
   if (!hadCancel) delete globalThis.cancelAnimationFrame;
   assert.equal(listeners.has('dragstart'), false);
 });
+
+test('geometry from one rect: layout centre, un-scaled size, and an absolute anchor that corrects layout shifts', async () => {
+  const { coverGeometry, contentOffsetAt, anchoredZoom } = await import('../src/lib/cover-zoom.js');
+  // A 200x200 cover at layout centre (300, 300), zoomed 2x and panned by (-40, 10): the rect is the visual box.
+  const state = { scale: 2, x: -40, y: 10 };
+  const rect = { left: 300 - 40 - 200, top: 300 + 10 - 200, width: 400, height: 400 };
+  const geo = coverGeometry(rect, state);
+  assert.deepEqual([geo.centreX, geo.centreY, geo.layoutX, geo.layoutY, geo.width, geo.height], [260, 310, 300, 300, 200, 200]);
+  // The content point under the cursor stays under the cursor after zooming, from the same geometry.
+  const cursor = { x: 350, y: 330 };
+  const u = contentOffsetAt(geo, state, cursor.x, cursor.y);
+  const next = anchoredZoom(geo, u, cursor, 3);
+  assert.equal(next.scale, 3);
+  assert.equal(300 + next.x + u.x * 3, cursor.x);
+  assert.equal(300 + next.y + u.y * 3, cursor.y);
+  // Same result as the relative formula when the layout did not move.
+  const relative = zoomCoverAt(state, 3, cursor.x - geo.centreX, cursor.y - geo.centreY, 200, 200);
+  assert.ok(Math.abs(relative.x - next.x) < 1e-9 && Math.abs(relative.y - next.y) < 1e-9);
+  // The layout moved by +30px between steps: the next write absorbs it (the cover point stays under the cursor).
+  const moved = coverGeometry({ ...rect, left: rect.left + 30 }, state);
+  const fixed = anchoredZoom(moved, u, cursor, 2);
+  assert.equal(330 + fixed.x + u.x * 2, cursor.x);
+});
+
+test('the idle gate turns on at the first poke, off after the idle time, and hold keeps it on', async () => {
+  const { createIdleGate } = await import('../src/lib/cover-zoom.js');
+  const timers = [];
+  const fake = { set: (fn, ms) => { const t = { fn, ms, live: true }; timers.push(t); return t; }, clear: (t) => { t.live = false; } };
+  const changes = [];
+  const gate = createIdleGate(150, (on) => changes.push(on), fake);
+  gate.poke(); gate.poke();
+  assert.deepEqual(changes, [true]);
+  assert.equal(timers.filter((t) => t.live).length, 1);
+  assert.equal(timers.at(-1).ms, 150);
+  gate.hold();
+  assert.equal(timers.filter((t) => t.live).length, 0);
+  gate.release();
+  const t = timers.filter((x) => x.live)[0];
+  t.fn();
+  assert.deepEqual(changes, [true, false]);
+  gate.poke(); gate.end();
+  assert.deepEqual(changes, [true, false, true, false]);
+});
+
+function fakeCover(rect) {
+  const listeners = new Map();
+  let rectReads = 0;
+  const node = {
+    style: {}, dataset: {}, offsetWidth: rect.width, offsetHeight: rect.height,
+    addEventListener: (type, handler) => listeners.set(type, handler),
+    removeEventListener: (type) => listeners.delete(type),
+    getBoundingClientRect: () => { rectReads += 1; return { ...rect }; },
+    setPointerCapture: () => {},
+    dispatchEvent: () => true,
+  };
+  return { node, listeners, reads: () => rectReads };
+}
+
+test('wheel steps and pinch moves are coalesced into one apply and one rect read per frame', async () => {
+  const { coverZoom } = await import('../src/lib/cover-zoom.js');
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const { node, listeners, reads } = fakeCover({ left: 100, top: 100, width: 200, height: 200 });
+    const zooms = [];
+    const zooming = [];
+    const action = coverZoom(node, { onZoom: (s) => zooms.push(s), onZoomingChange: (z) => zooming.push(z) });
+    const event = (deltaY) => ({ deltaY, deltaMode: 0, clientX: 200, clientY: 200, preventDefault() {} });
+    listeners.get('wheel')(event(-100));
+    listeners.get('wheel')(event(-100));
+    listeners.get('wheel')(event(-100));
+    assert.equal(frames.length, 1, 'one scheduled frame');
+    assert.equal(reads(), 0, 'no layout read in the handlers');
+    assert.deepEqual(zooming, [true]);
+    frames.shift()();
+    assert.equal(reads(), 1);
+    assert.equal(zooms.length, 1);
+    assert.ok(Math.abs(zooms[0].scale - Math.exp(0.45)) < 1e-9, 'the three factors multiplied');
+    assert.equal('coverGesture' in node.dataset, true);
+    assert.equal('coverZoomed' in node.dataset, true);
+    // The follow-up settle frame re-pins the anchor with at most one more read and one write.
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    assert.equal(reads(), 2);
+    assert.ok(zooms.length <= 2);
+    action.destroy();
+    assert.deepEqual(zooming, [true, false]);
+    assert.equal('coverGesture' in node.dataset, false);
+  } finally {
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});
+
+test('a pinch applies the latest positions of both fingers once per frame', async () => {
+  const { coverZoom } = await import('../src/lib/cover-zoom.js');
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const { node, listeners, reads } = fakeCover({ left: 100, top: 100, width: 200, height: 200 });
+    const zooms = [];
+    coverZoom(node, { onZoom: (s) => zooms.push(s) });
+    const ptr = (id, x, y) => ({ pointerId: id, clientX: x, clientY: y, pointerType: 'touch', cancelable: true, preventDefault() {} });
+    listeners.get('pointerdown')(ptr(1, 150, 200));
+    listeners.get('pointerdown')(ptr(2, 250, 200));
+    for (let i = 1; i <= 5; i += 1) {
+      listeners.get('pointermove')(ptr(1, 150 - i * 4, 200));
+      listeners.get('pointermove')(ptr(2, 250 + i * 4, 200));
+    }
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    assert.equal(reads(), 1);
+    assert.equal(zooms.length, 1);
+    assert.ok(Math.abs(zooms[0].scale - 1.4) < 1e-9);
+  } finally {
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});

@@ -32,6 +32,7 @@
     timedNavigationKind,
     type ScrollGlide,
   } from './lyrics-scroll-glide';
+  import { frozenRowWidth } from './lyrics-layout-freeze.js';
   import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
@@ -113,6 +114,9 @@
      *  lyrics once for every consumer, for example the taskbar lyrics); alone it creates its own. */
     sharedController?: ReturnType<typeof createLyricsController>;
     sharedState?: LyricsViewState;
+    /** True while the cover is being zoomed: the text layout stays at the last settled size (the column only clips it) and
+     *  is rebuilt once, instantly, when this turns false. */
+    layoutFrozen?: boolean;
   }
 
   let {
@@ -128,6 +132,7 @@
     api = defaultLyricsApi,
     sharedController,
     sharedState,
+    layoutFrozen = false,
   }: Props = $props();
 
   let ownState = $state<LyricsViewState>({
@@ -509,6 +514,7 @@
     const viewport = isTimed ? timedViewport : plainViewport;
     if (!viewport) return;
     const observer = new ResizeObserver(() => {
+      if (layoutFrozen) return; // re-measured once when the freeze ends (below)
       const nextWidth = Math.round(viewport.clientWidth);
       if (nextWidth !== layoutWidth) layoutWidth = nextWidth;
       if (isTimed) timedViewportHeight = viewport.clientHeight;
@@ -516,6 +522,19 @@
     });
     observer.observe(viewport);
     return () => observer.disconnect();
+  });
+
+  // The freeze ended: take the settled column size once (one re-wrap and one instant re-centre).
+  $effect(() => {
+    if (layoutFrozen) return;
+    untrack(() => {
+      const viewport = isTimed ? timedViewport : plainViewport;
+      if (!viewport) return;
+      const nextWidth = Math.round(viewport.clientWidth);
+      if (nextWidth !== layoutWidth) layoutWidth = nextWidth;
+      if (isTimed) { if (viewport.clientHeight !== timedViewportHeight) timedViewportHeight = viewport.clientHeight; }
+      else if (viewport.clientHeight !== plainViewportHeight) plainViewportHeight = viewport.clientHeight;
+    });
   });
 
   $effect(() => {
@@ -581,7 +600,7 @@
 
     const updateViewport = () => {
       plainScrollTop = element.scrollTop;
-      plainViewportHeight = element.clientHeight;
+      if (!layoutFrozen) plainViewportHeight = element.clientHeight;
     };
     element.addEventListener('scroll', updateViewport, { passive: true });
     const observer = typeof ResizeObserver === 'undefined'
@@ -876,6 +895,8 @@
         aria-label={tr("同步歌詞")}
         aria-live="off"
         bind:this={timedViewport}
+        data-layout-frozen={layoutFrozen ? '' : undefined}
+        style:--lyrics-frozen-width={frozenRowWidth(layoutFrozen, layoutWidth)}
         data-testid="timed-lyrics"
         data-rendered-count={timedRenderedRows.length}
         data-window-start={timedWindow.start}
@@ -923,6 +944,8 @@
         aria-label={tr("純歌詞，可捲動瀏覽")}
         aria-live="off"
         bind:this={plainViewport}
+        data-layout-frozen={layoutFrozen ? '' : undefined}
+        style:--lyrics-frozen-width={frozenRowWidth(layoutFrozen, layoutWidth)}
         data-testid="plain-lyrics"
         data-rendered-count={plainRenderedRows.length}
         data-window-start={plainWindow.start}
@@ -1062,6 +1085,8 @@
 
   .lyrics-lines-viewport {
     position: relative;
+    /* Rows and the column's other contents cannot invalidate (or be invalidated by) the rest of the page. */
+    contain: layout paint;
     min-height: 168px;
     max-height: min(56vh, 620px);
     flex: 1 1 auto;
@@ -1071,6 +1096,17 @@
     mask-image: linear-gradient(to bottom, transparent 0%, #000 24%, #000 76%, transparent 100%);
     scrollbar-color: color-mix(in srgb, var(--accent) 42%, transparent) transparent;
     scrollbar-width: thin;
+  }
+
+  /* The cover is being zoomed: the rows keep the text layout of the last settled width and the narrowing column clips them. */
+  .lyrics-lines-viewport[data-layout-frozen] {
+    overflow-x: hidden;
+  }
+
+  .lyrics-lines-viewport[data-layout-frozen] .lyric-line {
+    width: var(--lyrics-frozen-width, 100%);
+    max-width: none;
+    flex-shrink: 0;
   }
 
   .lyrics-spacer {

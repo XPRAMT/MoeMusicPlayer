@@ -2197,6 +2197,12 @@ input:focus-visible {
   max-width: none;
   max-height: none;
   flex: none;
+}
+
+/* A compositor layer only while a zoom gesture runs (set by cover-zoom.js, dropped shortly after the last input): a
+   layer kept with will-change keeps the raster scale it was promoted at, which leaves a cover zoomed in later blurry.
+   Dropping it makes Chromium re-raster the cover at the settled scale. */
+.now-playing-view .cover-stage[data-cover-gesture] {
   will-change: transform;
 }
 

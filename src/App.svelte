@@ -778,6 +778,19 @@
   let coverBaseAvailable: { width: number; height: number } | null = null;
   // 1 at original size or larger, fading to 0 as the cover shrinks to the minimum: the artwork pane's fr share.
   let coverShrinkShare = $derived(Math.min(1, Math.max(0, (coverLayoutScale - COVER_ZOOM_MIN) / (1 - COVER_ZOOM_MIN))));
+  // The card's size, from the section's ResizeObserver (no layout read): the grid clamps the cover's track at 65% of the
+  // card, so once the reserved size passes that the value written to the CSS variable stops changing (no style work).
+  let nowPlayingViewWidth = $state(0);
+  let nowPlayingViewHeight = $state(0);
+  let coverReserve = $derived.by(() => {
+    if (coverLayoutScale === 1) return 0;
+    const frame = coverFrame;
+    if (coverLayoutScale < 1 || !frame || !nowPlayingViewWidth || !nowPlayingViewHeight) return coverLayoutScale;
+    const cap = Math.max((0.65 * nowPlayingViewWidth) / frame.width, (0.65 * nowPlayingViewHeight) / frame.height);
+    return Math.min(coverLayoutScale, Math.ceil(cap * 1000) / 1000);
+  });
+  // True from the first wheel/pinch step until the zoom has been idle for a moment: the lyrics keep their text layout.
+  let coverZooming = $state(false);
   let sources = $state<LibrarySource[]>([]);
   let sourcesLoadedOnce = $state(false);
   const showSourceScopeSwitch = $derived(shouldShowSourceScopeSwitch(sources));
@@ -5486,11 +5499,12 @@
       <div class="now-playing-overlay-body" data-testid="now-playing-overlay-body" inert={isQuickSettingsOpen}>
         <div class="now-playing-overlay-content">
           <section class="now-playing-view" aria-label={tr("正在播放")}
+            bind:clientWidth={nowPlayingViewWidth}
+            bind:clientHeight={nowPlayingViewHeight}
             use:swipeDismiss={{ follow: false, damped: true, feedbackTarget: () => coverStageElement ?? null, enabled: isNowPlayingOpen, actions: {}, mouseActions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous') } }}
             style:--np-cover-height={coverFrame ? `${coverFrame.height}px` : undefined}
             style:--np-cover-width={coverFrame ? `${coverFrame.width}px` : undefined}
-            style:--np-cover-zoom={coverLayoutScale}
-            style:--np-cover-reserve={coverLayoutScale === 1 ? 0 : coverLayoutScale}
+            style:--np-cover-reserve={coverReserve}
             style:--np-art-col-a={`${(1 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-col-b={`${(1 * coverShrinkShare).toFixed(4)}fr`}
             style:--np-art-row={`${(1.1 * coverShrinkShare).toFixed(4)}fr`}
@@ -5502,7 +5516,7 @@
                 <div
                   bind:this={coverStageElement}
                   class="cover-stage"
-                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: handleCoverZoom, initial: restoreCoverZoom, syncScale: coverZoomPersisted.scale }}
+                  use:coverZoom={{ enabled: isNowPlayingOpen, onZoom: handleCoverZoom, onZoomingChange: (zooming) => { coverZooming = zooming; }, initial: restoreCoverZoom, syncScale: coverZoomPersisted.scale }}
                   use:swipeDismiss={{ follow: false, damped: true, enabled: isNowPlayingOpen, actions: { left: () => void controlPlayback('playback_next'), right: () => void controlPlayback('playback_previous'), down: () => void closeNowPlaying() }, mouseActions: { down: () => void closeNowPlaying() } }}
                   class:has-artwork={nowPlayingArtworkUrl !== null}
                   class:cover-corner-square={nowPlayingAppearancePreferences.coverCornerStyle === 'square'}
@@ -5539,6 +5553,7 @@
                   onStatusChange={(status) => { lyricsTopbarStatus = status; }}
                   sharedController={lyricsController}
                   sharedState={lyricsState}
+                  layoutFrozen={coverZooming}
                 />
               {/snippet}
             </NowPlayingArrangement>
