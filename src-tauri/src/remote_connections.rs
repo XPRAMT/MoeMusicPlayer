@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use player_core::{MediaLocator, SourceId};
 use player_remote::account::{CredentialVault, RemoteAccount, RemoteProtocol};
-use player_remote::fs::{RemoteError, RemoteFs};
+use player_remote::fs::{FileStamp, RemoteEntry, RemoteError, RemoteFile, RemoteFs};
 use player_remote::index::{RemoteResolver, ResolvedSource};
 use player_remote::smb::{SmbFs, SmbSettings};
 use player_remote::webdav::WebDavFs;
@@ -33,22 +33,144 @@ fn fingerprint(account: &RemoteAccount) -> String {
 /// for another connection attempt to time out.
 pub(crate) const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(15);
 
+/// Whether an account's server is known to be unreachable: set when connecting or any operation on the open connection
+/// ends in a network error (after the protocol client's own retry), cleared by the next success once the backoff is over.
+/// Shared by the slot and every [`GuardedFs`] handed out for it, so the mark is made in this one place.
+struct LinkHealth {
+    backoff: Duration,
+    down: Mutex<Option<(Instant, String)>>,
+}
+
+impl LinkHealth {
+    fn new(backoff: Duration) -> Self {
+        Self {
+            backoff,
+            down: Mutex::new(None),
+        }
+    }
+
+    /// `Err` (the error that started the backoff) while the backoff lasts.
+    fn check(&self) -> Result<(), RemoteError> {
+        match &*self.down.lock().unwrap_or_else(PoisonError::into_inner) {
+            Some((since, message)) if since.elapsed() < self.backoff => {
+                Err(RemoteError::Network(message.clone()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The backoff was started and has run out: the connection that failed should be replaced.
+    fn expired(&self) -> bool {
+        self.down
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|(since, _)| since.elapsed() >= self.backoff)
+    }
+
+    fn mark(&self, message: &str) {
+        *self.down.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((Instant::now(), message.to_owned()));
+    }
+
+    fn clear(&self) {
+        *self.down.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
+/// The connection every caller gets: it answers at once while the server is in its backoff, and a network error of any
+/// operation starts the backoff, so one dead server costs one slow failure and then none. SMB and WebDAV both come
+/// through here.
+struct GuardedFs {
+    inner: Arc<dyn RemoteFs>,
+    health: Arc<LinkHealth>,
+}
+
+impl GuardedFs {
+    fn run<T>(
+        &self,
+        operation: impl FnOnce(&dyn RemoteFs) -> Result<T, RemoteError>,
+    ) -> Result<T, RemoteError> {
+        self.health.check()?;
+        match operation(self.inner.as_ref()) {
+            Ok(value) => {
+                self.health.clear();
+                Ok(value)
+            }
+            Err(RemoteError::Network(message)) => {
+                self.health.mark(&message);
+                Err(RemoteError::Network(message))
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl RemoteFs for GuardedFs {
+    fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, RemoteError> {
+        self.run(|fs| fs.list(dir))
+    }
+
+    fn stat(&self, path: &str) -> Result<RemoteEntry, RemoteError> {
+        self.run(|fs| fs.stat(path))
+    }
+
+    fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
+        self.run(|fs| fs.open(path))
+    }
+
+    fn replace_file(
+        &self,
+        path: &str,
+        source: &mut dyn std::io::Read,
+        len: u64,
+        expected: Option<FileStamp>,
+    ) -> Result<RemoteEntry, RemoteError> {
+        self.run(|fs| fs.replace_file(path, source, len, expected))
+    }
+
+    fn remove_file(&self, path: &str) -> Result<(), RemoteError> {
+        self.run(|fs| fs.remove_file(path))
+    }
+
+    fn rename_file(&self, from: &str, to: &str) -> Result<(), RemoteError> {
+        self.run(|fs| fs.rename_file(from, to))
+    }
+
+    fn replace_file_keeping_backup(
+        &self,
+        path: &str,
+        source: &mut dyn std::io::Read,
+        len: u64,
+        expected: Option<FileStamp>,
+        backup: &str,
+    ) -> Result<RemoteEntry, RemoteError> {
+        self.run(|fs| fs.replace_file_keeping_backup(path, source, len, expected, backup))
+    }
+
+    fn read_ahead_blocks(&self) -> u64 {
+        self.inner.read_ahead_blocks()
+    }
+}
+
 /// One account's connection: its own lock (so connecting to one server never waits on another, and nothing else in the
-/// app waits on it), the open connection, and when connecting last failed on the network.
+/// app waits on it), the open connection, and whether the server is known to be unreachable.
 struct AccountSlot {
     print: String,
+    health: Arc<LinkHealth>,
     state: Mutex<SlotState>,
 }
 
 #[derive(Default)]
 struct SlotState {
     fs: Option<Arc<dyn RemoteFs>>,
-    unreachable: Option<(Instant, String)>,
 }
 
 #[derive(Default)]
 pub(crate) struct RemoteConnections {
     open: Mutex<HashMap<String, Arc<AccountSlot>>>,
+    /// Test hook: a backoff other than [`UNREACHABLE_BACKOFF`].
+    backoff: Option<Duration>,
 }
 
 impl RemoteConnections {
@@ -76,6 +198,9 @@ impl RemoteConnections {
                 _ => {
                     let slot = Arc::new(AccountSlot {
                         print,
+                        health: Arc::new(LinkHealth::new(
+                            self.backoff.unwrap_or(UNREACHABLE_BACKOFF),
+                        )),
                         state: Mutex::new(SlotState::default()),
                     });
                     open.insert(account.id.clone(), Arc::clone(&slot));
@@ -86,22 +211,30 @@ impl RemoteConnections {
         // The account's own lock is held while connecting: a second caller for the same account waits for this
         // connection instead of making another, which is what a scan's parallel readers need.
         let mut state = slot.state.lock().unwrap_or_else(PoisonError::into_inner);
+        slot.health.check()?;
+        if slot.health.expired() {
+            // The connection that failed is replaced, not tried again; letting go of a dead link can take a while.
+            if let Some(old) = state.fs.take() {
+                let _ = std::thread::Builder::new()
+                    .name("moe-remote-drop".to_owned())
+                    .spawn(move || drop(old));
+            }
+        }
         if let Some(fs) = &state.fs {
             return Ok(Arc::clone(fs));
         }
-        if let Some((since, message)) = &state.unreachable {
-            if since.elapsed() < UNREACHABLE_BACKOFF {
-                return Err(RemoteError::Network(message.clone()));
-            }
-        }
         match make() {
-            Ok(fs) => {
+            Ok(inner) => {
+                slot.health.clear();
+                let fs: Arc<dyn RemoteFs> = Arc::new(GuardedFs {
+                    inner,
+                    health: Arc::clone(&slot.health),
+                });
                 state.fs = Some(Arc::clone(&fs));
-                state.unreachable = None;
                 Ok(fs)
             }
             Err(RemoteError::Network(message)) => {
-                state.unreachable = Some((Instant::now(), message.clone()));
+                slot.health.mark(&message);
                 Err(RemoteError::Network(message))
             }
             Err(error) => Err(error),
@@ -811,6 +944,7 @@ mod real_server_tests {
 
 #[cfg(test)]
 mod unreachable_server_tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -873,5 +1007,110 @@ mod unreachable_server_tests {
         connections.forget("down");
         let retried = connections.connect_with(&down, || Err(RemoteError::Network("still down".to_owned())));
         assert!(matches!(retried, Err(RemoteError::Network(message)) if message == "still down"));
+    }
+
+    /// A server that answered when connected, then went away: every operation fails on the network, and counts how
+    /// often it was really asked.
+    struct Switch {
+        up: AtomicBool,
+        calls: AtomicUsize,
+    }
+
+    struct SwitchFs(Arc<Switch>);
+
+    impl SwitchFs {
+        fn answer(&self) -> Result<(), RemoteError> {
+            self.0.calls.fetch_add(1, Ordering::SeqCst);
+            if self.0.up.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(RemoteError::Network("No route to host".to_owned()))
+            }
+        }
+    }
+
+    impl RemoteFs for SwitchFs {
+        fn list(&self, _: &str) -> Result<Vec<player_remote::fs::RemoteEntry>, RemoteError> {
+            self.answer().map(|()| Vec::new())
+        }
+        fn stat(&self, _: &str) -> Result<player_remote::fs::RemoteEntry, RemoteError> {
+            self.answer()?;
+            Err(RemoteError::NotFound)
+        }
+        fn open(&self, _: &str) -> Result<Box<dyn player_remote::fs::RemoteFile>, RemoteError> {
+            self.answer()?;
+            Err(RemoteError::NotFound)
+        }
+    }
+
+    fn connected(
+        connections: &RemoteConnections,
+        account: &RemoteAccount,
+        switch: &Arc<Switch>,
+    ) -> Arc<dyn RemoteFs> {
+        let switch = Arc::clone(switch);
+        connections
+            .connect_with(account, move || Ok(Arc::new(SwitchFs(switch)) as Arc<dyn RemoteFs>))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_network_error_of_an_operation_starts_the_backoff_for_every_later_use() {
+        let connections = RemoteConnections::default();
+        let account = account("cached", "192.0.2.1");
+        let switch = Arc::new(Switch { up: AtomicBool::new(true), calls: AtomicUsize::new(0) });
+        let fs = connected(&connections, &account, &switch);
+        assert!(fs.list("").is_ok());
+        let before = switch.calls.load(Ordering::SeqCst);
+
+        // The server goes away: the first operation fails on the network and is the last one that asks the server.
+        switch.up.store(false, Ordering::SeqCst);
+        assert!(matches!(fs.list(""), Err(RemoteError::Network(_))));
+        let after_first = switch.calls.load(Ordering::SeqCst);
+        assert_eq!(after_first, before + 1);
+
+        // Every kind of use now fails at once with the same error, on the connection already held and on a new request
+        // for the account, without asking the server.
+        assert!(matches!(fs.stat("a"), Err(RemoteError::Network(m)) if m == "No route to host"));
+        assert!(matches!(fs.open("a"), Err(RemoteError::Network(_))));
+        let again = connections.connect_with(&account, || panic!("no new connection while the server is known down"));
+        assert!(matches!(again, Err(RemoteError::Network(_))));
+        assert_eq!(switch.calls.load(Ordering::SeqCst), after_first);
+    }
+
+    #[test]
+    fn a_connection_is_replaced_and_the_backoff_cleared_once_it_is_over() {
+        let connections = RemoteConnections { backoff: Some(Duration::from_millis(80)), ..Default::default() };
+        let account = account("recovering", "192.0.2.2");
+        let switch = Arc::new(Switch { up: AtomicBool::new(true), calls: AtomicUsize::new(0) });
+        let fs = connected(&connections, &account, &switch);
+        switch.up.store(false, Ordering::SeqCst);
+        assert!(fs.list("").is_err());
+        assert!(fs.list("").is_err());
+
+        std::thread::sleep(Duration::from_millis(120));
+        // The server is back: the backoff is over, a new connection is made, and its first success clears the mark.
+        switch.up.store(true, Ordering::SeqCst);
+        let fresh = connected(&connections, &account, &switch);
+        assert!(fresh.list("").is_ok());
+        assert!(fs.list("").is_ok(), "the old handle works again too");
+
+        // A failure of the new connection starts the backoff again.
+        switch.up.store(false, Ordering::SeqCst);
+        assert!(fresh.list("").is_err());
+        let calls = switch.calls.load(Ordering::SeqCst);
+        assert!(fresh.list("").is_err());
+        assert_eq!(switch.calls.load(Ordering::SeqCst), calls);
+    }
+
+    #[test]
+    fn errors_that_are_not_the_network_do_not_start_the_backoff() {
+        let connections = RemoteConnections::default();
+        let account = account("plain", "192.0.2.3");
+        let switch = Arc::new(Switch { up: AtomicBool::new(true), calls: AtomicUsize::new(0) });
+        let fs = connected(&connections, &account, &switch);
+        assert!(matches!(fs.stat("missing"), Err(RemoteError::NotFound)));
+        assert!(matches!(fs.stat("missing"), Err(RemoteError::NotFound)));
+        assert_eq!(switch.calls.load(Ordering::SeqCst), 2);
     }
 }

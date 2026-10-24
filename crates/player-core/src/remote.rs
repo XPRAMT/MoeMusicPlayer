@@ -89,16 +89,39 @@ pub fn remote_content() -> Option<Arc<dyn RemoteContent>> {
         .clone()
 }
 
+/// Whether a read error means the server could not be reached (a [`RemoteError::Network`] converted to an I/O error),
+/// as opposed to the file being missing or unreadable. Lookups that try several files stop after the first such error.
+pub fn is_remote_network_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::ConnectionAborted
+}
+
 /// Read at most `limit` bytes of a remote file, or `None` when it is missing or larger than `limit` (for sidecars such
 /// as `cover.jpg` and `.lrc`, which must not be loaded without a bound).
 pub fn read_remote_file_capped(source_id: SourceId, path: &str, limit: u64) -> Option<Vec<u8>> {
-    let handle = remote_content()?.open(source_id, path).ok()?;
+    read_remote_file_capped_checked(source_id, path, limit)
+        .ok()
+        .flatten()
+}
+
+/// As [`read_remote_file_capped`], but an error of opening the file is returned, so a caller can tell "not there" from
+/// "the server cannot be reached" ([`is_remote_network_error`]).
+pub fn read_remote_file_capped_checked(
+    source_id: SourceId,
+    path: &str,
+    limit: u64,
+) -> io::Result<Option<Vec<u8>>> {
+    let Some(content) = remote_content() else {
+        return Ok(None);
+    };
+    let handle = content.open(source_id, path)?;
     if handle.len == 0 || handle.len > limit {
-        return None;
+        return Ok(None);
     }
     let mut bytes = Vec::with_capacity(handle.len as usize);
-    handle.reader.take(limit + 1).read_to_end(&mut bytes).ok()?;
-    (bytes.len() as u64 <= limit).then_some(bytes)
+    if let Err(error) = handle.reader.take(limit + 1).read_to_end(&mut bytes) {
+        return if is_remote_network_error(&error) { Err(error) } else { Ok(None) };
+    }
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
 }
 
 /// `a/b/c.flac` + `cover.jpg` → `a/b/cover.jpg`: a file beside a remote track.

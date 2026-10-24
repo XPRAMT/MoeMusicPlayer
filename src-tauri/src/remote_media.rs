@@ -10,8 +10,9 @@ use lofty::{
     probe::Probe, tag::ItemKey,
 };
 use player_core::{
-    read_remote_file_capped, remote_content, remote_sibling, remote_with_extension, RemoteStream,
-    SourceId, MAX_ARTWORK_BYTES, MAX_LYRIC_PAYLOAD_BYTES,
+    is_remote_network_error, read_remote_file_capped_checked, remote_content,
+    remote_sibling, remote_with_extension, RemoteStream, SourceId, MAX_ARTWORK_BYTES,
+    MAX_LYRIC_PAYLOAD_BYTES,
 };
 
 const SIDECAR_COVERS: [&str; 2] = ["cover.jpg", "folder.jpg"];
@@ -74,24 +75,31 @@ pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<
     let started = std::time::Instant::now();
     let opened = content.open(source_id, path);
     let opened_in = started.elapsed().as_millis();
-    if let Ok(handle) = opened {
-        let len = handle.len;
-        let read_started = std::time::Instant::now();
-        let found = embedded_cover(handle.reader, path);
-        eprintln!(
-            "[remote] cover stages: open {opened_in} ms, tags of {len} bytes {} ms (embedded: {})",
-            read_started.elapsed().as_millis(),
-            found.is_some()
-        );
-        if let Some(bytes) = found {
-            return Some(bytes);
+    match opened {
+        Ok(handle) => {
+            let len = handle.len;
+            let read_started = std::time::Instant::now();
+            let found = embedded_cover(handle.reader, path);
+            eprintln!(
+                "[remote] cover stages: open {opened_in} ms, tags of {len} bytes {} ms (embedded: {})",
+                read_started.elapsed().as_millis(),
+                found.is_some()
+            );
+            if let Some(bytes) = found {
+                return Some(bytes);
+            }
         }
-    } else {
-        eprintln!("[remote] cover stages: open failed after {opened_in} ms");
+        Err(error) => {
+            eprintln!("[remote] cover stages: open failed after {opened_in} ms");
+            // The server cannot be reached: trying the sidecars would only fail the same way, slowly.
+            if is_remote_network_error(&error) {
+                return None;
+            }
+        }
     }
-    SIDECAR_COVERS.iter().find_map(|name| {
+    for name in SIDECAR_COVERS {
         let sidecar_started = std::time::Instant::now();
-        let bytes = read_remote_file_capped(
+        let read = read_remote_file_capped_checked(
             source_id,
             &remote_sibling(path, name),
             MAX_ARTWORK_BYTES as u64,
@@ -99,10 +107,15 @@ pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<
         eprintln!(
             "[remote] cover stages: {name} {} ms (found: {})",
             sidecar_started.elapsed().as_millis(),
-            bytes.is_some()
+            matches!(read, Ok(Some(_)))
         );
-        bytes
-    })
+        match read {
+            Ok(Some(bytes)) => return Some(bytes),
+            Err(error) if is_remote_network_error(&error) => return None,
+            _ => {}
+        }
+    }
+    None
 }
 
 fn embedded_cover(reader: Box<dyn RemoteStream>, path: &str) -> Option<Vec<u8>> {
@@ -158,24 +171,34 @@ pub(crate) fn remote_lyric_texts(
     let mut oversized = false;
     // Every sidecar there is, in the preferred order (`.lrc`, `.ass`, `.srt`; ADR 0041).
     let mut sidecars = Vec::new();
+    let mut unreachable = false;
     for extension in player_core::LYRIC_SIDECAR_EXTENSIONS.iter().filter(|_| with_sidecar) {
         let sidecar_path = remote_with_extension(path, extension);
-        match read_remote_file_capped(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64) {
-            Some(bytes) => sidecars.push(
+        match read_remote_file_capped_checked(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64) {
+            Ok(Some(bytes)) => sidecars.push(
                 String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
                     .into_owned(),
             ),
-            None => {
+            Ok(None) => {
                 if let Some(handle) =
                     remote_content().and_then(|c| c.open(source_id, &sidecar_path).ok())
                 {
                     oversized |= handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64;
                 }
             }
+            // The server cannot be reached: the other files fail the same way.
+            Err(error) if is_remote_network_error(&error) => {
+                unreachable = true;
+                break;
+            }
+            Err(_) => {}
         }
     }
     let mut embedded = Vec::new();
-    if let Some(handle) = remote_content().and_then(|content| content.open(source_id, path).ok()) {
+    if let Some(handle) = remote_content()
+        .filter(|_| !unreachable)
+        .and_then(|content| content.open(source_id, path).ok())
+    {
         let tagged = Probe::new(BufReader::new(handle.reader))
             .options(ParseOptions::new().read_properties(false))
             .guess_file_type()
@@ -253,5 +276,27 @@ mod tests {
         assert!(none.is_empty());
         assert!(empty.is_empty());
         let _ = std::fs::remove_dir_all(root);
+
+        // A server that cannot be reached: the lookups stop after the first network error instead of trying every file.
+        let down = Arc::new(Down(std::sync::atomic::AtomicUsize::new(0)));
+        player_core::set_remote_content(down.clone());
+        assert_eq!(remote_cover_bytes(source, "a/song.wv"), None);
+        assert_eq!(down.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        down.0.store(0, std::sync::atomic::Ordering::SeqCst);
+        let (sidecars, embedded, _) = remote_lyric_texts(source, "a/song.wv", true);
+        assert!(sidecars.is_empty() && embedded.is_empty());
+        assert_eq!(down.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Every open fails on the network; counts the opens.
+    struct Down(std::sync::atomic::AtomicUsize);
+
+    impl RemoteContent for Down {
+        fn open(&self, _: SourceId, _: &str) -> std::io::Result<RemoteFileHandle> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(std::io::Error::from(player_remote::fs::RemoteError::Network(
+                "No route to host".to_owned(),
+            )))
+        }
     }
 }

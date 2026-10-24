@@ -58,7 +58,8 @@ pub use sync::{
 pub use windows_locator::windows_locator_key;
 
 pub use remote::{
-    is_remote_link_lost, read_remote_file_capped, remote_content, remote_sibling,
+    is_remote_link_lost, is_remote_network_error, read_remote_file_capped,
+    read_remote_file_capped_checked, remote_content, remote_sibling,
     remote_with_extension, set_remote_content, RemoteContent, RemoteFileHandle, RemoteStamp,
     RemoteStream, REMOTE_LINK_LOST,
 };

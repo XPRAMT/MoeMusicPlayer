@@ -67,14 +67,24 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
         }
     }
     // Remote tracks (ADR 0026): the embedded cover through the remote reader, then the sidecars beside the track.
+    // After the first network error the server is unreachable: nothing else on it is tried (and the lookup is never
+    // recorded as "no cover").
+    let mut unreachable = false;
     if let Some(content) = player_core::remote_content() {
         for (source_id, path) in &remote {
-            if let Ok(handle) = content.open(*source_id, path) {
-                if let Some(image) =
-                    embedded_artwork_from(handle.reader, Path::new(path), &mut oversized)
-                {
-                    return ArtworkLookup::Found(image);
+            match content.open(*source_id, path) {
+                Ok(handle) => {
+                    if let Some(image) =
+                        embedded_artwork_from(handle.reader, Path::new(path), &mut oversized)
+                    {
+                        return ArtworkLookup::Found(image);
+                    }
                 }
+                Err(error) if player_core::is_remote_network_error(&error) => {
+                    unreachable = true;
+                    break;
+                }
+                Err(_) => {}
             }
         }
     }
@@ -85,16 +95,23 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
                 return ArtworkLookup::Found(image);
             }
         }
-        for (source_id, path) in &remote {
+        for (source_id, path) in remote.iter().filter(|_| !unreachable) {
             let sidecar = player_core::remote_sibling(path, sidecar_name);
-            if let Some(bytes) = player_core::read_remote_file_capped(
+            match player_core::read_remote_file_capped_checked(
                 *source_id,
                 &sidecar,
                 MAX_ARTWORK_BYTES as u64,
             ) {
-                if let Some(image) = image_from_raw_bytes(&bytes, &mut oversized) {
-                    return ArtworkLookup::Found(image);
+                Ok(Some(bytes)) => {
+                    if let Some(image) = image_from_raw_bytes(&bytes, &mut oversized) {
+                        return ArtworkLookup::Found(image);
+                    }
                 }
+                Err(error) if player_core::is_remote_network_error(&error) => {
+                    unreachable = true;
+                    break;
+                }
+                _ => {}
             }
         }
     }
