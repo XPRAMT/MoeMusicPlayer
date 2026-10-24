@@ -6,6 +6,15 @@
 
 相關：[ADR 0018](0018-taskbar-lyrics.md)、[ADR 0031](0031-multi-monitor-taskbar-lyrics.md)、[ADR 0032](0032-floating-lyrics.md)、[ADR 0028](0028-frontend-playback-clock.md)
 
+## 現況（已採納並實作；以下研究與量測保留為歷史）
+
+本檔檔名來自最初的研究；研究結論已被採納並完成實作，現行行為以「決策與最終設計」之後的各修訂、「目前設計細節」與文末兩段 Amendment 為準。要點：
+
+- **已實作**：Windows 的工作列歌詞（每條工作列一個）與浮動歌詞全部由 `crates/player-lyrics-native` 原生繪製，WebView2 歌詞視窗已刪除；Android 不受影響（`FloatingLyricsOverlay.kt`）。規則在 `crates/player-lyrics-rules`，與 JS 參考實作、Kotlin 以共用向量對照。
+- **合成層與動畫的最終答案不是最初比較表的結論**：最終使用 Windows.UI.Composition（不是 DirectComposition），而且不使用任何由合成器執行的動畫（DComp `IDCompositionAnimation`、WUC 關鍵格動畫都已移除）；每個合成幀依音訊時鐘在 `plan.rs` 的曲線上取樣，只提交有變的值（位移 1/8 裝置像素、不透明度 1/255），閒置時睡眠。原型 `crates/lyrics-native-proto/`（獨立 crate）仍留在 repo，僅作歷史量測用。
+- **之後又被取代的設計**：連續模式的 200 ms 行淡化與 `lyrics-inactive-opacity` 事件已不存在，透明度改為每個分頁各自的主要／次要兩個值＋靜態置中遮罩（見文末 “opacity inputs”）；逐字歌詞連續模式每行用兩個節點（行起點、最後一個字的結束）以單一單調 C1 曲線連接，`smooth_glide` 只用於卡拉 OK 邊界（ADR 0041 D10）；字重可設定（見文末 “font weight”）；浮動歌詞的移動模式改為自行捕捉滑鼠（ADR 0032），不再用 `HTCAPTION`。
+- **仍待辦**：使用者實機驗收（外觀、鎖頭 tooltip、固定模式穿透、拖曳存檔、自動隱藏／全螢幕／Explorer 重啟、熱插拔、DPI、裝置遺失重建）；歌詞開啟時其他執行緒額外 CPU 的來源待查。
+
 ## 背景
 
 使用者希望所有歌詞動畫以螢幕的完整更新率執行（120 Hz 螢幕 120 fps、60 Hz 螢幕 60 fps），而且主視窗、每條工作列各一個的工作列歌詞視窗（本機 2 條）與浮動歌詞可同時開啟。另一位代理以 CDP 對 Release 播放器量測：所有 WebView2 視窗共用一個 GPU 行程，該行程每個 vsync 合計最多約 3 次有損壞區的 present（120 Hz 時約每秒 340–360 次），4 個動畫中的視窗在 120 Hz 時各掉到約 90 fps；60 Hz 時使用者看得到頓挫。
@@ -113,13 +122,13 @@ powershell -File measure.ps1 -ProtoArgs "--windows 3 --mode anim --seconds 12 --
 
 Windows 的工作列歌詞（每條工作列一個）與浮動歌詞改為原生繪製，WebView2 歌詞視窗（`?view=taskbar-lyrics`、`?view=floating-lyrics`、`TaskbarLyricsView.svelte`、`FloatingLyricsView.svelte`）已刪除。Android 浮動歌詞不變。
 
-- **規則**：`crates/player-lyrics-rules`（選句、`display_offset_ms`、連續條排版／位移／視窗化、末句 500 ms／字元叢集、200 ms 交叉淡化與第一行前導、非目前透明度、「無」模式長句捲動 90%）。`tests/fixtures/lyrics-rules-vectors.json` 由 `scripts/generate-lyrics-rules-vectors.mjs` 以 JS 規則（`lyrics-strip.js` 等，作為參考實作保留）產生，Rust（`tests/shared_vectors.rs`）、node（`tests/lyrics-rules-vectors.test.mjs`）、Kotlin（`LyricsRulesVectorsTest`）都對照同一份；Android 與 Windows 已知不同的前導情況以 `android: false` 標記。
-- **繪製**：`crates/player-lyrics-native`。一條 UI 執行緒（`moe-lyrics-native`，Per-Monitor V2）持有 D3D11（失敗退 WARP）、D2D、DWrite（Segoe UI＋Microsoft JhengHei＋系統備援、字重 500、行框依 CSS 規則置中）、DComp 裝置；每個視窗一個 target。每行（連續模式每格含譯文）點陣化一次並快取（鍵含文字、字級、顏色、效果）；陰影＝D2D Shadow σ 0.3 em、反色 α 0.75，描邊＝字形輪廓 0.08 em、反色 α 0.5、先描邊後填色。**連續模式選陰影時照樣畫陰影**（使用者 2026-10-23 決定：陰影已在快取點陣裡，沒有每幀成本；`native_text_effect`），不再改描邊；Android 仍改描邊。
+- **規則**：`crates/player-lyrics-rules`（選句、`display_offset_ms`、連續條排版／位移／視窗化、末句 500 ms／字元叢集、「無」模式長句捲動 90%；200 ms 交叉淡化與第一行前導、非目前透明度是當時的規則，現已不用於連續模式，見文末 Amendment）。`tests/fixtures/lyrics-rules-vectors.json` 由 `scripts/generate-lyrics-rules-vectors.mjs` 以 JS 規則（`lyrics-strip.js` 等，作為參考實作保留）產生，Rust（`tests/shared_vectors.rs`）、node（`tests/lyrics-rules-vectors.test.mjs`）、Kotlin（`LyricsRulesVectorsTest`）都對照同一份；Android 與 Windows 已知不同的前導情況以 `android: false` 標記。
+- **繪製**：`crates/player-lyrics-native`。一條 UI 執行緒（`moe-lyrics-native`，Per-Monitor V2）持有 D3D11（失敗退 WARP）、D2D、DWrite（Segoe UI＋Microsoft JhengHei＋系統備援、字重當時固定 500〔現為可設定，預設 500，見文末 “font weight”〕、行框依 CSS 規則置中）、DComp 裝置；每個視窗一個 target。每行（連續模式每格含譯文）點陣化一次並快取（鍵含文字、字級、顏色、效果）；陰影＝D2D Shadow σ 0.3 em、反色 α 0.75，描邊＝字形輪廓 0.08 em、反色 α 0.5、先描邊後填色。**連續模式選陰影時照樣畫陰影**（使用者 2026-10-23 決定：陰影已在快取點陣裡，沒有每幀成本；`native_text_effect`），不再改描邊；Android 仍改描邊。
 - **動畫**：`plan.rs` 由規則產生分段線性關鍵格：連續條位移（涵蓋接下來 3 個換行點）、每格不透明度（在各行開始與淡化起點取樣，保證與規則一致，單元測試逐 10 ms 比對）、「無」模式長句捲動。以 `IDCompositionAnimation`（`AddCubic`＋`End`）交給 DWM；位移視覺用最近鄰取樣（整數裝置像素）。只在換行點、跳轉、暫停／繼續、播放校正、新歌詞、設定、大小或 DPI 改變時重排（`MOE_LYRICS_NATIVE_LOG=<檔案>` 會記錄每次重排與原因）。
 - **播放校正不跳動（2026-10-23）**：舊版取樣與推算差 ≥ 30 ms 就把時鐘直接設成取樣值並重排，連續條會往前或往後跳（差×速度，30 ms 約 3–5 px）。現在 `plan::Motion`：差 < 4 ms 不動；4–250 ms 從目前推算位置繼續，以 `1 + 差/750 ms` 的速率跑 750 ms 吸收（位置連續、速率恆 > 0，不倒退）；≥ 250 ms、換歌、狀態或曲長改變才直接跳。速率結束點是計畫裡的一個節點（`StripInput.rate`／`slew_until_ms`，三次式係數依速率換算），不需要額外重排。每次重排以 `IDCompositionDevice::GetFrameStatistics` 的下一個合成影格時間（最多 50 ms）為計畫起點（`commit_lead`），因為 DWM 從接手 commit 的那一影格才開始新動畫，否則每次重排落後最多一影格。測試 `a_jittery_drifting_sample_feed_never_steps_or_reverses_the_strip` 以 0–25 ms 延遲抖動、快 0.3 % 的播放器與一次 120 ms 偏移逐 ms 重播，斷言不倒退、單步 < 1 px。Android `smoothPositionMs` 同樣改為從上一影格的顯示位置以速率吸收（原本落後時停住、超前時直接跳）。
 - **裝置與 DPI**：每 2 秒（閒置時）檢查 `GetDeviceRemovedReason`，Commit／繪製回報裝置遺失也會重建全部裝置、target 與快取；`WM_DPICHANGED`（浮動視窗套用建議矩形）與 `WM_SIZE` 觸發重排。
-- **視窗**：`WS_EX_NOREDIRECTIONBITMAP | LAYERED | TOPMOST | TOOLWINDOW | NOACTIVATE`，工作列視窗另加 `TRANSPARENT`、`WM_NCHITTEST` 回 `HTTRANSPARENT`，擁有者為該條工作列；`taskbar_lyrics.rs` 的擺位、遮蓋、自動隱藏、熱插拔、Explorer 重啟重建（`IsWindow` 失效即重建）不變。浮動視窗：移動模式整窗 `HTCAPTION` 拖曳（游標 SizeAll），游標在窗上時歌詞區顯示 rgba(0,0,0,.28)、10 px 圓角底色與鎖頭；固定模式 `WS_EX_TRANSPARENT`，沿用 100 ms 游標監看，只在游標位於鎖頭上時取消穿透；鎖頭有原生 tooltip（`TOOLTIPS_CLASS`，文字由主視窗以 `tr()` 翻譯後經 `floating-lyrics-tips` 送來）。`WM_MOVE` → `remember_position`（700 ms 後存）；有無譯文 → `fit_lines`；`WM_CLOSE` → 主視窗正常關閉流程。
-- **資料流**：主視窗仍是唯一來源，沿用廣播事件 `taskbar-lyrics-data`、`taskbar-lyrics-playback`、`lyrics-inactive-opacity`，新增 `lyrics-native-delay`（每首延遲，換歌與變更時送）與 `floating-lyrics-tips`；`src-tauri/src/native_lyrics.rs` 以 `listen_any` 接收，渲染器啟動時送 `taskbar-lyrics-request`／`taskbar-lyrics-playback-request` 要一次。
+- **視窗**：`WS_EX_NOREDIRECTIONBITMAP | LAYERED | TOPMOST | TOOLWINDOW | NOACTIVATE`，工作列視窗另加 `TRANSPARENT`、`WM_NCHITTEST` 回 `HTTRANSPARENT`，擁有者為該條工作列；`taskbar_lyrics.rs` 的擺位、遮蓋、自動隱藏、熱插拔、Explorer 重啟重建（`IsWindow` 失效即重建）不變。浮動視窗：移動模式整窗 `HTCAPTION` 拖曳（游標 SizeAll；現已改為自行捕捉滑鼠並以 `SetWindowPos` 移動，見 ADR 0032），游標在窗上時歌詞區顯示 rgba(0,0,0,.28)、10 px 圓角底色與鎖頭；固定模式 `WS_EX_TRANSPARENT`，沿用 100 ms 游標監看，只在游標位於鎖頭上時取消穿透；鎖頭有原生 tooltip（`TOOLTIPS_CLASS`，文字由主視窗以 `tr()` 翻譯後經 `floating-lyrics-tips` 送來）。`WM_MOVE` → `remember_position`（700 ms 後存）；有無譯文 → `fit_lines`；`WM_CLOSE` → 主視窗正常關閉流程。
+- **資料流**：主視窗仍是唯一來源，沿用廣播事件 `taskbar-lyrics-data`、`taskbar-lyrics-playback`、`lyrics-inactive-opacity`（已移除，透明度隨各視窗自己的設定送達），新增 `lyrics-native-delay`（每首延遲，換歌與變更時送）與 `floating-lyrics-tips`；`src-tauri/src/native_lyrics.rs` 以 `listen_any` 接收，渲染器啟動時送 `taskbar-lyrics-request`／`taskbar-lyrics-playback-request` 要一次。
 
 ### 實測（2026-10-23，隔離測試執行檔：另一個 identifier、資料夾 `target/nativetest/`、音量 0、無聲 WAV＋自製 LRC；使用者的播放器與其 WebView 歌詞同時在跑）
 
@@ -329,8 +338,8 @@ D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
 
 ## 逐字歌詞（ADR 0041 D10）
 
-- 連續模式的逐字歌詞：捲動條位移改由字起點節點計算（`StripInput.word_knots`，`rules::glide_cubic`），仍是每幀由音訊時鐘取樣、1/8 px 才提交；淡出改用靜態置中遮罩（`Mask::Centre`，`rules::centre_mask_stops`），掛在同一個 `FadeHost` 的 `CompositionMaskBrush`，所有格的透明度係數為 1。行級歌詞照舊用邊緣淡出（`Mask::Edge`）。
-- 「無」模式的逐字行：白色與主色兩張快取表面（`TextStyle.effect_from` 讓兩張的陰影顏色相同，並進入點陣快取的鍵），兩個 sprite 加互補 `InsetClip`（`WordClip`），邊界由 `rules::karaoke_clip_x` 依音訊時鐘計算，與 `Live` 一起每幀取樣、移動至少 1/8 裝置像素才提交；唱字期間 `moving_until` 延到最後一個字結束。下一行（含主色副本）在閒置時預先點陣化。
+- 連續模式的逐字歌詞：捲動條位移由每行的兩個節點（行起點、最後一個字的結束；`StripInput.word_knots`，`rules::word_strip_knots`／`knot_cubic`；原先以字起點為節點的做法已取代）計算，仍是每幀由音訊時鐘取樣、1/8 px 才提交；淡出改用靜態置中遮罩（`Mask::Centre`，`rules::centre_mask_stops`），掛在同一個 `FadeHost` 的 `CompositionMaskBrush`，所有格的透明度係數為 1。現在連續模式的行級歌詞也用同一個置中遮罩；邊緣淡出（`Mask::Edge`）只在動畫「無」使用。
+- 「無」模式的逐字行：白色與主色兩張快取表面（`TextStyle.effect_from` 讓兩張的陰影顏色相同，並進入點陣快取的鍵），兩個 sprite 加互補 `InsetClip`（`WordClip`），邊界由 `rules::karaoke_glide` 的曲線（`smooth_glide`）依音訊時鐘計算，與 `Live` 一起每幀取樣、移動至少 1/8 裝置像素才提交；唱字期間 `moving_until` 延到最後一個字結束。下一行（含主色副本）在閒置時預先點陣化。
 - 主色由 `lyrics-accent-color` 事件送達（`NativeLyrics::set_accent`），改變時清除點陣快取。
 - `MOE_LYRICS_FRAME_LOG` 每個取樣幀多記一欄「是否提交」。量測結果見 ADR 0041 5.3。
 
@@ -338,11 +347,11 @@ D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
 
-原生繪製（ADR 0034）：Windows 工作列歌詞與浮動歌詞由 `crates/player-lyrics-native` 繪製（Windows.UI.Composition＋D2D／DWrite，單一 `moe-lyrics-native` 執行緒；`plan.rs`、`sampling.rs`、`win.rs`、`shared_cache.rs`）。每行點陣化一次進 `CompositionDrawingSurface`，所有視窗共用以完整點陣鍵（文字、該 DPI 的字級、顏色、效果、行高）為鍵的點陣登錄表；歌詞載入後第一次刷新畫出可見格與之後最多 100 行（`PREWARM_LINES`），之後每批預先點陣化；行寬量測依歌詞／尺寸／外觀快取。有視窗在動時每個合成幀（`DwmFlush`）在 DWM vblank 格線上的呈現時刻（`present_time`）取樣滑動／淡化／捲動，只提交有變的值：位置以 1/8 裝置像素為單位（`sampling::OFFSET_STEP_PX`，線性取樣），變動不到 1/8 px、不透明度不到 1/255 不寫入；閒置時不輪詢。播放時鐘取自音訊引擎（快照的 `position_at`），1 秒視窗平均誤差 < 3 ms 不動、較大以 4 秒慢速吸收（`AUDIO_SLEW_MS`）、≥ 250 ms／換歌／暫停才跳（`plan.rs`）。需要 Windows 10 1809 以上，更舊的系統不建立歌詞視窗。規則在 `crates/player-lyrics-rules`，與 JS（`lyrics-strip.js` 等，保留為參考實作）、Kotlin（`FloatingLyricsRules.kt`）以 `tests/fixtures/lyrics-rules-vectors.json` 共用向量（`node scripts/generate-lyrics-rules-vectors.mjs` 重產）。資料流：主視窗廣播 `taskbar-lyrics-data`／`taskbar-lyrics-playback`／`lyrics-inactive-opacity`，另送 `lyrics-native-delay`（每首延遲）與 `floating-lyrics-tips`（`tr()` 翻譯的鎖頭 tooltip），`src-tauri/src/native_lyrics.rs` 以 `listen_any` 接收，視窗需要時以 `taskbar-lyrics-request`／`taskbar-lyrics-playback-request` 要求主視窗重送。WM_CLOSE（例如登出）轉成主視窗正常關閉。診斷：`MOE_LYRICS_NATIVE_LOG=<檔案>`（每次重排）、`MOE_LYRICS_FRAME_LOG=<檔案>`（每幀取樣與音訊讀數）、`MOE_LYRICS_NO_FADE=1`（關淡出量測）；`cargo run --release -p player-lyrics-native --example measure -- <pid> <秒>` 量 DWM 統計與行程 CPU，`--example demo` 開示範視窗。待辦：使用者實機驗收（外觀、鎖頭 tooltip、固定模式穿透、拖曳存檔、自動隱藏／全螢幕／Explorer 重啟、熱插拔、DPI、裝置遺失重建）；歌詞開啟時行程其他執行緒多約 8% CPU 的來源待查。
+原生繪製（ADR 0034）：Windows 工作列歌詞與浮動歌詞由 `crates/player-lyrics-native` 繪製（Windows.UI.Composition＋D2D／DWrite，單一 `moe-lyrics-native` 執行緒；`plan.rs`、`sampling.rs`、`win.rs`、`shared_cache.rs`）。每行點陣化一次進 `CompositionDrawingSurface`，所有視窗共用以完整點陣鍵（文字、該 DPI 的字級、顏色、效果、行高）為鍵的點陣登錄表；歌詞載入後第一次刷新畫出可見格與之後最多 100 行（`PREWARM_LINES`），之後每批預先點陣化；行寬量測依歌詞／尺寸／外觀快取。有視窗在動時每個合成幀（`DwmFlush`）在 DWM vblank 格線上的呈現時刻（`present_time`）取樣滑動／淡化／捲動，只提交有變的值：位置以 1/8 裝置像素為單位（`sampling::OFFSET_STEP_PX`，線性取樣），變動不到 1/8 px、不透明度不到 1/255 不寫入；閒置時不輪詢。播放時鐘取自音訊引擎（快照的 `position_at`），1 秒視窗平均誤差 < 3 ms 不動、較大以 4 秒慢速吸收（`AUDIO_SLEW_MS`）、≥ 250 ms／換歌／暫停才跳（`plan.rs`）。需要 Windows 10 1809 以上，更舊的系統不建立歌詞視窗。規則在 `crates/player-lyrics-rules`，與 JS（`lyrics-strip.js` 等，保留為參考實作）、Kotlin（`FloatingLyricsRules.kt`）以 `tests/fixtures/lyrics-rules-vectors.json` 共用向量（`node scripts/generate-lyrics-rules-vectors.mjs` 重產）。資料流：主視窗廣播 `taskbar-lyrics-data`／`taskbar-lyrics-playback`，另送 `lyrics-accent-color`（卡拉 OK 主色）、`lyrics-native-delay`（每首延遲）與 `floating-lyrics-tips`（`tr()` 翻譯的鎖頭 tooltip）；`lyrics-inactive-opacity` 已移除，主要／次要透明度隨各視窗的設定送達，`src-tauri/src/native_lyrics.rs` 以 `listen_any` 接收，視窗需要時以 `taskbar-lyrics-request`／`taskbar-lyrics-playback-request` 要求主視窗重送。WM_CLOSE（例如登出）轉成主視窗正常關閉。診斷：`MOE_LYRICS_NATIVE_LOG=<檔案>`（每次重排）、`MOE_LYRICS_FRAME_LOG=<檔案>`（每幀取樣與音訊讀數）、`MOE_LYRICS_NO_FADE=1`（關淡出量測）；`cargo run --release -p player-lyrics-native --example measure -- <pid> <秒>` 量 DWM 統計與行程 CPU，`--example demo` 開示範視窗。待辦：使用者實機驗收（外觀、鎖頭 tooltip、固定模式穿透、拖曳存檔、自動隱藏／全螢幕／Explorer 重啟、熱插拔、DPI、裝置遺失重建）；歌詞開啟時行程其他執行緒多約 8% CPU 的來源待查。
 
 ## Amendment: opacity inputs
 
-The window opacity and the `lyrics-inactive-opacity` broadcast named above no longer exist. Each window's `Look`
+The window opacity and the `lyrics-inactive-opacity` broadcast named above no longer exist (so do the 200 ms per-line fades and the non-current weighting). Each window's `Look`
 carries `main_opacity_percent` and `secondary_opacity_percent` (ADR 0041 5.4): animation none draws the line through the
 mask host at the main opacity (`plan::container_opacity`); continuous keeps the container at 1 and builds
 `Mask::Centre { em, main, secondary }`, whose key includes both values.
