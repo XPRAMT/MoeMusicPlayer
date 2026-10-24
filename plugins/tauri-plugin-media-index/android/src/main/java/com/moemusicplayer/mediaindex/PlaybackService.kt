@@ -244,15 +244,16 @@ class PlaybackService : MediaSessionService() {
     }
 
     /** Main thread (the player's looper): what the floating lyrics overlay needs (ADR 0032). */
-    internal fun overlaySample(): FloatingLyricsOverlay.Sample? {
-        val player = exoPlayer ?: return null
-        val item = player.currentMediaItem ?: return null
+    internal fun overlaySample(into: FloatingLyricsOverlay.Sample): Boolean {
+        val player = exoPlayer ?: return false
+        val item = player.currentMediaItem ?: return false
         val state = player.playbackState
         val active = state == androidx.media3.common.Player.STATE_READY ||
             state == androidx.media3.common.Player.STATE_BUFFERING
-        val duration = player.duration.takeIf { it > 0 }
+        val duration = player.duration.takeIf { it > 0 } ?: FloatingLyricsRules.NO_TIME
         // `playing` lets the overlay carry the coarse position on per frame (FloatingLyricsRules.smoothPositionMs).
-        return FloatingLyricsOverlay.Sample(item.mediaId, player.currentPosition, duration, active, player.isPlaying)
+        into.set(item.mediaId, player.currentPosition, duration, active, player.isPlaying)
+        return true
     }
 
     override fun onDestroy() {
@@ -912,8 +913,8 @@ class PlaybackService : MediaSessionService() {
     companion object {
         @Volatile private var activeInstance: PlaybackService? = null
 
-        /** Main thread only. Null while no playback service is running. */
-        fun floatingLyricsSample(): FloatingLyricsOverlay.Sample? = activeInstance?.overlaySample()
+        /** Main thread only. Fills `into` and returns true; false while no playback service is running or nothing is loaded. */
+        fun floatingLyricsSample(into: FloatingLyricsOverlay.Sample): Boolean = activeInstance?.overlaySample(into) ?: false
 
         private const val ACTIVE_POLL_INTERVAL_MS = 50L
         private const val IDLE_POLL_INTERVAL_MS = 250L

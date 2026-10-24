@@ -35,25 +35,49 @@ import org.json.JSONObject
  * Main thread only.
  */
 object FloatingLyricsOverlay {
-    /** What the playback service reports for the overlay. */
-    data class Sample(
-        val trackId: String,
-        val positionMs: Long,
-        val durationMs: Long?,
-        val active: Boolean,
-        val playing: Boolean = active,
-    )
+    /**
+     * What the playback service reports for the overlay. One instance is refilled every frame (no allocation per
+     * frame); `durationMs` is [FloatingLyricsRules.NO_TIME] while the track length is unknown.
+     */
+    class Sample {
+        var trackId: String = ""
+        var positionMs = 0L
+        var durationMs = FloatingLyricsRules.NO_TIME
+        var active = false
+        var playing = false
+
+        fun set(trackId: String, positionMs: Long, durationMs: Long, active: Boolean, playing: Boolean) {
+            this.trackId = trackId
+            this.positionMs = positionMs
+            this.durationMs = durationMs
+            this.active = active
+            this.playing = playing
+        }
+    }
 
     /**
      * A lyric line; for a word-timed one (ADR 0041) its words' times (lyrics ms) and UTF-16 ranges `(start, end)` in
      * the trimmed `text`.
      */
-    private class Line(
+    internal class Line(
         val startMs: Long,
         val text: String,
         val translation: String,
         val wordTimes: List<Pair<Double, Double>>? = null,
         val wordRanges: List<Pair<Int, Int>>? = null,
+    ) {
+        /** Trimmed once here, not every frame. */
+        val trimmedText: String = text.trim()
+        val trimmedTranslation: String = translation.trim()
+    }
+
+    /** The page's `data` (track id, offset, lines) parsed off the main thread; applied with [applyParsed]. */
+    internal class ParsedData(
+        val trackId: String?,
+        val offsetMs: Long,
+        val durationMs: Long,
+        val lines: List<Line>,
+        val starts: LongArray,
     )
 
     /** The theme accent (karaoke in the none mode, ADR 0041), pushed by the page as `accentColor`. */
@@ -80,19 +104,46 @@ object FloatingLyricsOverlay {
     private var animation = "none"
     // The strip of the continuous animation, rebuilt when the lyrics or the look change (see stripFor).
     private class Strip(
-        val key: List<Any?>,
         val starts: LongArray,
         val texts: List<String>,
         val translations: List<String>,
         val cells: FloatArray,
         val widths: FloatArray,
         val mainWidths: FloatArray,
+        val translationWidths: FloatArray,
         val lastGlyphCenters: FloatArray,
         val firstGlyphCenters: FloatArray,
         /** Word-timed lyrics (ADR 0041 D10): the word glide's knots (lyrics ms, strip px); null for line-timed lyrics (the line glide). */
-        val wordKnots: List<Pair<Double, Double>>?,
-    )
+        val wordKnots: WordLyricsRules.WordKnots?,
+        /** Grapheme count of the last line (the terminal glide's duration estimate), counted once. */
+        val lastGraphemes: Int,
+        val hasTranslation: Boolean,
+    ) {
+        /** The line glide's knots for the terminal arrival `knotsEnd` they were built with (rebuilt only if that changes). */
+        var knots: FloatingLyricsRules.StripKnots? = null
+        var knotsEnd = FloatingLyricsRules.NO_TIME
+        var knotsBuilt = false
+    }
     private var strip: Strip? = null
+    // What the strip was built from (primitives; a mismatch rebuilds it): the lines, the translation switch and the two
+    // rows' font measures. `stripKeyValid` is also true for "no usable lines" (strip stays null).
+    private var stripKeyValid = false
+    private var stripKeyLines = 0
+    private var stripKeyTranslation = false
+    private var stripKeyMain = 0
+    private var stripKeySecond = 0
+    private var linesVersion = 0
+    // What the neighbour images of the none mode were last prepared for.
+    private var prefetchValid = false
+    private var prefetchIndex = 0
+    private var prefetchLinesVersion = 0
+    private var prefetchEpoch = 0
+    private var prefetchTranslation = false
+    private var prefetchLocked = false
+    private val prefetchMain = ArrayList<String>()
+    private val prefetchAccent = ArrayList<String>()
+    private val prefetchSecond = ArrayList<String>()
+    private val sample = Sample()
     /** The floating settings' own pair: "none" draws the line at main; "continuous" feeds both into the static mask. */
     private var mainOpacityPercent = FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT
     private var secondaryOpacityPercent = FloatingLyricsRules.DEFAULT_SECONDARY_OPACITY_PERCENT
@@ -100,16 +151,18 @@ object FloatingLyricsOverlay {
     private var landscapeWidthDp = 800
     private var rotationWatch: android.content.ComponentCallbacks? = null
     // The position carried on between ExoPlayer's coarse reports (FloatingLyricsRules.smoothPositionMs).
-    private var smoothedMs: Double? = null
-    private var smoothedAt = 0L
+    // Times are in (fractional) ms of the display frame's own clock (Choreographer's frame time, System.nanoTime base).
+    private var smoothedMs = 0.0
+    private var hasSmoothed = false
+    private var smoothedAt = 0.0
     private var lastReportedMs = Long.MIN_VALUE
-    private var lastReportedAt = 0L
+    private var lastReportedAt = 0.0
     private var lastReportedTrack: String? = null
     private var shownLandscape: Boolean? = null
 
     private var trackId: String? = null
     private var offsetMs = 0L
-    private var trackDurationMs: Long? = null
+    private var trackDurationMs = FloatingLyricsRules.NO_TIME
     private var lines: List<Line> = emptyList()
     private var starts = LongArray(0)
 
@@ -121,31 +174,52 @@ object FloatingLyricsOverlay {
 
     /** Every display frame while a line slides during playback, otherwise every 100 ms (line changes, pauses). */
     private var frameScheduled = false
-    private val frame = Choreographer.FrameCallback {
+    private var tickScheduled = false
+    private val choreographer: Choreographer by lazy(LazyThreadSafetyMode.NONE) { Choreographer.getInstance() }
+    private val frame = Choreographer.FrameCallback { frameTimeNanos ->
         frameScheduled = false
-        tickOnce()
+        tickOnce(frameTimeNanos)
     }
-    private val tick = Runnable { tickOnce() }
+    private val tick = Runnable {
+        tickScheduled = false
+        tickOnce(System.nanoTime())
+    }
 
-    private fun tickOnce() {
-        main.removeCallbacks(tick)
+    /** `nowNanos`: the display frame's time when called from a frame, otherwise the current time (same clock). */
+    private fun tickOnce(nowNanos: Long) {
+        if (tickScheduled) {
+            main.removeCallbacks(tick)
+            tickScheduled = false
+        }
         if (root == null) return
-        val sliding = render()
+        val sliding = if (LyricsTrace.on) {
+            LyricsTrace.frameBoundary()
+            val section = LyricsTrace.begin("moeLyrics.render")
+            try {
+                render(nowNanos)
+            } finally {
+                LyricsTrace.end(section, true)
+            }
+        } else {
+            render(nowNanos)
+        }
         if (root == null) return
         if (sliding) {
             if (!frameScheduled) {
                 frameScheduled = true
-                Choreographer.getInstance().postFrameCallback(frame)
+                choreographer.postFrameCallback(frame)
             }
         } else {
+            tickScheduled = true
             main.postDelayed(tick, TICK_MS)
         }
     }
 
     private fun stopTicking() {
         main.removeCallbacks(tick)
+        tickScheduled = false
         if (frameScheduled) {
-            Choreographer.getInstance().removeFrameCallback(frame)
+            choreographer.removeFrameCallback(frame)
             frameScheduled = false
         }
     }
@@ -153,18 +227,82 @@ object FloatingLyricsOverlay {
     fun canDrawOverlays(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
 
-    fun isLocked(context: Context): Boolean = prefs(context).getBoolean("locked", false)
+    // The lock state is read from SharedPreferences once (a synchronized read) and then kept here; every write goes
+    // through setLockedState. Nothing else writes the "locked" key.
+    @Volatile
+    private var lockedCache = false
+    @Volatile
+    private var lockedLoaded = false
+
+    fun isLocked(context: Context): Boolean {
+        if (!lockedLoaded) {
+            lockedCache = prefs(context).getBoolean("locked", false)
+            lockedLoaded = true
+        }
+        return lockedCache
+    }
+
+    private fun setLockedState(context: Context, locked: Boolean) {
+        lockedCache = locked
+        lockedLoaded = true
+        prefs(context).edit().putBoolean("locked", locked).apply()
+    }
 
     fun status(context: Context): JSONObject = JSONObject()
         .put("canDrawOverlays", canDrawOverlays(context))
         .put("locked", isLocked(context))
         .put("screenWidthDp", Math.round(screenSize(context).first / context.resources.displayMetrics.density))
 
-    /** `{ settings?, data?, setLocked?, resetPosition? }` from the page. */
-    fun update(context: Context, args: JSONObject) {
+    /**
+     * The page's `data` turned into the overlay's model. Heavy for long lyrics, so the plugin command calls it on its
+     * own thread and hands the result to [update]; nothing here touches the views.
+     */
+    internal fun parseData(data: JSONObject): ParsedData {
+        val started = if (LyricsTrace.on) LyricsTrace.begin("moeLyrics.applyData") else 0L
+        try {
+            val trackId = if (data.isNull("trackId")) null else data.optString("trackId")
+            val durationMs = if (data.isNull("durationMs")) FloatingLyricsRules.NO_TIME else data.optLong("durationMs").takeIf { it > 0 } ?: FloatingLyricsRules.NO_TIME
+            val array = data.optJSONArray("lines")
+            val parsed = ArrayList<Line>()
+            if (array != null) {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val text = item.optString("text", "")
+                    var times: List<Pair<Double, Double>>? = null
+                    var ranges: List<Pair<Int, Int>>? = null
+                    item.optJSONArray("words")?.let { words ->
+                        // The words spell the untrimmed line; `lead` UTF-16 units were trimmed off its front.
+                        val lead = item.optInt("lead", 0)
+                        var at = 0
+                        val t = ArrayList<Pair<Double, Double>>()
+                        val r = ArrayList<Pair<Int, Int>>()
+                        for (w in 0 until words.length()) {
+                            val word = words.optJSONObject(w) ?: continue
+                            val len = word.optString("t", "").length
+                            t.add(word.optDouble("s") to word.optDouble("e"))
+                            r.add((at - lead).coerceIn(0, text.length) to (at + len - lead).coerceIn(0, text.length))
+                            at += len
+                        }
+                        if (t.isNotEmpty()) {
+                            times = t
+                            ranges = r
+                        }
+                    }
+                    parsed.add(Line(item.optLong("startMs"), text, item.optString("translation", ""), times, ranges))
+                }
+            }
+            parsed.sortBy { it.startMs }
+            return ParsedData(trackId, data.optLong("offsetMs", 0L), durationMs, parsed, LongArray(parsed.size) { parsed[it].startMs })
+        } finally {
+            if (LyricsTrace.on) LyricsTrace.end(started, false)
+        }
+    }
+
+    /** `{ settings?, data?, setLocked?, resetPosition? }` from the page; `parsed` is `data` already parsed by [parseData]. */
+    internal fun update(context: Context, args: JSONObject, parsed: ParsedData? = null) {
         appContext = context.applicationContext
         args.optJSONObject("settings")?.let(::applySettings)
-        args.optJSONObject("data")?.let(::applyData)
+        (parsed ?: args.optJSONObject("data")?.let(::parseData))?.let(::applyParsed)
         if (args.has("accentColor") && !args.isNull("accentColor")) {
             FloatingLyricsRules.parseHexColor(args.optString("accentColor"))?.let {
                 accentColor = 0xff000000.toInt() or it
@@ -172,7 +310,7 @@ object FloatingLyricsOverlay {
             }
         }
         if (args.has("setLocked") && !args.isNull("setLocked")) {
-            prefs(context).edit().putBoolean("locked", args.optBoolean("setLocked")).apply()
+            setLockedState(context, args.optBoolean("setLocked"))
         }
         if (args.optBoolean("moveToStatusBar", false)) moveToStatusBar(context)
         if (args.has("centreAxis") && !args.isNull("centreAxis")) {
@@ -240,42 +378,13 @@ object FloatingLyricsOverlay {
         landscapeWidthDp = FloatingLyricsRules.widthDp(settings.optInt("landscapeWidthPx", 800))
     }
 
-    private fun applyData(data: JSONObject) {
-        trackId = if (data.isNull("trackId")) null else data.optString("trackId")
-        offsetMs = data.optLong("offsetMs", 0L)
-        trackDurationMs = if (data.isNull("durationMs")) null else data.optLong("durationMs").takeIf { it > 0 }
-        val array = data.optJSONArray("lines")
-        val parsed = ArrayList<Line>()
-        if (array != null) {
-            for (index in 0 until array.length()) {
-                val item = array.optJSONObject(index) ?: continue
-                val text = item.optString("text", "")
-                var times: List<Pair<Double, Double>>? = null
-                var ranges: List<Pair<Int, Int>>? = null
-                item.optJSONArray("words")?.let { words ->
-                    // The words spell the untrimmed line; `lead` UTF-16 units were trimmed off its front.
-                    val lead = item.optInt("lead", 0)
-                    var at = 0
-                    val t = ArrayList<Pair<Double, Double>>()
-                    val r = ArrayList<Pair<Int, Int>>()
-                    for (w in 0 until words.length()) {
-                        val word = words.optJSONObject(w) ?: continue
-                        val len = word.optString("t", "").length
-                        t.add(word.optDouble("s") to word.optDouble("e"))
-                        r.add((at - lead).coerceIn(0, text.length) to (at + len - lead).coerceIn(0, text.length))
-                        at += len
-                    }
-                    if (t.isNotEmpty()) {
-                        times = t
-                        ranges = r
-                    }
-                }
-                parsed.add(Line(item.optLong("startMs"), text, item.optString("translation", ""), times, ranges))
-            }
-        }
-        parsed.sortBy { it.startMs }
-        lines = parsed
-        starts = LongArray(parsed.size) { parsed[it].startMs }
+    private fun applyParsed(data: ParsedData) {
+        trackId = data.trackId
+        offsetMs = data.offsetMs
+        trackDurationMs = data.durationMs
+        lines = data.lines
+        starts = data.starts
+        linesVersion++
     }
 
     private fun dp(context: Context, value: Int): Int =
@@ -521,8 +630,14 @@ object FloatingLyricsOverlay {
         mainText = first
         translationText = second
         lockButton = lock
+        fadeLayout = column
+        appliedLocked = null
+        stripKeyValid = false
+        prefetchValid = false
         stopTicking()
+        tickScheduled = true
         main.postDelayed(tick, TICK_MS)
+        LyricsTrace.configure(context)
     }
 
     private fun remove() {
@@ -537,6 +652,12 @@ object FloatingLyricsOverlay {
         mainText = null
         translationText = null
         lockButton = null
+        fadeLayout = null
+        appliedLocked = null
+        stripKeyValid = false
+        strip = null
+        prefetchValid = false
+        LyricsTrace.stop()
         if (context != null) {
             try {
                 (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(view)
@@ -547,7 +668,7 @@ object FloatingLyricsOverlay {
 
     private fun setLockedFromOverlay() {
         val context = appContext ?: return
-        prefs(context).edit().putBoolean("locked", true).apply()
+        setLockedState(context, true)
         applyMode()
     }
 
@@ -615,12 +736,16 @@ object FloatingLyricsOverlay {
         }
     }
 
+    /** The lock state the window (flags, alpha, background, lock button) was last set for; null before the first apply. */
+    private var appliedLocked: Boolean? = null
+    private var fadeLayout: EdgeFadeLayout? = null
+
     private fun applyMode() {
         val view = root ?: return
         val layout = params ?: return
         val context = appContext ?: return
         val locked = isLocked(context)
-        layout.flags = if (locked) {
+        val flags = if (locked) {
             layout.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         } else {
             layout.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
@@ -633,7 +758,12 @@ object FloatingLyricsOverlay {
         } else {
             null
         }
-        layout.alpha = FloatingLyricsRules.windowAlpha(systemLimit)
+        val alpha = FloatingLyricsRules.windowAlpha(systemLimit)
+        // Nothing changed since the last apply (every page update calls this): no new window layout pass.
+        if (appliedLocked == locked && layout.flags == flags && layout.alpha == alpha) return
+        appliedLocked = locked
+        layout.flags = flags
+        layout.alpha = alpha
         // Move mode: only the lyric area gets the background, never the lock gutter.
         view.background = null
         (mainText?.parent as? View)?.background = if (locked) null else GradientDrawable().apply {
@@ -647,48 +777,56 @@ object FloatingLyricsOverlay {
         }
     }
 
-    /** Draw the current line; true while a line slides during playback (then the next frame is wanted). */
-    private fun render(): Boolean {
+    /**
+     * Draw the current line; true while a line slides during playback (then the next frame is wanted). `nowNanos` is the
+     * display frame's time (Choreographer), or the current time outside a frame; the position is carried on in it.
+     */
+    private fun render(nowNanos: Long = System.nanoTime()): Boolean {
         val view = root ?: return false
         val context = appContext ?: return false
-        val sample = PlaybackService.floatingLyricsSample()?.let { reported ->
-            val now = android.os.SystemClock.uptimeMillis()
-            if (reported.trackId != lastReportedTrack || reported.positionMs != lastReportedMs) {
-                if (reported.trackId != lastReportedTrack) smoothedMs = null
-                lastReportedTrack = reported.trackId
-                lastReportedMs = reported.positionMs
+        val have = PlaybackService.floatingLyricsSample(sample)
+        if (have) {
+            val now = nowNanos / 1_000_000.0
+            if (sample.trackId != lastReportedTrack || sample.positionMs != lastReportedMs) {
+                if (sample.trackId != lastReportedTrack) hasSmoothed = false
+                lastReportedTrack = sample.trackId
+                lastReportedMs = sample.positionMs
                 lastReportedAt = now
             }
-            val smoothed = FloatingLyricsRules.smoothPositionMs(
-                smoothedMs, smoothedAt, reported.positionMs, lastReportedAt, now, reported.playing,
+            val smoothed = FloatingLyricsRules.smoothPosition(
+                smoothedMs, hasSmoothed, smoothedAt, sample.positionMs, lastReportedAt, now, sample.playing,
             )
             smoothedMs = smoothed
+            hasSmoothed = true
             smoothedAt = now
-            reported.copy(positionMs = kotlin.math.round(smoothed).toLong())
+            sample.positionMs = kotlin.math.round(smoothed).toLong()
         }
-        val index = if (sample != null && sample.active && sample.trackId == trackId) {
+        val index = if (have && sample.active && sample.trackId == trackId) {
             FloatingLyricsRules.activeIndex(starts, sample.positionMs, offsetMs)
         } else {
             -1
         }
-        if (animation == "continuous" && renderStrip(view, sample)) {
-            return sample?.playing == true && view.visibility == View.VISIBLE
+        if (animation == "continuous" && renderStrip(view, have)) {
+            prefetchValid = false
+            return have && sample.playing && view.visibility == View.VISIBLE
         }
         val line = lines.getOrNull(index)
-        val text = line?.text?.trim().orEmpty()
-        val translation = if (showTranslation) line?.translation?.trim().orEmpty() else ""
+        val text = line?.trimmedText.orEmpty()
+        val translation = if (showTranslation) line?.trimmedTranslation.orEmpty() else ""
         val locked = isLocked(context)
         val shown = if (text.isEmpty() && !locked) "♪" else text
         view.visibility = if (shown.isEmpty()) View.INVISIBLE else View.VISIBLE
-        val progress = if (line != null && sample != null) {
-            val duration = FloatingLyricsRules.lineDurationMs(starts, index, sample.durationMs ?: trackDurationMs, offsetMs)
+        val progress = if (line != null && have) {
+            val duration = FloatingLyricsRules.lineDurationMs(
+                starts, index, if (sample.durationMs != FloatingLyricsRules.NO_TIME) sample.durationMs else trackDurationMs, offsetMs,
+            )
             FloatingLyricsRules.scrollProgress(sample.positionMs + offsetMs - line.startMs, duration)
         } else {
             0f
         }
 
         var sliding = false
-        (mainText?.parent as? EdgeFadeLayout)?.fadeEnabled = true
+        fadeLayout?.fadeEnabled = true
         mainText?.let {
             it.setWordMask(0f)
             it.setLine(shown, progress)
@@ -696,7 +834,7 @@ object FloatingLyricsOverlay {
             // Word-timed line: karaoke, one smooth accent edge over the line (ADR 0041 D10).
             val times = line?.wordTimes
             val ranges = line?.wordRanges
-            if (times != null && ranges != null && shown == text && sample != null) {
+            if (times != null && ranges != null && shown == text && have) {
                 val lyricsMs = (sample.positionMs + offsetMs).toDouble()
                 it.setKaraoke(ranges, times, lyricsMs)
                 if (sample.playing && it.karaokeMoving(lyricsMs)) sliding = true
@@ -710,70 +848,122 @@ object FloatingLyricsOverlay {
             it.setLine(translation, progress)
             if (translation.isNotEmpty() && it.overflows()) sliding = true
         }
-        return sliding && sample?.active == true && view.visibility == View.VISIBLE
+        prefetchNeighbours(index, locked)
+        return sliding && have && sample.active && view.visibility == View.VISIBLE
+    }
+
+    /**
+     * The none mode: have the images of the shown line's neighbours (and the karaoke copies and translations) made in
+     * the background, so the next line change finds them ready. Runs when the line, the lyrics, the translation switch or
+     * a look changed (the views' raster epochs), not every frame.
+     */
+    private fun prefetchNeighbours(index: Int, locked: Boolean) {
+        val first = mainText ?: return
+        val second = translationText ?: return
+        val epoch = first.rasterEpoch() xor (second.rasterEpoch() * 17)
+        if (prefetchValid && prefetchIndex == index && prefetchLinesVersion == linesVersion && prefetchEpoch == epoch &&
+            prefetchTranslation == showTranslation && prefetchLocked == locked
+        ) {
+            return
+        }
+        prefetchValid = true
+        prefetchIndex = index
+        prefetchLinesVersion = linesVersion
+        prefetchEpoch = epoch
+        prefetchTranslation = showTranslation
+        prefetchLocked = locked
+        prefetchMain.clear()
+        prefetchAccent.clear()
+        prefetchSecond.clear()
+        // The shown line first, then the next, the previous and the one after the next.
+        val order = if (index >= 0) intArrayOf(index, index + 1, index - 1, index + 2) else intArrayOf(0, 1)
+        for (at in order) {
+            val line = lines.getOrNull(at) ?: continue
+            if (line.trimmedText.isNotEmpty()) {
+                prefetchMain.add(line.trimmedText)
+                if (line.wordRanges != null) prefetchAccent.add(line.trimmedText)
+            }
+            if (showTranslation && line.trimmedTranslation.isNotEmpty()) prefetchSecond.add(line.trimmedTranslation)
+        }
+        if (!locked) prefetchMain.add("♪")
+        first.prefetchLines(prefetchMain, prefetchAccent)
+        second.prefetchLines(prefetchSecond, emptyList())
     }
 
     /**
      * The strip for the current lyrics and look: lines with some text (main or translation), the translation strip
-     * using the same cells (each cell as wide as the wider text, one U+3000 of the main line apart).
+     * using the same cells (each cell as wide as the wider text, one U+3000 of the main line apart). Rebuilt only when
+     * the lyrics, the translation switch or either row's font measures changed (compared as numbers, not per frame).
      */
     private fun stripFor(main: LyricLineView, second: LyricLineView?): Strip? {
-        val key = listOf(lines, showTranslation, main.textWidth("\u3000"), second?.textWidth("\u3000"), fontWeight)
         main.setKaraoke(null, null, 0.0)
-        strip?.let { if (it.key == key) return it }
+        val secondVersion = second?.measureVersion ?: -1
+        if (stripKeyValid && stripKeyLines == linesVersion && stripKeyTranslation == showTranslation &&
+            stripKeyMain == main.measureVersion && stripKeySecond == secondVersion
+        ) {
+            return strip
+        }
+        stripKeyValid = true
+        stripKeyLines = linesVersion
+        stripKeyTranslation = showTranslation
+        stripKeyMain = main.measureVersion
+        stripKeySecond = secondVersion
+        strip = null
         val keptLines = lines.filter { line ->
-            line.text.trim().isNotEmpty() || (showTranslation && line.translation.trim().isNotEmpty())
+            line.trimmedText.isNotEmpty() || (showTranslation && line.trimmedTranslation.isNotEmpty())
         }
-        val kept = keptLines.map { line ->
-            Triple(line.startMs, line.text.trim(), if (showTranslation) line.translation.trim() else "")
-        }
-        if (kept.isEmpty()) return null
-        val texts = kept.map { it.second }
-        val translations = kept.map { it.third }
-        val mainWidths = FloatArray(kept.size) { main.textWidth(texts[it]) }
-        val lastGlyphCenters = FloatArray(kept.size) { index -> main.lastGlyphCenter(texts[index]) }
-        val firstGlyphCenters = FloatArray(kept.size) { index -> main.firstGlyphCenter(texts[index]) }
-        val (cells, widths) = FloatingLyricsRules.stripLayout(
-            mainWidths,
-            FloatArray(kept.size) { second?.textWidth(translations[it]) ?: 0f },
-            main.textWidth("\u3000"),
-        )
+        if (keptLines.isEmpty()) return null
+        val texts = keptLines.map { it.trimmedText }
+        val translations = keptLines.map { if (showTranslation) it.trimmedTranslation else "" }
+        val mainWidths = FloatArray(keptLines.size) { main.textWidth(texts[it]) }
+        val translationWidths = FloatArray(keptLines.size) { second?.textWidth(translations[it]) ?: 0f }
+        val lastGlyphCenters = FloatArray(keptLines.size) { index -> main.lastGlyphCenter(texts[index]) }
+        val firstGlyphCenters = FloatArray(keptLines.size) { index -> main.firstGlyphCenter(texts[index]) }
+        val (cells, widths) = FloatingLyricsRules.stripLayout(mainWidths, translationWidths, main.textWidth("　"))
         // Word-timed lyrics (ADR 0041 D10): knots at the line starts (first glyph centre) and the last words' ends (last
         // glyph centre); individual words never shape the glide. The translation strip shares the main offset.
         val wordKnots = if (keptLines.any { it.wordRanges != null }) {
-            WordLyricsRules.wordStripKnots(keptLines.mapIndexed { i, line ->
-                val times = line.wordTimes
-                val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
-                WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(), end, lastGlyphCenters[i].toDouble())
-            })
+            WordLyricsRules.WordKnots.of(
+                WordLyricsRules.wordStripKnots(keptLines.mapIndexed { i, line ->
+                    val times = line.wordTimes
+                    val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
+                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(), end, lastGlyphCenters[i].toDouble())
+                }),
+            )
         } else {
             null
         }
-        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths, mainWidths, lastGlyphCenters, firstGlyphCenters, wordKnots).also { strip = it }
+        return Strip(
+            LongArray(keptLines.size) { keptLines[it].startMs }, texts, translations, cells, widths, mainWidths, translationWidths,
+            lastGlyphCenters, firstGlyphCenters, wordKnots, FloatingLyricsRules.graphemeCount(texts.last()),
+            translations.any { it.isNotEmpty() },
+        ).also { strip = it }
     }
 
     /** Continuous animation: draw both strips at the current place; false when there is nothing to draw as a strip. */
-    private fun renderStrip(view: View, sample: Sample?): Boolean {
+    private fun renderStrip(view: View, have: Boolean): Boolean {
         val main = mainText ?: return false
-        if (sample == null || !sample.active || sample.trackId != trackId) return false
+        if (!have || !sample.active || sample.trackId != trackId) return false
         val current = stripFor(main, translationText) ?: return false
         val lyricsMs = sample.positionMs + offsetMs
-        val trackEndAtLyricsMs = (sample.durationMs ?: trackDurationMs)?.plus(offsetMs)
-        val finalArrivalAtLyricsMs = current.starts.lastOrNull()?.let { lastStart ->
-            FloatingLyricsRules.finalLineArrivalMs(
-                lastStart,
-                current.texts.lastOrNull().orEmpty(),
-                trackEndAtLyricsMs,
-            )
-        }
-        val knots = current.wordKnots
-        val offset = if (knots != null) {
-            (main.availableWidth() / 2.0 - WordLyricsRules.knotValue(knots, lyricsMs.toDouble())).toFloat()
+        val duration = if (sample.durationMs != FloatingLyricsRules.NO_TIME) sample.durationMs else trackDurationMs
+        val trackEndAtLyricsMs = if (duration != FloatingLyricsRules.NO_TIME) duration + offsetMs else FloatingLyricsRules.NO_TIME
+        val wordKnots = current.wordKnots
+        val offset = if (wordKnots != null) {
+            (main.availableWidth() / 2.0 - WordLyricsRules.knotValue(wordKnots, lyricsMs.toDouble())).toFloat()
         } else {
-            FloatingLyricsRules.stripOffset(
-                current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,
-                lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET,
-                finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters, current.firstGlyphCenters,
+            val arrival = FloatingLyricsRules.finalLineArrivalFromGraphemes(current.starts[current.starts.size - 1], current.lastGraphemes, trackEndAtLyricsMs)
+            if (!current.knotsBuilt || current.knotsEnd != arrival) {
+                current.knots = FloatingLyricsRules.stripKnots(
+                    current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN, arrival,
+                    current.mainWidths, current.lastGlyphCenters, current.firstGlyphCenters,
+                )
+                current.knotsEnd = arrival
+                current.knotsBuilt = true
+            }
+            val knots = current.knots
+            if (knots == null) 0f else FloatingLyricsRules.stripKnotsOffset(
+                knots, lyricsMs, FloatingLyricsRules.stripTarget(main.availableWidth(), FloatingLyricsRules.STRIP_TARGET),
             )
         }
         // Line- and word-timed: the static mask at the main row's em with the main and secondary opacity on both
@@ -781,15 +971,14 @@ object FloatingLyricsOverlay {
         val em = main.textSizePx()
         val mainOpacity = FloatingLyricsRules.mainOpacityPercent(mainOpacityPercent) / 100f
         val secondaryOpacity = FloatingLyricsRules.secondaryOpacityPercent(secondaryOpacityPercent) / 100f
-        (main.parent as? EdgeFadeLayout)?.fadeEnabled = false
+        fadeLayout?.fadeEnabled = false
         main.setWordMask(em, mainOpacity, secondaryOpacity)
         translationText?.setWordMask(em, mainOpacity, secondaryOpacity)
         view.visibility = View.VISIBLE
-        main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)
+        main.setStrip(current.texts, current.cells, current.widths, current.mainWidths, offset, current.starts, lyricsMs)
         translationText?.let {
-            val any = current.translations.any { text -> text.isNotEmpty() }
-            it.visibility = if (any) View.VISIBLE else View.GONE
-            if (any) it.setStrip(current.translations, current.cells, current.widths, offset, current.starts, lyricsMs)
+            it.visibility = if (current.hasTranslation) View.VISIBLE else View.GONE
+            if (current.hasTranslation) it.setStrip(current.translations, current.cells, current.widths, current.translationWidths, offset, current.starts, lyricsMs)
         }
         return true
     }

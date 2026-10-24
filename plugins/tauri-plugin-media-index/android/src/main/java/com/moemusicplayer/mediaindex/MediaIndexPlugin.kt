@@ -685,9 +685,16 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun floatingLyricsUpdate(invoke: Invoke) {
         val args = JSONObject(invoke.getArgs().toString())
+        // The lyrics are turned into the overlay's model here, off the UI thread; the UI thread only applies them.
+        val data = try {
+            args.optJSONObject("data")?.let(FloatingLyricsOverlay::parseData)
+        } catch (error: Exception) {
+            invoke.reject("Could not read the floating lyrics: ${error.message}")
+            return
+        }
         activity.runOnUiThread {
             try {
-                FloatingLyricsOverlay.update(activity, args)
+                FloatingLyricsOverlay.update(activity, args, data)
                 invoke.resolve(JSObject(FloatingLyricsOverlay.status(activity).toString()))
             } catch (error: Exception) {
                 invoke.reject("Could not update the floating lyrics: ${error.message}")

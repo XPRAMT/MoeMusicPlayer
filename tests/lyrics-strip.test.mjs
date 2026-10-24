@@ -100,8 +100,8 @@ test('the views anchor the continuous strip on the lyric area centre whatever th
   assert.match(plan, /rules::STRIP_ALIGN,[\s\S]*rules::STRIP_TARGET,/);
   assert.doesNotMatch(plan, /align: Align|look\.align/);
   const kotlin = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt', import.meta.url), 'utf8');
-  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN,\s*lyricsMs, main\.availableWidth\(\), FloatingLyricsRules\.STRIP_TARGET,/);
-  assert.match(kotlin, /finalArrivalAtLyricsMs, current\.mainWidths, current\.lastGlyphCenters/);
+  assert.match(kotlin, /FloatingLyricsRules\.STRIP_ALIGN, arrival,\s*current\.mainWidths, current\.lastGlyphCenters/);
+  assert.match(kotlin, /stripTarget\(main\.availableWidth\(\), FloatingLyricsRules\.STRIP_TARGET\)/);
 });
 
 test('the strip holds only the lines near the lyric area, never the whole song', () => {
