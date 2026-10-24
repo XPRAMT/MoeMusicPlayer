@@ -240,7 +240,7 @@ class FloatingLyricsRulesTest {
 
     @Test
     fun fontWeightRangesAndTheTranslationOffsetMatchTheSettings() {
-        assertEquals(550, FloatingLyricsRules.DEFAULT_FONT_WEIGHT)
+        assertEquals(500, FloatingLyricsRules.DEFAULT_FONT_WEIGHT)
         assertEquals(100, FloatingLyricsRules.fontWeight(0))
         assertEquals(1000, FloatingLyricsRules.fontWeight(5_000))
         assertEquals(300, FloatingLyricsRules.fontWeight(300))

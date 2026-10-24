@@ -231,7 +231,7 @@ fn default_auxiliary_scale_percent() -> u8 {
 pub const LYRICS_FONT_WEIGHT_RANGE: (u16, u16) = (100, 1000);
 
 pub fn default_lyrics_font_weight() -> u16 {
-    550
+    500
 }
 
 impl From<RawLyricsPreferences> for LyricsPreferences {
@@ -1030,7 +1030,7 @@ pub struct TaskbarLyricsSettings {
     /// Secondary opacity, 10–100: where the strip's edge ramp starts in "continuous"; no effect in "none".
     #[serde(default = "default_secondary_opacity_percent")]
     pub secondary_opacity_percent: u8,
-    /// Weight of the original text, 100–1000; translation rows are 50 lighter. Files without it use 550.
+    /// Weight of the original text, 100–1000; translation rows are 50 lighter. Files without it use 500.
     #[serde(default = "default_lyrics_font_weight")]
     pub font_weight: u16,
     /// Line animation; older files without it keep the one-line-at-a-time look.
@@ -4295,7 +4295,7 @@ mod tests {
                 secondary_opacity_percent: 50,
                 primary_font_size_px: 20,
                 auxiliary_scale_percent: 90,
-                font_weight: 550,
+                font_weight: 500,
                 line_gap_px: 10,
                 text_effect: LyricsTextEffect::Shadow,
                 simplified_to_traditional: true,
@@ -4310,7 +4310,7 @@ mod tests {
         assert!(value.get("inactiveOpacityPercent").is_none());
         assert_eq!(value["primaryFontSizePx"], 20);
         assert_eq!(value["auxiliaryScalePercent"], 90);
-        assert_eq!(value["fontWeight"], 550);
+        assert_eq!(value["fontWeight"], 500);
         assert!(value.get("auxiliaryFontSizePx").is_none());
         assert_eq!(value["lineGapPx"], 10);
         assert_eq!(value["textEffect"], "shadow");
@@ -4611,21 +4611,21 @@ mod tests {
     }
 
     #[test]
-    fn font_weight_defaults_to_550_per_tab_and_is_clamped_on_load() {
-        assert_eq!(default_lyrics_font_weight(), 550);
+    fn font_weight_defaults_to_500_per_tab_and_is_clamped_on_load() {
+        assert_eq!(default_lyrics_font_weight(), 500);
         let defaults = TaskbarLyricsSettings::default();
-        assert_eq!(defaults.font_weight, 550);
-        assert_eq!(FloatingLyricsSettings::default().font_weight, 550);
-        // Files without the field load 550 on every tab.
+        assert_eq!(defaults.font_weight, 500);
+        assert_eq!(FloatingLyricsSettings::default().font_weight, 500);
+        // Files without the field load 500 on every tab.
         let old = lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true})));
-        assert_eq!(old.font_weight, 550);
-        assert_eq!(lenient_floating_lyrics(None).font_weight, 550);
+        assert_eq!(old.font_weight, 500);
+        assert_eq!(lenient_floating_lyrics(None).font_weight, 500);
         assert_eq!(
             lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 900}))).font_weight,
-            550
+            500
         );
         let from_json = |text: &str| serde_json::from_str::<LyricsPreferences>(text).unwrap();
-        assert_eq!(from_json("{}").font_weight, 550);
+        assert_eq!(from_json("{}").font_weight, 500);
         // Clamped to 100..=1000 on load, independently per tab.
         assert_eq!(from_json(r#"{"fontWeight": 0}"#).font_weight, 100);
         assert_eq!(from_json(r#"{"fontWeight": 5000}"#).font_weight, 1000);

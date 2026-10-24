@@ -16,21 +16,21 @@ import { DEFAULT_FLOATING_LYRICS_SETTINGS, normalizeFloatingLyricsSettings } fro
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
 
-test('the font weight defaults to 550 on every tab and is clamped to 100-1000 on load', () => {
-  assert.deepEqual(LYRICS_FONT_WEIGHT, { min: 100, max: 1000, step: 50, default: 550 });
-  assert.equal(DEFAULT_LYRICS_PREFERENCES.fontWeight, 550);
-  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.fontWeight, 550);
-  assert.equal(DEFAULT_FLOATING_LYRICS_SETTINGS.fontWeight, 550);
+test('the font weight defaults to 500 on every tab and is clamped to 100-1000 on load', () => {
+  assert.deepEqual(LYRICS_FONT_WEIGHT, { min: 100, max: 1000, step: 100, default: 500 });
+  assert.equal(DEFAULT_LYRICS_PREFERENCES.fontWeight, 500);
+  assert.equal(DEFAULT_TASKBAR_LYRICS_SETTINGS.fontWeight, 500);
+  assert.equal(DEFAULT_FLOATING_LYRICS_SETTINGS.fontWeight, 500);
   const tabs = [normalizeLyricsPreferences, normalizeTaskbarLyricsSettings, normalizeFloatingLyricsSettings];
   for (const normalize of tabs) {
-    assert.equal(normalize({}).fontWeight, 550, 'an old file without the field');
+    assert.equal(normalize({}).fontWeight, 500, 'an old file without the field');
     assert.equal(normalize({ fontWeight: 0 }).fontWeight, 100);
     assert.equal(normalize({ fontWeight: 99999 }).fontWeight, 1000);
     assert.equal(normalize({ fontWeight: 349.6 }).fontWeight, 350);
-    assert.equal(normalize({ fontWeight: 'bold' }).fontWeight, 550);
+    assert.equal(normalize({ fontWeight: 'bold' }).fontWeight, 500);
     assert.equal(normalize({ fontWeight: 1000 }).fontWeight, 1000);
   }
-  assert.equal(normalizeLyricsFontWeight(Number.NaN), 550);
+  assert.equal(normalizeLyricsFontWeight(Number.NaN), 500);
 });
 
 test('each tab keeps its own weight', () => {
@@ -49,9 +49,9 @@ test('translation and romanization rows are 50 lighter than the original, never 
 test('the Rust and Kotlin defaults and ranges match the JS ones', () => {
   const rust = read('src-tauri/src/settings.rs');
   assert.match(rust, /pub const LYRICS_FONT_WEIGHT_RANGE: \(u16, u16\) = \(100, 1000\);/);
-  assert.match(rust, /pub fn default_lyrics_font_weight\(\) -> u16 \{\s*550\s*\}/);
+  assert.match(rust, /pub fn default_lyrics_font_weight\(\) -> u16 \{\s*500\s*\}/);
   const kotlin = read('plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsRules.kt');
-  assert.match(kotlin, /DEFAULT_FONT_WEIGHT\s*=\s*550/);
+  assert.match(kotlin, /DEFAULT_FONT_WEIGHT\s*=\s*500/);
   assert.match(kotlin, /MIN_FONT_WEIGHT\s*=\s*100/);
   assert.match(kotlin, /MAX_FONT_WEIGHT\s*=\s*1000/);
 });
@@ -76,9 +76,9 @@ test('the playing page draws the original at the weight and the aux rows 50 ligh
   const view = read('src/lib/LyricsView.svelte');
   assert.match(view, /--lyric-primary-weight:\$\{preferences\.fontWeight\}/);
   assert.match(view, /--lyric-auxiliary-weight:\$\{lyricsAuxiliaryWeight\(preferences\.fontWeight\)\}/);
-  assert.match(view, /\.lyric-primary \{[^}]*font-weight: var\(--lyric-primary-weight, 550\);/s);
+  assert.match(view, /\.lyric-primary \{[^}]*font-weight: var\(--lyric-primary-weight, 500\);/s);
   assert.match(view, /\.lyric-translation,\s*\.lyric-romanization \{[^}]*font-weight: var\(--lyric-auxiliary-weight, 500\);/s);
-  assert.doesNotMatch(view, /`550 100px|`400 100px/, 'the ink-height measure uses the setting');
+  assert.doesNotMatch(view, /`500 100px|`400 100px/, 'the ink-height measure uses the setting');
 });
 
 test('the label is translated', () => {

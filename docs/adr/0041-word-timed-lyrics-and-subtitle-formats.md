@@ -279,9 +279,9 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 
 ### 5.5 修訂：每個歌詞分頁各自的字體粗細（使用者核准）
 
-- 設定：播放頁（`lyricsPreferences`）、工作列（`taskbarLyrics`）、浮動（`floatingLyrics`）各自儲存 `fontWeight`（整數，100–1000，滑桿步進 50，預設 550）。缺欄位取 550，載入時夾在範圍內（Rust `LYRICS_FONT_WEIGHT_RANGE`／`default_lyrics_font_weight`，JS `LYRICS_FONT_WEIGHT`／`normalizeLyricsFontWeight`，Kotlin `FloatingLyricsRules.fontWeight`），不遷移。滑桿「字體粗細」在「字體與大小」群組、緊接「譯文大小（相對原文）」之後，三個分頁與播放頁快速設定共用 `LyricsLookSettings.svelte`。
+- 設定：播放頁（`lyricsPreferences`）、工作列（`taskbarLyrics`）、浮動（`floatingLyrics`）各自儲存 `fontWeight`（整數，100–1000，滑桿步進 100，預設 500）。缺欄位取 500，載入時夾在範圍內（Rust `LYRICS_FONT_WEIGHT_RANGE`／`default_lyrics_font_weight`，JS `LYRICS_FONT_WEIGHT`／`normalizeLyricsFontWeight`，Kotlin `FloatingLyricsRules.fontWeight`），不遷移。滑桿「字體粗細」在「字體與大小」群組、緊接「譯文大小（相對原文）」之後，三個分頁與播放頁快速設定共用 `LyricsLookSettings.svelte`。
 - 意義：`fontWeight` 是原文的字重；譯文與羅馬拼音恆為 `fontWeight − 50`（`lyricsAuxiliaryWeight`／`translation_weight`／`auxiliaryFontWeight`，至少 1，所以字重 100 時為 50）。
-- 播放頁：`LyricsView.svelte` 以 CSS 變數 `--lyric-primary-weight`／`--lyric-auxiliary-weight` 取代寫死的字重（原文 550；譯文與羅馬拼音原本沿用預設字重）；行內墨水行高以同一字重量測（canvas 字型字串帶字重），字重改變時重測；列高仍由 DOM 觀察器量測，所以版面會跟著重排。
+- 播放頁：`LyricsView.svelte` 以 CSS 變數 `--lyric-primary-weight`／`--lyric-auxiliary-weight` 取代寫死的字重（原文 500；譯文與羅馬拼音原本沿用預設字重）；行內墨水行高以同一字重量測（canvas 字型字串帶字重），字重改變時重測；列高仍由 DOM 觀察器量測，所以版面會跟著重排。
 - Windows 原生：`Look.font_weight`；DirectWrite 的 `DWRITE_FONT_WEIGHT` 只收 1..=999，設定值 1000 以 999 繪製（`dwrite_weight`）。點陣列改為 `(文字, 字級 px, 字重)`，主列用 `fontWeight`、譯文列用 −50，所以點陣鍵（`plan::raster_key`）含每一列的字重：字重不同的視窗不共用點陣。字重會改變文字寬度、第一與最後字形中心，所以連續模式的行寬量測鍵（`Win.measured`）含字重；設定改變時整份快取與量測清除並重新規劃（`Cmd::Look`），不是每幀。卡拉 OK 的白色與主色兩張表面用同一字重。行框以 Segoe UI Medium 的 ascent／descent 計算，沒有隨字重改變（同一字型家族各字重的垂直度量相同）。
 - Android：`LyricLineView.setLook` 帶字重，API 28 以上 `Typeface.create(Typeface.DEFAULT, weight, false)`；minSdk 24，更舊的系統只有一般與粗體，字重 ≥ 600 用粗體、否則一般（`FloatingLyricsRules.typefaceChoice`）。`LineLook`（`LineRasterCache` 的鍵）含字重，改變時所有行重新點陣化並重新量測；`stripFor` 的鍵含字重。字重隨 `floatingLyricsUpdate` 的 settings 傳入，不需新通道。
 - 非可變字型（Segoe UI、Roboto 等系統字型視版本）無法呈現所有字重，系統會對應到最近的可用字重，不特別處理。

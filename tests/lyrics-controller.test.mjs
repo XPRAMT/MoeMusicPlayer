@@ -143,7 +143,7 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     secondaryOpacityPercent: 1,
     primaryFontSizePx: 50,
     auxiliaryScalePercent: 4,
-    fontWeight: 550,
+    fontWeight: 500,
     lineGapPx: 50,
     textEffect: 'shadow',
     simplifiedToTraditional: true,

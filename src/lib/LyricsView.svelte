@@ -1174,7 +1174,7 @@
     overflow: hidden;
     color: inherit;
     font-size: var(--lyric-primary-font-size, 14px);
-    font-weight: var(--lyric-primary-weight, 550);
+    font-weight: var(--lyric-primary-weight, 500);
     /* Measured ink fit (ascenders + descenders, no extra leading); vertical room comes from the shadow padding. */
     line-height: var(--lyric-primary-line-height, 1.35);
     line-clamp: 2;

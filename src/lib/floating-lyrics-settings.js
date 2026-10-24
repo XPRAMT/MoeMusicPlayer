@@ -91,7 +91,7 @@ export const DEFAULT_FLOATING_LYRICS_SETTINGS = Object.freeze({
   translationScalePercent: 80,
   mainOpacityPercent: 100,
   secondaryOpacityPercent: 50,
-  fontWeight: 550,
+  fontWeight: 500,
   widthPx: FLOATING_LYRICS_WIDTH_PX.default,
   landscapeWidthPx: FLOATING_LYRICS_WIDTH_PX.default,
   useCustomColor: false,

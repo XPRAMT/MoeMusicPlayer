@@ -37,8 +37,8 @@ object FloatingLyricsRules {
     fun lineViewAlpha(animation: String, mainPercent: Int): Float =
         if (animation == "continuous") 1f else mainOpacityPercent(mainPercent) / 100f
 
-    /** Font weight of the original text: settings.rs `LYRICS_FONT_WEIGHT_RANGE` (100-1000) and default 550. */
-    const val DEFAULT_FONT_WEIGHT = 550
+    /** Font weight of the original text: settings.rs `LYRICS_FONT_WEIGHT_RANGE` (100-1000) and default 500. */
+    const val DEFAULT_FONT_WEIGHT = 500
     const val MIN_FONT_WEIGHT = 100
     const val MAX_FONT_WEIGHT = 1000
     fun fontWeight(value: Int): Int = value.coerceIn(MIN_FONT_WEIGHT, MAX_FONT_WEIGHT)
