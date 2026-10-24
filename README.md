@@ -11,7 +11,7 @@
 - **Simple:** add a folder, press play. Lists, search, sorting and playlists work the way you expect, the Now Playing page shows the cover and the lyrics side by side, and every setting is in one place.
 - **Fast:** large libraries are browsed through paginated, virtualized lists, so thousands of songs scroll smoothly. Scanning reads tags on several threads: in a measured run, building a 5,400-song library from scratch took about 1 minute 30 seconds, and later incremental scans take about 5 seconds. Closing the window during a scan saves what was read, and the next scan continues from there.
 - **Professional:** edit tags and cover art in place, view a spectrogram, play DSD, and on Windows send the sound bit-perfect through WASAPI exclusive mode or to several devices at once.
-- **Automatic lyrics:** the player finds lyrics for you. It reads a local `.lrc` file or embedded lyrics first; if there is none, it searches NetEase and QQ and applies a result by itself only when the title matches closely, the length differs by at most 2 seconds and the lyrics are synchronized. You can always search, pick another result or reload by hand, and a lyric you picked is never overwritten by an automatic one.
+- **Automatic lyrics:** the player finds lyrics for you. It reads embedded lyrics first, then a lyric file next to the song (`.lrc`, `.qrc`, `.ass` or `.srt`, see [Supported lyric formats](#supported-lyric-formats)); if there is none, it searches NetEase and QQ and applies a result by itself only when the title matches closely, the length differs by at most 2 seconds and the lyrics are synchronized. You can always search, pick another result or reload by hand, and a lyric you picked is never overwritten by an automatic one.
 
 ## Features on both Windows and Android
 
@@ -26,6 +26,24 @@
 - **Appearance and language:** background and accent color; five main-background modes: solid color, single image, slideshow, album cover and the system wallpaper (on Android the wallpaper needs **All files access**); automatic text color or automatic image transparency. The interface is available in Traditional Chinese, Simplified Chinese, Japanese and English (Settings → Main → Language).
 - **Backup and restore:** Settings → About → Backup and restore exports what you tick (library, settings, server accounts under a passphrase, favorites; never album covers) into one zip, and imports that zip or a single file from it (`settings.json`, the library database, `MyLove.m3u8`). An import is applied the next time the app starts, and the previous data is kept in a `before-import` folder.
 - **Updates:** the player checks the latest GitHub Release and offers the new version (see [Install](#install)). Settings → About shows the build and the open-source packages used.
+
+## Supported lyric formats
+
+Without a manual choice the player uses, in this order: embedded lyrics, a lyric file next to the song with the same name (`.lrc` > `.qrc` > `.ass` > `.srt`), then an online search. The format is recognized from the content, not the extension, so SRT or ASS text stored in a tag also displays correctly.
+
+| Format | Timing | Where it is read from | Notes |
+| ------ | ------ | --------------------- | ----- |
+| LRC | Line | `.lrc`, embedded | Lines sharing a timestamp are sorted by content into original, translation and romanization. |
+| Enhanced LRC (A2, `<mm:ss.xx>` word stamps) | Word | `.lrc`, embedded | Word timing is kept. |
+| NetEase YRC | Word | Online (NetEase search), embedded text | Online results also bring translation and romanization. |
+| QRC, plain text (QQ) | Word | `.qrc`, embedded, online via AMLL | Encrypted QRC is not supported. When you search online, the player checks whether the AMLL TTML database has a word-timed version of a QQ result and adds it as a candidate. |
+| ASS / SSA (subset) | Line, plus `\k` word timing | `.ass`, embedded | Events at the same time with different styles become translation or romanization. |
+| SRT | Line | `.srt`, embedded | Multi-line cues and paired cues are sorted by content. |
+| Plain text | None | embedded, online | Shown without synchronization. |
+
+Online sources are NetEase Cloud Music and QQ Music. A result is applied automatically only when the title matches closely, the length differs by at most 2 seconds and the lyrics are synchronized; word-timed candidates are preferred when they qualify. Lyrics are fetched only when you search online, and none are bundled with the app.
+
+Word-timed lyrics are shown karaoke-style on the Now Playing page. In taskbar and floating lyrics, the continuous animation keeps the word being sung near the middle and the "no animation" mode colors the sung words. Not supported: encrypted QRC and KRC, TTML, WebVTT and SYLT.
 
 ## Windows and Android differences
 
