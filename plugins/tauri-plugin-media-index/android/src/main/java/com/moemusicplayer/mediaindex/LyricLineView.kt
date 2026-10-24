@@ -59,6 +59,8 @@ internal class LyricLineView(context: Context) : View(context) {
     private val accentKeep = HashSet<String>()
     private val accentRasters = LineRasterCache<Raster>({ value, look -> rasterise(value, look, accentPaint) }) { }
     private var karaokeSpans: List<Pair<Double, Double>>? = null
+    private var karaokeTimes: List<Pair<Double, Double>>? = null
+    private var karaokeGlide: List<WordLyricsRules.GlidePiece> = emptyList()
     private var karaokeSpansText = ""
     private var karaokeEdge = Float.NaN
     private var karaokeRawEdge = Float.NaN
@@ -106,14 +108,23 @@ internal class LyricLineView(context: Context) : View(context) {
             karaokeSpans = wordSpans(text, ranges)
             karaokeSpansText = text
             karaokeEdge = Float.NaN
+            karaokeTimes = null
         }
-        val edge = WordLyricsRules.karaokeClipX(karaokeSpans!!, times, lyricsMs).toFloat()
+        // One smooth edge per line (ADR 0041 D10), built once per line; per frame only its value is read.
+        if (karaokeTimes !== times) {
+            karaokeGlide = WordLyricsRules.karaokeGlide(karaokeSpans!!, times)
+            karaokeTimes = times
+        }
+        val edge = WordLyricsRules.glideValue(karaokeGlide, lyricsMs).toFloat()
         if (karaokeEdge.isNaN() || FloatingLyricsRules.needsPixelRedraw(karaokeEdge, edge, karaokeRawEdge)) {
             karaokeEdge = edge
             invalidate()
         }
         karaokeRawEdge = edge
     }
+
+    /** True while the karaoke edge of the shown line still moves at `lyricsMs` (frames are wanted). */
+    fun karaokeMoving(lyricsMs: Double): Boolean = karaokeSpans != null && WordLyricsRules.glideMoving(karaokeGlide, lyricsMs)
 
     /** The centre mask of word-timed continuous lyrics at `em` px (0: none). */
     fun setWordMask(em: Float) {
@@ -197,6 +208,15 @@ internal class LyricLineView(context: Context) : View(context) {
 
     /** Width of `value` in this line's font (for the strip layout). */
     fun textWidth(value: String): Float = if (value.isEmpty()) 0f else paint.measureText(value)
+
+    /** Centre of the first grapheme's advance (px from the line's start): the continuous strip's anchor (ADR 0041 D10). */
+    fun firstGlyphCenter(value: String): Float {
+        if (value.isEmpty()) return 0f
+        val iterator = BreakIterator.getCharacterInstance(Locale.ROOT)
+        iterator.setText(value)
+        val end = iterator.following(0).let { if (it == BreakIterator.DONE) value.length else it }
+        return paint.measureText(value, 0, end) / 2f
+    }
 
     /** X coordinate of the final grapheme's visual bounds centre, relative to the start of the complete line. */
     fun lastGlyphCenter(value: String): Float {

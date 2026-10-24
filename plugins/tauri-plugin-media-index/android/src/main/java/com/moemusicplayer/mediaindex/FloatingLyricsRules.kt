@@ -45,7 +45,7 @@ object FloatingLyricsRules {
         return x.coerceIn(0, maxX)
     }
 
-    /** The continuous strip anchors a line by its LEFT edge (`LYRICS_STRIP_ALIGN`) ... */
+    /** The continuous strip draws a line from its cell's LEFT edge and anchors it by its first glyph's centre (`firstGlyphCenters`, ADR 0041 D10) ... */
     const val STRIP_ALIGN = "left"
 
     /** ... on the lyric area's horizontal CENTRE (`LYRICS_STRIP_TARGET`), whatever the alignment setting and panel width. */
@@ -87,13 +87,13 @@ object FloatingLyricsRules {
     }
 
     /** The point of a cell that sits on the view's alignment point. */
-    fun stripAnchor(cellStarts: FloatArray, cellWidths: FloatArray, index: Int, align: String): Float {
+    fun stripAnchor(cellStarts: FloatArray, cellWidths: FloatArray, index: Int, align: String, anchors: FloatArray = FloatArray(0)): Float {
         val start = cellStarts.getOrElse(index) { 0f }
         val width = cellWidths.getOrElse(index) { 0f }
         return when (align) {
             "right" -> start + width
             "center" -> start + width / 2f
-            else -> start
+            else -> start + anchors.getOrElse(index) { 0f }.coerceIn(0f, maxOf(0f, width))
         }
     }
 
@@ -116,6 +116,7 @@ object FloatingLyricsRules {
         finalArrivalMs: Long? = null,
         mainTextWidths: FloatArray = cellWidths,
         lastGlyphCenters: FloatArray = FloatArray(0),
+        firstGlyphCenters: FloatArray = FloatArray(0),
     ): Float {
         val count = minOf(startTimesMs.size, cellStarts.size)
         if (count == 0) return 0f
@@ -129,11 +130,11 @@ object FloatingLyricsRules {
         val knots = count + if (end != null) 1 else 0
         fun time(k: Int): Double = (if (k < count) startTimesMs[k] else end!!).toDouble()
         fun value(k: Int): Double {
-            if (k < count) return stripAnchor(cellStarts, cellWidths, k, align).toDouble()
+            if (k < count) return stripAnchor(cellStarts, cellWidths, k, align, firstGlyphCenters).toDouble()
             val mainWidth = maxOf(0f, mainTextWidths.getOrElse(last) { cellWidths.getOrElse(last) { 0f } })
             val glyphCenter = lastGlyphCenters.getOrElse(last) { mainWidth }.coerceIn(0f, mainWidth)
             return maxOf(
-                stripAnchor(cellStarts, cellWidths, last, align).toDouble(),
+                stripAnchor(cellStarts, cellWidths, last, align, firstGlyphCenters).toDouble(),
                 cellStarts.getOrElse(last) { 0f }.toDouble() + glyphCenter,
             )
         }

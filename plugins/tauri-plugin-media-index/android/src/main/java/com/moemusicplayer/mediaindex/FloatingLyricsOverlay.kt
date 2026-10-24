@@ -86,8 +86,9 @@ object FloatingLyricsOverlay {
         val widths: FloatArray,
         val mainWidths: FloatArray,
         val lastGlyphCenters: FloatArray,
-        /** Word-timed lyrics (option C): the glide's knots; null for line-timed lyrics (the line glide). */
-        val wordKnots: List<Pair<Double, Double>>?,
+        val firstGlyphCenters: FloatArray,
+        /** Word-timed lyrics (ADR 0041 D10): the smoothed word glide; null for line-timed lyrics (the line glide). */
+        val wordKnots: List<WordLyricsRules.GlidePiece>?,
     )
     private var strip: Strip? = null
     private var opacityPercent = 100
@@ -694,13 +695,13 @@ object FloatingLyricsOverlay {
             it.setWordMask(0f)
             it.setLine(shown, progress)
             sliding = it.overflows()
-            // Word-timed line: karaoke (sung words and the sung part of the current word in the accent).
+            // Word-timed line: karaoke, one smooth accent edge over the line (ADR 0041 D10).
             val times = line?.wordTimes
             val ranges = line?.wordRanges
             if (times != null && ranges != null && shown == text && sample != null) {
                 val lyricsMs = (sample.positionMs + offsetMs).toDouble()
                 it.setKaraoke(ranges, times, lyricsMs)
-                if (sample.playing && WordLyricsRules.wiping(times, lyricsMs)) sliding = true
+                if (sample.playing && it.karaokeMoving(lyricsMs)) sliding = true
             } else {
                 it.setKaraoke(null, null, 0.0)
             }
@@ -733,29 +734,30 @@ object FloatingLyricsOverlay {
         val translations = kept.map { it.third }
         val mainWidths = FloatArray(kept.size) { main.textWidth(texts[it]) }
         val lastGlyphCenters = FloatArray(kept.size) { index -> main.lastGlyphCenter(texts[index]) }
+        val firstGlyphCenters = FloatArray(kept.size) { index -> main.firstGlyphCenter(texts[index]) }
         val (cells, widths) = FloatingLyricsRules.stripLayout(
             mainWidths,
             FloatArray(kept.size) { second?.textWidth(translations[it]) ?: 0f },
             main.textWidth("\u3000"),
         )
-        // Word-timed lyrics (ADR 0041 option C): knots at the word starts (each word's centre in its cell). The
-        // translation strip has none of its own: it shares the main strip's offset.
+        // Word-timed lyrics (ADR 0041 D10): hard knots at the line starts (first glyph centre), the word starts (each
+        // word's centre in its cell) as guides. The translation strip has none of its own: it shares the main offset.
         val wordKnots = if (keptLines.any { it.wordRanges != null }) {
-            WordLyricsRules.wordGlideKnots(keptLines.mapIndexed { i, line ->
+            WordLyricsRules.wordStripGlide(keptLines.mapIndexed { i, line ->
                 val ranges = line.wordRanges
                 val times = line.wordTimes
                 if (ranges != null && times != null && ranges.size == times.size) {
                     val centres = main.wordSpans(texts[i], ranges).map { (l, r) -> (l + r) / 2.0 }
-                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(),
+                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(),
                         DoubleArray(times.size) { times[it].first }, centres.toDoubleArray())
                 } else {
-                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), DoubleArray(0), DoubleArray(0))
+                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(), DoubleArray(0), DoubleArray(0))
                 }
             })
         } else {
             null
         }
-        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths, mainWidths, lastGlyphCenters, wordKnots).also { strip = it }
+        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths, mainWidths, lastGlyphCenters, firstGlyphCenters, wordKnots).also { strip = it }
     }
 
     /** Continuous animation: draw both strips at the current place; false when there is nothing to draw as a strip. */
@@ -774,12 +776,12 @@ object FloatingLyricsOverlay {
         }
         val knots = current.wordKnots
         val offset = if (knots != null) {
-            WordLyricsRules.glideOffset(knots, lyricsMs.toDouble(), main.availableWidth() / 2.0).toFloat()
+            (main.availableWidth() / 2.0 - WordLyricsRules.glideValue(knots, lyricsMs.toDouble())).toFloat()
         } else {
             FloatingLyricsRules.stripOffset(
                 current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,
                 lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET,
-                finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters,
+                finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters, current.firstGlyphCenters,
             )
         }
         // Word-timed: the static centre mask at the main row's em on both rows, instead of the line fades.

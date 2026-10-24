@@ -1,94 +1,187 @@
 package com.moemusicplayer.mediaindex
 
 /**
- * Word-timed lyrics in the floating window (ADR 0041), the same rules as `player-lyrics-rules/src/words.rs` and
- * `src/lib/lyrics-word-strip.js` (checked against the shared vectors): the word glide's knots with the speed cap, the
- * monotone C1 glide, the static centre mask and the karaoke clip edge.
+ * Word-timed lyrics in the floating window (ADR 0041 D10), the same rules as `player-lyrics-rules/src/glide.rs`,
+ * `words.rs` and `src/lib/lyrics-glide.js` / `lyrics-word-strip.js` (checked against the shared vectors): the smoothed
+ * glide (one curve: hard knots exact, soft guides followed within 0.5x-1.5x of each stretch's average speed, monotone,
+ * C1) for the strip's word glide and the karaoke edge, and the static centre mask.
  */
 internal object WordLyricsRules {
-    const val WORD_SPEED_FACTOR = 2.0
-    const val WORD_MAX_LEAD_MS = 600.0
+    const val GLIDE_MIN_SPEED = 0.5
+    const val GLIDE_MAX_SPEED = 1.5
+    const val GLIDE_KNOT_WINDOW = 0.125
     const val MASK_BAND_EM = 1.0
     const val MASK_SOFT_EM = 0.1
 
-    class KnotLine(val startMs: Double, val cellStart: Double, val wordStarts: DoubleArray, val wordCentres: DoubleArray)
+    /** From lyrics time `t` up to the next piece the value is `v + s u + c u^2` (`u` = time - `t`). */
+    data class GlidePiece(val t: Double, val v: Double, val s: Double, val c: Double)
 
-    private class Knot(var t: Double, var v: Double, val line: Int)
+    class KnotLine(val startMs: Double, val cellStart: Double, val anchor: Double, val wordStarts: DoubleArray, val wordCentres: DoubleArray)
 
-    private fun wordKnots(lines: List<KnotLine>): MutableList<Knot> {
-        val out = ArrayList<Knot>()
-        lines.forEachIndexed { line, l ->
-            val n = minOf(l.wordStarts.size, l.wordCentres.size)
-            if (n == 0) {
-                out.add(Knot(l.startMs, l.cellStart, line))
+    /** `smooth_glide`: hard knots `(t, v)`, guides between knot j and j + 1, eased (speed 0) ends or not. */
+    fun smoothGlide(hard: List<Pair<Double, Double>>, guides: List<List<Pair<Double, Double>>>, easeEnds: Boolean): List<GlidePiece> {
+        val knots = ArrayList<Pair<Double, Double>>()
+        val between = ArrayList<List<Pair<Double, Double>>>()
+        var dropped = false
+        hard.forEachIndexed { j, (t, v) ->
+            if (!t.isFinite() || !v.isFinite()) {
+                dropped = true
+                return@forEachIndexed
+            }
+            val prev = knots.lastOrNull()
+            if (prev != null) {
+                if (t <= prev.first) {
+                    dropped = true
+                    return@forEachIndexed
+                }
+                between.add(if (dropped) emptyList() else guides.getOrElse(j - 1) { emptyList() })
+                knots.add(t to maxOf(v, prev.second))
             } else {
-                for (i in 0 until n) out.add(Knot(l.wordStarts[i], l.cellStart + maxOf(0.0, l.wordCentres[i]), line))
+                knots.add(t to v)
             }
+            dropped = false
         }
-        return out
-    }
-
-    /** The knots `(t, v)` of the word glide, the speed cap applied (`word_glide_knots`). */
-    fun wordGlideKnots(lines: List<KnotLine>): List<Pair<Double, Double>> {
-        val k = wordKnots(lines)
-        val caps = (lines.indices).map { line ->
-            val mine = k.filter { it.line == line }
-            if (mine.size < 2) null else {
-                val dt = mine.last().t - mine.first().t
-                val dv = mine.last().v - mine.first().v
-                if (dt > 0 && dv > 0) WORD_SPEED_FACTOR * dv / dt else null
-            }
-        }
-        for (i in 1 until k.size) if (k[i].v < k[i - 1].v) k[i].v = k[i - 1].v
-        val original = DoubleArray(k.size) { k[it].t }
-        for (i in k.size - 1 downTo 1) {
-            val cap = caps.getOrNull(k[i].line) ?: continue
-            val need = (k[i].v - k[i - 1].v) / cap
-            if (k[i].t - k[i - 1].t >= need) continue
-            var t = maxOf(k[i].t - need, original[i - 1] - WORD_MAX_LEAD_MS)
-            if (i >= 2) t = maxOf(t, k[i - 2].t)
-            k[i - 1].t = minOf(k[i - 1].t, t)
-        }
-        val out = ArrayList<Knot>(k.size)
-        for (knot in k) {
-            while (out.isNotEmpty() && out.last().t >= knot.t) out.removeAt(out.size - 1)
-            out.add(knot)
-        }
-        return out.map { it.t to it.v }
-    }
-
-    /** The strip offset at `positionMs` (`target - v` along the monotone C1 curve through the knots). */
-    fun glideOffset(knots: List<Pair<Double, Double>>, positionMs: Double, target: Double): Double {
         val n = knots.size
-        if (n == 0) return 0.0
-        fun time(k: Int) = knots[k].first
-        fun value(k: Int) = knots[k].second
-        fun tangent(k: Int): Double {
-            if (k == 0 || k >= n - 1) return 0.0
-            val h0 = time(k) - time(k - 1)
-            val h1 = time(k + 1) - time(k)
-            if (h0 <= 0 || h1 <= 0) return 0.0
-            val d0 = (value(k) - value(k - 1)) / h0
-            val d1 = (value(k + 1) - value(k)) / h1
-            if (d0 <= 0 || d1 <= 0) return 0.0
-            val w0 = 2 * h1 + h0
-            val w1 = h1 + 2 * h0
-            return (w0 + w1) / (w0 / d0 + w1 / d1)
+        if (n == 0) return emptyList()
+        if (n == 1) return listOf(GlidePiece(knots[0].first, knots[0].second, 0.0, 0.0))
+        fun span(j: Int) = knots[j + 1].first - knots[j].first
+        val avg = DoubleArray(n - 1) { (knots[it + 1].second - knots[it].second) / span(it) }
+        val tangent = DoubleArray(n)
+        val window = DoubleArray(n)
+        for (j in 0 until n) {
+            if (j == 0 || j == n - 1) {
+                val edge = if (j == 0) 0 else n - 2
+                tangent[j] = if (easeEnds) 0.0 else avg[edge]
+                window[j] = GLIDE_KNOT_WINDOW * span(edge)
+                continue
+            }
+            val aL = avg[j - 1]
+            val aR = avg[j]
+            val lo = GLIDE_MIN_SPEED * maxOf(aL, aR)
+            val hi = GLIDE_MAX_SPEED * minOf(aL, aR)
+            val base = if (aL + aR > 0) 2 * aL * aR / (aL + aR) else 0.0
+            tangent[j] = if (lo <= hi) base.coerceIn(lo, hi) else hi
+            window[j] = GLIDE_KNOT_WINDOW * minOf(span(j - 1), span(j))
         }
-        var i = -1
-        while (i + 1 < n && time(i + 1) <= positionMs) i += 1
-        if (i < 0) return target - value(0)
-        if (i >= n - 1) return target - value(n - 1)
-        val t0 = time(i)
-        val h = time(i + 1) - t0
-        val v0 = value(i)
-        val m0 = tangent(i)
-        val m1 = tangent(i + 1)
-        val d = (value(i + 1) - v0) / h
-        val c2 = (3 * d - 2 * m0 - m1) / h
-        val c3 = (m0 + m1 - 2 * d) / (h * h)
-        val u = positionMs - t0
-        return target - (v0 + u * (m0 + u * (c2 + u * c3)))
+        val pt = ArrayList<Double>()
+        val pv = ArrayList<Double>()
+        val ph = ArrayList<Boolean>()
+        fun point(t: Double, v: Double, isHard: Boolean) {
+            pt.add(t)
+            pv.add(v)
+            ph.add(isHard)
+        }
+        point(knots[0].first, knots[0].second, true)
+        for (j in 0 until n - 1) {
+            val lo = GLIDE_MIN_SPEED * avg[j]
+            val hi = GLIDE_MAX_SPEED * avg[j]
+            val at = knots[j].first + window[j]
+            val av = knots[j].second + tangent[j] * window[j]
+            val bt = knots[j + 1].first - window[j + 1]
+            val bv = knots[j + 1].second - tangent[j + 1] * window[j + 1]
+            point(at, av, false)
+            var prevT = at
+            var prevV = av
+            for ((t, v) in between[j]) {
+                if (!(t > prevT && t < bt && v.isFinite())) continue
+                val low = maxOf(prevV + lo * (t - prevT), bv - hi * (bt - t))
+                val high = minOf(prevV + hi * (t - prevT), bv - lo * (bt - t))
+                val value = if (low <= high) v.coerceIn(low, high) else (low + high) / 2
+                prevT = t
+                prevV = value
+                point(t, value, false)
+            }
+            point(bt, bv, false)
+            point(knots[j + 1].first, knots[j + 1].second, true)
+        }
+        fun slope(k: Int) = (pv[k + 1] - pv[k]) / (pt[k + 1] - pt[k])
+        val pieces = ArrayList<GlidePiece>()
+        var cursorT = pt[0]
+        var cursorV = pv[0]
+        for (k in 1 until pt.size) {
+            val t = pt[k]
+            val v = pv[k]
+            val sIn = slope(k - 1)
+            val sOut = if (k + 1 < pt.size) slope(k) else 0.0
+            var r = 0.0
+            if (!ph[k] && k + 1 < pt.size && kotlin.math.abs(sOut - sIn) > 1e-12) {
+                r = minOf(t - pt[k - 1], pt[k + 1] - t) / 2
+            }
+            if (t - r > cursorT) pieces.add(GlidePiece(cursorT, cursorV, sIn, 0.0))
+            if (r > 0) {
+                pieces.add(GlidePiece(t - r, v - sIn * r, sIn, (sOut - sIn) / (4 * r)))
+                cursorT = t + r
+                cursorV = v + sOut * r
+            } else {
+                cursorT = t
+                cursorV = v
+            }
+        }
+        pieces.add(GlidePiece(cursorT, cursorV, 0.0, 0.0))
+        return pieces
+    }
+
+    private fun pieceIndex(pieces: List<GlidePiece>, time: Double): Int {
+        var lo = 0
+        var hi = pieces.size
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (pieces[mid].t <= time) lo = mid + 1 else hi = mid
+        }
+        return lo - 1
+    }
+
+    /** `[value, speed, half acceleration]` at `time` (`glide_at`). */
+    fun glideAt(pieces: List<GlidePiece>, time: Double): DoubleArray {
+        if (pieces.isEmpty()) return doubleArrayOf(0.0, 0.0, 0.0)
+        val i = pieceIndex(pieces, time)
+        if (i < 0) return doubleArrayOf(pieces[0].v, 0.0, 0.0)
+        val p = pieces[i]
+        val u = time - p.t
+        return doubleArrayOf(p.v + u * (p.s + p.c * u), p.s + 2 * p.c * u, p.c)
+    }
+
+    fun glideValue(pieces: List<GlidePiece>, time: Double): Double = glideAt(pieces, time)[0]
+
+    /** True while the glide still moves at `time` (frames are wanted). */
+    fun glideMoving(pieces: List<GlidePiece>, time: Double): Boolean =
+        pieces.size > 1 && time >= pieces[0].t && time < pieces[pieces.size - 1].t
+
+    /** The karaoke edge of one line (`karaoke_glide`): hard at the first word's start and the last word's end. */
+    fun karaokeGlide(spans: List<Pair<Double, Double>>, words: List<Pair<Double, Double>>): List<GlidePiece> {
+        val n = minOf(spans.size, words.size)
+        if (n == 0) return emptyList()
+        val start = words[0].first
+        var end = words[n - 1].second
+        if (!(end > start)) end = start + 1
+        val guides = ArrayList<Pair<Double, Double>>()
+        for (i in 0 until n) {
+            if (i > 0) guides.add(words[i].first to spans[i].first)
+            if (i < n - 1 && words[i].second < words[i + 1].first) guides.add(words[i].second to spans[i].second)
+        }
+        return smoothGlide(listOf(start to spans[0].first, end to spans[n - 1].second), listOf(guides), false)
+    }
+
+    /** The continuous strip's word glide (`word_strip_glide`): the strip px on the lyric area's centre. */
+    fun wordStripGlide(lines: List<KnotLine>): List<GlidePiece> {
+        val hard = ArrayList<Pair<Double, Double>>()
+        val guides = ArrayList<List<Pair<Double, Double>>>()
+        lines.forEachIndexed { index, line ->
+            val n = minOf(line.wordStarts.size, line.wordCentres.size)
+            val mine = ArrayList<Pair<Double, Double>>()
+            for (i in 0 until n) {
+                if (line.wordStarts[i] > line.startMs) mine.add(line.wordStarts[i] to line.cellStart + maxOf(0.0, line.wordCentres[i]))
+            }
+            hard.add(line.startMs to line.cellStart + maxOf(0.0, line.anchor))
+            if (index == lines.size - 1 && mine.isNotEmpty()) {
+                val last = mine.removeAt(mine.size - 1)
+                guides.add(mine)
+                hard.add(last)
+            } else {
+                guides.add(mine)
+            }
+        }
+        return smoothGlide(hard, guides, true)
     }
 
     /** The centre mask's gradient stops `(offset 0..1, opacity)` (`centre_mask_stops`): an opaque em, straight ramps. */
@@ -117,26 +210,4 @@ internal object WordLyricsRules {
         }
         return value
     }
-
-    /** Karaoke clip edge (the none mode): lit up to the sung position (`karaoke_clip_x`). */
-    fun karaokeClipX(spans: List<Pair<Double, Double>>, words: List<Pair<Double, Double>>, t: Double): Double {
-        val n = minOf(spans.size, words.size)
-        if (n == 0) return 0.0
-        var x = spans[0].first
-        for (i in 0 until n) {
-            val (s, e) = words[i]
-            val (l, r) = spans[i]
-            if (t < s) break
-            if (t >= e || e <= s) {
-                x = maxOf(x, r)
-                continue
-            }
-            x = maxOf(x, l + (r - l) * (t - s) / (e - s))
-            break
-        }
-        return x
-    }
-
-    /** True while a word is being sung at `t` (the karaoke edge moves, so frames are wanted). */
-    fun wiping(words: List<Pair<Double, Double>>, t: Double): Boolean = words.any { (s, e) -> t >= s && t < e && e > s }
 }
