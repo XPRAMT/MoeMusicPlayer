@@ -219,7 +219,11 @@ pub fn read_remote_file_capped_checked(
     }
     let mut bytes = Vec::with_capacity(handle.len as usize);
     if let Err(error) = handle.reader.take(limit + 1).read_to_end(&mut bytes) {
-        return if is_remote_network_error(&error) { Err(error) } else { Ok(None) };
+        return if is_remote_network_error(&error) {
+            Err(error)
+        } else {
+            Ok(None)
+        };
     }
     Ok((bytes.len() as u64 <= limit).then_some(bytes))
 }
@@ -275,10 +279,16 @@ mod tests {
 
         // The user chooses another track while the first one is still opening its file.
         let second = player.note_requested();
-        assert!(stream_of_first(), "the stream of the replaced load gives up");
+        assert!(
+            stream_of_first(),
+            "the stream of the replaced load gives up"
+        );
         assert!(running_load_superseded());
         end_load();
-        assert!(!stream_of_first(), "a finished load is never cut off by the next choice");
+        assert!(
+            !stream_of_first(),
+            "a finished load is never cut off by the next choice"
+        );
         assert!(!running_load_superseded());
 
         // A load already replaced before it starts is skipped; the newest starts normally.

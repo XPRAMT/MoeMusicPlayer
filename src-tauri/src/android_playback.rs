@@ -1023,7 +1023,11 @@ impl AndroidActor {
             if remaining.is_zero() {
                 return Err("Android 播放服務沒有在期限內確認命令。".to_owned());
             }
-            let slice = if preemptible { LOAD_WAIT_SLICE } else { Duration::from_millis(250) };
+            let slice = if preemptible {
+                LOAD_WAIT_SLICE
+            } else {
+                Duration::from_millis(250)
+            };
             match self.events.recv_timeout(remaining.min(slice)) {
                 Ok(event) => {
                     if event.v != 1 {
