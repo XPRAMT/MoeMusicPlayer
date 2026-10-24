@@ -265,50 +265,12 @@ pub fn strip_cubic(
             .max(0.0);
         strip_anchor(layout, last, align).max(layout.starts[last] + glyph)
     };
-    let tangent = |k: usize| {
-        if k == 0 || k >= knots - 1 {
-            return 0.0;
-        }
-        let h0 = time(k) - time(k - 1);
-        let h1 = time(k + 1) - time(k);
-        if h0 <= 0.0 || h1 <= 0.0 {
-            return 0.0;
-        }
-        let d0 = (value(k) - value(k - 1)) / h0;
-        let d1 = (value(k + 1) - value(k)) / h1;
-        if d0 <= 0.0 || d1 <= 0.0 {
-            return 0.0;
-        }
-        let w0 = 2.0 * h1 + h0;
-        let w1 = h1 + 2.0 * h0;
-        (w0 + w1) / (w0 / d0 + w1 / d1)
-    };
-    let mut index: isize = -1;
-    while ((index + 1) as usize) < knots && time((index + 1) as usize) <= position_ms {
-        index += 1;
-    }
-    if index < 0 {
-        return [target - value(0), 0.0, 0.0, 0.0];
-    }
-    let i = index as usize;
-    if i >= knots - 1 {
-        return [target - value(knots - 1), 0.0, 0.0, 0.0];
-    }
-    let t0 = time(i);
-    let h = time(i + 1) - t0;
-    let v0 = value(i);
-    let m0 = tangent(i);
-    let m1 = tangent(i + 1);
-    let d = (value(i + 1) - v0) / h;
-    let c2 = (3.0 * d - 2.0 * m0 - m1) / h;
-    let c3 = (m0 + m1 - 2.0 * d) / (h * h);
-    let u = position_ms - t0;
-    let anchor = v0 + u * (m0 + u * (c2 + u * c3));
-    let velocity = m0 + u * (2.0 * c2 + 3.0 * c3 * u);
-    [target - anchor, -velocity, -(c2 + 3.0 * c3 * u), -c3]
+    // `anchor` (the knot curve's value) is subtracted from the target; speed and curvature change sign with it.
+    let [anchor, velocity, c2, c3] = glide::hermite_cubic(knots, time, value, position_ms);
+    [target - anchor, -velocity, -c2, -c3]
 }
 
-/// Cells to draw while the strip glides between two offsets, plus `margin_px` on both sides. `None` when empty.
+// Cells to draw while the strip glides between two offsets, plus `margin_px` on both sides. `None` when empty.
 pub fn strip_window(
     layout: &StripLayout,
     from_offset_px: f64,

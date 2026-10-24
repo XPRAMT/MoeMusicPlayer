@@ -1,8 +1,9 @@
 //! The smoothed glide of word-timed lyrics (ADR 0041 D10), port of `src/lib/lyrics-glide.js` (the reference) and
-//! `WordLyricsRules.kt`, checked by the shared vectors. One pure curve drives the continuous strip's word glide and the
-//! karaoke colour edge.
+//! `WordLyricsRules.kt`, checked by the shared vectors. `smooth_glide` drives the karaoke colour edge; the continuous
+//! strip's word glide ignores individual words and is a plain monotone cubic through line start / line end knots
+//! (`word_strip_knots`, `knot_cubic`).
 //!
-//! Hard knots (line starts, and the line end of a karaoke line) are hit exactly. Between two hard knots the curve
+//! Hard knots (the line start and end of a karaoke line) are hit exactly. Between two hard knots the curve
 //! follows soft guides (the words) with its speed kept within `GLIDE_MIN_SPEED..GLIDE_MAX_SPEED` x the stretch's
 //! average speed: a polyline through the hard knots and the guides (each guide clamped into what the band can reach
 //! from the previous point and still reach the end), a tangent run of `GLIDE_KNOT_WINDOW` of the shorter neighbouring
@@ -225,45 +226,121 @@ pub fn karaoke_glide(spans: &[(f64, f64)], words: &[(f64, f64)]) -> Vec<GlidePie
     )
 }
 
-/// One line of the strip for the word glide: its start, its cell's left edge (px along the strip), its first glyph's
-/// centre (px from the cell's left edge) and, for a word-timed line, each word's start and centre (px from the cell).
+/// One line of the continuous strip for the word glide: its start, its cell's left edge (px along the strip), its first
+/// glyph's centre (px from the cell's left edge) and, for a word-timed line, the end of its last word and its last
+/// glyph's centre (px from the cell's left edge).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KnotLine {
     pub start_ms: f64,
     pub cell_start: f64,
     pub anchor: f64,
-    pub word_starts: Vec<f64>,
-    pub word_centres: Vec<f64>,
+    pub end_ms: Option<f64>,
+    pub last_centre: f64,
 }
 
-/// The continuous strip's word glide (`wordStripGlide` in JS): the strip px that sits on the lyric area's centre. One
-/// hard knot per line (its start, its first glyph centre); a word-timed line's later word starts (their centres) guide
-/// it; the last line with words ends on its last word. Rests before the first and after the last knot.
-pub fn word_strip_glide(lines: &[KnotLine]) -> Vec<GlidePiece> {
-    let mut hard = Vec::with_capacity(lines.len() + 1);
-    let mut guides = Vec::with_capacity(lines.len() + 1);
-    for (index, line) in lines.iter().enumerate() {
-        let n = line.word_starts.len().min(line.word_centres.len());
-        let mut mine: Vec<(f64, f64)> = (0..n)
-            .filter(|&i| line.word_starts[i] > line.start_ms)
-            .map(|i| {
-                (
-                    line.word_starts[i],
-                    line.cell_start + line.word_centres[i].max(0.0),
-                )
-            })
-            .collect();
-        hard.push((line.start_ms, line.cell_start + line.anchor.max(0.0)));
-        if index == lines.len() - 1 {
-            if let Some(last) = mine.pop() {
-                guides.push(mine);
-                hard.push(last);
-                continue;
+/// The continuous strip's word glide knots `(lyrics ms, strip px on the lyric area's centre)` (`wordStripKnots` in JS).
+/// Individual word times are ignored: a line has its start (first glyph's centre on the area's centre) and, when it
+/// has word times, its end (the last word's end, last glyph's centre), which is skipped for a one-glyph line or an end
+/// not after the start. Times strictly increase (a later knot at or before an earlier one's time replaces it, so the
+/// later line's start wins an overlap) and values never decrease.
+pub fn word_strip_knots(lines: &[KnotLine]) -> Vec<(f64, f64)> {
+    let mut knots: Vec<(f64, f64)> = Vec::with_capacity(lines.len() * 2);
+    let mut push = |t: f64, v: f64| {
+        if !t.is_finite() || !v.is_finite() {
+            return;
+        }
+        while knots.last().is_some_and(|k| k.0 >= t) {
+            knots.pop();
+        }
+        let v = knots.last().map_or(v, |k| v.max(k.1));
+        knots.push((t, v));
+    };
+    for line in lines {
+        let start = line.cell_start + line.anchor.max(0.0);
+        push(line.start_ms, start);
+        if let Some(end) = line.end_ms {
+            let value = line.cell_start + line.last_centre.max(0.0);
+            if end > line.start_ms && value > start {
+                push(end, value);
             }
         }
-        guides.push(mine);
     }
-    smooth_glide(&hard, &guides, true)
+    knots
+}
+
+/// The monotone C1 cubic Hermite through `count` knots (equal times get tangent 0). Tangents are 0 at the first and
+/// last knot and, inside, the weighted harmonic mean of the neighbouring slopes (Fritsch-Butland; 0 when a slope is not
+/// positive). Returns `[value, speed, c2, c3]`: the value at `position + u` is `value + speed u + c2 u^2 + c3 u^3` up
+/// to the next knot; before the first and after the last knot the value rests.
+pub(crate) fn hermite_cubic(
+    count: usize,
+    time: impl Fn(usize) -> f64,
+    value: impl Fn(usize) -> f64,
+    position: f64,
+) -> [f64; 4] {
+    if count == 0 {
+        return [0.0; 4];
+    }
+    let tangent = |k: usize| {
+        if k == 0 || k >= count - 1 {
+            return 0.0;
+        }
+        let h0 = time(k) - time(k - 1);
+        let h1 = time(k + 1) - time(k);
+        if h0 <= 0.0 || h1 <= 0.0 {
+            return 0.0;
+        }
+        let d0 = (value(k) - value(k - 1)) / h0;
+        let d1 = (value(k + 1) - value(k)) / h1;
+        if d0 <= 0.0 || d1 <= 0.0 {
+            return 0.0;
+        }
+        let w0 = 2.0 * h1 + h0;
+        let w1 = h1 + 2.0 * h0;
+        (w0 + w1) / (w0 / d0 + w1 / d1)
+    };
+    let mut index: isize = -1;
+    while ((index + 1) as usize) < count && time((index + 1) as usize) <= position {
+        index += 1;
+    }
+    if index < 0 {
+        return [value(0), 0.0, 0.0, 0.0];
+    }
+    let i = index as usize;
+    if i >= count - 1 {
+        return [value(count - 1), 0.0, 0.0, 0.0];
+    }
+    let t0 = time(i);
+    let h = time(i + 1) - t0;
+    let v0 = value(i);
+    let m0 = tangent(i);
+    let m1 = tangent(i + 1);
+    let d = (value(i + 1) - v0) / h;
+    let c2 = (3.0 * d - 2.0 * m0 - m1) / h;
+    let c3 = (m0 + m1 - 2.0 * d) / (h * h);
+    let u = position - t0;
+    [
+        v0 + u * (m0 + u * (c2 + u * c3)),
+        m0 + u * (2.0 * c2 + 3.0 * c3 * u),
+        c2 + 3.0 * c3 * u,
+        c3,
+    ]
+}
+
+/// The word glide at lyrics time `time` as `[value, speed, c2, c3]` (see `hermite_cubic`) through `knots`.
+pub fn knot_cubic(knots: &[(f64, f64)], time: f64) -> [f64; 4] {
+    hermite_cubic(knots.len(), |k| knots[k].0, |k| knots[k].1, time)
+}
+
+/// The word glide's value at `time`.
+pub fn knot_value(knots: &[(f64, f64)], time: f64) -> f64 {
+    knot_cubic(knots, time)[0]
+}
+
+/// The next lyrics time after `time` at which the word glide has a knot.
+pub fn next_knot_break(knots: &[(f64, f64)], time: f64) -> Option<f64> {
+    let i = knots.partition_point(|k| k.0 <= time);
+    knots.get(i).map(|k| k.0)
 }
 
 #[cfg(test)]
@@ -370,9 +447,55 @@ mod tests {
         assert_eq!(glide_value(&[], 5.0), 0.0);
     }
 
+    fn line(start: f64, cell: f64, anchor: f64, end: Option<f64>, last: f64) -> KnotLine {
+        KnotLine {
+            start_ms: start,
+            cell_start: cell,
+            anchor,
+            end_ms: end,
+            last_centre: last,
+        }
+    }
+
     #[test]
-    fn dense_words_and_long_gaps_keep_the_band_and_the_knots() {
-        let mut seed = 7u64;
+    fn knots_are_line_starts_and_last_word_ends() {
+        let knots = word_strip_knots(&[
+            line(1000.0, 0.0, 10.0, Some(2000.0), 90.0),
+            // No word times: the start knot only.
+            line(3000.0, 120.0, 8.0, None, 0.0),
+            // One glyph (first centre == last centre): no end knot.
+            line(4000.0, 200.0, 6.0, Some(4500.0), 6.0),
+            // End not after the start: no end knot.
+            line(5000.0, 260.0, 5.0, Some(5000.0), 80.0),
+        ]);
+        assert_eq!(
+            knots,
+            vec![
+                (1000.0, 10.0),
+                (2000.0, 90.0),
+                (3000.0, 128.0),
+                (4000.0, 206.0),
+                (5000.0, 265.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_overlapping_next_start_wins_and_values_never_decrease() {
+        let knots = word_strip_knots(&[
+            line(1000.0, 0.0, 10.0, Some(3000.0), 90.0),
+            line(2500.0, 100.0, 10.0, Some(4000.0), 50.0),
+            line(2500.0, 200.0, 4.0, None, 0.0),
+        ]);
+        assert_eq!(knots, vec![(1000.0, 10.0), (2500.0, 204.0)]);
+        assert!(word_strip_knots(&[]).is_empty());
+    }
+
+    /// The curve hits every knot, never goes backwards, and its speed is continuous (also across line boundaries and
+    /// the gaps between a line's end and the next start), sampled at 120 Hz.
+    #[test]
+    fn the_word_glide_hits_every_knot_and_is_monotone_and_c1() {
+        let mut seed = 11u64;
         let mut rand = || {
             seed = seed
                 .wrapping_mul(6364136223846793005)
@@ -381,74 +504,52 @@ mod tests {
         };
         let mut lines = Vec::new();
         let (mut t, mut cell) = (500.0, 0.0);
-        for i in 0..24 {
-            let n = if i % 5 == 3 { 0 } else { 2 + i % 9 };
-            let start = t;
-            let (mut starts, mut centres, mut x) = (Vec::new(), Vec::new(), 0.0);
-            for _ in 0..n {
-                let w = 8.0 + rand() * 60.0;
-                starts.push(t);
-                centres.push(x + w / 2.0);
-                x += w;
-                t += if rand() < 0.15 {
-                    0.0
-                } else {
-                    10.0 + rand() * 300.0
-                };
-            }
-            let width = x.max(40.0);
-            lines.push(KnotLine {
-                start_ms: start,
-                cell_start: cell,
-                anchor: 9.0,
-                word_starts: starts,
-                word_centres: centres,
-            });
+        for i in 0..30 {
+            let width = 40.0 + rand() * 300.0;
+            let dur = 30.0 + rand() * 4000.0;
+            let words = i % 6 != 4;
+            lines.push(line(
+                t,
+                cell,
+                5.0 + rand() * 5.0,
+                words.then_some(t + dur),
+                width - 5.0,
+            ));
             cell += width + 24.0;
-            // Sometimes a long instrumental gap.
             t += if i % 7 == 6 {
                 20000.0
             } else {
-                100.0 + rand() * 900.0
+                dur * rand() + 50.0 + rand() * 900.0
             };
         }
-        let p = word_strip_glide(&lines);
-        let mut hard: Vec<(f64, f64)> = lines
-            .iter()
-            .map(|l| (l.start_ms, l.cell_start + l.anchor))
-            .collect();
-        let last = lines.last().unwrap();
-        if let Some(i) = (0..last.word_starts.len())
-            .rev()
-            .find(|&i| last.word_starts[i] > last.start_ms)
-        {
-            hard.push((last.word_starts[i], last.cell_start + last.word_centres[i]));
+        let knots = word_strip_knots(&lines);
+        assert!(knots.len() > lines.len());
+        for w in knots.windows(2) {
+            assert!(w[1].0 > w[0].0 && w[1].1 >= w[0].1);
         }
-        check(&p, &hard, true);
-    }
-
-    #[test]
-    fn a_line_level_strip_glide_hits_every_line_start() {
-        let lines: Vec<KnotLine> = [
-            (1000.0, 0.0),
-            (3000.0, 120.0),
-            (3300.0, 200.0),
-            (9000.0, 260.0),
-        ]
-        .iter()
-        .map(|&(t, c)| KnotLine {
-            start_ms: t,
-            cell_start: c,
-            anchor: 10.0,
-            ..Default::default()
-        })
-        .collect();
-        let p = word_strip_glide(&lines);
-        for l in &lines {
-            assert!((glide_value(&p, l.start_ms) - (l.cell_start + 10.0)).abs() < 1e-9);
+        for &(t, v) in &knots {
+            assert!((knot_value(&knots, t) - v).abs() < 1e-9, "knot {t}");
         }
-        assert_eq!(next_glide_break(&p, 0.0), Some(1000.0));
-        assert_eq!(next_glide_break(&p, 9000.0), None);
+        let frame = 1000.0 / 120.0;
+        let (t0, t1) = (knots[0].0 - 100.0, knots[knots.len() - 1].0 + 100.0);
+        let (mut at, mut prev) = (t0, knot_cubic(&knots, t0));
+        while at < t1 {
+            at += frame;
+            let now = knot_cubic(&knots, at);
+            assert!(now[0] >= prev[0] - 1e-9 && now[1] >= -1e-12, "back at {at}");
+            prev = now;
+        }
+        // Exactly at each knot the speed from both sides agrees (C1), also from the end of a line into the next gap.
+        for &(t, _) in &knots {
+            let before = knot_cubic(&knots, t - 1e-6)[1];
+            let after = knot_cubic(&knots, t + 1e-6)[1];
+            assert!(
+                (before - after).abs() < 1e-4,
+                "C1 at {t}: {before} vs {after}"
+            );
+        }
+        assert_eq!(next_knot_break(&knots, 0.0), Some(knots[0].0));
+        assert_eq!(next_knot_break(&knots, knots[knots.len() - 1].0), None);
     }
 
     #[test]

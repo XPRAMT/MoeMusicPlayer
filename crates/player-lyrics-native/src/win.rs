@@ -1223,14 +1223,7 @@ const DEFAULT_ACCENT: [u8; 3] = [0xA9, 0xC3, 0xFE];
 /// word centres (px from the text's left edge; empty for a line without words).
 /// Per lyrics, size and look: main and translation widths, the last glyph centre of the last line, each line's first
 /// glyph centre and each line's word centres.
-type MeasuredLines = (
-    (u32, u32, usize),
-    Vec<f64>,
-    Vec<f64>,
-    f64,
-    Vec<f64>,
-    Vec<Vec<f64>>,
-);
+type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
 struct Win {
     hwnd: HWND,
@@ -2298,7 +2291,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             .collect();
         let sources: Vec<&crate::LyricLine> = lines.iter().map(|l| l.1).collect();
         let lines: Vec<(f64, &str, &str)> = lines.into_iter().map(|l| l.0).collect();
-        // Word-timed lyrics (ADR 0041 option C): the glide's knots are the word starts. Line- and word-timed alike see
+        // Word-timed lyrics (ADR 0041 D10): the glide's knots are the line starts and last-word ends. Line- and word-timed alike see
         // the static continuous mask (experimental) instead of edge fades and line fades. Translations have no word effects: they follow the main row.
         let word_ranges: Vec<Option<Vec<(usize, usize)>>> =
             sources.iter().map(|l| l.word_ranges()).collect();
@@ -2325,18 +2318,10 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         if win.measured.as_ref().is_none_or(|m| m.0 != key) {
             let mut main_widths = Vec::new();
             let mut trans_widths = Vec::new();
-            let mut last_centre = 0.0;
+            let mut last_centres = Vec::new();
             let mut first_centres = Vec::new();
-            let mut word_centres = Vec::new();
-            for (i, (_, text, tr)) in lines.iter().enumerate() {
+            for (_, text, tr) in lines.iter() {
                 let main = text_layout(gfx, text, font, style.line_height)?;
-                word_centres.push(match &word_ranges[i] {
-                    Some(ranges) => word_spans(&main, ranges)
-                        .into_iter()
-                        .map(|(l, r)| ((l + r) / 2.0) as f64)
-                        .collect(),
-                    None => Vec::new(),
-                });
                 main_widths.push(if text.is_empty() {
                     0.0
                 } else {
@@ -2347,30 +2332,22 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 } else {
                     first_glyph_centre(&main) as f64
                 });
-                if i + 1 == lines.len() {
-                    last_centre = if text.is_empty() {
-                        0.0
-                    } else {
-                        last_glyph_centre(&main, text) as f64
-                    };
-                }
+                last_centres.push(if text.is_empty() {
+                    0.0
+                } else {
+                    last_glyph_centre(&main, text) as f64
+                });
                 trans_widths.push(if tr.is_empty() {
                     0.0
                 } else {
                     text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
                 });
             }
-            win.measured = Some((
-                key,
-                main_widths,
-                trans_widths,
-                last_centre,
-                first_centres,
-                word_centres,
-            ));
+            win.measured = Some((key, main_widths, trans_widths, last_centres, first_centres));
         }
-        let (_, main_widths, trans_widths, last_centre, first_centres, word_centres) =
+        let (_, main_widths, trans_widths, last_centres, first_centres) =
             win.measured.clone().unwrap();
+        let last_centre = last_centres.last().copied().unwrap_or(0.0);
         let starts: Vec<f64> = lines.iter().map(|l| l.0).collect();
         let mut layout = rules::layout_strip(&main_widths, &trans_widths, font as f64);
         // Every line, word-timed or not, sits with its first glyph's centre on the area's centre at its start.
@@ -2383,23 +2360,22 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 .iter()
                 .enumerate()
                 .map(|(i, l)| {
-                    let words = &sources[i].words;
-                    let centres = &word_centres[i];
-                    let keep = word_ranges[i].is_some() && centres.len() == words.len();
+                    // Only the line's start and, with word times, the end of its last word: the words themselves
+                    // never shape the glide.
+                    let end_ms = word_ranges[i]
+                        .as_ref()
+                        .and_then(|_| sources[i].words.last())
+                        .map(|w| w.end_ms);
                     rules::KnotLine {
                         start_ms: l.0,
                         cell_start: layout.starts[i],
                         anchor: layout.anchors[i],
-                        word_starts: if keep {
-                            words.iter().map(|w| w.start_ms).collect()
-                        } else {
-                            Vec::new()
-                        },
-                        word_centres: if keep { centres.clone() } else { Vec::new() },
+                        end_ms,
+                        last_centre: last_centres[i],
                     }
                 })
                 .collect();
-            rules::word_strip_glide(&knot_lines)
+            rules::word_strip_knots(&knot_lines)
         });
         let input = plan::StripInput {
             word_glide: knots.as_deref(),

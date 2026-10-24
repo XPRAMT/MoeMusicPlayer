@@ -186,20 +186,35 @@ fn word_rules_match_the_shared_vectors() {
             );
         }
     }
-    let g = &v["stripGlide"];
-    let lines: Vec<KnotLine> = g["lines"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|l| KnotLine {
-            start_ms: f(&l["startMs"]),
-            cell_start: f(&l["cellStart"]),
-            anchor: f(&l["anchor"]),
-            word_starts: fs(&l["wordStarts"]),
-            word_centres: fs(&l["wordCentres"]),
-        })
-        .collect();
-    same_pieces(&word_strip_glide(&lines), &g["pieces"], "strip glide");
+    for c in cases(&v, "stripGlide") {
+        let lines: Vec<KnotLine> = c["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| KnotLine {
+                start_ms: f(&l["startMs"]),
+                cell_start: f(&l["cellStart"]),
+                anchor: f(&l["anchor"]),
+                end_ms: l["endMs"].as_f64(),
+                last_centre: f(&l["lastCentre"]),
+            })
+            .collect();
+        let knots = word_strip_knots(&lines);
+        let expected = pairs(&c["knots"]);
+        assert_eq!(knots.len(), expected.len(), "strip knots");
+        for (a, e) in knots.iter().zip(&expected) {
+            close(a.0, e.0, "strip knot t");
+            close(a.1, e.1, "strip knot v");
+        }
+        for s in c["samples"].as_array().unwrap() {
+            for (x, e) in knot_cubic(&knots, f(&s["t"]))
+                .into_iter()
+                .zip(fs(&s["expected"]))
+            {
+                close(x, e, &s.to_string());
+            }
+        }
+    }
     for c in cases(&v, "centreMask") {
         close(
             centre_mask_opacity(

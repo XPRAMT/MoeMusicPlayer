@@ -44,7 +44,7 @@ const samePieces = (/** @type {number[][]} */ actual, /** @type {number[][]} */ 
 };
 
 test('the smoothed glide (ADR 0041 D10) matches the shared vectors', async () => {
-  const { smoothGlide, glideAt, karaokeGlide, wordStripGlide } = await import('../src/lib/lyrics-glide.js');
+  const { smoothGlide, glideAt, karaokeGlide, wordStripKnots, knotCubic } = await import('../src/lib/lyrics-glide.js');
   for (const c of v.glide) {
     const pieces = smoothGlide(c.hard, c.guides, c.easeEnds);
     samePieces(pieces, c.pieces, JSON.stringify(c.hard));
@@ -55,8 +55,11 @@ test('the smoothed glide (ADR 0041 D10) matches the shared vectors', async () =>
     samePieces(pieces, c.pieces, 'karaoke');
     for (const s of c.samples) close(glideAt(pieces, s.t)[0], s.expected[0], `karaoke ${s.t}`);
   }
-  const strip = wordStripGlide(v.stripGlide.lines);
-  samePieces(strip, v.stripGlide.pieces, 'strip glide');
+  for (const c of v.stripGlide) {
+    const knots = wordStripKnots(c.lines);
+    samePieces(knots, c.knots, 'strip knots');
+    for (const s of c.samples) knotCubic(knots, s.t).forEach((x, k) => close(x, s.expected[k], `strip glide ${s.t}`));
+  }
 });
 
 test('the smoothed glide is monotone, C1, exact on hard knots and inside the speed band', async () => {
@@ -86,4 +89,28 @@ test('the smoothed glide is monotone, C1, exact on hard knots and inside the spe
       if (!eased) assert.ok(speed >= GLIDE_MIN_SPEED * a - 1e-9 && speed <= GLIDE_MAX_SPEED * a + 1e-9, `band at ${t}: ${speed} vs ${a}`);
     }
   }
+});
+
+test('the strip word glide only knows line starts and last-word ends: exact, monotone, C1, overlap-safe', async () => {
+  const { wordStripKnots, knotCubic, knotValue, nextKnotBreak } = await import('../src/lib/lyrics-glide.js');
+  const lines = [
+    { startMs: 1000, cellStart: 0, anchor: 10, endMs: 2000, lastCentre: 90 },
+    { startMs: 3000, cellStart: 120, anchor: 8, endMs: null, lastCentre: 0 },
+    { startMs: 4000, cellStart: 200, anchor: 6, endMs: 4500, lastCentre: 6 },
+    { startMs: 5000, cellStart: 260, anchor: 5, endMs: 7000, lastCentre: 80 },
+    { startMs: 6500, cellStart: 400, anchor: 5, endMs: 9000, lastCentre: 60 },
+  ];
+  const knots = wordStripKnots(lines);
+  assert.deepEqual(knots, [[1000, 10], [2000, 90], [3000, 128], [4000, 206], [5000, 265], [6500, 405], [9000, 460]]);
+  for (const [t, value] of knots) close(knotValue(knots, t), value, `knot ${t}`);
+  let last = -Infinity;
+  for (let t = 900; t < 9100; t += 1000 / 120) {
+    const [value, speed] = knotCubic(knots, t);
+    assert.ok(value >= last - 1e-9 && speed >= -1e-12, `monotone at ${t}`);
+    last = value;
+  }
+  for (const [t] of knots) close(knotCubic(knots, t - 1e-6)[1], knotCubic(knots, t + 1e-6)[1], `C1 at ${t}`);
+  assert.equal(nextKnotBreak(knots, 0), 1000);
+  assert.equal(nextKnotBreak(knots, 9000), null);
+  assert.deepEqual(wordStripKnots([]), []);
 });

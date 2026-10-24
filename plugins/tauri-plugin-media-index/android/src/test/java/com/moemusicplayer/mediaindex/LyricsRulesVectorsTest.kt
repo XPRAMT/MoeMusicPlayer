@@ -120,13 +120,26 @@ class LyricsRulesVectorsTest {
             val pieces = WordLyricsRules.karaokeGlide(c.getJSONArray("spans").pairs(), c.getJSONArray("words").pairs())
             samePieces(pieces, c.getJSONArray("pieces"), "karaoke")
         }
-        val g = vectors.getJSONObject("stripGlide")
-        val linesJson = g.getJSONArray("lines")
-        val lines = (0 until linesJson.length()).map { linesJson.getJSONObject(it) }.map {
-            WordLyricsRules.KnotLine(it.getDouble("startMs"), it.getDouble("cellStart"), it.getDouble("anchor"),
-                it.getJSONArray("wordStarts").doubles(), it.getJSONArray("wordCentres").doubles())
+        for (c in vectors.cases("stripGlide")) {
+            val linesJson = c.getJSONArray("lines")
+            val lines = (0 until linesJson.length()).map { linesJson.getJSONObject(it) }.map {
+                WordLyricsRules.KnotLine(it.getDouble("startMs"), it.getDouble("cellStart"), it.getDouble("anchor"),
+                    if (it.isNull("endMs")) null else it.getDouble("endMs"), it.getDouble("lastCentre"))
+            }
+            val knots = WordLyricsRules.wordStripKnots(lines)
+            val expected = c.getJSONArray("knots").pairs()
+            assertEquals("strip knots", expected.size, knots.size)
+            knots.forEachIndexed { i, k ->
+                assertEquals("strip knot t", expected[i].first, k.first, 1e-9)
+                assertEquals("strip knot v", expected[i].second, k.second, 1e-9)
+            }
+            val samples = c.getJSONArray("samples")
+            for (i in 0 until samples.length()) {
+                val s = samples.getJSONObject(i)
+                val at = WordLyricsRules.knotCubic(knots, s.getDouble("t"))
+                for (k in 0 until 4) assertEquals(s.toString(), s.getJSONArray("expected").getDouble(k), at[k], 1e-9)
+            }
         }
-        samePieces(WordLyricsRules.wordStripGlide(lines), g.getJSONArray("pieces"), "strip glide")
         for (c in vectors.cases("centreMask")) {
             assertEquals(c.toString(), c.getDouble("expected"),
                 WordLyricsRules.centreMaskOpacity(c.getDouble("x"), c.getDouble("areaWidth"), c.getDouble("emPx"),

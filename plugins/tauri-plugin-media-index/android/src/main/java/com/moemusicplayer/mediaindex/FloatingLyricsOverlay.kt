@@ -87,8 +87,8 @@ object FloatingLyricsOverlay {
         val mainWidths: FloatArray,
         val lastGlyphCenters: FloatArray,
         val firstGlyphCenters: FloatArray,
-        /** Word-timed lyrics (ADR 0041 D10): the smoothed word glide; null for line-timed lyrics (the line glide). */
-        val wordKnots: List<WordLyricsRules.GlidePiece>?,
+        /** Word-timed lyrics (ADR 0041 D10): the word glide's knots (lyrics ms, strip px); null for line-timed lyrics (the line glide). */
+        val wordKnots: List<Pair<Double, Double>>?,
     )
     private var strip: Strip? = null
     private var opacityPercent = 100
@@ -742,19 +742,13 @@ object FloatingLyricsOverlay {
             FloatArray(kept.size) { second?.textWidth(translations[it]) ?: 0f },
             main.textWidth("\u3000"),
         )
-        // Word-timed lyrics (ADR 0041 D10): hard knots at the line starts (first glyph centre), the word starts (each
-        // word's centre in its cell) as guides. The translation strip has none of its own: it shares the main offset.
+        // Word-timed lyrics (ADR 0041 D10): knots at the line starts (first glyph centre) and the last words' ends (last
+        // glyph centre); individual words never shape the glide. The translation strip shares the main offset.
         val wordKnots = if (keptLines.any { it.wordRanges != null }) {
-            WordLyricsRules.wordStripGlide(keptLines.mapIndexed { i, line ->
-                val ranges = line.wordRanges
+            WordLyricsRules.wordStripKnots(keptLines.mapIndexed { i, line ->
                 val times = line.wordTimes
-                if (ranges != null && times != null && ranges.size == times.size) {
-                    val centres = main.wordSpans(texts[i], ranges).map { (l, r) -> (l + r) / 2.0 }
-                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(),
-                        DoubleArray(times.size) { times[it].first }, centres.toDoubleArray())
-                } else {
-                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(), DoubleArray(0), DoubleArray(0))
-                }
+                val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
+                WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), firstGlyphCenters[i].toDouble(), end, lastGlyphCenters[i].toDouble())
             })
         } else {
             null
@@ -778,7 +772,7 @@ object FloatingLyricsOverlay {
         }
         val knots = current.wordKnots
         val offset = if (knots != null) {
-            (main.availableWidth() / 2.0 - WordLyricsRules.glideValue(knots, lyricsMs.toDouble())).toFloat()
+            (main.availableWidth() / 2.0 - WordLyricsRules.knotValue(knots, lyricsMs.toDouble())).toFloat()
         } else {
             FloatingLyricsRules.stripOffset(
                 current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,

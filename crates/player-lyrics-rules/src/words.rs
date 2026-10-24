@@ -1,6 +1,6 @@
 //! Word-timed lyrics in the native windows (ADR 0041 option C and the 「無」 recolour).
 //!
-//! Continuous mode: the word glide (`glide::word_strip_glide`) keeps the word being sung near the lyric area's
+//! Continuous mode: the word glide (`glide::word_strip_knots`, `glide::knot_cubic`: line start and last-word end knots) keeps the line being sung near the lyric area's
 //! centre; opacity comes only from a static mask fixed to the lyric area (`centre_mask_stops`). 「無」 mode: the karaoke
 //! edge (`glide::karaoke_glide`) lights the line in the accent colour.
 

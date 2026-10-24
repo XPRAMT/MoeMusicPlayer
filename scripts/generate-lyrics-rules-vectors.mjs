@@ -8,7 +8,7 @@ import {
   lyricsLineOpacityFactor, lyricsStripFinalArrivalMs, nextLyricsStripBreak, lyricsEdgeFadeWidth, lyricsEdgeFadeOpacity,
 } from '../src/lib/lyrics-strip.js';
 import { sungWord, centreMaskOpacity } from '../src/lib/lyrics-word-strip.js';
-import { smoothGlide, glideAt, karaokeGlide, wordStripGlide } from '../src/lib/lyrics-glide.js';
+import { smoothGlide, glideAt, karaokeGlide, wordStripKnots, knotCubic } from '../src/lib/lyrics-glide.js';
 import { findActiveLyricIndex } from '../src/lib/lyrics-window.js';
 import { lyricsDisplayOffsetMs } from '../src/lib/lyrics-timing-offset.js';
 import { getLyricScrollProgress } from '../src/lib/taskbar-lyrics-settings.js';
@@ -128,13 +128,30 @@ const karaokeCases = [
   const pieces = karaokeGlide(/** @type {any} */ (c.spans), /** @type {any} */ (c.words));
   return { ...c, pieces, samples: glideSamples(pieces, sampleTimes(600, 2500)) };
 });
-const stripGlideLines = [
-  { startMs: 1000, cellStart: 0, anchor: 10, wordStarts: [1000, 1300, 1320, 1900], wordCentres: [12, 40, 70, 110] },
-  { startMs: 3000, cellStart: 160, anchor: 9, wordStarts: [], wordCentres: [] },
-  { startMs: 5000, cellStart: 300, anchor: 8, wordStarts: [5000, 5000, 5400, 5450, 6000], wordCentres: [10, 30, 55, 90, 120] },
+// The strip glide ignores word times: only line starts and last-word ends. Cases: ordinary lines, a line without word
+// times, a one-glyph line, an end not after its start, an overlap, and a long gap.
+const stripGlideCases = [
+  [
+    { startMs: 1000, cellStart: 0, anchor: 10, endMs: 2400, lastCentre: 110 },
+    { startMs: 3000, cellStart: 160, anchor: 9, endMs: null, lastCentre: 0 },
+    { startMs: 5000, cellStart: 300, anchor: 8, endMs: 6000, lastCentre: 120 },
+  ],
+  [
+    { startMs: 1000, cellStart: 0, anchor: 10, endMs: 1800, lastCentre: 60 },
+    { startMs: 2000, cellStart: 90, anchor: 5, endMs: 2300, lastCentre: 5 },
+    { startMs: 2500, cellStart: 150, anchor: 6, endMs: 2500, lastCentre: 70 },
+    { startMs: 9000, cellStart: 260, anchor: 6, endMs: 12000, lastCentre: 200 },
+    { startMs: 11000, cellStart: 520, anchor: 7, endMs: 13000, lastCentre: 90 },
+    { startMs: 40000, cellStart: 640, anchor: 7, endMs: 41000, lastCentre: 100 },
+  ],
+  [{ startMs: 500, cellStart: 0, anchor: 4, endMs: 900, lastCentre: 4 }],
 ];
-const stripGlidePieces = wordStripGlide(stripGlideLines);
-const stripGlide = { lines: stripGlideLines, pieces: stripGlidePieces, samples: glideSamples(stripGlidePieces, sampleTimes(800, 6300)) };
+const stripGlide = stripGlideCases.map((lines) => {
+  const knots = wordStripKnots(lines);
+  const from = knots.length > 0 ? knots[0][0] - 100 : 0;
+  const to = knots.length > 0 ? knots[knots.length - 1][0] + 100 : 100;
+  return { lines, knots, samples: sampleTimes(from, to).map((t) => ({ t, expected: knotCubic(knots, t) })) };
+});
 const centreMask = [];
 for (const [areaWidth, emPx, inactive] of [[1000, 40, 0.5], [80, 40, 0.5], [300, 24, 0.05], [1000, 40, 1], [400, 30, 0], [0, 40, 0.5]]) {
   for (const x of [0, 10, 20, 39, 40, 41, 120, 130, 150, 160, 170, 178, 180, 182, 200, 470, 480, 500, 520, 600, 960, areaWidth]) {

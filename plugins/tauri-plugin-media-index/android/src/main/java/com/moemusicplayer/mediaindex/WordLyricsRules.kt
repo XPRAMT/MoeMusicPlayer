@@ -3,8 +3,9 @@ package com.moemusicplayer.mediaindex
 /**
  * Word-timed lyrics in the floating window (ADR 0041 D10), the same rules as `player-lyrics-rules/src/glide.rs`,
  * `words.rs` and `src/lib/lyrics-glide.js` / `lyrics-word-strip.js` (checked against the shared vectors): the smoothed
- * glide (one curve: hard knots exact, soft guides followed within 0.5x-1.5x of each stretch's average speed, monotone,
- * C1) for the strip's word glide and the karaoke edge, and the static centre mask.
+ * glide (hard knots exact, soft guides followed within 0.5x-1.5x of each stretch's average speed, monotone, C1) for the
+ * karaoke edge, the strip's word glide (a monotone C1 cubic through line start / last-word end knots only), and the
+ * static centre mask.
  */
 internal object WordLyricsRules {
     const val GLIDE_MIN_SPEED = 0.5
@@ -16,7 +17,8 @@ internal object WordLyricsRules {
     /** From lyrics time `t` up to the next piece the value is `v + s u + c u^2` (`u` = time - `t`). */
     data class GlidePiece(val t: Double, val v: Double, val s: Double, val c: Double)
 
-    class KnotLine(val startMs: Double, val cellStart: Double, val anchor: Double, val wordStarts: DoubleArray, val wordCentres: DoubleArray)
+    /** One line of the strip: its start, cell left edge, first glyph centre and, with word times, its last word's end and last glyph centre. */
+    class KnotLine(val startMs: Double, val cellStart: Double, val anchor: Double, val endMs: Double?, val lastCentre: Double)
 
     /** `smooth_glide`: hard knots `(t, v)`, guides between knot j and j + 1, eased (speed 0) ends or not. */
     fun smoothGlide(hard: List<Pair<Double, Double>>, guides: List<List<Pair<Double, Double>>>, easeEnds: Boolean): List<GlidePiece> {
@@ -162,27 +164,63 @@ internal object WordLyricsRules {
         return smoothGlide(listOf(start to spans[0].first, end to spans[n - 1].second), listOf(guides), false)
     }
 
-    /** The continuous strip's word glide (`word_strip_glide`): the strip px on the lyric area's centre. */
-    fun wordStripGlide(lines: List<KnotLine>): List<GlidePiece> {
-        val hard = ArrayList<Pair<Double, Double>>()
-        val guides = ArrayList<List<Pair<Double, Double>>>()
-        lines.forEachIndexed { index, line ->
-            val n = minOf(line.wordStarts.size, line.wordCentres.size)
-            val mine = ArrayList<Pair<Double, Double>>()
-            for (i in 0 until n) {
-                if (line.wordStarts[i] > line.startMs) mine.add(line.wordStarts[i] to line.cellStart + maxOf(0.0, line.wordCentres[i]))
-            }
-            hard.add(line.startMs to line.cellStart + maxOf(0.0, line.anchor))
-            if (index == lines.size - 1 && mine.isNotEmpty()) {
-                val last = mine.removeAt(mine.size - 1)
-                guides.add(mine)
-                hard.add(last)
-            } else {
-                guides.add(mine)
+    /** The continuous strip's word glide knots `(lyrics ms, strip px)` (`word_strip_knots`), see [wordStripKnots]. */
+    fun wordStripKnots(lines: List<KnotLine>): List<Pair<Double, Double>> {
+        val knots = ArrayList<Pair<Double, Double>>(lines.size * 2)
+        fun push(t: Double, v: Double) {
+            if (!t.isFinite() || !v.isFinite()) return
+            while (knots.isNotEmpty() && knots[knots.size - 1].first >= t) knots.removeAt(knots.size - 1)
+            knots.add(t to if (knots.isNotEmpty()) maxOf(v, knots[knots.size - 1].second) else v)
+        }
+        for (line in lines) {
+            val start = line.cellStart + maxOf(0.0, line.anchor)
+            push(line.startMs, start)
+            val end = line.endMs
+            if (end != null) {
+                val value = line.cellStart + maxOf(0.0, line.lastCentre)
+                if (end > line.startMs && value > start) push(end, value)
             }
         }
-        return smoothGlide(hard, guides, true)
+        return knots
     }
+
+    /**
+     * The word glide at lyrics time `time` as `[value, speed, c2, c3]` (`knot_cubic`): the monotone C1 cubic Hermite
+     * through [knots] (tangents 0 at the first and last knot, inside the weighted harmonic mean of the neighbouring
+     * slopes, Fritsch-Butland); the value at `time + u` is `value + speed u + c2 u^2 + c3 u^3` up to the next knot.
+     */
+    fun knotCubic(knots: List<Pair<Double, Double>>, time: Double): DoubleArray {
+        val count = knots.size
+        if (count == 0) return doubleArrayOf(0.0, 0.0, 0.0, 0.0)
+        fun tangent(k: Int): Double {
+            if (k == 0 || k >= count - 1) return 0.0
+            val h0 = knots[k].first - knots[k - 1].first
+            val h1 = knots[k + 1].first - knots[k].first
+            if (h0 <= 0 || h1 <= 0) return 0.0
+            val d0 = (knots[k].second - knots[k - 1].second) / h0
+            val d1 = (knots[k + 1].second - knots[k].second) / h1
+            if (d0 <= 0 || d1 <= 0) return 0.0
+            val w0 = 2 * h1 + h0
+            val w1 = h1 + 2 * h0
+            return (w0 + w1) / (w0 / d0 + w1 / d1)
+        }
+        var index = -1
+        while (index + 1 < count && knots[index + 1].first <= time) index++
+        if (index < 0) return doubleArrayOf(knots[0].second, 0.0, 0.0, 0.0)
+        if (index >= count - 1) return doubleArrayOf(knots[count - 1].second, 0.0, 0.0, 0.0)
+        val t0 = knots[index].first
+        val v0 = knots[index].second
+        val h = knots[index + 1].first - t0
+        val m0 = tangent(index)
+        val m1 = tangent(index + 1)
+        val d = (knots[index + 1].second - v0) / h
+        val c2 = (3 * d - 2 * m0 - m1) / h
+        val c3 = (m0 + m1 - 2 * d) / (h * h)
+        val u = time - t0
+        return doubleArrayOf(v0 + u * (m0 + u * (c2 + u * c3)), m0 + u * (2 * c2 + 3 * c3 * u), c2 + 3 * c3 * u, c3)
+    }
+
+    fun knotValue(knots: List<Pair<Double, Double>>, time: Double): Double = knotCubic(knots, time)[0]
 
     /**
      * The static continuous-mode mask's gradient stops `(offset 0..1, opacity)` (`centre_mask_stops`, experimental):
