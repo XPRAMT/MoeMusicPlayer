@@ -1115,4 +1115,34 @@ mod unreachable_server_tests {
         assert!(matches!(fs.stat("missing"), Err(RemoteError::NotFound)));
         assert_eq!(switch.calls.load(Ordering::SeqCst), 2);
     }
+
+    /// The real protocol clients against a port nothing listens on (as for a host that is switched off): the failure
+    /// is a network error, so the first use pays for one attempt and the backoff answers every later one at once.
+    #[test]
+    fn a_closed_port_is_a_network_error_that_trips_the_guard_for_smb_and_webdav() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let data_dir = std::env::temp_dir().join(format!("moe-closed-port-{}", std::process::id()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        for protocol in [RemoteProtocol::Smb, RemoteProtocol::Webdav] {
+            let mut down = account("closed", "127.0.0.1");
+            down.protocol = protocol;
+            down.port = Some(port);
+            let connections = RemoteConnections::default();
+            let attempt = |connections: &RemoteConnections| {
+                connections
+                    .connect_with(&down, || super::connect_account(&data_dir, &down))
+                    .and_then(|fs| fs.list("").map(|_| ()))
+            };
+            let first = attempt(&connections);
+            assert!(matches!(first, Err(RemoteError::Network(_))), "{protocol:?}: {first:?}");
+            let started = Instant::now();
+            let second = connections.connect_with(&down, || panic!("must not connect again"));
+            assert!(matches!(second, Err(RemoteError::Network(_))), "{protocol:?}");
+            assert!(started.elapsed() < Duration::from_millis(50), "{protocol:?}: {:?}", started.elapsed());
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
 }

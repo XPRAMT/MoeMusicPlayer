@@ -84,11 +84,25 @@ fn classify(error: &smb::Error) -> RemoteError {
         E::MissingPermissions(_) => RemoteError::Auth,
         E::NotFound(_) => RemoteError::NotFound,
         E::SspiError(_) | E::UnsupportedAuthenticationMechanism(_) => RemoteError::Auth,
+        // A failed connect (no route, refused, unresolvable, timed out) arrives wrapped in the transport's error.
+        E::TransportError(inner) => classify_transport(inner, error),
         E::IoError(_)
         | E::ConnectionStopped
         | E::OperationTimeout(..)
         | E::ChannelRecvError(_)
         | E::UnexpectedMessageId(..) => RemoteError::Network(error.to_string()),
+        _ => RemoteError::Protocol(error.to_string()),
+    }
+}
+
+/// A transport failure is `Network` when the host could not be reached or the link broke; a malformed or misused
+/// transport (bad framing, double connect) is `Protocol`.
+fn classify_transport(inner: &smb::transport::TransportError, error: &smb::Error) -> RemoteError {
+    use smb::transport::TransportError as T;
+    match inner {
+        T::IoError(_) | T::NotConnected | T::Timeout(_) | T::InvalidAddress(_) => {
+            RemoteError::Network(error.to_string())
+        }
         _ => RemoteError::Protocol(error.to_string()),
     }
 }
@@ -358,9 +372,15 @@ impl Link {
         let port = settings.port.unwrap_or(crate::smb_transport::NoDelayTransport::DEFAULT_PORT);
         let address = (settings.host.as_str(), port)
             .to_socket_addrs()
-            .map_err(|error| smb::Error::InvalidArgument(error.to_string()))?
+            // A name that does not resolve is the server being unreachable, not a bad argument.
+            .map_err(smb::Error::IoError)?
             .next()
-            .ok_or_else(|| smb::Error::InvalidArgument("the server name has no address".to_owned()))?;
+            .ok_or_else(|| {
+                smb::Error::IoError(std::io::Error::new(
+                    std::io::ErrorKind::AddrNotAvailable,
+                    "the server name has no address",
+                ))
+            })?;
         let health = crate::smb_transport::LinkHealth::new();
         let mut transport =
             crate::smb_transport::NoDelayTransport::with_health(CONNECT_TIMEOUT, std::sync::Arc::clone(&health));
@@ -946,6 +966,56 @@ mod tests {
             classify(&E::ConnectionStopped),
             RemoteError::Network(_)
         ));
+    }
+
+    #[test]
+    fn connect_failures_are_network_errors() {
+        use smb::transport::TransportError as T;
+        use smb::Error as E;
+        let no_route = std::io::Error::from_raw_os_error(if cfg!(windows) { 10065 } else { 113 });
+        for error in [
+            E::TransportError(T::IoError(no_route)),
+            E::TransportError(T::NotConnected),
+            E::TransportError(T::Timeout(std::time::Duration::from_secs(5))),
+            E::TransportError(T::InvalidAddress("x".to_owned())),
+        ] {
+            assert!(matches!(classify(&error), RemoteError::Network(_)), "{error}");
+        }
+        assert!(matches!(
+            classify(&E::TransportError(T::InvalidMessage)),
+            RemoteError::Protocol(_)
+        ));
+        assert!(matches!(
+            classify(&E::TransportError(T::AlreadyConnected)),
+            RemoteError::Protocol(_)
+        ));
+    }
+
+    #[test]
+    fn a_no_route_connect_failure_reads_as_the_server_being_unreachable() {
+        use smb::transport::TransportError as T;
+        let no_route = std::io::Error::from_raw_os_error(if cfg!(windows) { 10065 } else { 113 });
+        let error = std::io::Error::from(classify(&smb::Error::TransportError(T::IoError(no_route))));
+        assert!(player_core::is_remote_network_error(&error));
+        assert!(player_core::is_remote_unreachable(&error.to_string()), "{error}");
+    }
+
+    #[test]
+    fn an_unreachable_port_is_a_network_error() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let settings = SmbSettings {
+            host: "127.0.0.1".into(),
+            port: Some(port),
+            share: "s".into(),
+            base_path: String::new(),
+            user: "u".into(),
+            password: "p".to_owned().into(),
+        };
+        let error = SmbFs::new_client_bounded(&settings).err().expect("nothing listens");
+        assert!(matches!(error, RemoteError::Network(_)), "{error:?}");
     }
 
     #[test]
