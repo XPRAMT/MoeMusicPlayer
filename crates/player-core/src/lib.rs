@@ -59,7 +59,7 @@ pub use sync::{
 pub use windows_locator::windows_locator_key;
 
 pub use remote::{
-    begin_load, end_load, is_remote_link_lost, is_remote_network_error, is_remote_unreachable,
+    begin_load, begin_load_abandonable, end_load, is_remote_link_lost, is_remote_network_error, is_remote_unreachable,
     load_cancel, read_remote_file_capped, read_remote_file_capped_checked, remote_content,
     remote_sibling, remote_with_extension, running_load_superseded, set_remote_content,
     LoadCancel, LoadCounter, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream,

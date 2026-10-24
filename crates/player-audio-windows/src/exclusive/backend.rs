@@ -358,7 +358,16 @@ impl ExclusiveBackend {
 }
 
 impl AudioBackend for ExclusiveBackend {
+    fn probe(&self) -> Option<crate::TrackProbe> {
+        Some(crate::rodio_backend::decoder_probe(Arc::clone(
+            &self.config.dsd,
+        )))
+    }
+
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+        // Opening a track gives up the one that is loaded, so the new file is checked first: a file that cannot be
+        // opened leaves the playing track alone (ADR 0036).
+        open_decoder_with(path, &self.config.dsd)?;
         self.reset_for_load();
         self.open(path, Duration::ZERO)
     }

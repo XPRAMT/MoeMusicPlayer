@@ -40,6 +40,24 @@ pub(crate) fn link_lost_pending() -> bool {
     LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).is_some()
 }
 
+thread_local! {
+    /// The calling thread is only checking that a file opens (a [`crate::TrackProbe`]): its reads are not the playing
+    /// track's, so a failure of theirs must not be mistaken for the playing track's stream giving up.
+    static PROBING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `check` as a probe on the calling thread (see [`PROBING`]).
+pub(crate) fn probing<T>(check: impl FnOnce() -> T) -> T {
+    let before = PROBING.with(|flag| flag.replace(true));
+    let result = check();
+    PROBING.with(|flag| flag.set(before));
+    result
+}
+
+fn is_probing() -> bool {
+    PROBING.with(std::cell::Cell::get)
+}
+
 /// A shared remote stream as the engine's `Read + Seek + Send`.
 struct Stream(Box<dyn player_core::RemoteStream>);
 
@@ -48,7 +66,7 @@ impl Read for Stream {
         let result = self.0.read(buf);
         if let Err(error) = &result {
             let message = error.to_string();
-            if player_core::is_remote_link_lost(&message) {
+            if player_core::is_remote_link_lost(&message) && !is_probing() {
                 *LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
             }
         }
@@ -80,8 +98,13 @@ pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
     let main = content
         .open_streaming(source_id, &relative)
         .map_err(|error| failed(error.to_string()))?;
-    // A new track starts without the failure of an earlier one.
-    LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).take();
+    // A new track starts without the failure of an earlier one (a probe is not the start of a track).
+    if !is_probing() {
+        LINK_LOST
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+    }
     // A hybrid WavPack file is lossless with its `.wvc` correction file next to it.
     let correction = if relative.to_ascii_lowercase().ends_with(".wv") {
         content

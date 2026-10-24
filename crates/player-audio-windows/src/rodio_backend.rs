@@ -675,6 +675,10 @@ impl Drop for RodioBackend {
 }
 
 impl AudioBackend for RodioBackend {
+    fn probe(&self) -> Option<crate::TrackProbe> {
+        Some(decoder_probe(Arc::clone(&self.config.dsd)))
+    }
+
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
         let decoder = open_decoder_with(path, &self.config.dsd)?;
         let plan = self.plan_for(path, &decoder);
@@ -1667,6 +1671,11 @@ fn try_seek_with_deadline(
 #[cfg(test)]
 fn open_decoder(path: &Path) -> Result<AudioDecoder, AudioError> {
     open_decoder_with(path, &DsdOptions::default())
+}
+
+/// The check of a file before it is loaded: its decoder opens (headers read, format recognised), then it is dropped.
+pub(crate) fn decoder_probe(dsd: Arc<DsdOptions>) -> crate::TrackProbe {
+    Arc::new(move |path| open_decoder_with(path, &dsd).map(drop))
 }
 
 pub(crate) fn open_decoder_with(path: &Path, dsd: &DsdOptions) -> Result<AudioDecoder, AudioError> {

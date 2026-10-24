@@ -66,11 +66,19 @@ struct RunningLoad {
     number: u64,
     requested: Arc<AtomicU64>,
     running: Arc<AtomicBool>,
+    /// Set by whoever gives up waiting for the load (a deadline, a stop): its reads end like a replaced load's.
+    abandoned: Arc<AtomicBool>,
 }
 
 impl RunningLoad {
-    fn superseded(number: u64, requested: &AtomicU64, running: &AtomicBool) -> bool {
-        running.load(Ordering::SeqCst) && requested.load(Ordering::SeqCst) > number
+    fn superseded(
+        number: u64,
+        requested: &AtomicU64,
+        running: &AtomicBool,
+        abandoned: &AtomicBool,
+    ) -> bool {
+        running.load(Ordering::SeqCst)
+            && (abandoned.load(Ordering::SeqCst) || requested.load(Ordering::SeqCst) > number)
     }
 }
 
@@ -82,6 +90,15 @@ thread_local! {
 /// The calling thread (the worker) starts the load numbered `number` of `counter`'s player. `false` when a newer one
 /// was already asked for: this one is not worth starting.
 pub fn begin_load(counter: &LoadCounter, number: u64) -> bool {
+    begin_load_abandonable(counter, number, Arc::new(AtomicBool::new(false)))
+}
+
+/// As [`begin_load`]; the streams of the load also give up once `abandoned` is set.
+pub fn begin_load_abandonable(
+    counter: &LoadCounter,
+    number: u64,
+    abandoned: Arc<AtomicBool>,
+) -> bool {
     if counter.0.load(Ordering::SeqCst) > number {
         return false;
     }
@@ -90,6 +107,7 @@ pub fn begin_load(counter: &LoadCounter, number: u64) -> bool {
             number,
             requested: Arc::clone(&counter.0),
             running: Arc::new(AtomicBool::new(true)),
+            abandoned,
         });
     });
     true
@@ -108,7 +126,7 @@ pub fn end_load() {
 pub fn running_load_superseded() -> bool {
     RUNNING_LOAD.with(|slot| {
         slot.borrow().as_ref().is_some_and(|load| {
-            RunningLoad::superseded(load.number, &load.requested, &load.running)
+            RunningLoad::superseded(load.number, &load.requested, &load.running, &load.abandoned)
         })
     })
 }
@@ -118,12 +136,14 @@ pub fn running_load_superseded() -> bool {
 pub fn load_cancel() -> Option<LoadCancel> {
     RUNNING_LOAD.with(|slot| {
         slot.borrow().as_ref().map(|load| {
-            let (number, requested, running) = (
+            let (number, requested, running, abandoned) = (
                 load.number,
                 Arc::clone(&load.requested),
                 Arc::clone(&load.running),
+                Arc::clone(&load.abandoned),
             );
-            Arc::new(move || RunningLoad::superseded(number, &requested, &running)) as LoadCancel
+            Arc::new(move || RunningLoad::superseded(number, &requested, &running, &abandoned))
+                as LoadCancel
         })
     })
 }

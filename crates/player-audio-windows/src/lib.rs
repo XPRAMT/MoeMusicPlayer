@@ -457,6 +457,21 @@ pub enum AudioError {
     RemoteLinkLost(String),
 }
 
+impl AudioError {
+    /// The error of a load that a newer choice of track replaced (nothing is reported for it).
+    pub fn superseded() -> Self {
+        Self::FileOpen {
+            path: PathBuf::new(),
+            message: player_core::LOAD_SUPERSEDED.to_owned(),
+        }
+    }
+
+    /// Whether this is [`superseded`](Self::superseded).
+    pub fn is_superseded(&self) -> bool {
+        matches!(self, Self::FileOpen { message, .. } if message == player_core::LOAD_SUPERSEDED)
+    }
+}
+
 impl fmt::Display for AudioError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -503,9 +518,20 @@ pub enum OutputStatus {
 /// Synchronous backend operations. Implementations are created and called only
 /// by the worker thread, so an application can replace Rodio without changing
 /// the IPC-facing handle.
+/// Checks, on a helper thread, that a file can be opened the way [`AudioBackend::load`] will open it. It must not touch
+/// the track that is loaded.
+pub type TrackProbe = Arc<dyn Fn(&Path) -> Result<(), AudioError> + Send + Sync>;
+
 pub trait AudioBackend: 'static {
-    /// Load a file and leave it ready but paused. Return its duration if known.
+    /// Load a file and leave it ready but paused. Return its duration if known. When the file cannot be opened the
+    /// track that was loaded before stays as it was (a track is switched only after the new one is open, ADR 0036).
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError>;
+    /// The check the worker runs on a helper thread before it asks this backend to [`load`](Self::load) a file, so the
+    /// current track keeps playing and the worker keeps answering while a file on a server is opened. `None`: the
+    /// worker loads directly.
+    fn probe(&self) -> Option<TrackProbe> {
+        None
+    }
     fn play(&mut self) -> Result<(), AudioError>;
     fn pause(&mut self) -> Result<(), AudioError>;
     fn stop(&mut self) -> Result<(), AudioError>;
@@ -827,6 +853,12 @@ impl PlayerHandle {
             return Err(AudioError::InvalidVolume);
         }
         self.enqueue(Command::SetVolume(volume))
+    }
+
+    /// How many loads have been asked for so far. A walk over the queue compares it before each entry, so it stops
+    /// once the user has chosen a track of their own.
+    pub fn loads_requested(&self) -> u64 {
+        self.inner.loads.requested()
     }
 
     pub fn request_play(&self) -> Result<CommandTicket, AudioError> {
@@ -1263,6 +1295,9 @@ fn worker_loop(
         resampling_mode: None,
     };
 
+    // A load whose file is being checked on a helper thread while the current track keeps playing (ADR 0036).
+    let mut pending: Option<PendingLoad> = None;
+
     loop {
         match commands.recv_timeout(POSITION_POLL_INTERVAL) {
             Ok(queued) if matches!(queued.command, Command::Shutdown) => {
@@ -1278,46 +1313,67 @@ fn worker_loop(
                 if let Command::SetResampling(mode) = &queued.command {
                     supervisor.resampling_mode = Some(*mode);
                 }
-                // A load that a newer one has already replaced is not started; one that is replaced while it opens a
-                // remote file gives up at its next read (`player_core::begin_load`).
-                let superseded_before_start =
-                    queued.load_number != 0 && !player_core::begin_load(&loads, queued.load_number);
-                let result = if superseded_before_start {
-                    Err(AudioError::FileOpen {
-                        path: PathBuf::new(),
-                        message: player_core::LOAD_SUPERSEDED.to_owned(),
-                    })
-                } else if backend.is_none() && supervisor.recovery.is_some() {
-                    handle_command_during_recovery(
-                        queued.command,
+                let queued = if queued.load_number != 0 {
+                    // The newest choice of track replaces the one whose file is still being checked.
+                    if let Some(older) = pending.take() {
+                        older.abandon_with(AudioError::superseded());
+                    }
+                    match start_probe(queued, &backend, &supervisor, &loads) {
+                        Ok(started) => {
+                            pending = Some(started);
+                            None
+                        }
+                        Err(queued) => Some(queued),
+                    }
+                } else {
+                    if matches!(queued.command, Command::Stop) {
+                        // Stopping ends the choice of a track whose file was still being checked.
+                        if let Some(older) = pending.take() {
+                            older.abandon_with(AudioError::superseded());
+                        }
+                    }
+                    Some(queued)
+                };
+                if let Some(queued) = queued {
+                    run_queued(
+                        queued,
+                        &loads,
                         &mut supervisor,
                         &mut backend,
                         &mut current_path,
                         &mut meter,
                         &snapshot,
                         &events,
-                    )
-                } else {
-                    handle_command(
-                        queued.command,
+                    );
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if let Some(waiting) = pending.take() {
+            match waiting.poll() {
+                PendingPoll::Waiting(still) => pending = Some(still),
+                // The file opens: only now does the player switch to it.
+                PendingPoll::Opens(queued) => {
+                    sample_before_command(&mut meter, &mut backend, &snapshot);
+                    run_queued(
+                        queued,
+                        &loads,
+                        &mut supervisor,
                         &mut backend,
                         &mut current_path,
                         &mut meter,
                         &snapshot,
                         &events,
-                    )
-                };
-                if queued.load_number != 0 {
-                    player_core::end_load();
+                    );
                 }
-                update_position(&mut backend, &snapshot, &events, &mut meter);
-                if let Some(acknowledgement) = queued.acknowledgement {
-                    let response = result.map(|()| read_snapshot(&snapshot));
-                    let _ = acknowledgement.try_send(response);
+                // The file does not open: nothing changes, only the caller is told.
+                PendingPoll::Failed(queued, error) => {
+                    if let Some(acknowledgement) = queued.acknowledgement {
+                        let _ = acknowledgement.try_send(Err(error));
+                    }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         supervise_output(
             &mut supervisor,
@@ -1328,6 +1384,171 @@ fn worker_loop(
             &events,
         );
         update_position(&mut backend, &snapshot, &events, &mut meter);
+    }
+}
+
+/// Run one queued command on the worker and answer its ticket. A load is numbered (`LoadCounter`).
+#[allow(clippy::too_many_arguments)]
+fn run_queued(
+    queued: QueuedCommand,
+    loads: &player_core::LoadCounter,
+    supervisor: &mut OutputSupervisor,
+    backend: &mut Option<Box<dyn AudioBackend>>,
+    current_path: &mut Option<PathBuf>,
+    meter: &mut PlaybackMeter,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+) {
+    // A load that a newer one has already replaced is not started; one that is replaced while it opens a
+    // remote file gives up at its next read (`player_core::begin_load`).
+    let superseded_before_start =
+        queued.load_number != 0 && !player_core::begin_load(loads, queued.load_number);
+    let result = if superseded_before_start {
+        Err(AudioError::superseded())
+    } else if backend.is_none() && supervisor.recovery.is_some() {
+        handle_command_during_recovery(
+            queued.command,
+            supervisor,
+            backend,
+            current_path,
+            meter,
+            snapshot,
+            events,
+        )
+    } else {
+        handle_command(
+            queued.command,
+            backend,
+            current_path,
+            meter,
+            snapshot,
+            events,
+        )
+    };
+    if queued.load_number != 0 {
+        player_core::end_load();
+    }
+    update_position(backend, snapshot, events, meter);
+    if let Some(acknowledgement) = queued.acknowledgement {
+        let response = result.map(|()| read_snapshot(snapshot));
+        let _ = acknowledgement.try_send(response);
+    }
+}
+
+/// The longest a file on a server is given to open before the choice of it is dropped (a server that neither answers
+/// nor refuses). The application waits a little longer for the answer.
+#[cfg(not(test))]
+const LOAD_PREPARE_DEADLINE: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const LOAD_PREPARE_DEADLINE: Duration = Duration::from_millis(300);
+
+/// A load of a remote file whose check runs on a helper thread: the worker goes on serving the track that plays, and
+/// switches only once the file has been opened (ADR 0036).
+struct PendingLoad {
+    queued: QueuedCommand,
+    outcome: Receiver<Result<(), AudioError>>,
+    started: Instant,
+    /// Ends the reads of the helper thread when the choice is dropped.
+    abandoned: Arc<AtomicBool>,
+}
+
+enum PendingPoll {
+    Waiting(PendingLoad),
+    Opens(QueuedCommand),
+    Failed(QueuedCommand, AudioError),
+}
+
+fn load_path(command: &Command) -> Option<&Path> {
+    match command {
+        Command::Load(path, _)
+        | Command::LoadAndPlay(path, _)
+        | Command::LoadPreservingPlayback(path, _) => Some(path),
+        _ => None,
+    }
+}
+
+/// Check a remote file on a helper thread. Gives the command back when it is to be run directly (a local file, no
+/// backend to ask, or an output being rebuilt).
+fn start_probe(
+    queued: QueuedCommand,
+    backend: &Option<Box<dyn AudioBackend>>,
+    supervisor: &OutputSupervisor,
+    loads: &player_core::LoadCounter,
+) -> Result<PendingLoad, QueuedCommand> {
+    let Some(path) = load_path(&queued.command).filter(|path| remote_input::is_remote(path)) else {
+        return Err(queued);
+    };
+    let probe = match backend.as_ref().map(|backend| backend.probe()) {
+        Some(Some(probe)) if supervisor.recovery.is_none() => probe,
+        _ => return Err(queued),
+    };
+    let (outcome_tx, outcome_rx) = mpsc::sync_channel(1);
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let (path, number, counter, flag) = (
+        path.to_path_buf(),
+        queued.load_number,
+        loads.clone(),
+        Arc::clone(&abandoned),
+    );
+    let spawned = thread::Builder::new()
+        .name("moe-audio-probe".to_owned())
+        .spawn(move || {
+            let result = if player_core::begin_load_abandonable(&counter, number, flag) {
+                let result = remote_input::probing(|| probe(&path));
+                player_core::end_load();
+                result
+            } else {
+                Err(AudioError::superseded())
+            };
+            let _ = outcome_tx.send(result);
+        });
+    match spawned {
+        Ok(_) => Ok(PendingLoad {
+            queued,
+            outcome: outcome_rx,
+            started: Instant::now(),
+            abandoned,
+        }),
+        Err(_) => Err(queued),
+    }
+}
+
+impl PendingLoad {
+    /// Answer the load with `error` and drop it; its helper thread stops reading.
+    fn abandon_with(self, error: AudioError) {
+        self.abandoned.store(true, AtomicOrdering::SeqCst);
+        if let Some(acknowledgement) = self.queued.acknowledgement {
+            let _ = acknowledgement.try_send(Err(error));
+        }
+    }
+
+    fn poll(self) -> PendingPoll {
+        match self.outcome.try_recv() {
+            Ok(Ok(())) => PendingPoll::Opens(self.queued),
+            Ok(Err(error)) => PendingPoll::Failed(self.queued, error),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let error = AudioError::FileOpen {
+                    path: load_path(&self.queued.command)
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default(),
+                    message: "the file check stopped unexpectedly".to_owned(),
+                };
+                PendingPoll::Failed(self.queued, error)
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                if self.started.elapsed() < LOAD_PREPARE_DEADLINE {
+                    return PendingPoll::Waiting(self);
+                }
+                self.abandoned.store(true, AtomicOrdering::SeqCst);
+                let error = AudioError::FileOpen {
+                    path: load_path(&self.queued.command)
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default(),
+                    message: player_core::REMOTE_UNREACHABLE.to_owned(),
+                };
+                PendingPoll::Failed(self.queued, error)
+            }
+        }
     }
 }
 
@@ -1604,6 +1825,55 @@ fn handle_command_during_recovery(
     }
 }
 
+/// Switch to another track (ADR 0036): the file is opened first, and only a successful open replaces what was loaded.
+/// A file that cannot be opened changes nothing: the track that was loaded keeps playing, the snapshot (state, position,
+/// duration, last error) stays as it was, and the listening accounting goes on. Only when nothing was loaded does the
+/// snapshot say `Loading` while the file opens.
+fn load_track(
+    backend: &mut Box<dyn AudioBackend>,
+    current_path: &mut Option<PathBuf>,
+    meter: &mut PlaybackMeter,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+    path: PathBuf,
+    accounting_id: Option<PlaybackAccountingId>,
+) -> Result<(), AudioError> {
+    let prior = read_snapshot(snapshot);
+    let nothing_loaded = current_path.is_none();
+    if nothing_loaded {
+        update_snapshot(snapshot, events, |state| {
+            state.state = PlaybackState::Loading;
+            state.position = Duration::ZERO;
+            state.duration = None;
+            state.last_error = None;
+        });
+    }
+    match backend.load(&path) {
+        Ok(duration) => {
+            *current_path = Some(path);
+            meter.activate(accounting_id, duration);
+            update_snapshot(snapshot, events, |state| {
+                state.state = PlaybackState::Ready;
+                state.position = Duration::ZERO;
+                state.duration = duration;
+                state.last_error = None;
+            });
+            Ok(())
+        }
+        Err(error) => {
+            if nothing_loaded {
+                update_snapshot(snapshot, events, |state| {
+                    state.state = prior.state;
+                    state.position = prior.position;
+                    state.duration = prior.duration;
+                    state.last_error = prior.last_error.clone();
+                });
+            }
+            Err(error)
+        }
+    }
+}
+
 fn handle_command(
     command: Command,
     backend: &mut Option<Box<dyn AudioBackend>>,
@@ -1633,58 +1903,26 @@ fn handle_command(
 
     match command {
         Command::Load(path, accounting_id) => {
-            update_snapshot(snapshot, events, |state| {
-                state.state = PlaybackState::Loading;
-                state.position = Duration::ZERO;
-                state.duration = None;
-                state.last_error = None;
-            });
-            match backend.load(&path) {
-                Ok(duration) => {
-                    *current_path = Some(path);
-                    meter.activate(accounting_id, duration);
-                    update_snapshot(snapshot, events, |state| {
-                        state.state = PlaybackState::Ready;
-                        state.position = Duration::ZERO;
-                        state.duration = duration;
-                        state.last_error = None;
-                    });
-                }
-                Err(error) => {
-                    let _ = backend.stop();
-                    *current_path = None;
-                    meter.activate(None, None);
-                    report_load_failure(snapshot, events, &error);
-                    return Err(error);
-                }
-            }
+            load_track(
+                backend,
+                current_path,
+                meter,
+                snapshot,
+                events,
+                path,
+                accounting_id,
+            )?;
         }
         Command::LoadAndPlay(path, accounting_id) => {
-            update_snapshot(snapshot, events, |state| {
-                state.state = PlaybackState::Loading;
-                state.position = Duration::ZERO;
-                state.duration = None;
-                state.last_error = None;
-            });
-            match backend.load(&path) {
-                Ok(duration) => {
-                    *current_path = Some(path);
-                    meter.activate(accounting_id, duration);
-                    update_snapshot(snapshot, events, |state| {
-                        state.state = PlaybackState::Ready;
-                        state.position = Duration::ZERO;
-                        state.duration = duration;
-                        state.last_error = None;
-                    });
-                }
-                Err(error) => {
-                    let _ = backend.stop();
-                    *current_path = None;
-                    meter.activate(None, None);
-                    report_load_failure(snapshot, events, &error);
-                    return Err(error);
-                }
-            }
+            load_track(
+                backend,
+                current_path,
+                meter,
+                snapshot,
+                events,
+                path,
+                accounting_id,
+            )?;
             if let Err(error) = backend.play() {
                 set_error(snapshot, events, error.clone());
                 return Err(error);
@@ -1696,31 +1934,15 @@ fn handle_command(
             // (such as Pause) have completed. A Tauri-side snapshot would race
             // with the bounded actor queue.
             let prior_state = read_snapshot(snapshot).state;
-            update_snapshot(snapshot, events, |state| {
-                state.state = PlaybackState::Loading;
-                state.position = Duration::ZERO;
-                state.duration = None;
-                state.last_error = None;
-            });
-            match backend.load(&path) {
-                Ok(duration) => {
-                    *current_path = Some(path);
-                    meter.activate(accounting_id, duration);
-                    update_snapshot(snapshot, events, |state| {
-                        state.state = PlaybackState::Ready;
-                        state.position = Duration::ZERO;
-                        state.duration = duration;
-                        state.last_error = None;
-                    });
-                }
-                Err(error) => {
-                    let _ = backend.stop();
-                    *current_path = None;
-                    meter.activate(None, None);
-                    report_load_failure(snapshot, events, &error);
-                    return Err(error);
-                }
-            }
+            load_track(
+                backend,
+                current_path,
+                meter,
+                snapshot,
+                events,
+                path,
+                accounting_id,
+            )?;
             if matches!(prior_state, PlaybackState::Playing | PlaybackState::Empty) {
                 if let Err(error) = backend.play() {
                     set_error(snapshot, events, error.clone());
@@ -2214,19 +2436,6 @@ fn set_state(
     state: PlaybackState,
 ) {
     update_snapshot(snapshot, events, |snapshot| snapshot.state = state);
-}
-
-/// A load failed. When a newer one has replaced it nothing is reported (the user already chose another track).
-fn report_load_failure(
-    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
-    events: &SyncSender<AudioEvent>,
-    error: &AudioError,
-) {
-    if player_core::running_load_superseded() {
-        set_state(snapshot, events, PlaybackState::Empty);
-    } else {
-        set_error(snapshot, events, error.clone());
-    }
 }
 
 fn set_error(
@@ -3402,29 +3611,21 @@ mod tests {
     }
 
     #[test]
-    fn decoder_errors_are_reported_and_a_failed_load_is_not_playable() {
+    fn a_load_that_fails_with_nothing_loaded_changes_nothing_and_is_not_playable() {
         let player = PlayerHandle::with_backend_factory(|| {
             Ok(Box::new(FailingLoadBackend) as Box<dyn AudioBackend>)
         })
         .unwrap();
         wait_for(&player, PlaybackState::Empty);
-        player.load(PathBuf::from("unsupported.file")).unwrap();
-        wait_for(&player, PlaybackState::Error);
-        assert!(matches!(
-            player.snapshot().last_error,
-            Some(AudioError::UnsupportedFormat { .. })
-        ));
-        player.play().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline
-            && player.snapshot().last_error != Some(AudioError::NoTrackLoaded)
-        {
-            thread::sleep(Duration::from_millis(5));
-        }
-        assert_eq!(
-            player.snapshot().last_error,
-            Some(AudioError::NoTrackLoaded)
-        );
+        let failed = player
+            .request_load_preserving_playback(PathBuf::from("unsupported.file"))
+            .unwrap()
+            .wait(Duration::from_secs(1));
+        assert!(matches!(failed, Err(AudioError::UnsupportedFormat { .. })));
+        // The failed choice changed nothing: no error state, no error standing in the snapshot.
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.state, PlaybackState::Empty);
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
         assert_eq!(
             player.request_play().unwrap().wait(Duration::from_secs(1)),
             Err(AudioError::NoTrackLoaded)
@@ -3564,6 +3765,240 @@ mod tests {
         let snapshot = player.snapshot();
         assert_eq!(snapshot.state, PlaybackState::Playing);
         assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    }
+
+    /// A backend whose `bad*` files cannot be opened (leaving what is loaded alone, as every backend must), and whose
+    /// remote files are checked by a probe: `moeremote://*/slow*` waits for the network until the choice is dropped,
+    /// `moeremote://*/dead*` fails like an unreachable server, any other remote file opens.
+    struct ProbedBackend {
+        loaded: Option<(String, Instant)>,
+        loads: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl AudioBackend for ProbedBackend {
+        fn probe(&self) -> Option<TrackProbe> {
+            Some(Arc::new(|path: &Path| {
+                let name = path.to_string_lossy().into_owned();
+                if name.contains("/slow") {
+                    let cancel =
+                        player_core::load_cancel().expect("a probe runs as a numbered load");
+                    let started = Instant::now();
+                    while !cancel() {
+                        assert!(started.elapsed() < Duration::from_secs(5), "never given up");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    return Err(AudioError::superseded());
+                }
+                if name.contains("/dead") {
+                    return Err(AudioError::FileOpen {
+                        path: path.to_path_buf(),
+                        message: player_core::REMOTE_UNREACHABLE.to_owned(),
+                    });
+                }
+                Ok(())
+            }))
+        }
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            let name = path.to_string_lossy().into_owned();
+            self.loads.lock().unwrap().push(name.clone());
+            if name.contains("bad") {
+                return Err(AudioError::FileOpen {
+                    path: path.to_path_buf(),
+                    message: "no such file".to_owned(),
+                });
+            }
+            self.loaded = Some((name, Instant::now()));
+            Ok(Some(Duration::from_secs(60)))
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.loaded = None;
+            Ok(())
+        }
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            Ok(position)
+        }
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn position(&self) -> Duration {
+            self.loaded
+                .as_ref()
+                .map_or(Duration::ZERO, |(_, started)| started.elapsed())
+        }
+        fn is_empty(&self) -> bool {
+            self.loaded.is_none()
+        }
+    }
+
+    fn probed_player() -> (PlayerHandle, Arc<Mutex<Vec<String>>>) {
+        let loads = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&loads);
+        let player = PlayerHandle::with_backend_factory(move || {
+            Ok(Box::new(ProbedBackend {
+                loaded: None,
+                loads: Arc::clone(&seen),
+            }) as Box<dyn AudioBackend>)
+        })
+        .unwrap();
+        wait_for(&player, PlaybackState::Empty);
+        (player, loads)
+    }
+
+    const SLOW_REMOTE: &str = "moeremote://00000000-0000-4000-8000-000000000001/slow.flac";
+    const DEAD_REMOTE: &str = "moeremote://00000000-0000-4000-8000-000000000001/dead.flac";
+
+    #[test]
+    fn a_load_that_fails_leaves_the_playing_track_playing_and_the_snapshot_alone() {
+        let (player, _loads) = probed_player();
+        player
+            .request_load_and_play("good.flac")
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        thread::sleep(Duration::from_millis(120));
+        let before = player.snapshot();
+        assert_eq!(before.state, PlaybackState::Playing);
+        assert!(before.position > Duration::ZERO);
+
+        // A local file that cannot be opened.
+        let failed = player
+            .request_load_and_play("bad.flac")
+            .unwrap()
+            .wait(Duration::from_secs(1));
+        assert!(matches!(failed, Err(AudioError::FileOpen { .. })));
+        let after = player.snapshot();
+        assert_eq!(after.state, PlaybackState::Playing);
+        assert_eq!(after.duration, before.duration);
+        assert!(after.last_error.is_none(), "{:?}", after.last_error);
+        assert!(after.position >= before.position, "the position goes on");
+        thread::sleep(Duration::from_millis(120));
+        assert!(
+            player.snapshot().position > after.position,
+            "the music keeps running"
+        );
+    }
+
+    #[test]
+    fn a_remote_file_that_cannot_be_reached_is_never_loaded_and_the_music_goes_on() {
+        let (player, loads) = probed_player();
+        player
+            .request_load_and_play("good.flac")
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        let failed = player
+            .request_load_and_play(DEAD_REMOTE)
+            .unwrap()
+            .wait(Duration::from_secs(2));
+        match failed {
+            Err(AudioError::FileOpen { message, .. }) => {
+                assert!(player_core::is_remote_unreachable(&message), "{message}")
+            }
+            other => panic!("expected an unreachable-server error, got {other:?}"),
+        }
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.state, PlaybackState::Playing);
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        assert_eq!(
+            loads.lock().unwrap().as_slice(),
+            ["good.flac"],
+            "the dead file never reached the backend"
+        );
+    }
+
+    #[test]
+    fn while_a_server_is_asked_the_worker_answers_other_commands_and_the_position_keeps_running() {
+        let (player, loads) = probed_player();
+        player
+            .request_load_and_play("good.flac")
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        let slow = player.request_load_and_play(SLOW_REMOTE).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let during = player.snapshot();
+        assert_eq!(
+            during.state,
+            PlaybackState::Playing,
+            "state stays playing while the file is opened"
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            player.snapshot().position > during.position,
+            "the position keeps running"
+        );
+        // A pause is answered at once, not after the server.
+        let started = Instant::now();
+        player
+            .request_pause()
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(player.snapshot().state, PlaybackState::Paused);
+
+        // The next choice replaces the one waiting for the server; the replaced one is answered with "superseded".
+        let local = player.request_load_and_play("good2.flac").unwrap();
+        assert!(local.wait(Duration::from_secs(1)).is_ok());
+        assert!(slow
+            .wait(Duration::from_secs(1))
+            .unwrap_err()
+            .is_superseded());
+        assert_eq!(player.snapshot().state, PlaybackState::Playing);
+        assert_eq!(
+            loads.lock().unwrap().as_slice(),
+            ["good.flac", "good2.flac"]
+        );
+    }
+
+    #[test]
+    fn a_server_that_never_answers_is_given_up_after_the_deadline() {
+        let (player, loads) = probed_player();
+        player
+            .request_load_and_play("good.flac")
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        let slow = player.request_load_and_play(SLOW_REMOTE).unwrap();
+        let error = slow.wait(Duration::from_secs(2)).unwrap_err();
+        match error {
+            AudioError::FileOpen { message, .. } => {
+                assert!(player_core::is_remote_unreachable(&message), "{message}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(player.snapshot().state, PlaybackState::Playing);
+        assert_eq!(loads.lock().unwrap().as_slice(), ["good.flac"]);
+    }
+
+    #[test]
+    fn stop_drops_a_choice_that_is_still_waiting_for_its_server() {
+        let (player, loads) = probed_player();
+        player
+            .request_load_and_play("good.flac")
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        let slow = player.request_load_and_play(SLOW_REMOTE).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        player.stop().unwrap();
+        assert!(slow
+            .wait(Duration::from_secs(1))
+            .unwrap_err()
+            .is_superseded());
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(loads.lock().unwrap().as_slice(), ["good.flac"]);
+        assert_ne!(player.snapshot().state, PlaybackState::Playing);
     }
 
     #[test]
