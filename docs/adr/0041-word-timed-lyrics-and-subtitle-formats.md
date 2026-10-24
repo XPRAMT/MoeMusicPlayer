@@ -199,11 +199,11 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 
 **連續模式：方案 C。**（Windows 原生工作列與浮動歌詞、Android 浮動歌詞）
 - 行起點是硬節點：該行第一個字形的中心在行起點時剛好落在歌詞區中心（行級歌詞也一樣，`StripLayout.anchors`／JS `layoutLyricsStrip` 第 4 參數／Kotlin `firstGlyphCenters`，取代原本的左緣）。逐字行之內的字起點（字中心）只是軟導引：兩個行起點之間的曲線跟著字走，但速度維持在該行平均速度（本行起點位置到下一行起點位置的距離 ÷ 兩者時間差）的 0.5–1.5 倍，不會突然衝刺也不會停住，正在唱的字可以稍微偏離中心（`word_strip_glide`，見下方「平滑曲線」；選項 B，取代原本的字起點節點＋2 倍速度上限＋最多提前 600 ms）。沿用音訊時鐘的漂移修正（`plan::StripInput.word_glide`，下次重排在下一個曲線段）。最後一行有字時停在最後一個字起點；行級歌詞仍用原本的 PCHIP 行曲線（只改錨點）。
-- 遮罩是靜態的置中遮罩（`centre_mask_stops`）：中心 1 em（主行字級）100%，其外直線降到面板兩端 0%，平台邊緣只有 0.1 em 的柔邊。「非目前歌詞透明度」不套用，也沒有寬度設定（使用者修訂，取代 5.2 的兩側 1 em 頻帶）。
-- 逐字歌詞用置中遮罩，取代邊緣淡出與行淡化（所有格的透明度係數維持 1）；行級歌詞照舊用邊緣淡出。
+- 遮罩（實驗性，使用者核准；若不滿意可整筆還原提交 a457599）：固定在歌詞區、不隨文字移動的靜態遮罩（`centre_mask_stops(W, em, a)`，Rust／JS／Kotlin 共用向量 `centreMask`）。W＝歌詞區寬、e＝主行字級 1 em、a＝「非目前歌詞透明度」÷100：x 在 [0, e] 由 0 直線升到 a，[e, W/2 − e/2] 由 a 直線升到 1，中心 1 em 為 1，右側對稱。歌詞區窄於 4 em 時 e 改用 W/4，各段長度仍為正、往兩端單調遞減、不超過 1；a＝1 時中間全平，只剩兩端 1 em 淡出。取代先前的置中遮罩（中心 1 em 不透明、直線降到兩端 0、不套用非目前透明度）。
+- 行級與逐字歌詞都用這張遮罩，取代邊緣淡出與行淡化：連續模式下沒有每行的非目前透明度權重與 200 ms 過渡，所有格的透明度係數為 1，透明度只由位置決定。
 - 譯文列沒有自己的節點：它是同一條捲動條的格，跟著主列的位移，並用同一張遮罩（以主列的 em 計算）。
 - 羅馬音列只有在 `romanizationWords` 存在時才有逐字效果；原生視窗目前不顯示羅馬音列。
-- Windows 遮罩是 `CompositionLinearGradientBrush` 的停駐點（`Mask::Centre`，與邊緣淡出共用 `FadeHost`）；Android 是每列一個 `LinearGradient`，以 `saveLayer`＋`DST_IN` 套用，只在寬度或字級改變時重建。
+- Windows 遮罩是 `CompositionLinearGradientBrush` 的停駐點（`Mask::Centre`，與邊緣淡出共用 `FadeHost`）；Android 是每列一個 `LinearGradient`，以 `saveLayer`＋`DST_IN` 套用（連續模式時關閉 `EdgeFadeLayout` 的邊緣淡出），只在寬度、字級或非目前透明度改變時重建；Windows 的 `FadeHost` 鍵也含非目前透明度。
 
 **「無」模式：卡拉 OK（方案 A）。**
 - 套用「文字排版」對齊。
