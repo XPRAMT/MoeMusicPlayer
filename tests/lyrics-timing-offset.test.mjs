@@ -1,4 +1,4 @@
-import './helpers/untr-fs.mjs';
+﻿import './helpers/untr-fs.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
@@ -87,4 +87,25 @@ test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track del
   // The cue lead is the page's animation lead only.
   assert.doesNotMatch(native, /LYRIC_CUE_LEAD/);
   assert.match(page, /displayCuePositions\(timedStartTimes, timedOffsetMs, cueLeading\)/);
+});
+
+test('歌詞平移 +2 s shows each line 2 s later on every page path (displayed = start + value)', async () => {
+  const { findActiveLyricIndex } = await import('../src/lib/lyrics-window.js');
+  const { displayCuePositions, findDisplayCueIndex } = await import('../src/lib/lyrics-cue-timing.ts');
+  const { nextCuePosition } = await import('../src/lib/playback-clock.ts');
+  const { importTimestampShiftMs } = await import('../src/lib/lyrics-import.js');
+  const starts = [10_000, 20_000];
+  const offset = lyricsDisplayOffsetMs(null, 2);
+  const timeline = starts.map((startMs) => ({ startMs }));
+  assert.equal(findActiveLyricIndex(timeline, 11_999, offset), -1);
+  assert.equal(findActiveLyricIndex(timeline, 12_000, offset), 0);
+  assert.deepEqual(displayCuePositions(starts, offset, false), [12_000, 22_000]);
+  assert.equal(findDisplayCueIndex(displayCuePositions(starts, offset, false), 12_000), 0);
+  assert.equal(nextCuePosition(starts, offset, 0), 12_000);
+  assert.equal(importTimestampShiftMs(null, 2), 2_000);
+  // Windows native (player-lyrics-rules) and Android (FloatingLyricsRules) receive the same combined offset and apply
+  // `position + offset >= start`; their shared vectors must agree that +2 s gives offset −2000.
+  const vectors = JSON.parse(await readFile(new URL('./fixtures/lyrics-rules-vectors.json', import.meta.url), 'utf8'));
+  const flat = JSON.stringify(vectors);
+  assert.ok(/"delaySec":0\.15,"expected":-200/.test(flat));
 });
