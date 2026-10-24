@@ -213,11 +213,47 @@ pub trait RemoteContent: Send + Sync {
         source_id.to_string()
     }
 
+    /// Whether the whole file is in the provider's disk cache, so it plays without its server (online or not). Cheap and
+    /// never touches the network. Defaults to `false`.
+    fn available_offline(&self, source_id: SourceId, path: &str) -> bool {
+        let _ = (source_id, path);
+        false
+    }
+
     /// Stop every reader that has this file open (the player's handle and read-ahead): the file is about to be replaced.
     /// Whoever was reading must open it again.
     fn release(&self, source_id: SourceId, path: &str) {
         let _ = (source_id, path);
     }
+}
+
+/// The server a remote track counts under when a natural walk skips the entries of a server that could not be reached:
+/// `None` for a track that plays from the disk cache (it does not need its server, so a dead server never makes the walk
+/// pass it over).
+pub fn walk_server_key(
+    content: &dyn RemoteContent,
+    source_id: SourceId,
+    path: &str,
+) -> Option<String> {
+    if content.available_offline(source_id, path) {
+        None
+    } else {
+        Some(content.server_key(source_id))
+    }
+}
+
+/// Whether the file is only readable from the disk cache right now: it is whole in the cache but its server does not
+/// answer. Opening such a file succeeds, so a lookup that found nothing next to it (a cover or lyrics sidecar) must not
+/// take its own failure for "there is none".
+pub fn served_from_cache_only(
+    content: &dyn RemoteContent,
+    source_id: SourceId,
+    path: &str,
+) -> bool {
+    content.available_offline(source_id, path)
+        && content
+            .stat(source_id, path)
+            .is_err_and(|error| is_remote_network_error(&error))
 }
 
 static CONTENT: RwLock<Option<Arc<dyn RemoteContent>>> = RwLock::new(None);

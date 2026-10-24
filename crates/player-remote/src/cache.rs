@@ -164,7 +164,8 @@ impl DiskCache {
 
     /// What was last learned of the file `path` of `account_id` (see [`FileMeta`]).
     pub fn meta(&self, account_id: &str, path: &str) -> Option<FileMeta> {
-        let text = fs::read_to_string(self.dir.join("meta").join(path_id(account_id, path))).ok()?;
+        let text =
+            fs::read_to_string(self.dir.join("meta").join(path_id(account_id, path))).ok()?;
         let mut lines = text.lines();
         let len = lines.next()?.trim().parse().ok()?;
         let modified_ms = match lines.next()?.trim().parse::<i64>().ok()? {
@@ -172,6 +173,31 @@ impl DiskCache {
             value => Some(value),
         };
         Some(FileMeta { len, modified_ms })
+    }
+
+    /// Whether every chunk of the file named by `key` (`len` bytes) is on disk. Answered from the in-memory index, so it
+    /// is cheap and follows eviction, a smaller limit and `clear` at once. An empty file is never complete (nothing of it
+    /// is ever stored).
+    pub fn is_complete_key(&self, key: &str, len: u64) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let chunk = CACHE_CHUNK as u64;
+        let count = len.div_ceil(chunk);
+        let index = self.lock();
+        (0..count).all(|number| {
+            let expected = (len - number * chunk).min(chunk);
+            index.sizes.get(&chunk_name(key, number)) == Some(&expected)
+        })
+    }
+
+    /// What the cache knows of the file `path` of `account_id` when the whole file is on disk (its size and time are
+    /// remembered and every chunk of that version is present); `None` otherwise. A song for which this is `Some` plays
+    /// without the server.
+    pub fn complete_meta(&self, account_id: &str, path: &str) -> Option<FileMeta> {
+        let meta = self.meta(account_id, path)?;
+        let key = cache_key(account_id, path, meta.len, meta.modified_ms);
+        self.is_complete_key(&key, meta.len).then_some(meta)
     }
 
     /// Remember the size and modified time of a file. Written to a temporary name and renamed.
@@ -261,7 +287,11 @@ impl CachedFile {
     /// As [`new`](Self::new), but what the cache holds is used and what it lacks is fetched without being stored. For the
     /// small reads of a cover or a tag: a song that was played needs no network for them, and the many covers of an album
     /// page do not push the songs that were played out of the cache.
-    pub fn read_only(inner: Box<dyn RemoteFile>, cache: std::sync::Arc<DiskCache>, key: String) -> Self {
+    pub fn read_only(
+        inner: Box<dyn RemoteFile>,
+        cache: std::sync::Arc<DiskCache>,
+        key: String,
+    ) -> Self {
         let mut file = Self::new(inner, cache, key);
         file.read_only = true;
         file
@@ -421,7 +451,11 @@ mod tests {
         cache.clear();
         assert_eq!(cache.used(), 0);
         // Only the (empty) folder of remembered file sizes is left.
-        let left: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|item| item.file_name()).collect();
+        let left: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|item| item.file_name())
+            .collect();
         assert_eq!(left, vec![std::ffi::OsString::from("meta")]);
         let _ = fs::remove_dir_all(dir);
     }
@@ -526,6 +560,142 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// Plays a file of `len` bytes through the cache so every chunk is stored.
+    fn store_whole(cache: &Arc<DiskCache>, key: &str, len: u64) {
+        let mut file = CachedFile::new(
+            Box::new(Counting {
+                len,
+                requests: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::clone(cache),
+            key.to_owned(),
+        );
+        let mut buffer = vec![0_u8; len as usize];
+        assert_eq!(file.read_at(0, &mut buffer).unwrap(), len as usize);
+    }
+
+    #[test]
+    fn a_file_is_complete_only_when_every_chunk_is_on_disk() {
+        let dir = temp_dir("complete");
+        let cache = Arc::new(DiskCache::open(&dir, 100_000_000).unwrap());
+        let len = 2 * CACHE_CHUNK as u64 + 777;
+        let key = cache_key("a", "x.flac", len, Some(5));
+        assert!(!cache.is_complete_key(&key, len));
+        assert!(!cache.is_complete_key(&key, 0));
+        cache.put_meta(
+            "a",
+            "x.flac",
+            FileMeta {
+                len,
+                modified_ms: Some(5),
+            },
+        );
+        // Only the first chunk: partial.
+        cache.put(&key, 0, &expected(0, CACHE_CHUNK));
+        assert!(!cache.is_complete_key(&key, len));
+        assert_eq!(cache.complete_meta("a", "x.flac"), None);
+        store_whole(&cache, &key, len);
+        assert!(cache.is_complete_key(&key, len));
+        assert_eq!(
+            cache.complete_meta("a", "x.flac"),
+            Some(FileMeta {
+                len,
+                modified_ms: Some(5)
+            })
+        );
+        // Another version of the file (the server's size or time changed) is not complete.
+        assert!(!cache.is_complete_key(&cache_key("a", "x.flac", len, Some(6)), len));
+        cache.put_meta(
+            "a",
+            "x.flac",
+            FileMeta {
+                len,
+                modified_ms: Some(6),
+            },
+        );
+        assert_eq!(cache.complete_meta("a", "x.flac"), None);
+        // A restart keeps the answer.
+        cache.put_meta(
+            "a",
+            "x.flac",
+            FileMeta {
+                len,
+                modified_ms: Some(5),
+            },
+        );
+        drop(cache);
+        let again = DiskCache::open(&dir, 100_000_000).unwrap();
+        assert!(again.complete_meta("a", "x.flac").is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn evicting_one_chunk_makes_a_cached_file_incomplete_and_clear_resets_it() {
+        let dir = temp_dir("complete-evict");
+        let len = 3 * CACHE_CHUNK as u64;
+        // Room for the file and a little more.
+        let cache = Arc::new(DiskCache::open(&dir, len + 10).unwrap());
+        let key = cache_key("a", "y.flac", len, Some(1));
+        cache.put_meta(
+            "a",
+            "y.flac",
+            FileMeta {
+                len,
+                modified_ms: Some(1),
+            },
+        );
+        store_whole(&cache, &key, len);
+        assert!(cache.complete_meta("a", "y.flac").is_some());
+        // Another file's chunk pushes the oldest chunk (0) of this one out (first in, first out).
+        cache.put("other", 0, &[1; 20]);
+        assert!(cache.get(&key, 0).is_none());
+        assert!(!cache.is_complete_key(&key, len));
+        assert_eq!(cache.complete_meta("a", "y.flac"), None);
+
+        // A smaller limit does the same, and clear forgets everything.
+        let dir2 = temp_dir("complete-limit");
+        let cache2 = Arc::new(DiskCache::open(&dir2, 100_000_000).unwrap());
+        let key2 = cache_key("a", "z.flac", len, Some(1));
+        cache2.put_meta(
+            "a",
+            "z.flac",
+            FileMeta {
+                len,
+                modified_ms: Some(1),
+            },
+        );
+        store_whole(&cache2, &key2, len);
+        assert!(cache2.complete_meta("a", "z.flac").is_some());
+        cache2.set_limit(len - 1);
+        assert_eq!(cache2.complete_meta("a", "z.flac"), None);
+        cache2.set_limit(100_000_000);
+        store_whole(&cache2, &key2, len);
+        assert!(cache2.complete_meta("a", "z.flac").is_some());
+        cache2.clear();
+        assert_eq!(cache2.complete_meta("a", "z.flac"), None);
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir2);
+    }
+
+    #[test]
+    fn a_chunk_too_big_for_the_limit_is_never_stored_so_the_file_is_never_complete() {
+        let dir = temp_dir("complete-small-limit");
+        let len = 2 * CACHE_CHUNK as u64;
+        let cache = Arc::new(DiskCache::open(&dir, CACHE_CHUNK as u64 - 1).unwrap());
+        let key = cache_key("a", "w.flac", len, Some(1));
+        cache.put_meta(
+            "a",
+            "w.flac",
+            FileMeta {
+                len,
+                modified_ms: Some(1),
+            },
+        );
+        store_whole(&cache, &key, len);
+        assert_eq!(cache.complete_meta("a", "w.flac"), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_changed_file_is_another_key() {
         assert_ne!(
@@ -557,11 +727,21 @@ mod meta_tests {
         let _ = fs::remove_dir_all(&dir);
         let cache = DiskCache::open(&dir, 1_000_000).unwrap();
         assert_eq!(cache.meta("a", "x/y.flac"), None);
-        let meta = FileMeta { len: 123, modified_ms: Some(456) };
+        let meta = FileMeta {
+            len: 123,
+            modified_ms: Some(456),
+        };
         cache.put_meta("a", "x/y.flac", meta);
         assert_eq!(cache.meta("a", "x/y.flac"), Some(meta));
         assert_eq!(cache.meta("b", "x/y.flac"), None);
-        cache.put_meta("a", "x/y.flac", FileMeta { len: 5, modified_ms: None });
+        cache.put_meta(
+            "a",
+            "x/y.flac",
+            FileMeta {
+                len: 5,
+                modified_ms: None,
+            },
+        );
         assert_eq!(cache.meta("a", "x/y.flac").unwrap().modified_ms, None);
         // A new cache over the same folder still knows (and the meta files are not counted as chunks).
         let again = DiskCache::open(&dir, 1_000_000).unwrap();

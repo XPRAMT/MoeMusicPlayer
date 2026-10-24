@@ -225,6 +225,54 @@ mod tests {
         assert_eq!(walk.final_failure(), Some(StartFailure::Unreachable));
     }
 
+    /// A provider where `cached` paths are whole in the disk cache; every path is on server "a".
+    struct Cached(&'static [&'static str]);
+
+    impl crate::RemoteContent for Cached {
+        fn open(&self, _: crate::SourceId, _: &str) -> std::io::Result<crate::RemoteFileHandle> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+
+        fn server_key(&self, _: crate::SourceId) -> String {
+            "a".to_owned()
+        }
+
+        fn available_offline(&self, _: crate::SourceId, path: &str) -> bool {
+            self.0.contains(&path)
+        }
+    }
+
+    #[test]
+    fn a_song_in_the_disk_cache_is_not_passed_over_when_its_server_is_down() {
+        let source = crate::SourceId::new();
+        let content = Cached(&["cached1", "cached2"]);
+        // Entries 1..=5 of one dead server: 1 and 3 are not cached, 2 and 4 are, 5 is not.
+        let paths = [
+            "",
+            "uncached1",
+            "cached1",
+            "uncached2",
+            "cached2",
+            "uncached3",
+        ];
+        let server = |cursor: usize| crate::walk_server_key(&content, source, paths[cursor]);
+        let mut walk = NaturalWalk::new(6, 0, QueueRepeatMode::Off);
+        assert_eq!(walk.next_candidate(server), Some(1));
+        walk.failed(StartFailure::Unreachable, server(1));
+        // The cached entry is tried (and would play); the uncached one after it is passed over.
+        assert_eq!(walk.next_candidate(server), Some(2));
+        walk.failed(StartFailure::Unplayable, server(2));
+        assert_eq!(walk.next_candidate(server), Some(4));
+        walk.failed(StartFailure::Unplayable, server(4));
+        assert_eq!(walk.next_candidate(server), None);
+        assert_eq!(walk.final_failure(), Some(StartFailure::Unreachable));
+        assert_eq!(
+            crate::walk_server_key(&content, source, "x"),
+            Some("a".to_owned())
+        );
+        assert_eq!(crate::walk_server_key(&content, source, "cached1"), None);
+    }
+
     #[test]
     fn a_failure_that_is_not_the_network_does_not_mark_the_server_down() {
         let server = |_: usize| Some("a".to_owned());
