@@ -4317,6 +4317,21 @@ input:focus-visible {
   cursor: pointer;
 }
 
+.playback-notice {
+  position: fixed;
+  bottom: calc(var(--dock-height) + var(--android-safe-bottom, 0px) + 14px);
+  left: 50%;
+  z-index: 60;
+  box-sizing: border-box;
+  max-width: calc(100% - 32px);
+  padding: 9px 16px;
+  transform: translateX(-50%);
+  color: var(--status-danger);
+  font-size: var(--font-body, 14px);
+  pointer-events: none;
+  text-align: center;
+}
+
 .dock-error {
   position: absolute;
   top: calc(100% + 3px);

@@ -144,6 +144,12 @@
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
   import { dockMarquee } from './lib/dock-marquee.js';
+  import {
+    UNREACHABLE_NOTICE_VISIBLE_MS,
+    isRemoteUnreachableMessage,
+    shouldShowUnreachableNotice,
+    snapshotReportsNewUnreachable,
+  } from './lib/remote-unreachable-notice.js';
   import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
   import { formatSyncResultLine } from './lib/sync-result-line.js';
   import { normalizeSourceScope, shouldShowSourceScopeSwitch } from './lib/source-scope.js';
@@ -729,6 +735,19 @@
     if (!showSourceScopeSwitch && librarySourceScope !== 'all' && sourcesLoadedOnce) void changeLibrarySourceScope('all');
   });
   let playbackError = $state<string | null>(null);
+  /** The auto-dismissing notice for a remote track whose server cannot be reached (ADR 0036). */
+  let playbackNotice = $state<string | null>(null);
+  let playbackNoticeShownAt: number | null = null;
+  let playbackNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function showUnreachableNotice(): void {
+    const now = performance.now();
+    if (!shouldShowUnreachableNotice(playbackNoticeShownAt, now)) return;
+    playbackNoticeShownAt = now;
+    playbackNotice = tr('伺服器無法連線');
+    clearTimeout(playbackNoticeTimer);
+    playbackNoticeTimer = setTimeout(() => { playbackNotice = null; }, UNREACHABLE_NOTICE_VISIBLE_MS);
+  }
   let playback = $state<PlaybackSnapshot | null>(null);
   // Playback clock (ADR 0028): the progress bar and the lyrics advance from it between the 500 ms samples.
   let playbackClock = $state<PlaybackClock | null>(null);
@@ -3821,6 +3840,7 @@
       && previous !== null
       && previous.positionMs > resolved.positionMs + 50
       && resolved.positionMs < 1500;
+    if (snapshotReportsNewUnreachable(previous?.lastError, resolved.lastError)) showUnreachableNotice();
     playback = resolved;
     updatePlaybackClock(resolved);
     if (Object.hasOwn(resolved, 'queueSort')) queueSort = resolved.queueSort ?? null;
@@ -4018,7 +4038,12 @@
         if (options.refreshQueueList) playbackQueueResetKey += 1;
       }
     } catch (error) {
-      if (isLatest()) playbackError = getErrorText(error);
+      if (isLatest()) {
+        const text = getErrorText(error);
+        // A server that cannot be reached is told by the transient notice, not left as a standing dock error.
+        if (isRemoteUnreachableMessage(text)) showUnreachableNotice();
+        else playbackError = text;
+      }
     } finally {
       if (options.seek) isSeeking = false; else if (isLatest()) isSendingPlaybackCommand = false;
     }
@@ -5679,6 +5704,9 @@
 
     <div class="dock-spacer" aria-hidden="true"></div>
   </footer>
+  {#if playbackNotice}
+    <div class="playback-notice floating-surface" role="status">{playbackNotice}</div>
+  {/if}
 </div>
 
 {#if runtimePlatform === 'android'}

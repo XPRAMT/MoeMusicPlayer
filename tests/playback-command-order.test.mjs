@@ -47,7 +47,7 @@ test('a superseded command shows nothing and leaves the busy flag to the newest 
   const send = fn(app, 'sendPlaybackCommand');
   assert.match(send, /const token = options\.seek \? null : playbackCommandOrder\.begin\(\);/);
   assert.match(send, /if \(isLatest\(\)\) \{\s*applyPlaybackSnapshot/);
-  assert.match(send, /if \(isLatest\(\)\) playbackError = getErrorText\(error\);/);
+  assert.match(send, /\} catch \(error\) \{\s*if \(isLatest\(\)\) \{\s*const text = getErrorText\(error\);/);
   assert.match(send, /else if \(isLatest\(\)\) isSendingPlaybackCommand = false;/);
 });
 
