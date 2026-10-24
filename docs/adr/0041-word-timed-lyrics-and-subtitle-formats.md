@@ -1,6 +1,6 @@
 ﻿# 逐字歌詞與 SRT／ASS 字幕格式
 
-狀態：部分採納。資料模型、yrc 逐字、SRT、ASS 子集、內容偵測、本機歌詞順序與播放頁逐字高亮已實作；Windows 原生與 Android 的逐字顯示只做研究（第 5 節），待使用者決定。
+狀態：已採納並實作。資料模型、yrc 逐字、AMLL QRC 純文字解析與查詢（D6）、SRT、ASS 子集、增強型 LRC 讀寫、內容偵測、本機歌詞順序、播放頁逐字高亮（D8），以及 Windows 原生工作列／浮動歌詞與 Android 浮動歌詞的逐字顯示（D10，第 5.3 節；5.4、5.5 為其後的透明度與字重修訂）都已實作。尚未實作：TTML、WebVTT 檔案格式（SRT 解析器只接受 WebVTT 的 cue 版面）、ID3 SYLT，以及連續模式加卡拉 OK 變色（見「待使用者決定」）。第 5.1、5.2 節是當時的研究，保留為歷史。
 
 相關：[ADR 0029](0029-lyric-cue-lead.md)（換行提前）、[ADR 0030](0030-rust-chinese-script-conversion.md)（簡繁轉換）、[ADR 0032](0032-floating-lyrics.md)（浮動歌詞）、[ADR 0034](0034-native-lyrics-rendering-research.md)（原生繪製）、[ADR 0040](0040-library-sync-and-local-lyrics-data.md)（本機歌詞資料）
 
@@ -39,6 +39,8 @@
 5. 其餘 → 純文字。
 
 ASS、SRT、yrc 解析不出任何行時回 `Unusable`。
+
+現況補充：實際偵測順序是（加密的十六進位／Base64 整段內容 → `DetectedLyricFormat::Encrypted`，視為 `Unusable`）→ ASS → SRT → yrc → QRC（D6）→ LRC → 純文字。LRC 內的增強型字標記（`<mm:ss.xx>字`，A2 擴充）由 `parse_lrc` 讀成逐字（`enhanced_lrc_words`；沒有收尾時間戳的最後一個字在下一行起點結束，`close_open_enhanced_words`）；寫出由前端 `src/lib/lyrics-import.js` 的 `lyricsToText`（歌曲資訊面板「導入使用中歌詞」）負責，有逐字的行寫成增強型 LRC，只有行級的維持原樣。
 
 ### D3 SRT
 
@@ -206,11 +208,11 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 
 **連續模式：方案 C。**（Windows 原生工作列與浮動歌詞、Android 浮動歌詞）
 - 行起點是硬節點：該行第一個字形的中心在行起點時剛好落在歌詞區中心（行級歌詞也一樣，`StripLayout.anchors`／JS `layoutLyricsStrip` 第 4 參數／Kotlin `firstGlyphCenters`，取代原本的左緣）。連續模式完全忽略個別字的時間（極短的字會讓捲動速度忽快忽慢）：有逐字時間的行只有兩個硬節點，行起點，與行結束（最後一個字的結束時間，該行最後一個字形的中心落在歌詞區中心）；所有行的節點依時間排序，用一條單調 C1 曲線串起來（`word_strip_knots`＋`knot_cubic`，切線為 Fritsch–Butland 加權調和平均，第一個與最後一個節點為 0，與行級的 `strip_cubic` 同一族），所以行內與「行結束到下一行起點」的空檔速度都平滑變化，沒有停停走走，也沒有 0.5–1.5 倍速度帶與字導引。沒有逐字時間的行只有起點節點；單一字形的行（首尾字形中心相同）或結束不晚於起點的行沒有結束節點；重疊時（下一行起點不晚於本行結束）後一行的起點取代前面的節點，值維持非遞減；最後一行停在最後一個字的結束（逐字行不用每字 500 ms 的估計）。行級歌詞仍用原本的 PCHIP 行曲線（只改錨點）。沿用音訊時鐘的漂移修正（`plan::StripInput.word_glide` 為節點，下次重排在下一個節點）。
-- 遮罩（實驗性，使用者核准；若不滿意可整筆還原提交 a457599）：固定在歌詞區、不隨文字移動的靜態遮罩（`centre_mask_stops(W, em, a)`，Rust／JS／Kotlin 共用向量 `centreMask`）。W＝歌詞區寬、e＝主行字級 1 em、a＝「非目前歌詞透明度」÷100：x 在 [0, e] 由 0 直線升到 a，[e, W/2 − e/2] 由 a 直線升到 1，中心 1 em 為 1，右側對稱。歌詞區窄於 4 em 時 e 改用 W/4，各段長度仍為正、往兩端單調遞減、不超過 1；a＝1 時中間全平，只剩兩端 1 em 淡出。取代先前的置中遮罩（中心 1 em 不透明、直線降到兩端 0、不套用非目前透明度）。
+- 遮罩（實驗性，使用者核准；若不滿意可整筆還原提交 a457599；下列以「非目前歌詞透明度」a 為參數的描述已被 5.4 取代，現為主要／次要兩個值，`centre_mask_stops(W, em, main, secondary)`）：固定在歌詞區、不隨文字移動的靜態遮罩（`centre_mask_stops(W, em, a)`，Rust／JS／Kotlin 共用向量 `centreMask`）。W＝歌詞區寬、e＝主行字級 1 em、a＝「非目前歌詞透明度」÷100：x 在 [0, e] 由 0 直線升到 a，[e, W/2 − e/2] 由 a 直線升到 1，中心 1 em 為 1，右側對稱。歌詞區窄於 4 em 時 e 改用 W/4，各段長度仍為正、往兩端單調遞減、不超過 1；a＝1 時中間全平，只剩兩端 1 em 淡出。取代先前的置中遮罩（中心 1 em 不透明、直線降到兩端 0、不套用非目前透明度）。
 - 行級與逐字歌詞都用這張遮罩，取代邊緣淡出與行淡化：連續模式下沒有每行的非目前透明度權重與 200 ms 過渡，所有格的透明度係數為 1，透明度只由位置決定。
 - 譯文列沒有自己的節點：它是同一條捲動條的格，跟著主列的位移，並用同一張遮罩（以主列的 em 計算）。
 - 羅馬音列只有在 `romanizationWords` 存在時才有逐字效果；原生視窗目前不顯示羅馬音列。
-- Windows 遮罩是 `CompositionLinearGradientBrush` 的停駐點（`Mask::Centre`，與邊緣淡出共用 `FadeHost`）；Android 是每列一個 `LinearGradient`，以 `saveLayer`＋`DST_IN` 套用（連續模式時關閉 `EdgeFadeLayout` 的邊緣淡出），只在寬度、字級或非目前透明度改變時重建；Windows 的 `FadeHost` 鍵也含非目前透明度。
+- Windows 遮罩是 `CompositionLinearGradientBrush` 的停駐點（`Mask::Centre`，與邊緣淡出共用 `FadeHost`）；Android 是每列一個 `LinearGradient`，以 `saveLayer`＋`DST_IN` 套用（連續模式時關閉 `EdgeFadeLayout` 的邊緣淡出），只在寬度、字級或主要／次要透明度改變時重建；Windows 的 `FadeHost` 鍵也含這兩個值（5.4）。
 
 **「無」模式：卡拉 OK（方案 A）。**
 - 套用「文字排版」對齊。
@@ -228,6 +230,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 | 連續，行級 | 1.40% | — | 每幀 | 4–6 |
 | 連續，逐字（方案 C） | 3.12% | — | 每幀 | 7–9 |
 
+- （本表與下列數字量於當時的設計；之後連續逐字的曲線改為每行兩個節點、遮罩改為主要／次要兩個值〔5.4〕，這些數字沒有重測。）
 - 卡拉 OK 的點陣快取約加倍（每行兩張）；本程序 CPU 增加約 0.9 個百分點，來自唱字期間每幀的裁切提交。換字時沒有額外掉幀：唱字期間邊界連續移動，換字不會讓取樣間隔變長。
 - dwm 的 CPU 量不到：一般權限讀不到 dwm 的處理器時間。只在 120 Hz 主螢幕量過；60 Hz 虛擬螢幕沒有量。
 - 連續模式加卡拉 OK（方案 C＋A）的估計：看得到的每行都要主色副本，點陣快取約加倍（每視窗再加約 10 MiB）；位移本來就每幀提交，正在唱的那格多一個裁切值，CPU 估計再增加不到 1 個百分點。尚未實作，由使用者決定。
@@ -237,15 +240,15 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 - 每段平均速度 a，速度帶 [0.5a, 1.5a]（`GLIDE_MIN_SPEED`／`GLIDE_MAX_SPEED`）。每個硬節點有切線 m：兩鄰段的調和平均夾進兩段速度帶的交集；兩段相差超過 3 倍、交集為空時取較慢段的上限 1.5·min。硬節點兩側各有一段斜率 m 的直線，長度為較短鄰段的 1/8（`GLIDE_KNOT_WINDOW`）。
 - 折線：從硬節點窗口的端點出發，每個導引的值夾進「從前一點以速度帶能到達」與「還能以速度帶到達段尾窗口」兩個範圍的交集（必不為空），所以每一小段斜率都在速度帶內，且單調。
 - 除硬節點外每個轉角以對稱二次曲線圓角，半徑為兩鄰小段較短者的一半：速度在兩斜率間線性變化，不離開速度帶、連續（C1）；硬節點不圓角，值剛好命中。導引點會被圓角偏離最多 r·Δs/4。
-- 輸出為分段多項式 `GlidePiece { t, v, s, c }`（值 `v + s·u + c·u²`），`glide_at` 給值、速度與半加速度；Windows 計畫把每段轉成 `AddCubic` 鍵（c3＝0），重排在 `next_glide_break`；Android 每幀讀 `glideValue`。
+- 輸出為分段多項式 `GlidePiece { t, v, s, c }`（值 `v + s·u + c·u²`），`glide_at` 給值、速度與半加速度；Windows 計畫把每段轉成 `AddCubic` 鍵（c3＝0），重排在 `next_glide_break`（已被取代：Windows 不再使用合成器動畫，而是每幀依音訊時鐘在曲線上取樣並只提交有變的值，ADR 0034）；Android 每幀讀 `glideValue`。
 - 例外（測試明列）：緩起緩停的兩端窗口內速度從 0 升到帶內；相鄰兩段平均速度差超過 3 倍時，交界窗口（約 1.5 個窗口長）內較快那段低於 0.5 倍。
 - 測試：Rust `glide::tests`（120 Hz 取樣：單調、C0／C1、硬節點、速度帶；密集字、長間奏、同時節點）、`tests/lyrics-rules-vectors.test.mjs`、`LyricsRulesVectorsTest`。
 
 ### 待使用者決定
 
-- 連續模式是否也加卡拉 OK 變色（方案 C＋A，成本見 5.3）。
-- 歌曲資訊面板「導入使用中歌詞」遇到逐字歌詞時寫入什麼：增強型 LRC、SYLT，或只寫行級（目前只寫行級）。
-- 增強型 LRC、WebVTT、TTML、SYLT 尚未實作。
+- 連續模式是否也加卡拉 OK 變色（方案 C＋A，成本見 5.3）：仍未決定，也未實作（卡拉 OK 只在動畫「無」）。
+- 已決定並實作：歌曲資訊面板「導入使用中歌詞」遇到逐字歌詞時寫入增強型 LRC（`lyricsToText`；原先「只寫行級」的狀態已不適用）。增強型 LRC 的讀取也已實作（`parse_lrc`）。
+- 尚未實作：WebVTT 檔案格式（SRT 解析器接受其 cue 版面）、TTML、SYLT。
 
 ## 測試
 
@@ -258,7 +261,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
   - 服務層的內嵌字幕與 Unusable 改用旁檔；
   - yrc 取代 LRC；
   - 逐字旗標。
-- 原生與 Android 規則：`crates/player-lyrics-rules` 的 `words.rs` 單元測試與共用向量（`wordGlide`、`centreMask`、`sung`、`karaoke`），JS `tests/lyrics-rules-vectors.test.mjs`、Kotlin `LyricsRulesVectorsTest`；三邊都有卡拉 OK 邊界的逐幀連續性測試；`player-lyrics-native` 的 `plan.rs` 測試逐字計畫（每個字起點置中、譯文跟著同一位移、沒有行淡化、逐幀單調）。
+- 原生與 Android 規則：`crates/player-lyrics-rules` 的 `words.rs` 單元測試與共用向量（`stripGlide`、`karaokeGlide`、`glide`、`centreMask`、`sung`），JS `tests/lyrics-rules-vectors.test.mjs`、Kotlin `LyricsRulesVectorsTest`；三邊都有卡拉 OK 邊界的逐幀連續性測試；`player-lyrics-native` 的 `plan.rs` 測試逐字計畫（`word_timed_plans_follow_the_glide_and_keep_every_cell_whole`：節點曲線、譯文跟著同一位移、沒有行淡化）。
 - 前端：`tests/lyrics-word-highlight.test.mjs` 檢查時間計算、簡繁、掃色 keyframes 與 `@property`、沒有 fill／filter、減少動態時改用換色、羅馬音逐字與顯示順序。
 - `player-core` 的 `lyric_roles` 測試：日文＋羅馬字＋中文兩種順序、長音、韓文＋羅馬字＋英文、英文原文＋中文、中文＋拼音（含組合聲調）、Style 提示、無法判斷時的位置規則；`lyric_formats` 與 `lyrics` 另測 SRT 多行與成對 cue、ASS Style、LRC 兩種順序與寫入格式讀回。
 
