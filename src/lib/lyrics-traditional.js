@@ -12,7 +12,12 @@
  * @returns {import('./ipc').TrackLyrics}
  */
 export function lyricsForDisplay(lyrics, traditional) {
-  if (!traditional || !lyrics.lines.some((line) => line.textTraditional != null || line.translationTraditional != null)) {
+  if (
+    !traditional
+    || !lyrics.lines.some(
+      (line) => line.textTraditional != null || line.translationTraditional != null || line.wordsTraditional != null,
+    )
+  ) {
     return lyrics;
   }
   return {
@@ -21,6 +26,10 @@ export function lyricsForDisplay(lyrics, traditional) {
       ...line,
       text: line.textTraditional ?? line.text,
       translation: line.translationTraditional ?? line.translation,
+      words:
+        line.words && line.wordsTraditional?.length === line.words.length
+          ? line.words.map((word, index) => ({ ...word, t: line.wordsTraditional?.[index] ?? word.t }))
+          : line.words,
     })),
   };
 }

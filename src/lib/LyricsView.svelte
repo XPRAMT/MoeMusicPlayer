@@ -13,6 +13,7 @@
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
   import { lyricsForDisplay } from './lyrics-traditional.js';
+  import { wordHighlightTimings } from './lyrics-word-highlight.js';
   import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
   import {
     LYRIC_CUE_LEAD_MS,
@@ -311,6 +312,26 @@
       : -1,
   );
   let plainLayout = $derived(buildLyricsLayout(lines, layoutPreferences, preferences.lineGapPx, layoutWidth));
+  // Word highlight (ADR 0041): only the current line with word timing is split into words, each with one CSS
+  // animation (delay = time until the word starts). Recomputed only on a line change, seek, play/pause or offset
+  // change; the clock's regular samples do not touch it, so no style is written while a line plays.
+  let wordsPlaying = $derived(effectivePlaybackState === 'playing' && (playbackClock ? playbackClock.playing : isPlaying));
+  let currentLineWords = $derived.by(() => {
+    const index = visibleActiveTimedIndex;
+    const words = index >= 0 ? timedLines[index]?.line.words : undefined;
+    if (!words || words.length === 0) return null;
+    const jump = playbackClock?.jumpId ?? 0;
+    const playing = wordsPlaying;
+    const offset = timedOffsetMs;
+    const position = untrack(() =>
+      playbackClock ? estimatePlaybackPosition(playbackClock, performance.now()) : positionMs,
+    );
+    return {
+      index,
+      key: `${index}:${jump}:${playing}:${offset}:${timedLayout.generation}`,
+      words: wordHighlightTimings(words, null, position, offset),
+    };
+  });
   let timedTotalHeight = $derived.by(() => { layoutRevision; return timedLayout.totalHeight; });
   let timedCanvasHeight = $derived(timedTotalHeight + timedViewportHeight);
   let timedEdgePadding = $derived(timedViewportHeight / 2);
@@ -855,7 +876,13 @@
             style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.inactiveOpacityPercent)};--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
             aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
-            {#if row.line.text?.trim()}<p class="lyric-primary">{row.line.text}</p>{/if}
+            {#if row.line.text?.trim()}
+              {#if currentLineWords && currentLineWords.index === timelineIndex}
+                {#key currentLineWords.key}
+                  <p class="lyric-primary has-words" class:words-paused={!wordsPlaying} data-word-count={currentLineWords.words.length}>{#each currentLineWords.words as word, wordIndex (wordIndex)}<span class="lyric-word" style={`animation-delay:${word.delayMs}ms;animation-duration:${word.durationMs}ms`}>{word.text}</span>{/each}</p>
+                {/key}
+              {:else}<p class="lyric-primary">{row.line.text}</p>{/if}
+            {/if}
             {#if preferences.showTranslation && row.line.translation?.trim()}<p class="lyric-translation">{row.line.translation}</p>{/if}
             {#if preferences.showRomanization && row.line.romanization?.trim()}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
           </div>
@@ -1131,6 +1158,28 @@
     text-align: center;
     opacity: var(--lyric-text-opacity, 1);
     transition: opacity var(--lyric-cue-ms) ease;
+  }
+
+  /* Word highlight (ADR 0041): the line stays in its own colour (white when current); the word being sung is the
+     theme accent. The animation only holds the accent between its delay and its end and has no fill, so a word is
+     accent exactly while it is sung and back to the line colour before and after. Colour only: no filter, no
+     per-frame style writes. */
+  .lyric-word {
+    animation-name: lyric-word-sing;
+    animation-timing-function: linear;
+    animation-iteration-count: 1;
+    animation-fill-mode: none;
+  }
+
+  .words-paused .lyric-word {
+    animation-play-state: paused;
+  }
+
+  @keyframes lyric-word-sing {
+    from,
+    to {
+      color: var(--accent);
+    }
   }
 
   .lyric-translation,

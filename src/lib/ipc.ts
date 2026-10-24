@@ -673,6 +673,18 @@ export interface LyricLine {
   textTraditional?: string;
   /** `translation` in Taiwan Traditional glyphs, only when that differs. */
   translationTraditional?: string;
+  /** The end of the line when its source gives one (SRT, ASS, yrc). */
+  endMs?: number;
+  /** Word timing (ADR 0041): start, end (ms) and text; `text` is the texts joined. Absent for line-level lyrics. */
+  words?: LyricWord[];
+  /** Each word's Traditional text, cut at the same places, only when it differs. */
+  wordsTraditional?: string[];
+}
+
+export interface LyricWord {
+  s: number;
+  e: number;
+  t: string;
 }
 
 export type LyricsSource = 'local' | 'embedded' | 'netease' | 'qqmusic' | 'manual';
