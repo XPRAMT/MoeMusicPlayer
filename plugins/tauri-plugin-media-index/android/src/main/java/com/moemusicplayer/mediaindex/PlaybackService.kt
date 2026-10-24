@@ -16,6 +16,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -74,6 +75,22 @@ class PlaybackService : MediaSessionService() {
     private val loadFence = PlaybackLoadFence()
     @Volatile private var artworkPreparationCommandId: String? = null
     private var artworkPreparationFuture: java.util.concurrent.Future<*>? = null
+    // A new track is switched to only after its file has been opened and recognised (ADR 0036). The check runs on a
+    // worker of its own (a file on a server can take seconds, and one that never answers must not block the next
+    // check), while the track that plays goes on playing.
+    private val preflightExecutor = ThreadPoolExecutor(
+        0,
+        8,
+        20L,
+        TimeUnit.SECONDS,
+        java.util.concurrent.SynchronousQueue(),
+        { runnable -> Thread(runnable, "moe-playback-preflight").apply { isDaemon = true } },
+    )
+    private val loadGate = LoadPreflightGate()
+    private var mediaPreflight: MediaPreflight? = null
+    @Volatile private var preflightCommandId: String? = null
+    private var preflightRequestId = ""
+    private var preflightRemote = false
     @Volatile private var playbackActive = false
     private val loadAckTimeout = Runnable {
         val ack = pendingLoadAck ?: return@Runnable
@@ -86,6 +103,17 @@ class PlaybackService : MediaSessionService() {
         stopped = true
         ack.put("error", "Android media source did not become ready within ${LOAD_ACK_TIMEOUT_MS}ms")
         sendAck(ack)
+    }
+    private val preflightTimeout = Runnable {
+        val commandId = preflightCommandId ?: return@Runnable
+        preflightCommandId = null
+        // Whatever the check answers later is dropped; the choice is refused now.
+        loadGate.cancel(commandId)
+        rejectLoad(
+            commandId,
+            preflightRequestId,
+            if (preflightRemote) REMOTE_LINK_LOST_MESSAGE else "Opening the file took too long",
+        )
     }
     private val artworkPreparationTimeout = Runnable {
         val commandId = artworkPreparationCommandId ?: return@Runnable
@@ -114,6 +142,7 @@ class PlaybackService : MediaSessionService() {
         // DSD (.dsf) tracks arrive as moedsd:// URIs and WavPack (.wv) tracks as moewv:// URIs; both are served as
         // 32-bit float WAV by the Rust converters (ADR 0016, ADR 0025), so float PCM output is enabled for them.
         val dataSources = DsdAwareDataSourceFactory(DefaultDataSource.Factory(this))
+        mediaPreflight = MediaPreflight(dataSources, extractors)
         // Media3 keeps its existing native float path for 24/32-bit integer and float PCM. The chain converter
         // covers the remaining PCM encodings without bypassing the normal 16-bit playback processing.
         val renderers = object : DefaultRenderersFactory(this) {
@@ -235,6 +264,8 @@ class PlaybackService : MediaSessionService() {
         artworkPreparationFuture?.cancel(true)
         artworkExecutor.shutdownNow()
         remoteCoverExecutor.shutdownNow()
+        preflightExecutor.shutdownNow()
+        mainHandler.removeCallbacks(preflightTimeout)
         artworkPreparationCommandId?.let { commandId ->
             reportEvent(JSONObject().apply {
                 put("kind", "ack")
@@ -270,7 +301,12 @@ class PlaybackService : MediaSessionService() {
             val acquired = commandInFlight.compareAndSet(false, true)
             // A load that is still being awaited (a slow server) does not hold the next command back: a newer choice of
             // track takes over from it (Rust gave up waiting for the old one).
-            if (acquired || PlaybackCommandGate.mayPreempt(pendingLoadAck != null, artworkPreparationCommandId != null)) {
+            if (acquired || PlaybackCommandGate.mayPreempt(
+                    pendingLoadAck != null,
+                    artworkPreparationCommandId != null,
+                    preflightCommandId != null,
+                )
+            ) {
                 val command = try {
                     nativePollPlaybackCommand()
                 } catch (_: UnsatisfiedLinkError) {
@@ -376,6 +412,12 @@ class PlaybackService : MediaSessionService() {
                         sendAck(ack)
                     }
                 }
+                "cancel_load" -> {
+                    // Rust stopped waiting for a load: if its file is still being checked, it is not switched to.
+                    loadGate.cancel(command.optString("targetCommandId"))
+                    ack.put("snapshot", snapshot(player))
+                    sendAck(ack)
+                }
                 "play" -> {
                     player.play()
                     stopped = false
@@ -444,6 +486,84 @@ class PlaybackService : MediaSessionService() {
             executeCommand(raw)
             return
         }
+        loadGate.begin(commandId)
+        preflightLoad(commandId, requestId, contentUri) {
+            continueLoad(raw, commandId, requestId, contentUri, command, metadata)
+        }
+    }
+
+    /**
+     * Check that [contentUri] opens (and its container is recognised) before anything of the player is touched; then
+     * [onPassed] goes on to switch tracks. A refused load is answered with an error that says the track that plays was
+     * left alone ([rejectLoad]); a load that a newer one replaced, or Rust gave up on, is dropped without an answer.
+     */
+    private fun preflightLoad(commandId: String, requestId: String, contentUri: String, onPassed: () -> Unit) {
+        val preflight = mediaPreflight
+        if (preflight == null) {
+            onPassed()
+            return
+        }
+        preflightCommandId = commandId
+        preflightRequestId = requestId
+        preflightRemote = contentUri.startsWith("$REMOTE_URI_SCHEME:")
+        mainHandler.removeCallbacks(preflightTimeout)
+        mainHandler.postDelayed(preflightTimeout, PREFLIGHT_TIMEOUT_MS)
+        try {
+            preflightExecutor.execute {
+                val result = try {
+                    preflight.check(Uri.parse(contentUri))
+                } catch (error: Throwable) {
+                    PreflightResult.Failed(error.message ?: "Cannot open the file", serverUnreachable = false)
+                }
+                mainHandler.post {
+                    if (serviceDestroyed) return@post
+                    if (preflightCommandId == commandId) {
+                        preflightCommandId = null
+                        mainHandler.removeCallbacks(preflightTimeout)
+                    }
+                    val wanted = loadGate.mayCommit(commandId)
+                    loadGate.finish(commandId)
+                    if (!wanted) return@post
+                    when (result) {
+                        is PreflightResult.Passed -> onPassed()
+                        is PreflightResult.Failed -> rejectLoad(
+                            commandId,
+                            requestId,
+                            if (result.serverUnreachable) REMOTE_LINK_LOST_MESSAGE else result.message,
+                        )
+                    }
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            preflightCommandId = null
+            mainHandler.removeCallbacks(preflightTimeout)
+            rejectLoad(commandId, requestId, "Android file check is busy")
+        }
+    }
+
+    /** Answer a load that was refused before the player was touched: `retained` says the track that plays is untouched. */
+    private fun rejectLoad(commandId: String, requestId: String, message: String) {
+        reportEvent(JSONObject().apply {
+            put("v", 1)
+            put("kind", "ack")
+            put("commandId", commandId)
+            put("requestId", requestId)
+            put("serviceGeneration", serviceGeneration)
+            put("error", message)
+            put("retained", true)
+            put("snapshot", snapshot(exoPlayer))
+        })
+        commandInFlight.set(false)
+    }
+
+    private fun continueLoad(
+        raw: String,
+        commandId: String,
+        requestId: String,
+        contentUri: String,
+        command: JSONObject,
+        metadata: JSONObject,
+    ) {
         if (contentUri.startsWith("$REMOTE_URI_SCHEME:")) {
             // A track on a server starts at once; its cover is fetched afterwards (a round trip or several) and put on the
             // item when it arrives, so a slow server never delays the load.
@@ -800,6 +920,8 @@ class PlaybackService : MediaSessionService() {
         private const val SNAPSHOT_SAMPLE_INTERVAL_MS = 250L
         private const val SNAPSHOT_MIN_INTERVAL_MS = 200L
         private const val LOAD_ACK_TIMEOUT_MS = 8_000L
+        // Shorter than the wait of the Rust side (15 s), so the refusal arrives before Rust gives up.
+        private const val PREFLIGHT_TIMEOUT_MS = 12_000L
         private const val MAX_NOTIFICATION_SOURCE_BYTES = 32 * 1024 * 1024
         private const val MAX_NOTIFICATION_ARTWORK_BYTES = 256 * 1024
         private const val MAX_NOTIFICATION_ARTWORK_SIDE = 320

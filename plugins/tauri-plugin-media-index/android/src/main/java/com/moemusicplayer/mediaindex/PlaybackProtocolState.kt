@@ -31,9 +31,40 @@ internal class PlaybackLoadFence {
 
 /** Which commands the service may fetch while another one has not been answered yet. */
 internal object PlaybackCommandGate {
-    /** A load that is only waiting (for the media source to become ready, or for its artwork) can be replaced by the next command. */
-    fun mayPreempt(loadAwaitingReady: Boolean, artworkPreparing: Boolean): Boolean =
-        loadAwaitingReady || artworkPreparing
+    /**
+     * A load that is only waiting (for its file to be checked, for the media source to become ready, or for its artwork)
+     * can be replaced by the next command.
+     */
+    fun mayPreempt(loadAwaitingReady: Boolean, artworkPreparing: Boolean, preflighting: Boolean = false): Boolean =
+        loadAwaitingReady || artworkPreparing || preflighting
+}
+
+/**
+ * Which load may still switch tracks once its file has been checked (ADR 0036). The newest load wins, and Rust says when
+ * it gave up waiting for one (`cancel_load`): a check that finishes after that is dropped, so a stale choice never
+ * replaces the track that plays.
+ */
+internal class LoadPreflightGate {
+    private var latestCommandId: String? = null
+    private val cancelled = HashSet<String>()
+
+    /** A load command arrived. */
+    fun begin(commandId: String) {
+        latestCommandId = commandId
+    }
+
+    /** Rust gave up waiting for [commandId]. */
+    fun cancel(commandId: String) {
+        if (commandId.isNotBlank()) cancelled.add(commandId)
+    }
+
+    /** Whether the load whose file was just checked may go on to switch tracks. Asking again gives the same answer. */
+    fun mayCommit(commandId: String): Boolean = latestCommandId == commandId && commandId !in cancelled
+
+    /** The load is dealt with. */
+    fun finish(commandId: String) {
+        cancelled.remove(commandId)
+    }
 }
 
 internal data class QueueCapabilities(val canNext: Boolean, val canPrevious: Boolean) {

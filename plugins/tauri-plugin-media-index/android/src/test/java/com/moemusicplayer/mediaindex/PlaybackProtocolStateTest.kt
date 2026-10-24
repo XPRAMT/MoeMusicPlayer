@@ -108,5 +108,35 @@ class PlaybackProtocolStateTest {
         assertTrue(PlaybackCommandGate.mayPreempt(loadAwaitingReady = false, artworkPreparing = true))
         // Any other command in flight (a seek, a pause) still holds the next one back.
         assertFalse(PlaybackCommandGate.mayPreempt(loadAwaitingReady = false, artworkPreparing = false))
+        // A load whose file is still being checked (a slow server) is replaceable too.
+        assertTrue(
+            PlaybackCommandGate.mayPreempt(loadAwaitingReady = false, artworkPreparing = false, preflighting = true),
+        )
+    }
+
+    @Test
+    fun onlyTheNewestLoadMaySwitchTracksOnceItsFileHasBeenChecked() {
+        val gate = LoadPreflightGate()
+        gate.begin("load-1")
+        assertTrue(gate.mayCommit("load-1"))
+        // The user chose another track while the first file was still being checked.
+        gate.begin("load-2")
+        assertFalse(gate.mayCommit("load-1"))
+        assertTrue(gate.mayCommit("load-2"))
+    }
+
+    @Test
+    fun aLoadRustGaveUpWaitingForIsNeverSwitchedTo() {
+        val gate = LoadPreflightGate()
+        gate.begin("load-5")
+        gate.cancel("load-5")
+        assertFalse(gate.mayCommit("load-5"))
+        gate.finish("load-5")
+        // A later load with the same id cannot exist, but a finished cancellation is forgotten.
+        gate.begin("load-5")
+        assertTrue(gate.mayCommit("load-5"))
+        // Cancelling nothing in particular changes nothing.
+        gate.cancel("")
+        assertTrue(gate.mayCommit("load-5"))
     }
 }
