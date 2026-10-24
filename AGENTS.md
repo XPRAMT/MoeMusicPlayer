@@ -53,7 +53,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 播放頁切歌封面：大封面用 `nowPlayingArtworkObjectUrl`（`src/lib/active-track-artwork.ts`）：`ready`，或新封面 `loading` 而控制器保留上一首 object URL 時繼續顯示舊圖並維持有封面版面；新封面 `decode()`（`createDecodedImageObjectUrl`）後才替換；`missing`、過大或失敗才隱藏、歌詞置中；generation 序號丟棄舊結果。底欄小封面不受影響。測試 `tests/active-track-artwork.test.mjs`。專輯首頁卡片封面、專輯詳情封面及底欄封面皆直角；底欄封面在所有頁面使用同一個全域樣式。
 
-正在播放封面縮放（ADR 0036，`src/lib/cover-zoom.js` 的 `coverZoom`，`tests/cover-zoom.test.mjs`）：滾輪或雙指縮放 0.5–10 倍、雙擊還原、放大後可平移；只對封面套 transform，版面依倍率預留欄寬並擠壓歌詞區。縮放中的封面以 `data-cover-zoomed` 屬性標記（不用 class）。直排／橫排只看長寬比例（`@media (orientation: portrait)`）。縮小的封面切歌後維持、放大的切歌即還原（`coverZoomPersisted`）；跨重啟只記縮小（`settings.json` 的 `coverZoom.scale`，`settings_get/set_cover_zoom`）。Release 與手機實測待回報。
+正在播放封面縮放（ADR 0036，`src/lib/cover-zoom.js` 的 `coverZoom`，`tests/cover-zoom.test.mjs`）：滾輪或雙指縮放 0.5–10 倍、雙擊還原、放大後可平移；只對封面套 transform，版面依倍率預留欄寬並即時擠壓歌詞區；所有輸入合併為每幀一次 rAF 套用，開頭只讀一次 rect（錨點為絕對求解）；縮放期間歌詞文字版面凍結（`layoutFrozen`，列寬固定、視窗只裁切），輸入停止約 150 ms 後才一次重排並置中；`will-change` 只在手勢中（`data-cover-gesture`），結束後移除以便重新光柵化；雙擊還原先播過場再一次提交版面。縮放中的封面以 `data-cover-zoomed` 屬性標記（不用 class）。直排／橫排只看長寬比例（`@media (orientation: portrait)`）。縮小的封面切歌後維持、放大的切歌即還原（`coverZoomPersisted`）；跨重啟只記縮小（`settings.json` 的 `coverZoom.scale`，`settings_get/set_cover_zoom`）。Release 與手機實測待回報。
 
 手勢（ADR 0036）：`src/lib/swipe-dismiss.js`（`use:swipeDismiss`，`tests/swipe-dismiss.test.mjs`）。窄版導覽面板左滑 → `closeNavPanel`，快速設定右滑 → `closeQuickSettings`；正在播放封面與歌詞區左滑（deltaX < 0）→ 下一首、右滑 → 上一首（使用者實測確認，勿對調），封面下滑 → `closeNowPlaying`；滑鼠（`mouseActions`）在 `.now-playing-view` 水平拖曳切歌、`.cover-stage` 向下拖曳收合；`data-cover-zoomed` 時滑鼠拖曳是平移。從 input／select／textarea／`[role="slider"]`／`[data-swipe-ignore]` 開始的手勢一律忽略。
 
