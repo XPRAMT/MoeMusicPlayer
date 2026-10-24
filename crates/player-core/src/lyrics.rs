@@ -361,6 +361,15 @@ pub fn merge_lrc_auxiliary(
     Ok(())
 }
 
+fn has_words(candidate: &LyricCandidate) -> bool {
+    candidate
+        .lyrics
+        .lines
+        .iter()
+        .any(|line| !line.words.is_empty())
+}
+
+/// Order by score (best first); equal scores prefer word-timed lyrics, then the provider track id.
 pub fn rank_lyric_candidates(
     local: &LyricsTrackMetadata,
     candidates: impl IntoIterator<Item = LyricCandidate>,
@@ -376,6 +385,8 @@ pub fn rank_lyric_candidates(
         right
             .score
             .total_cmp(&left.score)
+            // Equal scores: word timing beats line timing (the AMLL QRC of a QQ song).
+            .then_with(|| has_words(right).cmp(&has_words(left)))
             .then_with(|| left.provider_track_id.cmp(&right.provider_track_id))
             .then_with(|| left.candidate_id.cmp(&right.candidate_id))
     });
@@ -1562,6 +1573,23 @@ mod tests {
             auto_lyric_candidate(&local, &[failing_top, passing_high, passing_low])
                 .map(|item| item.candidate_id.as_str()),
             Some("passing-high")
+        );
+    }
+
+    #[test]
+    fn equal_scores_rank_word_timed_lyrics_first() {
+        let local = gate_local();
+        let mut line_level = candidate("qqmusic:mid", "Song", "Artist", None, Some(180_000));
+        line_level.provider_track_id = Some("mid".into());
+        line_level.lyrics = parse_lrc("[00:01.00]a").expect("fixture LRC");
+        let mut worded = candidate("qqmusic:zz", "Song", "Artist", None, Some(180_000));
+        worded.provider_track_id = Some("mid".into());
+        worded.lyrics = crate::parse_qrc("[1000,500]a(1000,500)").expect("fixture QRC");
+        let ranked = rank_lyric_candidates(&local, [line_level, worded]);
+        assert_eq!(ranked[0].candidate_id, "qqmusic:zz");
+        assert_eq!(
+            auto_lyric_candidate(&local, &ranked).map(|item| item.candidate_id.as_str()),
+            Some("qqmusic:zz")
         );
     }
 

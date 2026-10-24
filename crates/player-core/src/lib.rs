@@ -28,7 +28,7 @@ pub use library::{
     TrackSortField, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
 };
 pub use lyric_formats::{
-    detect_lyric_format, lyric_sidecar_rank, parse_any_lyrics, parse_ass, parse_srt,
+    detect_lyric_format, lyric_sidecar_rank, parse_any_lyrics, parse_ass, parse_qrc, parse_srt,
     DetectedLyricFormat, LyricsContent, LYRIC_SIDECAR_EXTENSIONS,
 };
 pub use lyrics::{

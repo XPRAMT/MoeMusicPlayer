@@ -14,8 +14,11 @@ pub enum DetectedLyricFormat {
     Ass,
     Srt,
     Yrc,
+    Qrc,
     Lrc,
     Plain,
+    /// A single hex or Base64 blob: encrypted QRC, which is never decoded.
+    Encrypted,
 }
 
 /// The result of reading a lyric text of unknown format.
@@ -38,8 +41,8 @@ impl LyricsContent {
 }
 
 /// The sidecar extensions read beside a song, in the order they are preferred when a folder has
-/// more than one for the same song (ADR 0041): `.lrc`, then `.ass`, then `.srt`.
-pub const LYRIC_SIDECAR_EXTENSIONS: [&str; 3] = ["lrc", "ass", "srt"];
+/// more than one for the same song (ADR 0041): `.lrc`, `.qrc`, `.ass`, then `.srt`.
+pub const LYRIC_SIDECAR_EXTENSIONS: [&str; 4] = ["lrc", "qrc", "ass", "srt"];
 
 /// The preference rank of a sidecar file name (lower wins), or `None` when it is not a lyric
 /// sidecar. Case does not matter.
@@ -87,16 +90,20 @@ fn looks_like_yrc(text: &str) -> bool {
     })
 }
 
-/// Classify a lyric text: ASS markers, then SRT cue timing (`-->`), then yrc, then LRC
+/// Classify a lyric text: ASS markers, then SRT cue timing (`-->`), then yrc, then QRC, then LRC
 /// timestamps, else plain text.
 pub fn detect_lyric_format(input: &str) -> DetectedLyricFormat {
     let text = normalized(input);
-    if looks_like_ass(&text) {
+    if looks_like_encrypted_blob(&text) {
+        DetectedLyricFormat::Encrypted
+    } else if looks_like_ass(&text) {
         DetectedLyricFormat::Ass
     } else if looks_like_srt(&text) {
         DetectedLyricFormat::Srt
     } else if looks_like_yrc(&text) {
         DetectedLyricFormat::Yrc
+    } else if looks_like_qrc(&text) {
+        DetectedLyricFormat::Qrc
     } else if parse_lrc(&text).is_ok_and(|parsed| parsed.synced) {
         DetectedLyricFormat::Lrc
     } else {
@@ -114,6 +121,8 @@ pub fn parse_any_lyrics(input: &str) -> Result<LyricsContent, LyricsParseError> 
         DetectedLyricFormat::Ass => parse_ass(input)?,
         DetectedLyricFormat::Srt => parse_srt(input)?,
         DetectedLyricFormat::Yrc => parse_yrc(input)?,
+        DetectedLyricFormat::Qrc => parse_qrc(input)?,
+        DetectedLyricFormat::Encrypted => return Ok(LyricsContent::Unusable),
         DetectedLyricFormat::Lrc | DetectedLyricFormat::Plain => {
             return Ok(LyricsContent::Parsed(parse_lrc(input)?));
         }
@@ -565,6 +574,228 @@ pub fn parse_ass(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
     })
 }
 
+// ---------------------------------------------------------------- QRC (plain text)
+
+/// Decode the XML entities a QRC wrapper uses (`&lt;`, `&amp;`, `&#10;`, `&#x4e2d;`, ...). An
+/// entity it does not know is kept as written.
+fn xml_unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let decoded = tail.find(';').filter(|end| *end <= 10).and_then(|end| {
+            let name = &tail[1..end];
+            let character = match name {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "amp" => Some('&'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => name.strip_prefix('#').and_then(|number| {
+                    let code = match number.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => number.parse::<u32>().ok()?,
+                    };
+                    char::from_u32(code)
+                }),
+            }?;
+            Some((character, end + 1))
+        });
+        match decoded {
+            Some((character, consumed)) => {
+                out.push(character);
+                rest = &tail[consumed..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The lyric text of a QRC document: the plain text itself, or the decoded `LyricContent`
+/// attribute of the `<Lyric_1 ...>` wrapper QQ Music writes.
+fn qrc_body(input: &str) -> String {
+    const ATTRIBUTE: &str = "LyricContent=\"";
+    let trimmed = input.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.starts_with('<') {
+        if let Some(at) = trimmed.find(ATTRIBUTE) {
+            let rest = &trimmed[at + ATTRIBUTE.len()..];
+            let end = rest.find('"').unwrap_or(rest.len());
+            return xml_unescape(&rest[..end]);
+        }
+    }
+    input.to_owned()
+}
+
+/// `[start,duration]` at the start of a line, then the rest of the line.
+fn qrc_line_timing(line: &str) -> Option<(u64, u64, &str)> {
+    let tagged = line.strip_prefix('[')?;
+    let end = tagged.find(']')?;
+    let mut parts = tagged[..end].split(',');
+    let start = parts.next()?.trim().parse::<u64>().ok()?;
+    let duration = parts.next()?.trim().parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((start, duration, &tagged[end + 1..]))
+}
+
+/// `(start,duration)` at the start of `text`: the two numbers and the bytes it covers.
+fn qrc_marker(text: &str) -> Option<(u64, u64, usize)> {
+    let inner = text.strip_prefix('(')?;
+    let end = inner.find(')')?;
+    let (start, duration) = inner[..end].split_once(',')?;
+    let digits = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits(start) || !digits(duration) {
+        return None;
+    }
+    Some((start.parse().ok()?, duration.parse().ok()?, end + 2))
+}
+
+fn qrc_has_marker(text: &str) -> bool {
+    text.char_indices()
+        .any(|(at, character)| character == '(' && qrc_marker(&text[at..]).is_some())
+}
+
+fn looks_like_qrc(text: &str) -> bool {
+    let trimmed = text.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.starts_with('<') && trimmed.contains("LyricContent=") {
+        return true;
+    }
+    text.lines().any(|line| {
+        qrc_line_timing(line.trim())
+            .is_some_and(|(_, _, rest)| !rest.starts_with('(') && qrc_has_marker(rest))
+    })
+}
+
+/// Words of one QRC line as `text(start,duration)` pairs. A `(0,0)` marker carries no timing:
+/// the text before it (usually a space) joins the previous word, or the next one at the start.
+fn qrc_line_words(rest: &str) -> Vec<(String, u64, u64)> {
+    let mut words: Vec<(String, u64, u64)> = Vec::new();
+    let mut text = String::new();
+    let mut prefix = String::new();
+    let mut at = 0;
+    while at < rest.len() {
+        let character = rest[at..].chars().next().unwrap_or('\0');
+        if character == '(' {
+            if let Some((start, duration, consumed)) = qrc_marker(&rest[at..]) {
+                if start == 0 && duration == 0 {
+                    match words.last_mut() {
+                        Some(last) => last.0.push_str(&text),
+                        None => prefix.push_str(&text),
+                    }
+                } else {
+                    let mut word = std::mem::take(&mut prefix);
+                    word.push_str(&text);
+                    if !word.is_empty() {
+                        words.push((word, start, start.saturating_add(duration)));
+                    }
+                }
+                text.clear();
+                at += consumed;
+                continue;
+            }
+        }
+        text.push(character);
+        at += character.len_utf8();
+    }
+    if let Some(last) = words.last_mut() {
+        last.0.push_str(&text);
+    }
+    words
+}
+
+/// Read plain-text QRC (ADR 0041 D6): `[lineStart,lineDuration]` then `text(wordStart,wordDuration)`
+/// words, in absolute milliseconds. Word starts relative to the line start are accepted when
+/// they only fit that reading. The encrypted form is not decoded; it yields no lines.
+pub fn parse_qrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
+    if input.len() > MAX_LYRIC_PAYLOAD_BYTES {
+        return Err(LyricsParseError::PayloadTooLarge);
+    }
+    const SLACK_MS: u64 = 100;
+    let body = qrc_body(input);
+    let mut lines = Vec::new();
+    for physical in body.lines() {
+        let line = physical
+            .trim_start_matches('\u{feff}')
+            .trim_end_matches('\r')
+            .trim_start();
+        let Some((line_start, line_duration, rest)) = qrc_line_timing(line) else {
+            continue;
+        };
+        let mut words = qrc_line_words(rest);
+        if words.is_empty() {
+            continue;
+        }
+        let line_end = line_start.saturating_add(line_duration);
+        let fits_absolute = words
+            .iter()
+            .all(|word| word.1 + SLACK_MS >= line_start && word.1 <= line_end + SLACK_MS);
+        let fits_relative = words.iter().all(|word| word.1 <= line_duration + SLACK_MS);
+        if line_start > 0 && !fits_absolute && fits_relative {
+            for word in &mut words {
+                word.1 = word.1.saturating_add(line_start);
+                word.2 = word.2.saturating_add(line_start);
+            }
+        }
+        let words: Vec<LyricWord> = words
+            .into_iter()
+            .map(|(text, start_ms, end_ms)| LyricWord {
+                start_ms,
+                end_ms,
+                text,
+            })
+            .collect();
+        let text: String = words.iter().map(|word| word.text.as_str()).collect();
+        if text.trim().is_empty() {
+            continue;
+        }
+        let end_ms = words
+            .iter()
+            .map(|word| word.end_ms)
+            .fold(line_end, u64::max);
+        lines.push(LyricLine {
+            start_ms: Some(line_start),
+            end_ms: Some(end_ms),
+            text,
+            words,
+            ..LyricLine::default()
+        });
+    }
+    lines.sort_by_key(|line| line.start_ms.unwrap_or_default());
+    Ok(ParsedLyrics {
+        format: LyricFormat::Qrc,
+        synced: !lines.is_empty(),
+        lines,
+        raw_text: body,
+        raw_karaoke: None,
+    })
+}
+
+/// A single unbroken hex or Base64 blob: the encrypted form of QRC, which is never decoded.
+fn looks_like_encrypted_blob(text: &str) -> bool {
+    let blob = text.trim_start_matches('\u{feff}').trim();
+    if blob.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let hex = blob.len() >= 32
+        && blob.len().is_multiple_of(2)
+        && blob.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let base64 = blob.len() >= 64
+        && blob
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+        && blob.bytes().any(|byte| byte.is_ascii_digit())
+        && blob.bytes().any(|byte| byte.is_ascii_uppercase())
+        && blob.bytes().any(|byte| byte.is_ascii_lowercase());
+    hex || base64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,11 +963,112 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_preference_is_lrc_then_ass_then_srt() {
+    fn sidecar_preference_is_lrc_then_qrc_then_ass_then_srt() {
         assert_eq!(lyric_sidecar_rank("a.LRC"), Some(0));
-        assert_eq!(lyric_sidecar_rank("a.ass"), Some(1));
-        assert_eq!(lyric_sidecar_rank("a.Srt"), Some(2));
+        assert_eq!(lyric_sidecar_rank("a.Qrc"), Some(1));
+        assert_eq!(lyric_sidecar_rank("a.ass"), Some(2));
+        assert_eq!(lyric_sidecar_rank("a.Srt"), Some(3));
         assert_eq!(lyric_sidecar_rank("a.txt"), None);
         assert_eq!(lyric_sidecar_rank("noext"), None);
+    }
+
+    const AMLL_SAMPLE: &str = include_str!("../../../tests/fixtures/amll-qq-sample.qrc");
+
+    #[test]
+    fn qrc_sample_reads_absolute_words_and_space_placeholders() {
+        let parsed = parse_qrc(AMLL_SAMPLE).unwrap();
+        assert_eq!(parsed.format, LyricFormat::Qrc);
+        assert!(parsed.synced);
+        assert_eq!(parsed.lines.len(), 6);
+        let first = &parsed.lines[0];
+        assert_eq!(first.start_ms, Some(17669));
+        assert_eq!(first.text, "除刺的玫瑰");
+        assert_eq!(first.words[0], word(17669, 17911, "除"));
+        assert_eq!(first.words[4], word(18759, 19237, "瑰"));
+        assert_eq!(first.end_ms, Some(19237));
+        // `柜(…) (0,0)`: the space joins the previous word.
+        let third = &parsed.lines[2];
+        assert_eq!(third.words.last().unwrap().text, "柜 ");
+        assert_eq!(third.text, "我踏实放在床头柜 ");
+        assert_eq!(third.words.len(), 8);
+    }
+
+    #[test]
+    fn qrc_relative_word_starts_are_moved_to_the_line() {
+        let parsed = parse_qrc("[10000,900]a(0,300)b(300,300)c(600,300)\n").unwrap();
+        let words = &parsed.lines[0].words;
+        assert_eq!(words[0], word(10000, 10300, "a"));
+        assert_eq!(words[2], word(10600, 10900, "c"));
+        let absolute = parse_qrc("[10000,900]a(10000,300)b(10300,300)\n").unwrap();
+        assert_eq!(absolute.lines[0].words[1], word(10300, 10600, "b"));
+    }
+
+    #[test]
+    fn qrc_leading_placeholders_prefix_the_next_word() {
+        let parsed = parse_qrc("[1000,500] (0,0)hi(1000,200) there(1200,300)\n").unwrap();
+        let line = &parsed.lines[0];
+        assert_eq!(line.words[0].text, " hi");
+        assert_eq!(line.words[1].text, " there");
+        assert_eq!(line.text, " hi there");
+    }
+
+    #[test]
+    fn qrc_keeps_parentheses_that_are_not_timings_and_skips_metadata() {
+        let text =
+            "[ti:Song]\r\n[ar:Moe]\r\n[1000,600](oh)(1000,300)yes(1300,300)\r\n[2000,100]\r\n\r\n";
+        let parsed = parse_qrc(text).unwrap();
+        assert_eq!(parsed.lines.len(), 1);
+        assert_eq!(parsed.lines[0].words[0].text, "(oh)");
+        assert_eq!(parsed.lines[0].text, "(oh)yes");
+    }
+
+    #[test]
+    fn qrc_xml_wrapper_is_unescaped() {
+        let wrapped = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<QrcInfos><LyricInfo LyricCount=\"1\"><Lyric_1 LyricType=\"1\" LyricContent=\"[ti:A &amp; B]&#10;[500,400]你(500,200)好(700,200)&#10;\"/></LyricInfo></QrcInfos>";
+        assert_eq!(detect_lyric_format(wrapped), DetectedLyricFormat::Qrc);
+        let parsed = parse_qrc(wrapped).unwrap();
+        assert_eq!(parsed.lines.len(), 1);
+        assert_eq!(parsed.lines[0].text, "你好");
+        assert_eq!(parsed.lines[0].words[1], word(700, 900, "好"));
+    }
+
+    #[test]
+    fn qrc_empty_and_huge_inputs() {
+        assert!(parse_qrc("").unwrap().lines.is_empty());
+        assert!(!parse_qrc("").unwrap().synced);
+        assert!(matches!(
+            parse_qrc(&"x".repeat(MAX_LYRIC_PAYLOAD_BYTES + 1)),
+            Err(LyricsParseError::PayloadTooLarge)
+        ));
+        assert!(matches!(
+            parse_any_lyrics(&"x".repeat(MAX_LYRIC_PAYLOAD_BYTES + 1)),
+            Err(LyricsParseError::PayloadTooLarge)
+        ));
+    }
+
+    #[test]
+    fn qrc_is_detected_by_content_and_encrypted_blobs_are_unusable() {
+        assert_eq!(detect_lyric_format(AMLL_SAMPLE), DetectedLyricFormat::Qrc);
+        match parse_any_lyrics(AMLL_SAMPLE).unwrap() {
+            LyricsContent::Parsed(parsed) => assert_eq!(parsed.format, LyricFormat::Qrc),
+            other => panic!("{other:?}"),
+        }
+        // yrc keeps priority for its own `(start,duration,flag)` form.
+        assert_eq!(
+            detect_lyric_format("[100,200](100,200,0)x"),
+            DetectedLyricFormat::Yrc
+        );
+        let hex = "A1B2C3D4E5F60718293A4B5C6D7E8F90".repeat(4);
+        assert_eq!(detect_lyric_format(&hex), DetectedLyricFormat::Encrypted);
+        assert_eq!(parse_any_lyrics(&hex).unwrap(), LyricsContent::Unusable);
+        let base64 = "Qm9ndXNFbmNyeXB0ZWRQYXlsb2FkMDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6";
+        assert_eq!(parse_any_lyrics(base64).unwrap(), LyricsContent::Unusable);
+        let wrapped_blob = "<Lyric_1 LyricType=\"1\" LyricContent=\"ABCDEF0123456789\"/>";
+        assert_eq!(
+            parse_any_lyrics(wrapped_blob).unwrap(),
+            LyricsContent::Unusable
+        );
+        // Ordinary one-word plain text is still plain.
+        assert_eq!(detect_lyric_format("hello"), DetectedLyricFormat::Plain);
     }
 }
