@@ -8,8 +8,8 @@
 use std::sync::{Arc, OnceLock};
 
 use player_lyrics_native::{
-    Align, Animation, Chrome, Events, Look, LyricLine, LyricsData, NativeLyrics, PlayState,
-    PlaybackSample, TextEffect,
+    Align, Animation, Chrome, Events, Look, LyricLine, LyricWord, LyricsData, NativeLyrics,
+    PlayState, PlaybackSample, TextEffect,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Listener, Manager, PhysicalPosition};
@@ -77,6 +77,16 @@ struct LinePayload {
     text: Option<String>,
     #[serde(default)]
     translation: Option<String>,
+    #[serde(default)]
+    words: Vec<WordPayload>,
+}
+
+/// A word of a word-timed line (`LyricLineDto.words`, ADR 0041): start, end, text.
+#[derive(Deserialize)]
+struct WordPayload {
+    s: f64,
+    e: f64,
+    t: String,
 }
 
 #[derive(Deserialize)]
@@ -153,6 +163,15 @@ fn listen(app: &AppHandle, renderer: NativeLyrics) {
                             start_ms: line.start_ms,
                             text: line.text.unwrap_or_default(),
                             translation: line.translation.unwrap_or_default(),
+                            words: line
+                                .words
+                                .into_iter()
+                                .map(|w| LyricWord {
+                                    start_ms: w.s,
+                                    end_ms: w.e,
+                                    text: w.t,
+                                })
+                                .collect(),
                         })
                         .collect(),
                 }
@@ -180,6 +199,15 @@ fn listen(app: &AppHandle, renderer: NativeLyrics) {
     app.listen_any("lyrics-inactive-opacity", move |event| {
         if let Ok(percent) = serde_json::from_str::<f64>(event.payload()) {
             r.set_inactive_opacity(percent.round().clamp(0.0, 100.0) as u32);
+        }
+    });
+    let r = renderer.clone();
+    app.listen_any("lyrics-accent-color", move |event| {
+        if let Some(rgb) = serde_json::from_str::<String>(event.payload())
+            .ok()
+            .and_then(|v| hex(&v))
+        {
+            r.set_accent(rgb);
         }
     });
     let r = renderer.clone();

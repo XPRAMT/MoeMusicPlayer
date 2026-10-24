@@ -27,6 +27,23 @@ pub struct LyricLine {
     pub start_ms: f64,
     pub text: String,
     pub translation: String,
+    /// Word timing of the main text (ADR 0041), empty for a line-timed line; the words spell `text` (untrimmed).
+    pub words: Vec<LyricWord>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LyricWord {
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub text: String,
+}
+
+impl LyricLine {
+    /// The UTF-16 ranges of the words in the trimmed text, when the line is word-timed and its words spell it.
+    pub fn word_ranges(&self) -> Option<Vec<(usize, usize)>> {
+        let words: Vec<&str> = self.words.iter().map(|w| w.text.as_str()).collect();
+        player_lyrics_rules::word_utf16_ranges(&self.text, &words)
+    }
 }
 
 /// The lyrics of one track as the main window prepared them: synced lines only, Traditional Chinese already chosen.

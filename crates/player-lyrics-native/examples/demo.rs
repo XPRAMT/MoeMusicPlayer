@@ -56,6 +56,7 @@ fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2500.0);
+    let words = std::env::var("MOE_DEMO_WORDS").is_ok_and(|v| v == "1");
     let lines = texts
         .iter()
         .cycle()
@@ -66,6 +67,36 @@ fn main() {
             // Unique lines, so every line change brings a line that was never rasterised.
             text: format!("{t} {i}"),
             translation: tr.to_string(),
+            // `MOE_DEMO_WORDS=1`: word timing, one word per grapheme over 80 % of the line (uneven: every third
+            // word twice as long), as yrc lyrics give.
+            words: if words {
+                let text = format!("{t} {i}");
+                let graphemes: Vec<&str> =
+                    unicode_segmentation::UnicodeSegmentation::graphemes(text.as_str(), true)
+                        .collect();
+                let weights: Vec<f64> = (0..graphemes.len())
+                    .map(|k| if k % 3 == 2 { 2.0 } else { 1.0 })
+                    .collect();
+                let total: f64 = weights.iter().sum();
+                let start = 500.0 + i as f64 * line_ms;
+                let mut at = start;
+                graphemes
+                    .iter()
+                    .zip(&weights)
+                    .map(|(g, w)| {
+                        let len = line_ms * 0.8 * w / total;
+                        let word = LyricWord {
+                            start_ms: at,
+                            end_ms: at + len,
+                            text: g.to_string(),
+                        };
+                        at += len;
+                        word
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         })
         .collect();
     // `MOE_DEMO_LYRICS_DELAY_MS`: open the windows first and load the lyrics later (to measure their memory).

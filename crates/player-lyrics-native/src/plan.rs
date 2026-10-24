@@ -166,6 +166,10 @@ pub struct StripInput<'a> {
     pub rate: f64,
     /// Lyrics time at which `rate` returns to 1 (`None` = no correction running).
     pub slew_until_ms: Option<f64>,
+    /// Word-timed lyrics (ADR 0041 option C): the glide's knots `(lyrics ms, strip px)` are the word starts
+    /// (`rules::word_glide_knots`), the target is the area's centre, and every cell stays at factor 1 (the static
+    /// centre mask dims instead of the line fades). `None`: the line glide.
+    pub word_knots: Option<&'a [(f64, f64)]>,
 }
 
 impl StripInput<'_> {
@@ -196,6 +200,9 @@ impl StripInput<'_> {
 }
 
 fn offset_at(input: &StripInput, t: f64) -> f64 {
+    if let Some(knots) = input.word_knots {
+        return rules::glide_cubic(knots, t, input.view_width / 2.0)[0];
+    }
     rules::strip_offset(
         input.starts,
         input.layout,
@@ -208,6 +215,9 @@ fn offset_at(input: &StripInput, t: f64) -> f64 {
 }
 
 fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
+    if let Some(knots) = input.word_knots {
+        return rules::glide_cubic(knots, t, input.view_width / 2.0);
+    }
     rules::strip_cubic(
         input.starts,
         input.layout,
@@ -220,6 +230,9 @@ fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
 }
 
 fn factor_at(input: &StripInput, index: usize, t: f64) -> f64 {
+    if input.word_knots.is_some() {
+        return 1.0;
+    }
     let focus = rules::strip_focus(input.starts, t, rules::FADE_MS);
     rules::line_opacity_factor(
         rules::line_weight(&focus, index),
@@ -237,7 +250,11 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
     if input.playing {
         let mut t = p;
         while breaks.len() < HORIZON_BREAKS {
-            match rules::next_strip_break(input.starts, t, arrival) {
+            let next = match input.word_knots {
+                Some(knots) => rules::next_knot_after(knots, t),
+                None => rules::next_strip_break(input.starts, t, arrival),
+            };
+            match next {
                 Some(next) if next > t => {
                     breaks.push(next);
                     t = next;
@@ -446,6 +463,7 @@ mod tests {
             inactive_percent: 50,
             rate: 1.0,
             slew_until_ms: None,
+            word_knots: None,
         }
     }
 
@@ -478,6 +496,59 @@ mod tests {
                 plan.wake_ms,
                 rules::next_strip_break(&starts, at, Some(11000.0)).map(|b| b - at)
             );
+        }
+    }
+
+    #[test]
+    fn word_timed_plans_centre_each_word_and_keep_every_cell_whole() {
+        let starts = [1000.0, 3000.0];
+        let layout = rules::layout_strip(&[100.0, 80.0], &[60.0, 90.0], 20.0);
+        let lines = [
+            rules::KnotLine {
+                start_ms: 1000.0,
+                cell_start: layout.starts[0],
+                word_starts: vec![1000.0, 1400.0, 1900.0],
+                word_centres: vec![10.0, 45.0, 85.0],
+            },
+            rules::KnotLine {
+                start_ms: 3000.0,
+                cell_start: layout.starts[1],
+                word_starts: vec![],
+                word_centres: vec![],
+            },
+        ];
+        let knots = rules::word_glide_knots(&lines);
+        for at in [0.0, 1000.0, 1200.0, 2500.0] {
+            let mut i = input(&starts, &layout, at, true);
+            i.word_knots = Some(&knots);
+            let plan = plan_strip(&i);
+            // The translation row has no knots: it is a cell of the same strip, so one offset moves both rows and
+            // no cell fades (the centre mask dims instead).
+            for (_, keys) in &plan.opacity {
+                assert!(keys.iter().all(|k| (k.1 - 1.0).abs() < 1e-12));
+            }
+            let mut t = 0.0;
+            let mut last = f64::INFINITY;
+            while t <= plan.offset.last().unwrap().0 {
+                let v = cubic_value_at(&plan.offset, t);
+                assert!((v - offset_at(&i, at + t * 1000.0)).abs() < 1e-6);
+                // Per frame (240 Hz) the strip only moves left and never jumps.
+                assert!(v <= last + 1e-9 && (last - v).abs() < 5.0 || last.is_infinite());
+                last = v;
+                t += 1.0 / 240.0;
+            }
+            assert_eq!(
+                plan.wake_ms,
+                rules::next_knot_after(&knots, at).map(|b| b - at)
+            );
+        }
+        // Each word start is centred.
+        for &(t, v) in &knots {
+            let i = StripInput {
+                word_knots: Some(&knots),
+                ..input(&starts, &layout, t, true)
+            };
+            assert!((offset_at(&i, t) - (200.0 - v)).abs() < 1e-9);
         }
     }
 
@@ -562,6 +633,7 @@ mod tests {
                 inactive_percent: 50,
                 rate: slew.map_or(1.0, |s| s.0),
                 slew_until_ms: slew.map(|s| at + s.1),
+                word_knots: None,
             };
             plan_strip(&i)
         };

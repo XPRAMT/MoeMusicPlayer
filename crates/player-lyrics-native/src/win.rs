@@ -86,6 +86,8 @@ enum Cmd {
     Lyrics(Option<LyricsData>),
     Playback(PlaybackSample),
     Inactive(u32),
+    /// The theme accent (word highlight in the none mode, ADR 0041).
+    Accent([u8; 3]),
     Delay {
         track_id: String,
         delay_sec: f64,
@@ -168,6 +170,9 @@ impl NativeLyrics {
         self.send(Cmd::Inactive(rules::normalize_inactive_opacity_percent(
             percent as f64,
         )));
+    }
+    pub fn set_accent(&self, rgb: [u8; 3]) {
+        self.send(Cmd::Accent(rgb));
     }
     pub fn set_timing_delay(&self, track_id: &str, delay_sec: f64) {
         self.send(Cmd::Delay {
@@ -539,6 +544,9 @@ struct TextStyle {
     effect: rules::TextEffect,
     /// Line box in em.
     line_height: f32,
+    /// The colour the shadow / outline colour is taken from (the text colour; the accent copy of a line keeps the
+    /// white line's effect, so the two surfaces' shadows are identical and a clip between them shows no seam).
+    effect_from: [u8; 3],
 }
 
 fn rgba(c: [u8; 3], a: f32) -> D2D1_COLOR_F {
@@ -649,7 +657,7 @@ fn rasterise(gfx: &Gfx, request: &RasterRequest) -> Result<Raster> {
                 y += px * request.style.line_height;
             }
             let text_brush = dc.CreateSolidColorBrush(&rgba(request.style.color, 1.0), None)?;
-            let effect_color = effect_rgb(request.style.color);
+            let effect_color = effect_rgb(request.style.effect_from);
             let options = D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_NO_SNAP;
             match request.style.effect {
                 rules::TextEffect::None => {}
@@ -842,6 +850,73 @@ fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<Sur
 }
 
 // ---------------------------------------------------------------- animations
+
+/// The none mode's karaoke (ADR 0041): a word-timed main row is two sprites of the same position, the white line
+/// and its accent copy, with complementary clips: the accent one from the row's left to the karaoke edge
+/// (`rules::karaoke_clip_x`: sung words and the sung part of the current word), the white one from the edge on. The
+/// edge wipes with the audio clock and is written only when it moved at least 1/8 device px, so a still line commits
+/// nothing and nothing is rasterised per frame.
+struct WordClip {
+    /// `[lit, dim]`.
+    clips: [InsetClip; 2],
+    spans: Vec<(f64, f64)>,
+    times: Vec<(f64, f64)>,
+    width: f64,
+    /// The edge last written (NaN before the first write).
+    shown: f64,
+}
+
+impl WordClip {
+    fn sample(&mut self, t: f64) -> Result<bool> {
+        let x = rules::karaoke_clip_x(&self.spans, &self.times, t).clamp(0.0, self.width);
+        if (x - self.shown).abs() < 0.125 {
+            return Ok(false);
+        }
+        let [lit, dim] = &self.clips;
+        lit.SetRightInset((self.width - x) as f32)?;
+        dim.SetLeftInset(x as f32)?;
+        self.shown = x;
+        Ok(true)
+    }
+}
+
+/// Each word's x range `(left, right)` in a row's layout (px from the text's left edge), from DirectWrite's hit
+/// testing on the whole line (so kerning and CJK spacing are the line's); an empty word is a point.
+fn word_spans(layout: &IDWriteTextLayout, ranges: &[(usize, usize)]) -> Vec<(f32, f32)> {
+    ranges
+        .iter()
+        .map(|&(start, len)| unsafe {
+            if len > 0 {
+                let mut metrics = [DWRITE_HIT_TEST_METRICS::default(); 16];
+                let mut count = 0u32;
+                if layout
+                    .HitTestTextRange(
+                        start as u32,
+                        len as u32,
+                        0.0,
+                        0.0,
+                        Some(&mut metrics),
+                        &mut count,
+                    )
+                    .is_ok()
+                    && count > 0
+                {
+                    let used = &metrics[..(count as usize).min(metrics.len())];
+                    let l = used.iter().map(|m| m.left).fold(f32::INFINITY, f32::min);
+                    let r = used
+                        .iter()
+                        .map(|m| m.left + m.width)
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    return (l, r);
+                }
+            }
+            let (mut x, mut y) = (0.0, 0.0);
+            let mut m = DWRITE_HIT_TEST_METRICS::default();
+            let _ = layout.HitTestTextPosition(start as u32, false, &mut x, &mut y, &mut m);
+            (x, x)
+        })
+        .collect()
+}
 
 /// One property the renderer thread samples every frame (`sampling`): the strip's or a row's Offset.X, or a
 /// cell's Opacity, from its plan's curve. `written` is the device value last set (NaN before the first write).
@@ -1123,8 +1198,12 @@ const PREWARM_LINES: usize = 100;
 /// Later batches (while the strip glides) stay small: each line costs about 1 ms of CPU on top of the commit wait,
 /// and 100 at once stalled about 270 ms in the demo.
 const PREWARM_LATER_LINES: usize = 16;
+/// The theme's default accent (`theme.js`), until the main window sends the chosen one.
+const DEFAULT_ACCENT: [u8; 3] = [0xA9, 0xC3, 0xFE];
 
-type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, f64);
+/// (font, translation font, line count), main widths, translation widths, last glyph centre, and per line the
+/// word centres (px from the text's left edge; empty for a line without words).
+type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, f64, Vec<Vec<f64>>);
 
 struct Win {
     hwnd: HWND,
@@ -1146,6 +1225,8 @@ struct Win {
     has_translation: Option<bool>,
     /// The properties sampled every frame and the instant their plan's time 0 stands for.
     live: Vec<Live>,
+    /// The none mode's sung-word clips, sampled every frame with `live`.
+    words: Vec<WordClip>,
     plan_at: Instant,
     /// Line widths of the continuous strip: (font, translation font, line count), main and translation widths,
     /// the last glyph's centre. Cleared with the raster cache (new lyrics or look).
@@ -1303,6 +1384,7 @@ struct Renderer {
     lyrics: Option<LyricsData>,
     clock: Clock,
     inactive: u32,
+    accent: [u8; 3],
     delay: Option<(String, f64)>,
     events: Arc<dyn Events>,
     dirty: Vec<String>,
@@ -1349,6 +1431,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
             duration_ms: None,
         },
         inactive: rules::DEFAULT_INACTIVE_OPACITY_PERCENT,
+        accent: DEFAULT_ACCENT,
         delay: None,
         events,
         dirty: Vec::new(),
@@ -1412,6 +1495,8 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
             }
             continue;
         }
+        // Idle (a still line): the next line's rasters are drawn now, long before they are needed.
+        r.prewarm_batch();
         let next = r.windows.values().filter_map(|w| w.wake_at).min();
         let mut timeout = DEVICE_CHECK.saturating_sub(last_check.elapsed());
         if let Some(at) = next {
@@ -1736,6 +1821,15 @@ impl Renderer {
                     }
                 }
             }
+            Cmd::Accent(rgb) => {
+                if self.accent != rgb {
+                    self.accent = rgb;
+                    for win in self.windows.values_mut() {
+                        win.cache.clear();
+                    }
+                    self.mark_all();
+                }
+            }
             Cmd::Inactive(percent) => {
                 if self.inactive != percent {
                     self.inactive = percent;
@@ -1795,6 +1889,7 @@ impl Renderer {
             live: Vec::new(),
             plan_at: Instant::now(),
             measured: None,
+            words: Vec::new(),
             prewarm: Vec::new(),
             moving_until: None,
         };
@@ -1871,6 +1966,7 @@ impl Renderer {
             lyrics: self.lyrics.as_ref(),
             clock: &self.clock,
             inactive: self.inactive,
+            accent: self.accent,
             delay: self.delay.as_ref(),
             now: Instant::now(),
             frame: present_time(),
@@ -2003,6 +2099,7 @@ struct Context<'a> {
     lyrics: Option<&'a LyricsData>,
     clock: &'a Clock,
     inactive: u32,
+    accent: [u8; 3],
     delay: Option<&'a (String, f64)>,
     /// The plan's time 0 (when the plan is made).
     now: Instant,
@@ -2052,6 +2149,9 @@ fn sample_window(win: &mut Win, frame: Instant) -> Result<bool> {
     for l in &mut win.live {
         any |= l.sample(t)?;
     }
+    for word in &mut win.words {
+        any |= word.sample(t)?;
+    }
     if win.moving_until.is_some_and(|u| frame > u) {
         win.moving_until = None;
     }
@@ -2063,6 +2163,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
     let fresh = win.cache.is_empty();
     win.wake_at = None;
     win.live.clear();
+    win.words.clear();
     win.moving_until = None;
     win.plan_at = ctx.now;
     let Some(root) = win.root.clone() else {
@@ -2140,6 +2241,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         color: look.color,
         effect: look.effect,
         line_height: line_height as f32,
+        effect_from: look.color,
     };
     let clip_room = match look.effect {
         rules::TextEffect::Shadow => 0.6,
@@ -2152,8 +2254,8 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         let lines: Vec<_> = lyrics
             .lines
             .iter()
-            .map(|l| {
-                (
+            .filter_map(|l| {
+                let line = (
                     l.start_ms,
                     l.text.trim(),
                     if look.show_translation {
@@ -2161,10 +2263,17 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     } else {
                         ""
                     },
-                )
+                );
+                (!line.1.is_empty() || !line.2.is_empty()).then_some((line, l))
             })
-            .filter(|(_, t, tr)| !t.is_empty() || !tr.is_empty())
             .collect();
+        let sources: Vec<&crate::LyricLine> = lines.iter().map(|l| l.1).collect();
+        let lines: Vec<(f64, &str, &str)> = lines.into_iter().map(|l| l.0).collect();
+        // Word-timed lyrics (ADR 0041 option C): the glide's knots are the word starts and the static centre mask
+        // replaces the edge fade and the line fades. Translations have no word effects: they follow the main row.
+        let word_ranges: Vec<Option<Vec<(usize, usize)>>> =
+            sources.iter().map(|l| l.word_ranges()).collect();
+        let word_mode = word_ranges.iter().any(Option::is_some);
         has_translation = lines.iter().any(|l| !l.2.is_empty());
         if lines.is_empty() {
             return Ok(false);
@@ -2188,8 +2297,16 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             let mut main_widths = Vec::new();
             let mut trans_widths = Vec::new();
             let mut last_centre = 0.0;
+            let mut word_centres = Vec::new();
             for (i, (_, text, tr)) in lines.iter().enumerate() {
                 let main = text_layout(gfx, text, font, style.line_height)?;
+                word_centres.push(match &word_ranges[i] {
+                    Some(ranges) => word_spans(&main, ranges)
+                        .into_iter()
+                        .map(|(l, r)| ((l + r) / 2.0) as f64)
+                        .collect(),
+                    None => Vec::new(),
+                });
                 main_widths.push(if text.is_empty() {
                     0.0
                 } else {
@@ -2208,15 +2325,39 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
                 });
             }
-            win.measured = Some((key, main_widths, trans_widths, last_centre));
+            win.measured = Some((key, main_widths, trans_widths, last_centre, word_centres));
         }
-        let (_, main_widths, trans_widths, last_centre) = win.measured.clone().unwrap();
+        let (_, main_widths, trans_widths, last_centre, word_centres) =
+            win.measured.clone().unwrap();
         let starts: Vec<f64> = lines.iter().map(|l| l.0).collect();
         let layout = rules::layout_strip(&main_widths, &trans_widths, font as f64);
         let last = lines.last().unwrap();
         let arrival =
             rules::final_arrival_ms(last.0, last.1, ctx.clock.duration_ms.map(|d| d + offset));
+        let knots = word_mode.then(|| {
+            let knot_lines: Vec<rules::KnotLine> = lines
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let words = &sources[i].words;
+                    let centres = &word_centres[i];
+                    let keep = word_ranges[i].is_some() && centres.len() == words.len();
+                    rules::KnotLine {
+                        start_ms: l.0,
+                        cell_start: layout.starts[i],
+                        word_starts: if keep {
+                            words.iter().map(|w| w.start_ms).collect()
+                        } else {
+                            Vec::new()
+                        },
+                        word_centres: if keep { centres.clone() } else { Vec::new() },
+                    }
+                })
+                .collect();
+            rules::word_glide_knots(&knot_lines)
+        });
         let input = plan::StripInput {
+            word_knots: knots.as_deref(),
             starts: &starts,
             layout: &layout,
             view_width: area.width,
@@ -2310,6 +2451,14 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             h,
             opacity,
             font as f64 * clip_room,
+            if word_mode {
+                Mask::Centre {
+                    em: font as f64,
+                    inactive: ctx.inactive,
+                }
+            } else {
+                Mask::Edge
+            },
         )?;
         // The strip glides and every cell fades: sampled per frame from the plan (`Live`), in 1/8 device px steps
         // and 1/255 opacity steps.
@@ -2422,22 +2571,123 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             h,
             opacity,
             font as f64 * clip_room,
+            Mask::Edge,
         )?;
-        for (raster, base, overflow, y) in &placed {
-            let visual: Visual = sprite(gfx, &raster.surface)?.cast()?;
-            content.Children()?.InsertAtTop(&visual)?;
-            live(
-                win,
-                ctx,
-                visual,
-                sampling::Kind::OffsetX,
-                Curve::Linear {
-                    keys: planned.scroll.clone(),
-                    add: base - raster.margin as f64,
-                    factor: -overflow,
+        // Word-timed main row (ADR 0041): karaoke, sung words and the sung part of the current word in the theme
+        // accent. The line is rasterised twice (white and accent, same layout and the same shadow / outline colour)
+        // and shown as two sprites of the same position with complementary clips (`WordClip`), so the shadow has no
+        // seam, kerning and CJK spacing are the line's own, and nothing is drawn per frame.
+        // Translations keep the whole-line display.
+        let spans = line.word_ranges().and_then(|ranges| {
+            let layout = text_layout(gfx, text, font, style.line_height).ok()?;
+            Some(word_spans(&layout, &ranges))
+        });
+        let accent_style = TextStyle {
+            color: ctx.accent,
+            ..style
+        };
+        for (row, (raster, base, overflow, y)) in placed.iter().enumerate() {
+            let words = spans.as_ref().filter(|_| row == 0);
+            let accent = match words {
+                Some(_) => Some(cached(gfx, win, &[(text, font)], accent_style)?),
+                None => None,
+            };
+            // `[white]`, or `[accent (lit), white (dim)]` for a karaoke row.
+            let mut visuals: Vec<Visual> = Vec::new();
+            if let Some(accent) = &accent {
+                visuals.push(sprite(gfx, &accent.surface)?.cast()?);
+            }
+            visuals.push(sprite(gfx, &raster.surface)?.cast()?);
+            for visual in &visuals {
+                content.Children()?.InsertAtTop(visual)?;
+                live(
+                    win,
+                    ctx,
+                    visual.clone(),
+                    sampling::Kind::OffsetX,
+                    Curve::Linear {
+                        keys: planned.scroll.clone(),
+                        add: base - raster.margin as f64,
+                        factor: -overflow,
+                    },
+                    (y - raster.margin as f64).round(),
+                )?;
+            }
+            if let (Some(spans), Some(_)) = (words, &accent) {
+                let at = position + offset;
+                let margin = raster.margin as f64;
+                let times: Vec<(f64, f64)> = line
+                    .words
+                    .iter()
+                    .map(|w| ((w.start_ms - at) / 1000.0, (w.end_ms - at) / 1000.0))
+                    .collect();
+                let clips = [
+                    gfx.compositor.CreateInsetClip()?,
+                    gfx.compositor.CreateInsetClip()?,
+                ];
+                for (visual, clip) in visuals.iter().zip(&clips) {
+                    visual.SetClip(clip)?;
+                }
+                let mut word = WordClip {
+                    clips,
+                    spans: spans
+                        .iter()
+                        .map(|&(l, r)| (l as f64 + margin, r as f64 + margin))
+                        .collect(),
+                    times,
+                    width: raster.surface.width as f64,
+                    shown: f64::NAN,
+                };
+                word.sample(ctx.frame.saturating_duration_since(ctx.now).as_secs_f64())?;
+                if playing {
+                    if let Some(end) = word
+                        .times
+                        .iter()
+                        .map(|t| t.1)
+                        .fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.max(b))))
+                    {
+                        if end > 0.0 {
+                            let until = ctx.now + Duration::from_secs_f64(end);
+                            win.moving_until =
+                                Some(win.moving_until.map_or(until, |u| u.max(until)));
+                        }
+                    }
+                }
+                win.words.push(word);
+            }
+        }
+        // The next line's rasters (and its accent copy) are drawn ahead, so a line change never rasterises.
+        win.prewarm.clear();
+        if let Some(next) = lyrics.lines.get(index + 1) {
+            let next_text = next.text.trim();
+            let next_tr = if look.show_translation {
+                next.translation.trim()
+            } else {
+                ""
+            };
+            let next_font = (fit_font_size(
+                look.font_size_px,
+                area.height / scale,
+                if next_tr.is_empty() {
+                    0.0
+                } else {
+                    look.translation_scale_percent
                 },
-                (y - raster.margin as f64).round(),
-            )?;
+                line_height,
+            ) * scale) as f32;
+            if !next_text.is_empty() {
+                win.prewarm
+                    .push((vec![(next_text.to_string(), next_font)], style));
+                if next.word_ranges().is_some() {
+                    win.prewarm
+                        .push((vec![(next_text.to_string(), next_font)], accent_style));
+                }
+                if !next_tr.is_empty() {
+                    let trans = next_font * (look.translation_scale_percent / 100.0) as f32;
+                    win.prewarm
+                        .push((vec![(next_tr.to_string(), trans)], style));
+                }
+            }
         }
     }
     Ok(has_translation)
@@ -2454,9 +2704,36 @@ fn edge_fade_enabled() -> bool {
 /// `CompositionLinearGradientBrush` (`sampling::edge_fade_stops`, the rule `edge_fade_opacity`). One copy of the
 /// content per window, and the mask is a single pass in DWM.
 struct FadeHost {
-    key: [i64; 4],
+    key: [i64; 5],
     content: ContainerVisual,
     shown: SpriteVisual,
+}
+
+/// Which static mask a window's lyrics are seen through.
+#[derive(Clone, Copy, PartialEq)]
+enum Mask {
+    /// Line-timed lyrics: the square edge fade (`sampling::edge_fade_stops`).
+    Edge,
+    /// Word-timed continuous lyrics (ADR 0041 option C): the centre mask (`rules::word_mask_stops`) at the main
+    /// row's em, the same for the translation row so both fade at the same places.
+    Centre { em: f64, inactive: u32 },
+}
+
+impl Mask {
+    fn stops(self, area: Area) -> Vec<(f64, f64)> {
+        match self {
+            Mask::Edge => sampling::edge_fade_stops(area.width, area.height),
+            Mask::Centre { em, inactive } => rules::word_mask_stops(area.width, em, inactive),
+        }
+    }
+    fn key(self) -> i64 {
+        match self {
+            Mask::Edge => 0,
+            Mask::Centre { em, inactive } => {
+                ((em * 64.0).round() as i64) << 8 | inactive as i64 | 1 << 40
+            }
+        }
+    }
 }
 
 fn build_fade_host(
@@ -2464,6 +2741,7 @@ fn build_fade_host(
     area: Area,
     w: f64,
     h: f64,
+    mask: Mask,
 ) -> Result<(ContainerVisual, SpriteVisual)> {
     let c = &gfx.compositor;
     let size = Vector2 {
@@ -2492,7 +2770,7 @@ fn build_fade_host(
     // Clamp: transparent beyond the lyric area on both sides (as the zones end there).
     gradient.SetExtendMode(CompositionGradientExtendMode::Clamp)?;
     let stops = gradient.ColorStops()?;
-    for (offset, alpha) in sampling::edge_fade_stops(area.width, area.height) {
+    for (offset, alpha) in mask.stops(area) {
         let stop = c.CreateColorGradientStopWithOffsetAndColor(
             offset as f32,
             Color {
@@ -2525,6 +2803,7 @@ fn content_host(
     h: f64,
     opacity: f32,
     clip: f64,
+    mask: Mask,
 ) -> Result<ContainerVisual> {
     if !edge_fade_enabled() {
         let content = gfx.compositor.CreateContainerVisual()?;
@@ -2547,9 +2826,10 @@ fn content_host(
         h.round() as i64,
         (area.left * 64.0).round() as i64,
         (area.width * 64.0).round() as i64 ^ ((area.height * 64.0).round() as i64) << 32,
+        mask.key(),
     ];
     if win.fade.as_ref().is_none_or(|f| f.key != key) {
-        let (content, shown) = build_fade_host(gfx, area, w, h)?;
+        let (content, shown) = build_fade_host(gfx, area, w, h, mask)?;
         win.fade = Some(FadeHost {
             key,
             content,
@@ -2565,8 +2845,8 @@ fn content_host(
 
 fn raster_key<T: std::fmt::Debug>(rows: &[(T, f32)], style: TextStyle) -> String {
     format!(
-        "{:?}|{:?}|{}|{}",
-        rows, style.color, style.effect as u8, style.line_height
+        "{:?}|{:?}|{:?}|{}|{}",
+        rows, style.color, style.effect_from, style.effect as u8, style.line_height
     )
 }
 

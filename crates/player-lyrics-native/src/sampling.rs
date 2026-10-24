@@ -100,6 +100,7 @@ mod tests {
             inactive_percent: 50,
             rate: slew.map_or(1.0, |s| s.0),
             slew_until_ms: slew.map(|s| at + s.1),
+            word_knots: None,
         }
     }
 
