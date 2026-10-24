@@ -203,6 +203,7 @@ class PlaybackService : MediaSessionService() {
                 reportSnapshot()
             }
         })
+        player.addListener(clockListener)
         exoPlayer = player
         val forwarding = QueueAwarePlayer(player)
         sessionPlayer = forwarding
@@ -256,8 +257,75 @@ class PlaybackService : MediaSessionService() {
         return true
     }
 
+    /**
+     * The playback clock for the GL lyrics overlay (ADR 0032): every event that changes the position's course publishes a
+     * [ClockSnapshot] (and wakes the render thread); while the overlay wants it, a poll re-anchors on every step of the
+     * player's coarse position. Main thread (the player's thread) only.
+     */
+    private val clockListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            publishClock(true)
+            ensureClockPolling()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) = publishClock(true)
+
+        override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) = publishClock(true)
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) = publishClock(true)
+
+        override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) = publishClock(true)
+    }
+    private var clockPolling = false
+    private val clockPoll = object : Runnable {
+        override fun run() {
+            if (serviceDestroyed || LyricsClock.demand.get() <= 0 || !playbackActive) {
+                clockPolling = false
+                return
+            }
+            publishClock(false)
+            mainHandler.postDelayed(this, CLOCK_POLL_MS)
+        }
+    }
+
+    internal fun ensureClockPolling() {
+        if (clockPolling || serviceDestroyed || LyricsClock.demand.get() <= 0 || !playbackActive) return
+        clockPolling = true
+        mainHandler.postDelayed(clockPoll, CLOCK_POLL_MS)
+    }
+
+    internal fun publishClock(wake: Boolean) {
+        val player = exoPlayer
+        val item = player?.currentMediaItem
+        if (player == null || item == null) {
+            if (wake) LyricsClock.clear()
+            return
+        }
+        val state = player.playbackState
+        val active = state == Player.STATE_READY || state == Player.STATE_BUFFERING
+        LyricsClock.publish(
+            trackId = item.mediaId,
+            positionMs = player.currentPosition,
+            playing = player.isPlaying,
+            speed = player.playbackParameters.speed,
+            active = active,
+            durationMs = player.duration.takeIf { it > 0 } ?: FloatingLyricsRules.NO_TIME,
+            nowNanos = System.nanoTime(),
+            wake = wake,
+            // A stepped position was reached somewhere in the last poll interval: anchor in the middle of it.
+            anchorBackNanos = if (wake) 0L else CLOCK_POLL_MS * 1_000_000L / 2,
+        )
+    }
+
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
+        mainHandler.removeCallbacks(clockPoll)
+        clockPolling = false
+        LyricsClock.clear()
         serviceDestroyed = true
         playbackActive = false
         mainHandler.removeCallbacks(loadAckTimeout)
@@ -915,6 +983,15 @@ class PlaybackService : MediaSessionService() {
 
         /** Main thread only. Fills `into` and returns true; false while no playback service is running or nothing is loaded. */
         fun floatingLyricsSample(into: FloatingLyricsOverlay.Sample): Boolean = activeInstance?.overlaySample(into) ?: false
+
+        /** Main thread. The GL overlay was created: publish the clock now and keep it fresh while playing. */
+        internal fun startClockFeed() {
+            val service = activeInstance ?: return
+            service.publishClock(true)
+            service.ensureClockPolling()
+        }
+
+        private const val CLOCK_POLL_MS = 40L
 
         private const val ACTIVE_POLL_INTERVAL_MS = 50L
         private const val IDLE_POLL_INTERVAL_MS = 250L

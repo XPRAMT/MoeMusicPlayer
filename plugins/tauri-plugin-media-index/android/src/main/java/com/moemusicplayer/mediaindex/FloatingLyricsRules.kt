@@ -233,11 +233,15 @@ object FloatingLyricsRules {
     }
 
     /** [stripOffset] from prepared knots: a binary search for the segment and no allocation. */
-    fun stripKnotsOffset(knots: StripKnots, lyricsMs: Long, target: Double): Float {
+    fun stripKnotsOffset(knots: StripKnots, lyricsMs: Long, target: Double): Float =
+        stripKnotsOffset(knots, lyricsMs.toDouble(), target)
+
+    /** [stripKnotsOffset] at a fractional lyrics time (the GL renderer's clock is not a whole millisecond). */
+    fun stripKnotsOffset(knots: StripKnots, lyricsMs: Double, target: Double): Float {
         val times = knots.times
         val values = knots.values
         val count = times.size
-        val p = lyricsMs.toDouble()
+        val p = lyricsMs
         // The last knot at or before p (-1 before the first).
         var lo = 0
         var hi = count
@@ -354,11 +358,12 @@ object FloatingLyricsRules {
         playing: Boolean,
         resyncMs: Long = 250,
         slewMs: Double = 750.0,
+        speed: Double = 1.0,
     ): Double {
         if (!playing) return reportedMs.toDouble()
-        val carried = reportedMs + maxOf(0.0, nowMs - reportedAtMs)
+        val carried = reportedMs + maxOf(0.0, nowMs - reportedAtMs) * speed
         if (!hasPrevious) return carried
-        val step = maxOf(0.0, nowMs - previousAtMs)
+        val step = maxOf(0.0, nowMs - previousAtMs) * speed
         val drift = carried - (previousMs + step)
         if (kotlin.math.abs(drift) >= resyncMs) return carried
         val rate = (1.0 + drift / slewMs).coerceIn(0.5, 1.5)
@@ -478,6 +483,12 @@ object FloatingLyricsRules {
     fun scrollProgress(elapsedMs: Long, durationMs: Long): Float {
         if (durationMs <= 0) return 0f
         return (elapsedMs.toFloat() / (durationMs * 0.9f)).coerceIn(0f, 1f)
+    }
+
+    /** [scrollProgress] at a fractional elapsed time. */
+    fun scrollProgress(elapsedMs: Double, durationMs: Long): Float {
+        if (durationMs <= 0) return 0f
+        return (elapsedMs / (durationMs * 0.9)).toFloat().coerceIn(0f, 1f)
     }
 
     /** Black behind light text, white behind dark text (Rec. 601 brightness), as 0xRRGGBB. */
