@@ -1,6 +1,6 @@
 ﻿# Remote music sources: SMB, WebDAV and FTP
 
-Status: Accepted on 2026-10-20 (the owner's answers are recorded under Decisions); SMB and WebDAV are implemented on Windows and Android and verified against a real SMB server, GUI and on-device acceptance are still to do (see Progress)
+Status: Accepted on 2026-10-20 (the owner's answers are recorded under Decisions); SMB and WebDAV are implemented on Windows and Android and verified against a real SMB server, GUI and on-device acceptance are still to do (see Progress). Current state: only SMB and WebDAV exist (`RemoteProtocol` has `Webdav`, `Smb` and a keep-only `Unsupported`); FTP/FTPS is not implemented. The sections below up to Progress are the original decision record; where the code has since changed they carry a "Current state" note, and the section 目前設計細節 at the end describes what the code does now
 
 Decision date: 2026-10-20, Asia/Taipei (UTC+08:00)
 
@@ -30,7 +30,7 @@ A **remote account** is the connection (protocol, host, port, share or base path
 
 ### 2. A remote locator
 
-`MediaLocator::Remote { source_id, path }` (UTF-8 path relative to the source root, exactly as the server spells it: it has to be openable again, so it is not normalized). It is persisted as `locator_kind = 'remote'` with a JSON `locator_data`; `locator_key` is `remote:<source id>:<path>`; `TrackIdentity.source_item_id` is the relative path. Track IDs, playlists, statistics and the playback session keep working unchanged, because they use Track IDs. A remote track is playable only while its source is reachable; an unreachable source is `SourceScanState::Unavailable`, which already preserves every projection.
+`MediaLocator::Remote { source_id, path }` (UTF-8 path relative to the source root, exactly as the server spells it: it has to be openable again, so it is not normalized). It is persisted as `locator_kind = 'remote'` with a JSON `locator_data`; `locator_key` is `remote:<source id>:<path>` (superseded: it is now the account-level `remote-acct:{account id}:{path from the account root}`, see 目前設計細節 "來源與身分"); `TrackIdentity.source_item_id` is the relative path. Track IDs, playlists, statistics and the playback session keep working unchanged, because they use Track IDs. A remote track is playable only while its source is reachable; an unreachable source is `SourceScanState::Unavailable`, which already preserves every projection.
 
 ### 3. One client crate behind one trait
 
@@ -44,13 +44,13 @@ trait RemoteFs: Send + Sync {
 }
 ```
 
-Backends: **WebDAV** (`reqwest` + rustls, `PROPFIND` Depth 1 parsed with `quick-xml`, `GET` with `Range`, Basic and Digest authentication), **FTP / FTPS** (`suppaftp`, `MLSD` falling back to `LIST`, `REST` for offsets, a small connection pool), **SMB** (the pure-Rust `smb` crate, SMB2/3 with signing and encryption, on both platforms). All are MIT / Apache-2.0 and compile for Android without C toolchains beyond what the project already needs.
+Current state: the reader is `RangeReader` in `fs.rs` (the name `RemoteReader` was never used), and there is no FTP backend (no `suppaftp` dependency); the SMB client is the vendored `smb-rs` fork, not the crates.io `smb` crate. Backends: **WebDAV** (`reqwest` + rustls, `PROPFIND` Depth 1 parsed with `quick-xml`, `GET` with `Range`, Basic and Digest authentication), **FTP / FTPS** (`suppaftp`, `MLSD` falling back to `LIST`, `REST` for offsets, a small connection pool), **SMB** (the pure-Rust `smb` crate, SMB2/3 with signing and encryption, on both platforms). All are MIT / Apache-2.0 and compile for Android without C toolchains beyond what the project already needs.
 
-`RemoteReader` wraps a `RemoteFile` as `Read + Seek + Send` with a block cache (256 KiB blocks, read-ahead for sequential reads, an in-memory LRU, plus an on-disk cache folder with a size limit, default 2 GiB). Every consumer that is already generic over `Read + Seek` (lofty, our Opus / WavPack / DSD readers, the spectrogram, Symphonia through rodio) uses it as if it were a file, so no decoder is rewritten.
+`RemoteReader` wraps a `RemoteFile` as `Read + Seek + Send` with a block cache (256 KiB blocks, read-ahead for sequential reads, an in-memory LRU, plus an on-disk cache folder with a size limit; current state: `remote-cache/`, 100–5,000 MB, default 1,000 MB, see 目前設計細節 "磁碟快取"). Every consumer that is already generic over `Read + Seek` (lofty, our Opus / WavPack / DSD readers, the spectrogram, Symphonia through rodio) uses it as if it were a file, so no decoder is rewritten.
 
 ### 4. Scanning
 
-`RemoteMediaIndex` implements `MediaIndex` and the parallel `MetadataReader`: a breadth-first listing (a few directories in flight), skipping hidden entries and bounding depth, fingerprint = size + server modified time (WebDAV also the ETag), then tags through ranged head and tail reads (the first 256 KiB; the tail for APE, ID3v1 and DSF). Cancelling, the 4-thread parallel read and the "partial progress is saved" rule of ADR 0003 and the 2026-10-19 sync work apply unchanged. A server that cannot be reached, an authentication failure or a TLS failure makes the scan `Unavailable` with a reason, never an empty library.
+`RemoteMediaIndex` implements `MediaIndex` and the parallel `MetadataReader`: a breadth-first listing (a few directories in flight), skipping hidden entries and bounding depth, fingerprint = size + server modified time (WebDAV also the ETag), then tags through ranged head and tail reads (the first 256 KiB; the tail for APE, ID3v1 and DSF). Cancelling, the parallel read (4 threads here; 16 for remote sources, `player_remote::index::METADATA_READ_THREADS`) and the "partial progress is saved" rule of ADR 0003 and the 2026-10-19 sync work apply unchanged. A server that cannot be reached, an authentication failure or a TLS failure makes the scan `Unavailable` with a reason, never an empty library.
 
 ### 5. Playback
 
@@ -60,7 +60,7 @@ Backends: **WebDAV** (`reqwest` + rustls, `PROPFIND` Depth 1 parsed with `quick-
 
 ### 6. Artwork, lyrics, tags
 
-Embedded covers come from the tag read. `cover.jpg` / `folder.jpg` and the `.lrc` sidecar are fetched with one capped `GET` and cached like local artwork. **Tag editing is read-only for remote tracks in the first release** (the details panel says why); the spectrogram works (streams the whole file, cancellable).
+Embedded covers come from the tag read. `cover.jpg` / `folder.jpg` and the `.lrc` sidecar are fetched with one capped `GET` and cached like local artwork. **Tag editing is read-only for remote tracks in the first release** (the details panel says why; superseded: remote tracks can now be read and saved in the details panel, see 目前設計細節 "歌曲資訊與編輯"); the spectrogram works (streams the whole file, cancellable).
 
 ### 7. Security
 
@@ -100,10 +100,10 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
 
 1. **Protocols**: SMB and WebDAV first; FTP later.
 2. **Windows SMB**: the built-in SMB client, the same code as Android.
-3. **Tag editing of remote tracks**: read-only in the first release.
+3. **Tag editing of remote tracks**: read-only in the first release. (Superseded: `track_details.rs` `save_remote` edits remote tracks now.)
 4. **WebDAV authentication**: Basic and Digest; NTLM and Kerberos are not supported.
 5. **Passwords**: managed by the app itself (no operating-system credential store), stored encrypted in `settings.json`, never in plaintext, and accounts can be exported and moved to another device (section 1).
-6. **Cache** (default, not asked): a transient block cache bounded at 2 GiB and cleared by the user; remote tracks are not kept for offline listening in the first release.
+6. **Cache** (default, not asked): a transient block cache bounded at 2 GiB and cleared by the user; remote tracks are not kept for offline listening in the first release. (Superseded: the disk cache is 100–5,000 MB, default 1,000 MB, and a song that is whole in the cache plays without connecting, see 目前設計細節 "磁碟快取".)
 
 ## Progress
 
@@ -118,7 +118,7 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
   - Interface: settings -> music sources -> "Remote servers" (add / edit / delete a server, list SMB shares, test the connection, browse and add folders, export / import accounts), in all four languages.
   - A real-server test of the app-side chain (account with a sealed password -> source -> sync of 2,668 tracks -> playback path -> engine reader -> streaming pace) is `src-tauri/src/remote_connections.rs` `real_server_tests` (skipped unless `MOE_SMB_*` is set).
 - Done (2026-10-22): **a slow link is told from a dead one, and a dead one is retried** (the owner's design, phase 1). (1) `smb_transport.rs`: every byte received is noted in a `LinkHealth` (time of the last byte, byte count), and a message is received whole even when the 100 ms poll timeout falls inside it (the bytes read so far are kept for the next call; before, a timeout in the middle of a message could break the framing). `LinkHealth::kill` shuts the socket down, which ends the crate's receive loop and fails every request on the link at once. (2) `smb.rs` `bounded_on` (list, stat, open and file reads): a request waits as long as bytes keep coming (reads up to `READ_LIMIT` 120 s, other requests `OPERATION_TIMEOUT` 10 s); 1 s without a single byte (`STALL_DETECT`) asks the server something small in place of an SMB2 ECHO (`Link::ping`: open the share's root for its attributes and close it; the `smb` 0.12 crate keeps its message handlers private, so a real ECHO cannot be sent through it, and a hand-made one would bypass its message ids, credits and signing), and 1 s more without any byte (`ECHO_WAIT`) cuts the link and reports a network error, so a dead link is found in about 2 s. The probe's answer is not awaited: it only has to bring a byte back. Writes keep their fixed 30 s limit (nothing comes back while uploading). The fixed 15 s `READ_TIMEOUT` is gone. (3) `prefetch.rs`: a `Network` failure no longer stops the fetch thread; it keeps what it has and fetches the same place again after 0, 1, 2, 4, 8, 10, 10… s (`RETRY_BACKOFF`), the file reopening itself and the file system connecting again, until it works (reading on with nothing missing or repeated) or 3 minutes (`RETRY_GIVE_UP`) have passed since the outage began; any other error (file changed or released, refused) fails at once; a seek cuts the wait short and a seek after giving up tries again; the 45 s reader limit is gone (a 6-minute guard remains only for a fetch thread that is gone). Giving up fails the read with a message starting with `player_core::REMOTE_LINK_LOST` (「伺服器無法連線」). (4) Players: Windows (`remote_input.rs`) notes that failure; when the decoder then ends, the worker pauses at that position with `AudioError::RemoteLinkLost` (shown as the message) instead of ending the track, so the queue does not move on; Play reloads the track and seeks back to that position. Android: `nativeRead` returns -2, `DsdDataSource` throws `RemoteLinkLostException` (a `FileNotFoundException`, which Media3's default policy does not retry), the player stops in the error state with that message, and no "ended" event advances the queue. Tests: transport framing across timeouts, one byte every 0.5 s not called dead, silence found dead after about 2 s and the cut ending the receiver (local `TcpListener`), the watchdog's decisions, and in `prefetch.rs` an outage that recovers (bytes complete and in order), an outage that lasts (error after the allowance), a non-network error failing at once, the backoff steps, a seek cutting the wait, a seek after giving up. Not verified against a real server dropping off, and the "reconnecting" state is not shown in the interface yet (phase 2).
-- Not done: Release GUI (CDP) and on-device (NX809J) acceptance; FTP; the "Buffering" / "reconnecting" state in the interface (the retry itself is done, see above); the track details panel, spectrogram and tag editing for remote tracks (read-only message); DSEE HX is not applied to remote tracks. Decision 3 below (the first release is read-only) stands.
+- Not done: Release GUI (CDP) and on-device (NX809J) acceptance; FTP; the "Buffering" / "reconnecting" state in the interface (the retry itself is done, see above); DSEE HX is not applied to remote tracks. (At the time of writing the track details panel, spectrogram and tag editing for remote tracks were also listed here; they are implemented now, see 目前設計細節 "歌曲資訊與編輯".)
 
 - Playlist files on a server (2026-10-20): a source of kind PlaylistFile with `remote_account`; the songs it names are read from the same account, and songs a remote folder source already holds are not scanned twice. See `src-tauri/src/remote_playlist_sync.rs`.
 
