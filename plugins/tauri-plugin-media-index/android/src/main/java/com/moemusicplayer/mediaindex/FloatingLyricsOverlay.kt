@@ -3,6 +3,7 @@
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.hardware.input.InputManager
@@ -10,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.util.TypedValue
 import android.view.Choreographer
 import android.view.Gravity
@@ -85,6 +87,22 @@ object FloatingLyricsOverlay {
 
     private const val PREFS = "moe_floating_lyrics"
     private const val TICK_MS = 100L
+
+    /**
+     * Hidden developer switch (system property, read when the overlay window is created): `views` forces the Views
+     * renderer, `gl` the OpenGL one. Without it the GL renderer is used, and the Views one after GL failed (ADR 0032).
+     */
+    private const val RENDERER_PROPERTY = "debug.moe.lyrics.renderer"
+    private const val TAG = "MoeMediaIndex"
+
+    /** The GL renderer's panel while the window is a GL one; null for the Views renderer. */
+    private var glPanel: GlLyricsPanel? = null
+    /** GL failed once in this process: the Views renderer is used from now on (unless the property forces `gl`). */
+    private var glFailed = false
+    /** The next window is a Views one whatever the property says (set while falling back from a GL failure). */
+    private var viewsNext = false
+    /** Some line has a translation: with the switch on, the GL window reserves the translation row for the whole track. */
+    private var linesHaveTranslation = false
 
 
     private val main = Handler(Looper.getMainLooper())
@@ -357,6 +375,7 @@ object FloatingLyricsOverlay {
         applyLook()
         applyMode()
         render()
+        pushGl(context)
     }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -384,6 +403,7 @@ object FloatingLyricsOverlay {
         trackDurationMs = data.durationMs
         lines = data.lines
         starts = data.starts
+        linesHaveTranslation = data.lines.any { it.trimmedTranslation.isNotEmpty() }
         linesVersion++
     }
 
@@ -550,10 +570,33 @@ object FloatingLyricsOverlay {
         } else {
             centre()
         }
+        pushGl(context)
+    }
+
+    /** The window: the GL renderer unless the switch, an earlier failure or a failure to set it up says Views. */
+    private fun create(context: Context) {
+        val property = LyricsTrace.systemProperty(RENDERER_PROPERTY)
+        val gl = !viewsNext && when (property) {
+            "views" -> false
+            "gl" -> true
+            else -> !glFailed
+        }
+        viewsNext = false
+        if (gl) {
+            try {
+                createGl(context)
+                return
+            } catch (error: Throwable) {
+                Log.w(TAG, "lyrics gl: the GL overlay could not be created, using the Views renderer", error)
+                glFailed = true
+                remove()
+            }
+        }
+        createViews(context)
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun create(context: Context) {
+    private fun createViews(context: Context) {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val (screenWidth, screenHeight) = screenSize(context)
         val button = lockPx(context)
@@ -640,8 +683,155 @@ object FloatingLyricsOverlay {
         LyricsTrace.configure(context)
     }
 
+    // ---- OpenGL renderer (ADR 0032): the window holds a SurfaceView the render thread draws into, plus the real lock
+    // button above it; the main thread only lays the window out and forwards the inputs.
+
+    /** The panel's geometry for a window `windowWidth` px wide, derived from the settings and the lyrics (see [LyricsLayout]). */
+    private fun glLayout(context: Context, windowWidth: Int): LyricsLayout {
+        val mainPx = mainFontPx(context)
+        val secondPx = mainPx * translationScalePercent / 100f
+        val main = Paint().apply { typeface = lyricTypeface(fontWeight); textSize = mainPx }.fontMetrics
+        val second = Paint().apply { typeface = lyricTypeface(FloatingLyricsRules.auxiliaryFontWeight(fontWeight)); textSize = secondPx }.fontMetrics
+        val margin = marginPx(context)
+        val lock = lockPx(context)
+        return LyricsLayout(
+            margin, lock, maxOf(1, windowWidth - lock - 2 * margin), main.ascent, main.descent, second.ascent, second.descent,
+            showTranslation && linesHaveTranslation,
+        )
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createGl(context: Context) {
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val (screenWidth, screenHeight) = screenSize(context)
+        val button = lockPx(context)
+        val panel = GlLyricsPanel(context) { reason -> onGlFatal(reason) }
+        glPanel = panel
+        // The surface fills the window (the shadow room and the margins are drawn by the renderer); the lock button is a
+        // real view above it, in the gutter right of the lyric area.
+        val frame = FrameLayout(context).apply { clipChildren = false; clipToPadding = false }
+        frame.addView(panel.surfaceView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val lock = ImageButton(context).apply {
+            setImageResource(R.drawable.floating_lyrics_lock_open)
+            setColorFilter(Color.WHITE)
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x8C000000.toInt()) }
+            contentDescription = "Lock"
+            setOnClickListener { setLockedFromOverlay() }
+        }
+        frame.addView(lock, FrameLayout.LayoutParams(button, button, Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = marginPx(context) })
+        val width = overlayWidth(context)
+        val prefs = prefs(context)
+        val layout = WindowManager.LayoutParams(
+            width,
+            glLayout(context, width).surfaceH,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            // The SurfaceView is TRANSLUCENT too: the lyrics blend over whatever is behind the window.
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            x = prefs.getInt(
+                positionKeys(context).first,
+                FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context)),
+            )
+            y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt())
+        }
+        frame.setOnTouchListener(DragListener(context))
+        windowManager.addView(frame, layout)
+        root = frame
+        params = layout
+        lockButton = lock
+        mainText = null
+        translationText = null
+        fadeLayout = null
+        shownLandscape = isLandscape(context)
+        val (_, keyY) = positionKeys(context)
+        // No saved position for this orientation yet: the centre of the screen.
+        if (!prefs.contains(keyY)) frame.post { if (root === frame && !prefs.contains(keyY)) centre() }
+        val watch = object : android.content.ComponentCallbacks {
+            override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+                // Post so the new display size is in place first.
+                main.post { applyOrientation() }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onLowMemory() {}
+        }
+        context.applicationContext.registerComponentCallbacks(watch)
+        rotationWatch = watch
+        appliedLocked = null
+        stripKeyValid = false
+        prefetchValid = false
+        stopTicking()
+        LyricsTrace.configure(context)
+        PlaybackService.startClockFeed()
+    }
+
+    /** The window height follows the font and the reserved translation row (a fixed height: the surface has no content size). */
+    private fun applyGlLook(context: Context) {
+        val view = root ?: return
+        val layout = params ?: return
+        val info = glLayout(context, layout.width)
+        lockButton?.let { lock ->
+            (lock.layoutParams as? FrameLayout.LayoutParams)?.let {
+                if (it.marginEnd != info.marginPx) {
+                    it.marginEnd = info.marginPx
+                    lock.layoutParams = it
+                }
+            }
+        }
+        if (layout.height != info.surfaceH) {
+            layout.height = info.surfaceH
+            val (screenWidth, screenHeight) = screenSize(context)
+            val (x, y) = clampToText(layout.x, layout.y, layout.width, info.surfaceH, screenWidth, screenHeight)
+            layout.x = x
+            layout.y = y
+            try {
+                (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Hands the current settings and lyrics to the GL builder thread (the render thread picks the result up). */
+    private fun pushGl(context: Context) {
+        val panel = glPanel ?: return
+        val layout = params ?: return
+        val color = if (useCustomColor) FloatingLyricsRules.parseHexColor(customColor) ?: 0xffffff else 0xffffff
+        val mainPx = mainFontPx(context)
+        panel.submit(
+            RenderInputs(
+                linesVersion, trackId, offsetMs, trackDurationMs, lines,
+                if (animation == "continuous") ANIMATION_CONTINUOUS else ANIMATION_NONE,
+                align, textEffect, color, accentColor, mainPx, mainPx * translationScalePercent / 100f, fontWeight,
+                FloatingLyricsRules.auxiliaryFontWeight(fontWeight), showTranslation,
+                FloatingLyricsRules.mainOpacityPercent(mainOpacityPercent) / 100f,
+                FloatingLyricsRules.secondaryOpacityPercent(secondaryOpacityPercent) / 100f,
+                isLocked(context), context.resources.displayMetrics.density, glLayout(context, layout.width),
+                dp(context, 10).toFloat(),
+            ),
+        )
+    }
+
+    /** The render thread gave up (main thread): take the GL window down and bring the Views renderer up in its place. */
+    private fun onGlFatal(reason: String) {
+        if (glPanel == null) return
+        Log.w(TAG, "lyrics gl: falling back to the Views renderer ($reason)")
+        glFailed = true
+        remove()
+        viewsNext = true
+        refresh()
+    }
+
     private fun remove() {
         stopTicking()
+        glPanel?.destroy()
+        glPanel = null
         val view = root ?: return
         val context = appContext
         rotationWatch?.let { context?.applicationContext?.unregisterComponentCallbacks(it) }
@@ -670,6 +860,7 @@ object FloatingLyricsOverlay {
         val context = appContext ?: return
         setLockedState(context, true)
         applyMode()
+        pushGl(context)
     }
 
     private fun applyLook() {
@@ -718,7 +909,7 @@ object FloatingLyricsOverlay {
             }
         }
         // Side margins; the room above and below follows the lyric area's height (the column's layout listener).
-        root?.let { frame -> frame.setPadding(marginPx(context), frame.paddingTop, marginPx(context), frame.paddingBottom) }
+        if (glPanel == null) root?.let { frame -> frame.setPadding(marginPx(context), frame.paddingTop, marginPx(context), frame.paddingBottom) }
         for ((view, scale) in listOf(mainText to 100, translationText to translationScalePercent)) {
             view ?: continue
             val px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
@@ -734,6 +925,7 @@ object FloatingLyricsOverlay {
             view.alpha = FloatingLyricsRules.lineViewAlpha(animation, mainOpacityPercent)
             view.setInactiveFactor(1f)
         }
+        if (glPanel != null) applyGlLook(context)
     }
 
     /** The lock state the window (flags, alpha, background, lock button) was last set for; null before the first apply. */
@@ -782,6 +974,7 @@ object FloatingLyricsOverlay {
      * display frame's time (Choreographer), or the current time outside a frame; the position is carried on in it.
      */
     private fun render(nowNanos: Long = System.nanoTime()): Boolean {
+        if (glPanel != null) return false
         val view = root ?: return false
         val context = appContext ?: return false
         val have = PlaybackService.floatingLyricsSample(sample)

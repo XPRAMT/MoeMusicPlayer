@@ -12,6 +12,13 @@ import java.util.concurrent.TimeUnit
 /** A rasterised line: the image (text, shadow and outline at full opacity) and the room `pad` it keeps around the text. */
 internal class Raster(val bitmap: Bitmap, val pad: Int)
 
+/**
+ * A rasterised line for the GL renderer, cut into texture tiles (see [TilePlan]): `bitmaps[k]` holds the image columns
+ * `tiles[k].srcX until srcX + width` plus the one-pixel apron on each side. The renderer owns the bitmaps from here on
+ * (uploads them, then recycles them).
+ */
+internal class TileSet(val bitmaps: Array<Bitmap>, val tiles: List<TilePlan.Tile>, val imageW: Int, val imageH: Int, val pad: Int)
+
 /** The typeface for `weight`: any weight on API 28+, bold from 600 on older systems (see `typefaceChoice`). */
 internal fun lyricTypeface(weight: Int): Typeface {
     val choice = FloatingLyricsRules.typefaceChoice(weight, android.os.Build.VERSION.SDK_INT)
@@ -59,6 +66,73 @@ internal object LineRasteriser {
         } finally {
             LyricsTrace.end(section, false)
         }
+    }
+
+    /** Widest line image the GL renderer takes (a longer one is not drawn); tiles keep every bitmap small. */
+    private const val MAX_TILED_PX = 32_768
+
+    /**
+     * [render] for the GL renderer: the same image (text, shadow and outline at full opacity, `pad` of room), cut into
+     * tiles of at most `chunk` content columns so a line can be wider than a texture. Null if empty or absurdly large.
+     * A pure function of `value`, `look` and `chunk`, so it runs on any thread.
+     */
+    fun renderTiles(value: String, look: LineLook, chunk: Int): TileSet? {
+        if (!LyricsTrace.on) return buildTiles(value, look, chunk)
+        val section = LyricsTrace.begin("moeLyrics.raster")
+        try {
+            return buildTiles(value, look, chunk)
+        } finally {
+            LyricsTrace.end(section, false)
+        }
+    }
+
+    private fun buildTiles(value: String, look: LineLook, chunk: Int): TileSet? {
+        if (value.isEmpty()) return null
+        val started = if (LyricsTrace.on) System.nanoTime() else 0L
+        val face = if (look.defaultFace) Typeface.DEFAULT else lyricTypeface(look.weight)
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+            typeface = face
+            textSize = look.sizePx
+            color = look.color
+            if (look.shadowRadius > 0f) setShadowLayer(look.shadowRadius, 0f, 0f, look.shadowColor)
+        }
+        val outline = if (look.strokeWidth > 0f) {
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+                typeface = face
+                textSize = look.sizePx
+                style = Paint.Style.STROKE
+                strokeJoin = Paint.Join.ROUND
+                color = look.strokeColor
+                strokeWidth = look.strokeWidth
+            }
+        } else {
+            null
+        }
+        val blur = if (look.shadowRadius > 0f) kotlin.math.ceil(3f * (0.57735f * look.shadowRadius + 0.5f)).toInt() else 0
+        val pad = maxOf(blur, kotlin.math.ceil(look.strokeWidth).toInt()) + 1
+        val metrics = fill.fontMetrics
+        val w = kotlin.math.ceil(fill.measureText(value)).toInt() + 2 * pad
+        val h = kotlin.math.ceil(metrics.descent - metrics.ascent).toInt() + 2 * pad
+        if (w <= 0 || h <= 0 || w > MAX_TILED_PX || h > MAX_RASTER_PX) return null
+        val tiles = TilePlan.of(w, chunk)
+        val baseline = pad - metrics.ascent
+        val bitmaps = ArrayList<Bitmap>(tiles.size)
+        try {
+            for (tile in tiles) {
+                val bitmap = Bitmap.createBitmap(tile.width + 2 * TilePlan.APRON, h, Bitmap.Config.ARGB_8888)
+                bitmaps.add(bitmap)
+                val target = Canvas(bitmap)
+                // Image column x lands at bitmap column x - (srcX - apron): the text is drawn shifted left by the tile's start.
+                val x = (pad - (tile.srcX - TilePlan.APRON)).toFloat()
+                if (outline != null) target.drawText(value, x, baseline, outline)
+                target.drawText(value, x, baseline, fill)
+            }
+        } catch (error: Throwable) {
+            bitmaps.forEach { it.recycle() }
+            throw error
+        }
+        if (LyricsTrace.on) LyricsTrace.rasterised(w, h, System.nanoTime() - started)
+        return TileSet(bitmaps.toTypedArray(), tiles, w, h, pad)
     }
 
     private fun build(value: String, look: LineLook): Raster? {

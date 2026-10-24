@@ -26,6 +26,9 @@ internal class FrameParams {
     // One line per row: line indexes of the model (NO_LINE, NOTE_LINE) and the text's left edge.
     var mainLine = NO_LINE
     var secondLine = NO_LINE
+
+    /** The current line of the model (-1: none yet), whether or not it has text; what the prefetch looks around. */
+    var lineIndex = -1
     var mainX = 0f
     var secondX = 0f
 
@@ -52,6 +55,7 @@ internal class FrameParams {
         lastCell = -1
         mainLine = NO_LINE
         secondLine = NO_LINE
+        lineIndex = -1
         mainX = 0f
         secondX = 0f
         karaokeX = Float.NaN
@@ -71,6 +75,7 @@ internal class FrameParams {
         lastCell = o.lastCell
         mainLine = o.mainLine
         secondLine = o.secondLine
+        lineIndex = o.lineIndex
         mainX = o.mainX
         secondX = o.secondX
         karaokeX = o.karaokeX
@@ -177,6 +182,7 @@ internal class LyricsFramePlanner {
         val translation = if (index >= 0) model.translations[index] else ""
         val shownNote = text.isEmpty() && !look.locked
         out.contMask = false
+        out.lineIndex = index
         out.mainLine = if (text.isNotEmpty()) index else if (shownNote) FrameParams.NOTE_LINE else FrameParams.NO_LINE
         out.secondLine = if (translation.isNotEmpty()) index else FrameParams.NO_LINE
         out.visible = out.mainLine != FrameParams.NO_LINE || out.secondLine != FrameParams.NO_LINE

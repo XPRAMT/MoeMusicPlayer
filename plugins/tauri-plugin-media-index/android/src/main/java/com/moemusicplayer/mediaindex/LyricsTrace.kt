@@ -31,6 +31,18 @@ internal object LyricsTrace {
     private val rasterNanos = AtomicLong()
     private val fallbacks = AtomicInteger()
 
+    // GL render thread (ADR 0032): planner + draw time per drawn frame (the swap is not included), frames drawn and
+    // skipped as unchanged, texture uploads, and the texture cache's size (gauges).
+    private val glLock = Any()
+    private val glFrames = LongArray(MAX_FRAMES)
+    private var glFrameCount = 0
+    private val glDrawn = AtomicInteger()
+    private val glSkipped = AtomicInteger()
+    private val glUploads = AtomicInteger()
+    private val glUploadBytes = AtomicLong()
+    @Volatile private var glTextureCount = 0
+    @Volatile private var glTextureBytes = 0L
+
     // Main thread only: the per-frame main-thread time (render + onDraws) in nanoseconds.
     private val frames = LongArray(MAX_FRAMES)
     private var frameCount = 0
@@ -62,7 +74,7 @@ internal object LyricsTrace {
         on = false
     }
 
-    private fun systemProperty(name: String): String = try {
+    internal fun systemProperty(name: String): String = try {
         Class.forName("android.os.SystemProperties").getMethod("get", String::class.java, String::class.java)
             .invoke(null, name, "") as? String ?: ""
     } catch (_: Throwable) {
@@ -103,7 +115,33 @@ internal object LyricsTrace {
         Log.i(TAG, "lyrics raster ${width}x$height ${nanos / 1_000}us")
     }
 
+    /** The render thread drew a frame: planner + draw took `nanos`. */
+    fun glFrame(nanos: Long) {
+        glDrawn.incrementAndGet()
+        synchronized(glLock) { if (glFrameCount < MAX_FRAMES) glFrames[glFrameCount++] = nanos }
+    }
+
+    /** A frame was identical to the last one and not drawn. */
+    fun glSkippedFrame() {
+        glSkipped.incrementAndGet()
+    }
+
+    fun glUploaded(bytes: Int) {
+        glUploads.incrementAndGet()
+        glUploadBytes.addAndGet(bytes.toLong())
+    }
+
+    fun glTextures(count: Int, bytes: Long) {
+        glTextureCount = count
+        glTextureBytes = bytes
+    }
+
     private fun reset() {
+        synchronized(glLock) { glFrameCount = 0 }
+        glDrawn.set(0)
+        glSkipped.set(0)
+        glUploads.set(0)
+        glUploadBytes.set(0)
         invalidates.set(0)
         rasterCalls.set(0)
         rasterNanos.set(0)
@@ -122,6 +160,16 @@ internal object LyricsTrace {
                 "invalidates=${invalidates.get() / 5}/s rasterCalls=${rasterCalls.get()} rasterMs=${rasterNanos.get() / 1_000_000} " +
                 "fallbackDraws=${fallbacks.get()}",
         )
+        val gl = synchronized(glLock) { glFrames.copyOf(glFrameCount).also { it.sort() } }
+        if (gl.isNotEmpty() || glSkipped.get() > 0 || glUploads.get() > 0) {
+            fun glPercentile(p: Double): Long = if (gl.isEmpty()) 0L else gl[minOf(gl.size - 1, (gl.size * p).toInt())]
+            Log.i(
+                TAG,
+                "lyrics gl 5s: drawn=${glDrawn.get()} skipped=${glSkipped.get()} plan+draw p50=${glPercentile(0.5) / 1_000}us " +
+                    "p99=${glPercentile(0.99) / 1_000}us uploads=${glUploads.get()} uploadKb=${glUploadBytes.get() / 1024} " +
+                    "textures=$glTextureCount textureKb=${glTextureBytes / 1024}",
+            )
+        }
         reset()
     }
 }

@@ -71,7 +71,11 @@ internal class StripModel(
     val wordKnots: WordLyricsRules.WordKnots?,
     /** Grapheme count of the last line (the terminal glide's duration estimate), counted once. */
     val lastGraphemes: Int,
-)
+) {
+    /** The texture keys of the cells, made once so a frame allocates none. */
+    val mainKeys: Array<TexKey> = Array(texts.size) { TexKey(0, texts[it], false) }
+    val secondKeys: Array<TexKey> = Array(translations.size) { TexKey(1, translations[it], false) }
+}
 
 /** What the lyrics and the font measures make: immutable, built off the render thread and read once per frame. */
 internal class RenderModel(
@@ -92,6 +96,12 @@ internal class RenderModel(
     val reserveTranslation: Boolean,
     val linesVersion: Int,
 ) {
+    /** The texture keys of the lines (text colour, accent for karaoke lines, translation) and the placeholder, made once. */
+    val lineKeys: Array<TexKey> = Array(texts.size) { TexKey(0, texts[it], false) }
+    val accentKeys: Array<TexKey> = Array(texts.size) { TexKey(0, texts[it], true) }
+    val translationKeys: Array<TexKey> = Array(translations.size) { TexKey(1, translations[it], false) }
+    val noteKey: TexKey = TexKey(0, NOTE, false)
+
     companion object {
         /** The placeholder shown in move mode while no line is current. */
         const val NOTE = "♪"
