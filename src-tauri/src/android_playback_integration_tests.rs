@@ -779,3 +779,93 @@ fn a_seek_buffering_snapshot_keeps_playing_without_flipping_resume_or_counting_t
     assert_eq!(counted, 300, "buffering time is not listening time");
     assert!(reports.lock().unwrap().is_empty(), "still playing: nothing to record");
 }
+#[test]
+fn a_newer_choice_of_track_takes_over_from_a_load_that_is_still_awaited() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = ActorFixture::new(temporary.open());
+    let actor = harness.take_actor();
+
+    // The first track is a slow remote one: its load is sent and never acknowledged.
+    let first = fixture.first.to_string();
+    let handle = perform_on_thread(actor, move |actor| {
+        actor.handle_action("slow", PlaybackAction::select_track(first, None))
+    });
+    let stale_load = harness.fake.next_command();
+    assert_eq!(stale_load.op, "load");
+
+    // The user chooses a local track 0.4 s later; the actor must not wait out the stale load.
+    let (response, answer) = mpsc::sync_channel(1);
+    harness
+        .shared
+        .requests
+        .try_send(ActorRequest::Command {
+            request_id: "local".to_owned(),
+            action: PlaybackAction::select_track(fixture.second.to_string(), None),
+            response,
+        })
+        .expect("queue the newer choice");
+    let started = Instant::now();
+    let (mut actor, result) = handle.join().expect("actor action thread");
+    assert_eq!(result.err().as_deref(), Some(SUPERSEDED_MESSAGE));
+    assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    assert!(answer.try_recv().is_err(), "the newer request is still to be handled");
+    // Nothing of the stale load was committed.
+    assert!(actor.current_track.is_none());
+    assert!(actor.queue.is_none());
+
+    // The stale load is acknowledged late: it is ignored.
+    harness.fake.ack(&stale_load);
+
+    let Ok(ActorRequest::Command { request_id, action, .. }) =
+        actor.next_request(Duration::from_millis(10))
+    else {
+        panic!("the newer request was kept for the actor");
+    };
+    assert_eq!(request_id, "local");
+    let handle = perform_on_thread(actor, move |actor| actor.handle_action("local", action));
+    let load = harness.fake.next_command();
+    assert_eq!(load.op, "load");
+    assert_eq!(load.track_id.as_deref(), Some(fixture.second.to_string().as_str()));
+    harness.fake.ack(&load);
+    let capabilities = harness.fake.next_command();
+    assert_eq!(capabilities.op, "set_capabilities");
+    harness.fake.ack(&capabilities);
+    let (actor, result) = handle.join().expect("actor action thread");
+    assert!(result.is_ok(), "{:?}", result.err());
+    assert_eq!(actor.current_track.as_ref().map(|track| track.id), Some(fixture.second));
+}
+
+#[test]
+fn a_pause_during_a_load_does_not_cancel_it() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = ActorFixture::new(temporary.open());
+    let actor = harness.take_actor();
+    let first = fixture.first.to_string();
+    let handle = perform_on_thread(actor, move |actor| {
+        actor.handle_action("slow", PlaybackAction::select_track(first, None))
+    });
+    let load = harness.fake.next_command();
+    let (response, _answer) = mpsc::sync_channel(1);
+    harness
+        .shared
+        .requests
+        .try_send(ActorRequest::Command {
+            request_id: "pause".to_owned(),
+            action: PlaybackAction::Pause,
+            response,
+        })
+        .expect("queue a pause");
+    harness.fake.no_command();
+    harness.fake.ack(&load);
+    let capabilities = harness.fake.next_command();
+    harness.fake.ack(&capabilities);
+    let (actor, result) = handle.join().expect("actor action thread");
+    assert!(result.is_ok(), "{:?}", result.err());
+    assert_eq!(actor.held_requests.len(), 1, "the pause waits its turn");
+}

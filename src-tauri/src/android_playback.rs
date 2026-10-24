@@ -39,6 +39,11 @@ const ACTOR_REQUEST_CAPACITY: usize = 64;
 const NATIVE_EVENT_CAPACITY: usize = 256;
 const COMMAND_ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const STATS_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+/// How often the actor looks for a newer choice of track while it waits for a load to be acknowledged.
+const LOAD_WAIT_SLICE: Duration = Duration::from_millis(25);
+/// The error of a command whose wait was given up because the user chose another track meanwhile. The front end has
+/// already dropped such a command; nothing shows it.
+pub(crate) const SUPERSEDED_MESSAGE: &str = "superseded";
 
 static PROCESS_SERVICE: OnceLock<Arc<SharedService>> = OnceLock::new();
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -341,6 +346,14 @@ impl AndroidPlaybackService {
 }
 
 impl PlaybackAction {
+    /// The actions that load another track (a newer one replaces a load that is still being awaited).
+    fn chooses_track(&self) -> bool {
+        matches!(
+            self,
+            Self::SelectTrack { .. } | Self::Next { .. } | Self::Previous
+        )
+    }
+
     pub(crate) fn select_track(track_id: String, source: Option<PlaybackQueueSource>) -> Self {
         Self::SelectTrack { track_id, source }
     }
@@ -383,6 +396,8 @@ struct AndroidActor {
     database: Database,
     shared: Arc<SharedService>,
     requests: Receiver<ActorRequest>,
+    /// Requests taken from `requests` while a load was awaited, in arrival order; handled before any newer one.
+    held_requests: VecDeque<ActorRequest>,
     commands: SyncSender<NativeCommand>,
     events: Receiver<NativeEvent>,
     runtime_id: uuid::Uuid,
@@ -420,6 +435,7 @@ impl AndroidActor {
             database,
             shared,
             requests,
+            held_requests: VecDeque::new(),
             commands,
             events,
             runtime_id,
@@ -445,7 +461,7 @@ impl AndroidActor {
     fn run(mut self) {
         self.restore_session();
         loop {
-            match self.requests.recv_timeout(Duration::from_millis(250)) {
+            match self.next_request(Duration::from_millis(250)) {
                 Ok(ActorRequest::Command {
                     request_id,
                     action,
@@ -468,6 +484,26 @@ impl AndroidActor {
             self.process_deferred_events();
             self.periodic_checkpoint();
         }
+    }
+
+    /// The next request: the ones set aside while a load was awaited first, then the channel.
+    fn next_request(&mut self, timeout: Duration) -> Result<ActorRequest, RecvTimeoutError> {
+        match self.held_requests.pop_front() {
+            Some(request) => Ok(request),
+            None => self.requests.recv_timeout(timeout),
+        }
+    }
+
+    /// Whether a request that arrived while a load was awaited chooses another track, so the awaited one is of no
+    /// interest any more. Everything else (pause, seek, volume...) waits its turn as before.
+    fn choosing_request_waits(&mut self) -> bool {
+        while let Ok(request) = self.requests.try_recv() {
+            self.held_requests.push_back(request);
+        }
+        self.held_requests.iter().any(|request| {
+            let ActorRequest::Command { action, .. } = request;
+            action.chooses_track()
+        })
     }
 
     fn handle_action(
@@ -957,15 +993,20 @@ impl AndroidActor {
             .try_send(command.clone())
             .map_err(|error| format!("Android 播放服務命令佇列已滿：{error}"))?;
         let deadline = Instant::now() + COMMAND_ACK_TIMEOUT;
+        // A load of a track on a slow or dead server can take many seconds to be acknowledged: while it is awaited, a
+        // newer choice of track takes over at once (the stale load is left to finish or fail on its own; its late
+        // acknowledgement is ignored, and nothing of it was committed).
+        let preemptible = command.op == "load";
         loop {
+            if preemptible && self.choosing_request_waits() {
+                return Err(SUPERSEDED_MESSAGE.to_owned());
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err("Android 播放服務沒有在期限內確認命令。".to_owned());
             }
-            match self
-                .events
-                .recv_timeout(remaining.min(Duration::from_millis(250)))
-            {
+            let slice = if preemptible { LOAD_WAIT_SLICE } else { Duration::from_millis(250) };
+            match self.events.recv_timeout(remaining.min(slice)) {
                 Ok(event) => {
                     if event.v != 1 {
                         continue;
