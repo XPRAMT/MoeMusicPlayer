@@ -22,8 +22,20 @@ object FloatingLyricsRules {
         return trackEndMs?.let { minOf(estimated, it) } ?: estimated
     }
 
-    /** Same range as settings.rs `OPACITY_RANGE_PERCENT`. */
-    fun opacityPercent(value: Int): Int = value.coerceIn(1, 100)
+    /** Main opacity: same range and default as settings.rs `MAIN_OPACITY_RANGE_PERCENT` (1-100, 100). */
+    const val DEFAULT_MAIN_OPACITY_PERCENT = 100
+    fun mainOpacityPercent(value: Int): Int = value.coerceIn(1, 100)
+
+    /** Secondary opacity: settings.rs `SECONDARY_OPACITY_RANGE_PERCENT` (10-100, 50). May exceed the main one. */
+    const val DEFAULT_SECONDARY_OPACITY_PERCENT = 50
+    fun secondaryOpacityPercent(value: Int): Int = value.coerceIn(10, 100)
+
+    /**
+     * What the two line views draw at (their own alpha): animation "none" shows the line at the main opacity;
+     * "continuous" draws at 1 because the static mask carries the main and the secondary opacity.
+     */
+    fun lineViewAlpha(animation: String, mainPercent: Int): Float =
+        if (animation == "continuous") 1f else mainOpacityPercent(mainPercent) / 100f
 
     /** Same range as settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX` (dp here). */
     /** Stored lyric area width (dp); on screen it is also kept within the screen (`overlayWidth`). */
@@ -242,10 +254,6 @@ object FloatingLyricsRules {
     /** Height of one drawn line: the text's own height (ascent to descent) with a 10% buffer. */
     fun lineHeightPx(ascent: Float, descent: Float): Int = Math.ceil(((descent - ascent) * 1.1f).toDouble()).toInt()
 
-    /** Same range as `lyricsPreferences.inactiveOpacityPercent` (lyrics-preferences.js); 50 is its default. */
-    const val DEFAULT_INACTIVE_OPACITY_PERCENT = 50
-    fun inactiveOpacityPercent(value: Int): Int = value.coerceIn(10, 100)
-
     /** The continuous strip fades a line over this long, ending exactly when the next line starts. */
     const val STRIP_FADE_MS = 200L
 
@@ -290,27 +298,15 @@ object FloatingLyricsRules {
         return next < startTimesMs.size && startTimesMs[next] - lyricsMs < fadeMs
     }
 
-    /**
-     * Opacity of a cell relative to the main opacity (which dims the whole overlay): 1 for the current line, the
-     * inactive opacity for the others, in between while fading. Only the continuous animation fades; "none" keeps 1.
-     */
-    fun inactiveFactor(animation: String, inactivePercent: Int, weight: Float): Float {
-        if (animation != "continuous") return 1f
-        return fadedFactor(inactiveOpacityPercent(inactivePercent) / 100f, weight)
-    }
-
     /** `inactive` (the factor of a line that is not current) lifted toward 1 by `weight` (0..1). */
     fun fadedFactor(inactive: Float, weight: Float): Float = inactive + (1f - inactive) * weight.coerceIn(0f, 1f)
 
-    /** What reaches the screen for a cell: main opacity times its factor (80% main, 50% inactive: 0.4). */
-    fun cellOpacity(animation: String, opacityPercent: Int, inactivePercent: Int, weight: Float): Float =
-        opacityPercent(opacityPercent) / 100f * inactiveFactor(animation, inactivePercent, weight)
-
-    /** Window alpha from the opacity setting, capped by the system's touch-through limit when there is one. */
-    fun windowAlpha(opacityPercent: Int, systemLimit: Float?): Float {
-        val wanted = opacityPercent(opacityPercent) / 100f
-        return if (systemLimit == null) wanted else minOf(wanted, systemLimit)
-    }
+    /**
+     * The overlay window's alpha: 1, except that a locked (not touchable) overlay on Android 12+ may not exceed the
+     * system's maximum obscuring opacity for touches (`systemLimit`, normally 0.8). The drawn values (main and
+     * secondary opacity) are not compensated, so the locked brightness is capped by that limit.
+     */
+    fun windowAlpha(systemLimit: Float?): Float = if (systemLimit == null) 1f else minOf(1f, systemLimit)
 
     /**
      * Device-pixel rule (AGENTS.md): a moving position is redrawn only when it crosses into another whole pixel, so the

@@ -41,14 +41,21 @@ class FloatingLyricsRulesTest {
 
     @Test
     fun opacityAndCentre() {
-        assertEquals(1f, FloatingLyricsRules.windowAlpha(100, null), 0.0001f)
-        assertEquals(0.5f, FloatingLyricsRules.windowAlpha(50, null), 0.0001f)
-        assertEquals(0.01f, FloatingLyricsRules.windowAlpha(0, null), 0.0001f)
-        assertEquals(0.01f, FloatingLyricsRules.windowAlpha(1, null), 0.0001f)
-        assertEquals(0.05f, FloatingLyricsRules.windowAlpha(5, 0.8f), 0.0001f)
-        assertEquals(0.8f, FloatingLyricsRules.windowAlpha(100, 0.8f), 0.0001f)
-        assertEquals(0.6f, FloatingLyricsRules.windowAlpha(60, 0.8f), 0.0001f)
-        assertEquals(100, FloatingLyricsRules.opacityPercent(250))
+        // The window is opaque; only a locked overlay is capped by the system limit.
+        assertEquals(1f, FloatingLyricsRules.windowAlpha(null), 0.0001f)
+        assertEquals(0.8f, FloatingLyricsRules.windowAlpha(0.8f), 0.0001f)
+        assertEquals(1f, FloatingLyricsRules.windowAlpha(1.5f), 0.0001f)
+        assertEquals(100, FloatingLyricsRules.mainOpacityPercent(250))
+        assertEquals(1, FloatingLyricsRules.mainOpacityPercent(0))
+        assertEquals(10, FloatingLyricsRules.secondaryOpacityPercent(0))
+        assertEquals(37, FloatingLyricsRules.secondaryOpacityPercent(37))
+        assertEquals(100, FloatingLyricsRules.secondaryOpacityPercent(250))
+        assertEquals(100, FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT)
+        assertEquals(50, FloatingLyricsRules.DEFAULT_SECONDARY_OPACITY_PERCENT)
+        // Animation none draws the line at main; continuous draws at 1 (the mask dims).
+        assertEquals(0.6f, FloatingLyricsRules.lineViewAlpha("none", 60), 0.0001f)
+        assertEquals(1f, FloatingLyricsRules.lineViewAlpha("continuous", 60), 0.0001f)
+        assertEquals(0.01f, FloatingLyricsRules.lineViewAlpha("none", 0), 0.0001f)
         assertEquals(400, FloatingLyricsRules.centredStart(1080, 280))
         assertEquals(0, FloatingLyricsRules.centredStart(100, 300))
     }
@@ -281,44 +288,6 @@ class FloatingLyricsRulesTest {
 
     // Continuous strip fade: lines start at 1 000, 2 000 and 4 000 ms; a line fades over the 200 ms before the next starts.
     private fun weights(lyricsMs: Long) = (0..2).map { FloatingLyricsRules.cellWeight(starts, it, lyricsMs) }
-
-    @Test
-    fun inactiveOpacityIsClampedToTheSettingsRange() {
-        assertEquals(10, FloatingLyricsRules.inactiveOpacityPercent(0))
-        assertEquals(10, FloatingLyricsRules.inactiveOpacityPercent(-5))
-        assertEquals(37, FloatingLyricsRules.inactiveOpacityPercent(37))
-        assertEquals(100, FloatingLyricsRules.inactiveOpacityPercent(250))
-        assertEquals(50, FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT)
-    }
-
-    @Test
-    fun otherLinesAreMainOpacityTimesInactiveOpacity() {
-        // 80% main, 50% inactive: the current line stays 0.8, the others are 0.4.
-        assertEquals(0.8f, FloatingLyricsRules.cellOpacity("continuous", 80, 50, 1f), 0.0001f)
-        assertEquals(0.4f, FloatingLyricsRules.cellOpacity("continuous", 80, 50, 0f), 0.0001f)
-        // Relative to the main opacity, which dims the whole overlay.
-        assertEquals(0.5f, FloatingLyricsRules.inactiveFactor("continuous", 50, 0f), 0.0001f)
-        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 50, 1f), 0.0001f)
-    }
-
-    @Test
-    fun fullInactiveOpacityDoesNotFadeAnything() {
-        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 100, 0f), 0.0001f)
-        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 100, 0.5f), 0.0001f)
-        assertEquals(0.7f, FloatingLyricsRules.cellOpacity("continuous", 70, 100, 0f), 0.0001f)
-    }
-
-    @Test
-    fun noAnimationKeepsEveryLineAtTheMainOpacity() {
-        assertEquals(1f, FloatingLyricsRules.inactiveFactor("none", 10, 0f), 0.0001f)
-        assertEquals(0.8f, FloatingLyricsRules.cellOpacity("none", 80, 50, 0f), 0.0001f)
-    }
-
-    @Test
-    fun missingOrOutOfRangeInactiveOpacityFallsBackIntoRange() {
-        assertEquals(0.1f, FloatingLyricsRules.inactiveFactor("continuous", 0, 0f), 0.0001f)
-        assertEquals(1f, FloatingLyricsRules.inactiveFactor("continuous", 999, 0f), 0.0001f)
-    }
 
     @Test
     fun fadeStartsTwoHundredMsBeforeTheNextLineAndEndsWhenItStarts() {

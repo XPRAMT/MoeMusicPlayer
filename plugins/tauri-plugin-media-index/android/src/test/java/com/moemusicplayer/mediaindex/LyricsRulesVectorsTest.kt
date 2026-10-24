@@ -75,10 +75,6 @@ class LyricsRulesVectorsTest {
                     FloatingLyricsRules.cellWeight(starts, i, c.getLong("positionMs")), 0.0001f)
             }
         }
-        for (c in vectors.cases("opacity")) {
-            assertEquals(c.toString(), c.getDouble("expected").toFloat(),
-                FloatingLyricsRules.inactiveFactor(c.getString("animation"), c.getInt("inactive"), c.getDouble("weight").toFloat()), 0.0001f)
-        }
     }
 
     @Test
@@ -143,7 +139,7 @@ class LyricsRulesVectorsTest {
         for (c in vectors.cases("centreMask")) {
             assertEquals(c.toString(), c.getDouble("expected"),
                 WordLyricsRules.centreMaskOpacity(c.getDouble("x"), c.getDouble("areaWidth"), c.getDouble("emPx"),
-                    c.getDouble("inactive")), 1e-9)
+                    c.getDouble("main"), c.getDouble("secondary")), 1e-9)
         }
     }
 

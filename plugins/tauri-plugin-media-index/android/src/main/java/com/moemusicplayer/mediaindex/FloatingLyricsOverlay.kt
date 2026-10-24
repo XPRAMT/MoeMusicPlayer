@@ -91,9 +91,9 @@ object FloatingLyricsOverlay {
         val wordKnots: List<Pair<Double, Double>>?,
     )
     private var strip: Strip? = null
-    private var opacityPercent = 100
-    /** lyricsPreferences.inactiveOpacityPercent, pushed by the page on its own; the continuous strip dims the other lines by it. */
-    private var inactiveOpacityPercent = FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT
+    /** The floating settings' own pair: "none" draws the line at main; "continuous" feeds both into the static mask. */
+    private var mainOpacityPercent = FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT
+    private var secondaryOpacityPercent = FloatingLyricsRules.DEFAULT_SECONDARY_OPACITY_PERCENT
     private var widthDp = 800
     private var landscapeWidthDp = 800
     private var rotationWatch: android.content.ComponentCallbacks? = null
@@ -163,10 +163,6 @@ object FloatingLyricsOverlay {
         appContext = context.applicationContext
         args.optJSONObject("settings")?.let(::applySettings)
         args.optJSONObject("data")?.let(::applyData)
-        // lyricsPreferences.inactiveOpacityPercent (10-100), pushed by the page whenever that setting changes.
-        if (args.has("inactiveOpacityPercent") && !args.isNull("inactiveOpacityPercent")) {
-            applyInactiveOpacity(args.optInt("inactiveOpacityPercent", FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT))
-        }
         if (args.has("accentColor") && !args.isNull("accentColor")) {
             FloatingLyricsRules.parseHexColor(args.optString("accentColor"))?.let {
                 accentColor = 0xff000000.toInt() or it
@@ -235,15 +231,10 @@ object FloatingLyricsOverlay {
         showTranslation = settings.optBoolean("showTranslation", true)
         textEffect = settings.optString("textEffect", "shadow")
         animation = if (settings.optString("animation", "none") == "continuous") "continuous" else "none"
-        opacityPercent = FloatingLyricsRules.opacityPercent(settings.optInt("opacityPercent", 100))
-        // The look settings do not carry it (it is a general lyrics setting, pushed on its own, see update): keep the last one.
-        if (settings.has("inactiveOpacityPercent")) applyInactiveOpacity(settings.optInt("inactiveOpacityPercent"))
+        mainOpacityPercent = FloatingLyricsRules.mainOpacityPercent(settings.optInt("mainOpacityPercent", FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT))
+        secondaryOpacityPercent = FloatingLyricsRules.secondaryOpacityPercent(settings.optInt("secondaryOpacityPercent", FloatingLyricsRules.DEFAULT_SECONDARY_OPACITY_PERCENT))
         widthDp = FloatingLyricsRules.widthDp(settings.optInt("widthPx", 800))
         landscapeWidthDp = FloatingLyricsRules.widthDp(settings.optInt("landscapeWidthPx", 800))
-    }
-
-    private fun applyInactiveOpacity(percent: Int) {
-        inactiveOpacityPercent = FloatingLyricsRules.inactiveOpacityPercent(percent)
     }
 
     private fun applyData(data: JSONObject) {
@@ -467,7 +458,6 @@ object FloatingLyricsOverlay {
         }
         fun line(): LyricLineView = LyricLineView(context)
         val first = line()
-        // Same opacity as the main line: only the whole overlay is dimmed (fixed mode, Android 12+ limit).
         val second = line()
         column.addView(first, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(second, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -615,7 +605,8 @@ object FloatingLyricsOverlay {
             val strokeColor = if (effectiveEffect == "stroke") 0x80000000.toInt() or effect else 0
             view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor)
             if (view === mainText) view.setAccent(accentColor)
-            // Continuous mode (experimental): no per-line dimming; the inactive opacity is in the static mask.
+            // Animation "none": the line at the main opacity; "continuous": 1, the static mask carries main and secondary.
+            view.alpha = FloatingLyricsRules.lineViewAlpha(animation, mainOpacityPercent)
             view.setInactiveFactor(1f)
         }
     }
@@ -630,14 +621,15 @@ object FloatingLyricsOverlay {
         } else {
             layout.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         }
-        // The user's opacity for both lines. Android 12+ only lets touches pass through an overlay up to the system's
-        // maximum obscuring opacity (normally 0.8), so fixed mode cannot go above that limit.
+        // The window itself is opaque (the lines carry the main and secondary opacity). Android 12+ only lets touches
+        // pass through an overlay up to the system's maximum obscuring opacity (normally 0.8), so a locked overlay is
+        // capped at that limit; the drawn values are not compensated.
         val systemLimit = if (locked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (context.getSystemService(Context.INPUT_SERVICE) as InputManager).maximumObscuringOpacityForTouch
         } else {
             null
         }
-        layout.alpha = FloatingLyricsRules.windowAlpha(opacityPercent, systemLimit)
+        layout.alpha = FloatingLyricsRules.windowAlpha(systemLimit)
         // Move mode: only the lyric area gets the background, never the lock gutter.
         view.background = null
         (mainText?.parent as? View)?.background = if (locked) null else GradientDrawable().apply {
@@ -780,13 +772,14 @@ object FloatingLyricsOverlay {
                 finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters, current.firstGlyphCenters,
             )
         }
-        // Line- and word-timed (experimental): the static mask at the main row's em and the inactive opacity on both
+        // Line- and word-timed: the static mask at the main row's em with the main and secondary opacity on both
         // rows, instead of the edge fade and the line fades.
         val em = main.textSizePx()
-        val inactive = FloatingLyricsRules.inactiveOpacityPercent(inactiveOpacityPercent) / 100f
+        val mainOpacity = FloatingLyricsRules.mainOpacityPercent(mainOpacityPercent) / 100f
+        val secondaryOpacity = FloatingLyricsRules.secondaryOpacityPercent(secondaryOpacityPercent) / 100f
         (main.parent as? EdgeFadeLayout)?.fadeEnabled = false
-        main.setWordMask(em, inactive)
-        translationText?.setWordMask(em, inactive)
+        main.setWordMask(em, mainOpacity, secondaryOpacity)
+        translationText?.setWordMask(em, mainOpacity, secondaryOpacity)
         view.visibility = View.VISIBLE
         main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)
         translationText?.let {

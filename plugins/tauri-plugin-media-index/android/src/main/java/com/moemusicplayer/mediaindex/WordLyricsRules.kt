@@ -224,22 +224,25 @@ internal object WordLyricsRules {
 
     /**
      * The static continuous-mode mask's gradient stops `(offset 0..1, opacity)` (`centre_mask_stops`, experimental):
-     * 0 → inactive over the edge em, inactive → 1 up to an opaque em at the centre, mirrored; below four em the em
-     * shrinks to a quarter of the area.
+     * 0 -> `secondary` over the edge em, `secondary` -> `main` up to a `main` plateau of one em at the centre, mirrored
+     * (absolute opacities, each clamped on its own, NaN = 1, secondary may exceed main); below four em the em shrinks
+     * to a quarter of the area.
      */
-    fun centreMaskStops(areaWidth: Double, emPx: Double, inactive: Double): List<Pair<Double, Double>> {
+    fun centreMaskStops(areaWidth: Double, emPx: Double, main: Double, secondary: Double): List<Pair<Double, Double>> {
         if (!(areaWidth > 0) || !(emPx > 0)) return emptyList()
-        val a = if (inactive.isNaN()) 1.0 else inactive.coerceIn(0.0, 1.0)
+        fun unit(v: Double) = if (v.isNaN()) 1.0 else v.coerceIn(0.0, 1.0)
+        val m = unit(main)
+        val a = unit(secondary)
         val e = minOf(emPx, areaWidth / 4)
         val edge = MASK_EDGE_EM * e
         val half = MASK_BAND_EM * e / 2
         val c = areaWidth / 2
-        return listOf(0.0 to 0.0, edge to a, c - half to 1.0, c + half to 1.0, areaWidth - edge to a, areaWidth to 0.0)
+        return listOf(0.0 to 0.0, edge to a, c - half to m, c + half to m, areaWidth - edge to a, areaWidth to 0.0)
             .map { (x, o) -> x / areaWidth to o }
     }
 
-    fun centreMaskOpacity(x: Double, areaWidth: Double, emPx: Double, inactive: Double): Double {
-        val stops = centreMaskStops(areaWidth, emPx, inactive)
+    fun centreMaskOpacity(x: Double, areaWidth: Double, emPx: Double, main: Double, secondary: Double): Double {
+        val stops = centreMaskStops(areaWidth, emPx, main, secondary)
         if (stops.isEmpty()) return 0.0
         val p = (x / areaWidth).coerceIn(0.0, 1.0)
         var value = stops[0].second

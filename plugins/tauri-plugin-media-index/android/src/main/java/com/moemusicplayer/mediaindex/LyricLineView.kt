@@ -65,11 +65,12 @@ internal class LyricLineView(context: Context) : View(context) {
     private var karaokeEdge = Float.NaN
     private var karaokeRawEdge = Float.NaN
 
-    // Continuous lyrics, line- and word-timed (experimental): the static mask at this em and inactive opacity (0 = none).
+    // Continuous lyrics, line- and word-timed: the static mask at this em, main and secondary opacity (em 0 = none).
     private var maskEm = 0f
-    private var maskInactive = 1f
+    private var maskMain = 1f
+    private var maskSecondary = 1f
     private val maskPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
-    private var maskKey = Triple(0, 0f, 0f)
+    private var maskKey = listOf<Any>()
 
     fun textSizePx(): Float = paint.textSize
 
@@ -127,12 +128,13 @@ internal class LyricLineView(context: Context) : View(context) {
     /** True while the karaoke edge of the shown line still moves at `lyricsMs` (frames are wanted). */
     fun karaokeMoving(lyricsMs: Double): Boolean = karaokeSpans != null && WordLyricsRules.glideMoving(karaokeGlide, lyricsMs)
 
-    /** The static mask of continuous lyrics at `em` px and the inactive opacity `inactive` (0..1); em 0: none. */
-    fun setWordMask(em: Float, inactive: Float = 1f) {
-        if (em == maskEm && inactive == maskInactive) return
+    /** The static mask of continuous lyrics at `em` px, the main and the secondary opacity (0..1); em 0: none. */
+    fun setWordMask(em: Float, main: Float = 1f, secondary: Float = 1f) {
+        if (em == maskEm && main == maskMain && secondary == maskSecondary) return
         maskEm = em
-        maskInactive = inactive
-        maskKey = Triple(0, 0f, 0f)
+        maskMain = main
+        maskSecondary = secondary
+        maskKey = listOf()
         invalidate()
     }
 
@@ -360,10 +362,11 @@ internal class LyricLineView(context: Context) : View(context) {
             drawText(canvas, value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, weight)
         }
         if (maskEm > 0f) {
-            // DST_IN over the row's layer: one static gradient (rebuilt only when the width, em or inactive opacity changes).
-            if (maskKey != Triple(width, maskEm, maskInactive)) {
-                maskKey = Triple(width, maskEm, maskInactive)
-                val stops = WordLyricsRules.centreMaskStops(width.toDouble(), maskEm.toDouble(), maskInactive.toDouble())
+            // DST_IN over the row's layer: one static gradient (rebuilt only when the width, em or an opacity changes).
+            val key = listOf<Any>(width, maskEm, maskMain, maskSecondary)
+            if (maskKey != key) {
+                maskKey = key
+                val stops = WordLyricsRules.centreMaskStops(width.toDouble(), maskEm.toDouble(), maskMain.toDouble(), maskSecondary.toDouble())
                 maskPaint.shader = if (stops.isEmpty()) null else LinearGradient(
                     0f, 0f, width.toFloat(), 0f,
                     IntArray(stops.size) { (Math.round(stops[it].second * 255).toInt().coerceIn(0, 255) shl 24) or 0xffffff },
