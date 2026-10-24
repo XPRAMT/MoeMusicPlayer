@@ -24,7 +24,8 @@ such tracks hidden everywhere but restorable: if a later sync finds the file aga
   edited automatically.
 - Folder sources (Windows filesystem / system index, Android filesystem / MediaStore / SAF): on a Complete scan,
   mappings not seen any more are marked missing instead of deleted. Unavailable or Incomplete scans change nothing.
-  Remote sources keep deleting unseen mappings.
+  Remote sources keep deleting unseen mappings. (Superseded by the Amendment below: remote folder sources now keep and
+  hide unseen mappings too; `keeps_missing_files` in `player-db` includes `Remote`.)
 - Any later scan that observes the file clears the mark (`persist_mapping` sets it to NULL).
 - `SyncApplyStats.hidden_missing_mappings` counts newly hidden mappings.
 

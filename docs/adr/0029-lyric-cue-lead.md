@@ -22,6 +22,9 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
   lead; seeks while playing, track changes and reduced motion stay instant. Play counts and the previous-button
   three-second rule use the real position.
 - Taskbar lyrics: no fade; the line switches at its real start (no lead); long-line scrolling starts at the real start.
+  (Current state: the taskbar and floating lyric windows are now drawn natively, ADR 0034/0041; they still have no
+  lead and change line at `startMs - offset`, and the 200 ms line fade of the old WebView window no longer exists
+  there. The lead applies to the Now Playing page only.)
 
 ## Consequences
 
