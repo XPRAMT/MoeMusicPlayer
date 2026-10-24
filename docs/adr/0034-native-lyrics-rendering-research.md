@@ -327,6 +327,13 @@ D3D11／D2D／DWrite 與點陣化、規則、計畫（`plan.rs`）都不變：
 快取總量 111.6 MiB（原本 158 MiB，−46 MiB）；第二個工作列視窗放在 192 DPI 螢幕時兩者各自一份，總量 158.9 MiB，與原本相同。
 測試：`windows_with_the_same_key_share_and_the_last_user_frees`。
 
+## 逐字歌詞（ADR 0041 D10）
+
+- 連續模式的逐字歌詞：捲動條位移改由字起點節點計算（`StripInput.word_knots`，`rules::glide_cubic`），仍是每幀由音訊時鐘取樣、1/8 px 才提交；淡出改用靜態置中遮罩（`Mask::Centre`，`rules::centre_mask_stops`），掛在同一個 `FadeHost` 的 `CompositionMaskBrush`，所有格的透明度係數為 1。行級歌詞照舊用邊緣淡出（`Mask::Edge`）。
+- 「無」模式的逐字行：白色與主色兩張快取表面（`TextStyle.effect_from` 讓兩張的陰影顏色相同，並進入點陣快取的鍵），兩個 sprite 加互補 `InsetClip`（`WordClip`），邊界由 `rules::karaoke_clip_x` 依音訊時鐘計算，與 `Live` 一起每幀取樣、移動至少 1/8 裝置像素才提交；唱字期間 `moving_until` 延到最後一個字結束。下一行（含主色副本）在閒置時預先點陣化。
+- 主色由 `lyrics-accent-color` 事件送達（`NativeLyrics::set_accent`），改變時清除點陣快取。
+- `MOE_LYRICS_FRAME_LOG` 每個取樣幀多記一欄「是否提交」。量測結果見 ADR 0041 5.3。
+
 ## 目前設計細節（自 AGENTS.md 移入）
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
