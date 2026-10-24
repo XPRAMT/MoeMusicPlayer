@@ -12,6 +12,18 @@ pub type Keys = Vec<(f64, f64)>;
 /// the last key is the end value (only `c0`), constant after it.
 pub type Cubics = Vec<(f64, [f64; 4])>;
 
+/// The key of one rasterised line (shared between windows, ADR 0034): the rows with their font px and weight (a
+/// window with another weight must not reuse the bitmap), the colours, the effect and the line box.
+pub fn raster_key<T: std::fmt::Debug>(
+    rows: &[(T, f32, u16)],
+    color: [u8; 3],
+    effect_from: [u8; 3],
+    effect: u8,
+    line_height: f32,
+) -> String {
+    format!("{rows:?}|{color:?}|{effect_from:?}|{effect}|{line_height}")
+}
+
 /// Playback samples within this of the running clock are ignored (about 1 device px of glide).
 pub const CLOCK_TOLERANCE_MS: f64 = 4.0;
 /// Larger differences are a seek and jump; smaller ones are absorbed by a rate change (ADR 0028 / 0034).
@@ -437,6 +449,20 @@ pub fn value_at(keys: &Keys, t: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_raster_key_includes_each_rows_weight() {
+        let white = [255, 255, 255];
+        let key = |rows: &[(&str, f32, u16)]| raster_key(rows, white, white, 1, 1.4);
+        let regular = key(&[("night", 40.0, 550), ("tr", 32.0, 500)]);
+        assert_eq!(regular, key(&[("night", 40.0, 550), ("tr", 32.0, 500)]));
+        assert_ne!(regular, key(&[("night", 40.0, 700), ("tr", 32.0, 650)]));
+        assert_ne!(
+            regular,
+            key(&[("night", 40.0, 550), ("tr", 32.0, 550)]),
+            "the translation weight is part of the key"
+        );
+    }
 
     fn input<'a>(
         starts: &'a [f64],

@@ -46,9 +46,10 @@ use windows_numerics::{Matrix3x2, Vector2, Vector3};
 use crate::plan;
 use crate::sampling::{self, Curve};
 use crate::{
-    effect_rgb, fit_font_size, floating_lock_css, floating_margin_css, Chrome, Events, Kind, Look,
-    LyricsData, PlayState, PlaybackSample, FLOATING_LINE_HEIGHT, FLOATING_PANEL_LINE_HEIGHT,
-    TASKBAR_LINE_HEIGHT, TASKBAR_SIDE_PADDING_CSS,
+    dwrite_weight, effect_rgb, fit_font_size, floating_lock_css, floating_margin_css,
+    translation_weight, Chrome, Events, Kind, Look, LyricsData, PlayState, PlaybackSample,
+    FLOATING_LINE_HEIGHT, FLOATING_PANEL_LINE_HEIGHT, TASKBAR_LINE_HEIGHT,
+    TASKBAR_SIDE_PADDING_CSS,
 };
 
 const WM_WAKE: u32 = WM_APP + 41;
@@ -541,6 +542,8 @@ struct TextStyle {
     /// The colour the shadow / outline colour is taken from (the text colour; the accent copy of a line keeps the
     /// white line's effect, so the two surfaces' shadows are identical and a clip between them shows no seam).
     effect_from: [u8; 3],
+    /// Weight of the original text; translation rows carry `translation_weight` of it in their row.
+    weight: u16,
 }
 
 fn rgba(c: [u8; 3], a: f32) -> D2D1_COLOR_F {
@@ -552,12 +555,18 @@ fn rgba(c: [u8; 3], a: f32) -> D2D1_COLOR_F {
     }
 }
 
-fn text_layout(gfx: &Gfx, text: &str, size: f32, line_height: f32) -> Result<IDWriteTextLayout> {
+fn text_layout(
+    gfx: &Gfx,
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+) -> Result<IDWriteTextLayout> {
     unsafe {
         let format = gfx.dwrite.CreateTextFormat(
             w!("Segoe UI"),
             None,
-            DWRITE_FONT_WEIGHT_MEDIUM,
+            DWRITE_FONT_WEIGHT(dwrite_weight(weight)),
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             size,
@@ -624,7 +633,7 @@ fn last_glyph_centre(layout: &IDWriteTextLayout, text: &str) -> f32 {
 
 /// Rows drawn into one surface, stacked: `(text, font px)`.
 struct RasterRequest<'a> {
-    rows: &'a [(&'a str, f32)],
+    rows: &'a [(&'a str, f32, u16)],
     style: TextStyle,
 }
 
@@ -647,7 +656,9 @@ fn rasterise(gfx: &Gfx, request: &RasterRequest) -> Result<Raster> {
         let layouts: Vec<IDWriteTextLayout> = request
             .rows
             .iter()
-            .map(|(text, px)| text_layout(gfx, text, *px, request.style.line_height))
+            .map(|(text, px, weight)| {
+                text_layout(gfx, text, *px, *weight, request.style.line_height)
+            })
             .collect::<Result<_>>()?;
         let row_widths: Vec<f32> = layouts.iter().map(text_width).collect();
         let width = row_widths.iter().copied().fold(1.0f32, f32::max);
@@ -662,7 +673,7 @@ fn rasterise(gfx: &Gfx, request: &RasterRequest) -> Result<Raster> {
             dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let mut origins = Vec::new();
             let mut y = margin;
-            for (_, px) in request.rows {
+            for (_, px, _) in request.rows {
                 origins.push(Vector2 { X: margin, Y: y });
                 y += px * request.style.line_height;
             }
@@ -1217,7 +1228,9 @@ const DEFAULT_ACCENT: [u8; 3] = [0xA9, 0xC3, 0xFE];
 /// word centres (px from the text's left edge; empty for a line without words).
 /// Per lyrics, size and look: main and translation widths, the last glyph centre of the last line, each line's first
 /// glyph centre and each line's word centres.
-type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+/// Measurement key: main px, translation px, line count, weight.
+type MeasureKey = (u32, u32, usize, u16);
+type MeasuredLines = (MeasureKey, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
 struct Win {
     hwnd: HWND,
@@ -1246,7 +1259,7 @@ struct Win {
     /// the last glyph's centre. Cleared with the raster cache (new lyrics or look).
     measured: Option<MeasuredLines>,
     /// Lines to rasterise ahead of their entry (rows, style).
-    prewarm: Vec<(Vec<(String, f32)>, TextStyle)>,
+    prewarm: Vec<(Vec<(String, f32, u16)>, TextStyle)>,
     /// Until when any of them still moves (`None` = nothing moves).
     moving_until: Option<Instant>,
 }
@@ -1598,7 +1611,8 @@ impl Renderer {
         let mut count = 0;
         for win in self.windows.values_mut() {
             for (rows, style) in std::mem::take(&mut win.prewarm) {
-                let rows: Vec<(&str, f32)> = rows.iter().map(|(t, f)| (t.as_str(), *f)).collect();
+                let rows: Vec<(&str, f32, u16)> =
+                    rows.iter().map(|(t, f, w)| (t.as_str(), *f, *w)).collect();
                 if let Err(e) = cached(gfx, win, &rows, style) {
                     eprintln!("lyrics prewarm: {e}");
                 }
@@ -2252,7 +2266,9 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         effect: look.effect,
         line_height: line_height as f32,
         effect_from: look.color,
+        weight: look.font_weight,
     };
+    let trans_weight = translation_weight(look.font_weight);
     let clip_room = match look.effect {
         rules::TextEffect::Shadow => 0.6,
         rules::TextEffect::Stroke => 0.04,
@@ -2302,14 +2318,19 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
         // Measure every line once per lyrics, size and look (DirectWrite layouts; a few hundred of them take tens of
         // milliseconds, far too long to redo at every line change).
-        let key = (font.to_bits(), trans_font.to_bits(), lines.len());
+        let key = (
+            font.to_bits(),
+            trans_font.to_bits(),
+            lines.len(),
+            look.font_weight,
+        );
         if win.measured.as_ref().is_none_or(|m| m.0 != key) {
             let mut main_widths = Vec::new();
             let mut trans_widths = Vec::new();
             let mut last_centres = Vec::new();
             let mut first_centres = Vec::new();
             for (_, text, tr) in lines.iter() {
-                let main = text_layout(gfx, text, font, style.line_height)?;
+                let main = text_layout(gfx, text, font, style.weight, style.line_height)?;
                 main_widths.push(if text.is_empty() {
                     0.0
                 } else {
@@ -2328,7 +2349,13 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 trans_widths.push(if tr.is_empty() {
                     0.0
                 } else {
-                    text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
+                    text_width(&text_layout(
+                        gfx,
+                        tr,
+                        trans_font,
+                        trans_weight,
+                        style.line_height,
+                    )?) as f64
                 });
             }
             win.measured = Some((key, main_widths, trans_widths, last_centres, first_centres));
@@ -2390,10 +2417,10 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         let mut cells = Vec::new();
         for (index, keys) in &planned.opacity {
             let (_, text, tr) = lines[*index];
-            let rows: Vec<(&str, f32)> = if has_translation {
-                vec![(text, font), (tr, trans_font)]
+            let rows: Vec<(&str, f32, u16)> = if has_translation {
+                vec![(text, font, style.weight), (tr, trans_font, trans_weight)]
             } else {
-                vec![(text, font)]
+                vec![(text, font, style.weight)]
             };
             cells.push((cached(gfx, win, &rows, style)?, *index, keys));
         }
@@ -2406,9 +2433,9 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         win.prewarm.clear();
         if let Some((_, last)) = planned.cells {
             let rows_of = |text: &str, tr: &str| {
-                let mut rows = vec![(text.to_string(), font)];
+                let mut rows = vec![(text.to_string(), font, style.weight)];
                 if has_translation {
-                    rows.push((tr.to_string(), trans_font));
+                    rows.push((tr.to_string(), trans_font, trans_weight));
                 }
                 rows
             };
@@ -2431,8 +2458,8 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                         continue;
                     }
                     if fresh {
-                        let rows: Vec<(&str, f32)> =
-                            rows.iter().map(|(t, f)| (t.as_str(), *f)).collect();
+                        let rows: Vec<(&str, f32, u16)> =
+                            rows.iter().map(|(t, f, w)| (t.as_str(), *f, *w)).collect();
                         cached(gfx, win, &rows, style)?;
                         drawn += 1;
                     } else {
@@ -2544,9 +2571,9 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         );
         let font = (font_css * scale) as f32;
         let trans_font = font * (look.translation_scale_percent / 100.0) as f32;
-        let mut rows = vec![(text, font)];
+        let mut rows = vec![(text, font, style.weight)];
         if has_translation {
-            rows.push((tr, trans_font));
+            rows.push((tr, trans_font, trans_weight));
         }
         let rows_h: f64 = rows.iter().map(|r| r.1 as f64 * line_height).sum();
         let mut y = area.top + (area.height - rows_h) / 2.0;
@@ -2584,7 +2611,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         // seam, kerning and CJK spacing are the line's own, and nothing is drawn per frame.
         // Translations keep the whole-line display.
         let spans = line.word_ranges().and_then(|ranges| {
-            let layout = text_layout(gfx, text, font, style.line_height).ok()?;
+            let layout = text_layout(gfx, text, font, style.weight, style.line_height).ok()?;
             Some(word_spans(&layout, &ranges))
         });
         let accent_style = TextStyle {
@@ -2594,7 +2621,12 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         for (row, (raster, base, overflow, y)) in placed.iter().enumerate() {
             let words = spans.as_ref().filter(|_| row == 0);
             let accent = match words {
-                Some(_) => Some(cached(gfx, win, &[(text, font)], accent_style)?),
+                Some(_) => Some(cached(
+                    gfx,
+                    win,
+                    &[(text, font, style.weight)],
+                    accent_style,
+                )?),
                 None => None,
             };
             // `[white]`, or `[accent (lit), white (dim)]` for a karaoke row.
@@ -2682,16 +2714,20 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 line_height,
             ) * scale) as f32;
             if !next_text.is_empty() {
-                win.prewarm
-                    .push((vec![(next_text.to_string(), next_font)], style));
+                win.prewarm.push((
+                    vec![(next_text.to_string(), next_font, style.weight)],
+                    style,
+                ));
                 if next.word_ranges().is_some() {
-                    win.prewarm
-                        .push((vec![(next_text.to_string(), next_font)], accent_style));
+                    win.prewarm.push((
+                        vec![(next_text.to_string(), next_font, style.weight)],
+                        accent_style,
+                    ));
                 }
                 if !next_tr.is_empty() {
                     let trans = next_font * (look.translation_scale_percent / 100.0) as f32;
                     win.prewarm
-                        .push((vec![(next_tr.to_string(), trans)], style));
+                        .push((vec![(next_tr.to_string(), trans, trans_weight)], style));
                 }
             }
         }
@@ -2866,15 +2902,18 @@ fn content_host(
     Ok(host.content.clone())
 }
 
-fn raster_key<T: std::fmt::Debug>(rows: &[(T, f32)], style: TextStyle) -> String {
-    format!(
-        "{:?}|{:?}|{:?}|{}|{}",
-        rows, style.color, style.effect_from, style.effect as u8, style.line_height
+fn raster_key<T: std::fmt::Debug>(rows: &[(T, f32, u16)], style: TextStyle) -> String {
+    plan::raster_key(
+        rows,
+        style.color,
+        style.effect_from,
+        style.effect as u8,
+        style.line_height,
     )
 }
 
-fn is_cached(win: &Win, rows: &[(String, f32)], style: TextStyle) -> bool {
-    let rows: Vec<(&str, f32)> = rows.iter().map(|(t, f)| (t.as_str(), *f)).collect();
+fn is_cached(win: &Win, rows: &[(String, f32, u16)], style: TextStyle) -> bool {
+    let rows: Vec<(&str, f32, u16)> = rows.iter().map(|(t, f, w)| (t.as_str(), *f, *w)).collect();
     win.cache.contains_key(&raster_key(&rows, style))
 }
 
@@ -2903,7 +2942,12 @@ fn shared_bytes() -> u64 {
     })
 }
 
-fn cached(gfx: &Gfx, win: &mut Win, rows: &[(&str, f32)], style: TextStyle) -> Result<Rc<Raster>> {
+fn cached(
+    gfx: &Gfx,
+    win: &mut Win,
+    rows: &[(&str, f32, u16)],
+    style: TextStyle,
+) -> Result<Rc<Raster>> {
     let key = raster_key(rows, style);
     if let Some(r) = win.cache.get(&key) {
         return Ok(r.clone());

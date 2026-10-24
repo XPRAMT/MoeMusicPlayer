@@ -144,6 +144,7 @@ fn main() {
         show_translation: true,
         main_opacity_percent: 100.0,
         secondary_opacity_percent: 50.0,
+        font_weight: 550,
         animation,
     };
     let place = |hwnd: isize, x: i32, y: i32, w: i32, h: i32| unsafe {

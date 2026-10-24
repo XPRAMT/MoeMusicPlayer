@@ -276,6 +276,7 @@ pub fn taskbar_look(settings: &TaskbarLyricsSettings, light: bool) -> Look {
         show_translation: settings.show_translation,
         main_opacity_percent: f64::from(settings.main_opacity_percent),
         secondary_opacity_percent: f64::from(settings.secondary_opacity_percent),
+        font_weight: settings.font_weight,
         animation: animation(settings.animation),
     }
 }
@@ -291,6 +292,7 @@ pub fn floating_look(settings: &FloatingLyricsSettings) -> Look {
         show_translation: settings.show_translation,
         main_opacity_percent: f64::from(settings.main_opacity_percent),
         secondary_opacity_percent: f64::from(settings.secondary_opacity_percent),
+        font_weight: settings.font_weight,
         animation: animation(settings.animation),
     }
 }

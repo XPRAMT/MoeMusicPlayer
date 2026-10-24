@@ -113,7 +113,19 @@ pub struct Look {
     pub main_opacity_percent: f64,
     /// "continuous": the opacity where the edge ramp starts (10–100); no effect in "none".
     pub secondary_opacity_percent: f64,
+    /// Weight of the original text (100-1000); translation rows are `translation_weight` of it.
+    pub font_weight: u16,
     pub animation: Animation,
+}
+
+/// The translation (and romanization) weight: 50 lighter than the original text, never below 1.
+pub fn translation_weight(font_weight: u16) -> u16 {
+    font_weight.saturating_sub(50).max(1)
+}
+
+/// DirectWrite's `DWRITE_FONT_WEIGHT` accepts 1..=999, so the setting's top value 1000 is drawn as 999.
+pub fn dwrite_weight(weight: u16) -> i32 {
+    i32::from(weight.clamp(1, 999))
 }
 
 /// The shadow or outline colour: the opposite of the text (`getTaskbarLyricsEffectRgb`).
@@ -200,5 +212,16 @@ mod tests {
         assert_eq!(effect_rgb([20, 20, 20]), [255, 255, 255]);
         assert_eq!(floating_lock_css(28.0), 39.0);
         assert_eq!(floating_margin_css(28.0), 7.0);
+    }
+
+    #[test]
+    fn weights_follow_the_original_and_fit_directwrite() {
+        assert_eq!(translation_weight(550), 500);
+        assert_eq!(translation_weight(100), 50);
+        assert_eq!(translation_weight(1000), 950);
+        assert_eq!(translation_weight(1), 1);
+        assert_eq!(dwrite_weight(1000), 999);
+        assert_eq!(dwrite_weight(550), 550);
+        assert_eq!(dwrite_weight(0), 1);
     }
 }

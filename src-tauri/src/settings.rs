@@ -190,6 +190,8 @@ pub struct LyricsPreferences {
     pub primary_font_size_px: u8,
     /// Translation and romanization size as a percent of `primary_font_size_px` (1–100).
     pub auxiliary_scale_percent: u8,
+    /// Weight of the original text, 100–1000 (translation and romanization are 50 lighter).
+    pub font_weight: u16,
     pub line_gap_px: u8,
     pub text_effect: LyricsTextEffect,
     /// Display-only Simplified-to-Traditional conversion. Not written into lyric files.
@@ -208,6 +210,7 @@ struct RawLyricsPreferences {
     primary_font_size_px: Option<u8>,
     auxiliary_scale_percent: Option<u8>,
     auxiliary_font_size_px: Option<u8>,
+    font_weight: Option<u16>,
     line_gap_px: Option<u8>,
     text_effect: Option<LyricsTextEffect>,
     simplified_to_traditional: Option<bool>,
@@ -222,6 +225,13 @@ fn migrate_auxiliary_scale_percent(primary_px: u8, auxiliary_px: u8) -> u8 {
 
 fn default_auxiliary_scale_percent() -> u8 {
     90
+}
+
+/// Lyrics font weight (the original text; translation and romanization are 50 lighter), per lyrics tab.
+pub const LYRICS_FONT_WEIGHT_RANGE: (u16, u16) = (100, 1000);
+
+pub fn default_lyrics_font_weight() -> u16 {
+    550
 }
 
 impl From<RawLyricsPreferences> for LyricsPreferences {
@@ -247,6 +257,10 @@ impl From<RawLyricsPreferences> for LyricsPreferences {
                 .unwrap_or(defaults.secondary_opacity_percent),
             primary_font_size_px,
             auxiliary_scale_percent,
+            font_weight: raw
+                .font_weight
+                .unwrap_or(defaults.font_weight)
+                .clamp(LYRICS_FONT_WEIGHT_RANGE.0, LYRICS_FONT_WEIGHT_RANGE.1),
             line_gap_px: raw.line_gap_px.unwrap_or(defaults.line_gap_px),
             text_effect: raw.text_effect.unwrap_or(defaults.text_effect),
             simplified_to_traditional: raw
@@ -273,6 +287,7 @@ impl Default for LyricsPreferences {
             secondary_opacity_percent: default_secondary_opacity_percent(),
             primary_font_size_px: 20,
             auxiliary_scale_percent: default_auxiliary_scale_percent(),
+            font_weight: default_lyrics_font_weight(),
             line_gap_px: default_line_gap_px(),
             text_effect: default_lyrics_text_effect(),
             simplified_to_traditional: default_simplified_to_traditional(),
@@ -300,6 +315,11 @@ impl LyricsPreferences {
         if !(1..=100).contains(&self.auxiliary_scale_percent) {
             return Err(SettingsError::InvalidData(
                 "auxiliaryScalePercent must be between 1 and 100".into(),
+            ));
+        }
+        if !(LYRICS_FONT_WEIGHT_RANGE.0..=LYRICS_FONT_WEIGHT_RANGE.1).contains(&self.font_weight) {
+            return Err(SettingsError::InvalidData(
+                "fontWeight must be between 100 and 1000".into(),
             ));
         }
         if self.line_gap_px > 50 {
@@ -1010,6 +1030,9 @@ pub struct TaskbarLyricsSettings {
     /// Secondary opacity, 10–100: where the strip's edge ramp starts in "continuous"; no effect in "none".
     #[serde(default = "default_secondary_opacity_percent")]
     pub secondary_opacity_percent: u8,
+    /// Weight of the original text, 100–1000; translation rows are 50 lighter. Files without it use 550.
+    #[serde(default = "default_lyrics_font_weight")]
+    pub font_weight: u16,
     /// Line animation; older files without it keep the one-line-at-a-time look.
     #[serde(default)]
     pub animation: LyricsAnimation,
@@ -1049,6 +1072,9 @@ impl TaskbarLyricsSettings {
             Self::SECONDARY_OPACITY_RANGE_PERCENT.0,
             Self::SECONDARY_OPACITY_RANGE_PERCENT.1,
         );
+        self.font_weight = self
+            .font_weight
+            .clamp(LYRICS_FONT_WEIGHT_RANGE.0, LYRICS_FONT_WEIGHT_RANGE.1);
         self.translation_scale_percent = self.translation_scale_percent.clamp(
             Self::TRANSLATION_SCALE_RANGE_PERCENT.0,
             Self::TRANSLATION_SCALE_RANGE_PERCENT.1,
@@ -1085,6 +1111,7 @@ impl Default for TaskbarLyricsSettings {
             custom_monitors: Vec::new(),
             main_opacity_percent: default_main_opacity_percent(),
             secondary_opacity_percent: default_secondary_opacity_percent(),
+            font_weight: default_lyrics_font_weight(),
             animation: LyricsAnimation::None,
         }
     }
@@ -1125,6 +1152,9 @@ pub struct FloatingLyricsSettings {
     pub main_opacity_percent: u8,
     #[serde(default = "default_secondary_opacity_percent")]
     pub secondary_opacity_percent: u8,
+    /// Weight of the original text (see `TaskbarLyricsSettings`), saved apart from the taskbar lyrics'.
+    #[serde(default = "default_lyrics_font_weight")]
+    pub font_weight: u16,
     /// Panel width: CSS px on Windows, dp on Android; narrowed to the screen when wider.
     #[serde(default = "default_floating_lyrics_width_px")]
     pub width_px: u16,
@@ -1156,12 +1186,14 @@ impl FloatingLyricsSettings {
             custom_color: std::mem::take(&mut self.custom_color),
             main_opacity_percent: self.main_opacity_percent,
             secondary_opacity_percent: self.secondary_opacity_percent,
+            font_weight: self.font_weight,
             ..TaskbarLyricsSettings::default()
         }
         .normalized();
         self.font_size_px = look.font_size_px;
         self.main_opacity_percent = look.main_opacity_percent;
         self.secondary_opacity_percent = look.secondary_opacity_percent;
+        self.font_weight = look.font_weight;
         self.width_px = self
             .width_px
             .clamp(Self::WIDTH_RANGE_PX.0, Self::WIDTH_RANGE_PX.1);
@@ -1192,6 +1224,7 @@ impl Default for FloatingLyricsSettings {
             text_effect: LyricsTextEffect::Shadow,
             main_opacity_percent: default_main_opacity_percent(),
             secondary_opacity_percent: default_secondary_opacity_percent(),
+            font_weight: default_lyrics_font_weight(),
             width_px: Self::DEFAULT_WIDTH_PX,
             landscape_width_px: Self::DEFAULT_WIDTH_PX,
             animation: LyricsAnimation::None,
@@ -1241,6 +1274,11 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
             "secondaryOpacityPercent",
             defaults.secondary_opacity_percent,
         ),
+        font_weight: field("fontWeight")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.font_weight, |value| {
+                value.min(u64::from(u16::MAX)) as u16
+            }),
         width_px: field("widthPx")
             .and_then(|value| value.as_u64())
             .map_or(defaults.width_px, |value| {
@@ -1304,6 +1342,11 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
             .and_then(|value| value.as_u64())
             .map_or(defaults.secondary_opacity_percent, |value| {
                 value.min(255) as u8
+            }),
+        font_weight: field("fontWeight")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.font_weight, |value| {
+                value.min(u64::from(u16::MAX)) as u16
             }),
         animation: field("animation")
             .and_then(|value| serde_json::from_value(value).ok())
@@ -3755,6 +3798,7 @@ mod tests {
             custom_monitors: vec![r"\\?\DISPLAY#AUS28A0#1".into()],
             main_opacity_percent: 70,
             secondary_opacity_percent: 85,
+            font_weight: 700,
             animation: LyricsAnimation::Continuous,
         };
         store
@@ -4251,6 +4295,7 @@ mod tests {
                 secondary_opacity_percent: 50,
                 primary_font_size_px: 20,
                 auxiliary_scale_percent: 90,
+                font_weight: 550,
                 line_gap_px: 10,
                 text_effect: LyricsTextEffect::Shadow,
                 simplified_to_traditional: true,
@@ -4265,6 +4310,7 @@ mod tests {
         assert!(value.get("inactiveOpacityPercent").is_none());
         assert_eq!(value["primaryFontSizePx"], 20);
         assert_eq!(value["auxiliaryScalePercent"], 90);
+        assert_eq!(value["fontWeight"], 550);
         assert!(value.get("auxiliaryFontSizePx").is_none());
         assert_eq!(value["lineGapPx"], 10);
         assert_eq!(value["textEffect"], "shadow");
@@ -4565,6 +4611,39 @@ mod tests {
     }
 
     #[test]
+    fn font_weight_defaults_to_550_per_tab_and_is_clamped_on_load() {
+        assert_eq!(default_lyrics_font_weight(), 550);
+        let defaults = TaskbarLyricsSettings::default();
+        assert_eq!(defaults.font_weight, 550);
+        assert_eq!(FloatingLyricsSettings::default().font_weight, 550);
+        // Files without the field load 550 on every tab.
+        let old = lenient_taskbar_lyrics(Some(serde_json::json!({"enabled": true})));
+        assert_eq!(old.font_weight, 550);
+        assert_eq!(lenient_floating_lyrics(None).font_weight, 550);
+        assert_eq!(
+            lenient_floating_lyrics(Some(serde_json::json!({"widthPx": 900}))).font_weight,
+            550
+        );
+        let from_json = |text: &str| serde_json::from_str::<LyricsPreferences>(text).unwrap();
+        assert_eq!(from_json("{}").font_weight, 550);
+        // Clamped to 100..=1000 on load, independently per tab.
+        assert_eq!(from_json(r#"{"fontWeight": 0}"#).font_weight, 100);
+        assert_eq!(from_json(r#"{"fontWeight": 5000}"#).font_weight, 1000);
+        assert_eq!(from_json(r#"{"fontWeight": 300}"#).font_weight, 300);
+        let taskbar = lenient_taskbar_lyrics(Some(serde_json::json!({"fontWeight": 50})));
+        assert_eq!(taskbar.font_weight, 100);
+        let floating = lenient_floating_lyrics(Some(serde_json::json!({"fontWeight": 99999})));
+        assert_eq!(floating.font_weight, 1000);
+        let mut preferences = LyricsPreferences::default();
+        preferences.font_weight = 99;
+        assert!(preferences.validate().is_err());
+        preferences.font_weight = 1000;
+        preferences.validate().expect("1000 is allowed");
+        let value = serde_json::to_value(taskbar).unwrap();
+        assert_eq!(value["fontWeight"], 100);
+    }
+
+    #[test]
     fn former_opacity_keys_are_ignored_and_the_new_ones_default() {
         let directory = test_directory("former-opacity-keys");
         let path = directory.join("settings.json");
@@ -4780,6 +4859,7 @@ mod tests {
             secondary_opacity_percent: 43,
             primary_font_size_px: 26,
             auxiliary_scale_percent: 65,
+            font_weight: 700,
             line_gap_px: 42,
             text_effect: LyricsTextEffect::Shadow,
             simplified_to_traditional: true,
