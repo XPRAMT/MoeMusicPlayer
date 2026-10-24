@@ -24,7 +24,7 @@
 ## 1. 現況
 
 - **SMB**：已完成，真實伺服器驗證過（掃描、播放、快取、編輯、播放清單寫回）。
-- **WebDAV**：`crates/player-remote/src/webdav.rs` 已實作（reqwest blocking＋rustls、Basic／Digest、憑證釘選、PROPFIND、Range、PUT＋MOVE、`rename_file` 用 `MOVE Overwrite: F`），只有測試伺服器（`test_server.rs`）驗證；新增入口被 `src/lib/remote-protocols.js` 的 `WEBDAV_ENTRY_VISIBLE = false` 隱藏。既有 WebDAV 帳號仍可列出／編輯。
+- **WebDAV**：`crates/player-remote/src/webdav.rs` 已實作（reqwest 0.12 blocking＋rustls、Basic／Digest、憑證釘選、PROPFIND、Range、PUT＋MOVE、`rename_file` 用 `MOVE Overwrite: F`）。（撰寫本節時只有測試伺服器 `test_server.rs` 驗證且入口隱藏；現況：新增入口已開，`src/lib/remote-protocols.js` 的 `WEBDAV_ENTRY_VISIBLE = true`，並已用 WSL Apache mod_dav 真實伺服器測試，見 0.1 與 `tests/real_webdav.rs`。）
 - **與協定無關、可原樣沿用的部分**（只依賴 `RemoteFs`／`RemoteFile` 兩個 trait）：
   - 掃描 `RemoteMediaIndex`（平行列舉、16 執行緒讀標籤、`Unavailable`／`PermissionRevoked`／`Incomplete` 分類、`.lrc` 旁檔收集、`scan_paths_with_progress`）；
   - 標籤讀取 `player-track-metadata`（`ByteSource`，`RangeReader` 的 16 KiB 區塊與成長式預讀）；
@@ -40,6 +40,8 @@
 ## 2. 各協定如何對應 `RemoteFs`
 
 ### 2.1 WebDAV（已有）
+
+（現況註記：下列是撰寫時的計畫。`creationdate` 最後決定不使用，見 §0；「Basic 只允許在 https」沒有被強制——表單有「使用未加密的 http（不建議）」勾選，http 與 https 都能用；其餘「待驗」項目仍未驗證，寫入一次最多 512 MiB 屬實。）
 
 - 列出：`PROPFIND Depth: 1`，取 `getcontentlength`、`getlastmodified`（RFC 1123）、`creationdate`（ISO 8601，多數伺服器有，Nextcloud／Apache mod_dav 都有）、`resourcetype`。`Depth: infinity` 多數伺服器停用，不用。
 - 讀取：HTTP `Range: bytes=a-b`，keep-alive 連線池（reqwest 預設）。伺服器回 200 而非 206 時須拒絕或只讀需要的部分（要確認現有程式的處理）。
@@ -129,7 +131,7 @@
 - 真實伺服器（`--ignored`，缺環境變數即略過）：`MOE_WEBDAV_URL/USER/PASS`、`MOE_SFTP_HOST/PORT/USER/PASS/KEY`、`MOE_FTP_HOST/PORT/USER/PASS/MODE`；寫入測試另需 `MOE_*_WRITE_TEST=1`，只動自己建立的檔案。可沿用 WSL Ubuntu 測試機（openssh-server、vsftpd、Apache mod_dav）。
 - 實機：Windows Release CDP 與平板 23046RP50C。
 
-## 5A. WSL 真實伺服器測試環境（計畫，尚未安裝）
+## 5A. WSL 真實伺服器測試環境（WebDAV 已安裝；FTP／FTPS／SFTP 仍是計畫，尚未安裝）
 
 比照既有 Samba 測試分享（AGENTS.md「區網測試分享（2026-10-21）」：WSL Ubuntu 24.04 mirrored 網路、`/etc/samba/moemusic-test.conf`、唯讀 `moemusic-test`、帳號 `moe_test`、TCP 1445、只允許 192.168.1.0/24、停用 guest）。以下指令需 sudo，由主工作階段與使用者處理密碼後執行；本次未執行。
 
@@ -200,6 +202,8 @@
 | 延遲量測 | stat、開檔＋讀 64 B、閒置 0–1000 ms 後 stat，單／多執行緒（泛化 `smb_latency.rs`） | 記錄 p50／p95；確認無 ~40 ms Nagle 尖峰 |
 
 ## 6. 待使用者決定（與建議分開）
+
+（現況：第 1、2 項已由 §0 決定——先做 WebDAV，SFTP／FTPS 延後，明文 FTP 不支援；第 4 項在實作中是允許 http，但表單標示「不建議」。其餘各項因 SFTP／FTPS 延後而仍未決定。）
 
 **使用者的決定**：
 1. 分期順序（建議 WebDAV → SFTP → FTPS）以及是否三個都做。
