@@ -48,6 +48,12 @@ impl LoadCounter {
     pub fn note_requested(&self) -> u64 {
         self.0.fetch_add(1, Ordering::SeqCst) + 1
     }
+
+    /// How many loads were asked for so far: a walk over the queue compares it before each entry, to stop once the
+    /// user has chosen a track of their own.
+    pub fn requested(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
 }
 
 /// A read gave up because the load it belonged to was replaced by a newer one.
@@ -165,6 +171,12 @@ pub trait RemoteContent: Send + Sync {
     ) -> io::Result<RemoteStamp> {
         let _ = (source_id, path, local, expected);
         Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+
+    /// Names the server a source's files are on (its account), so tracks of one server can be told apart from the
+    /// others. Defaults to the source itself.
+    fn server_key(&self, source_id: SourceId) -> String {
+        source_id.to_string()
     }
 
     /// Stop every reader that has this file open (the player's handle and read-ahead): the file is about to be replaced.

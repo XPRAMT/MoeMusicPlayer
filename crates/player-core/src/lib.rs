@@ -9,6 +9,7 @@ pub mod playback_statistics;
 pub mod playlist;
 pub mod profile;
 pub mod sync;
+pub mod track_start;
 #[cfg(windows)]
 mod windows_locator;
 
@@ -63,4 +64,8 @@ pub use remote::{
     remote_sibling, remote_with_extension, running_load_superseded, set_remote_content,
     LoadCancel, LoadCounter, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream,
     LOAD_SUPERSEDED, REMOTE_LINK_LOST, REMOTE_UNREACHABLE,
+};
+
+pub use track_start::{
+    is_track_unplayable, natural_walk_cursors, NaturalWalk, StartFailure, TRACK_UNPLAYABLE,
 };
