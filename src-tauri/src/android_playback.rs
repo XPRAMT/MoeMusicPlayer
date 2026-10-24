@@ -474,6 +474,8 @@ impl AndroidActor {
     fn note_start_failure(&mut self, failure: StartFailure) {
         self.start_failures.0 += 1;
         self.start_failures.1 = Some(failure);
+        // A start asked for from the notification or a headset has no command to refuse: the snapshot carries it.
+        self.publish_snapshot();
     }
 
     /// The error of a manual start, in words the front end recognises, noted for the snapshot. A start that a newer
