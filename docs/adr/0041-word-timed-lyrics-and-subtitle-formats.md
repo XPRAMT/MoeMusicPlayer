@@ -97,11 +97,11 @@ App 實際送出的請求仍可用：`fcg_query_lyric_new.fcg?songmid=…&songid
 
 ### D8 播放頁逐字高亮
 
-- 目前行維持白色（`--text`）。正在唱的那一個字以主要顏色 `var(--accent)` 由左到右掃過（柔邊各 12%），主題變更即時生效。字一結束就回白色，任何時刻最多一個字有主色，字與字之間的空隙沒有主色字。`prefers-reduced-motion` 時不掃，整個字在唱中區間直接是主色。
+- 目前行維持白色（`--text`）。正在唱的那一個字以主要顏色 `var(--accent)` 由左到右掃過（柔邊各 12%），主題變更即時生效。已唱過的字維持主色直到換行（卡拉 OK；曾經是字結束就回白色，使用者認為閃得太快而改掉），尚未唱的字維持白色。`prefers-reduced-motion` 時不掃，字一開始唱整個字就是主色並維持。換行後舊行回到一般非目前行樣式。
 - 沒有逐字的行維持整行高亮；其他行的顏色與透明度規則不變。
 - 做法：目前行的每個字一個 `<span>`，各帶一個 CSS 動畫 `lyric-word-wipe`：
   - span 的背景是 `linear-gradient(主色 → --text)`，以 `background-clip:text` 裁到字形；漸層位置是註冊過的 `@property --lyric-word-fill`（app.css），keyframes 從 −12% 推到 112%，同時把 color 設成透明；
-  - 不設 fill mode：動畫外文字是不透明的 `--text`，蓋住背景；
+  - fill mode `forwards`：開始前文字是不透明的 `--text`、蓋住背景；結束後停在 112%（整字主色）。跳轉、暫停、偏移重建時，已過的字 delay ≤ −duration，一建好就是主色；
   - delay＝字起點−目前位置（可為負），duration＝字長；
   - 整段沒有逐幀寫樣式、span 上沒有 filter、沒有 `will-change`。陰影模式的 drop-shadow 仍在行上；描邊（`-webkit-text-stroke`）照常畫在填色上；`box-decoration-break: clone` 讓跨行的字每個片段各自掃。
 - 譯文行永遠沒有逐字效果；羅馬音行只有在該行帶 `romanization_words`（DTO `romanizationWords`）時才有，規則與原文相同。

@@ -1,10 +1,11 @@
 /**
- * Word highlight on the Now Playing current line (ADR 0041). The word being sung fills with the
- * theme accent (`--accent`) from left to right with a soft edge; before it starts and after it
- * ends it is the line's own colour (reduced motion: the whole word is accent while sung).
- * Each word span gets one CSS animation whose delay is the time until the word starts (negative
- * once it has started) and whose duration is the word's length; without a fill mode the span
- * falls back to its normal colour outside that window. No style
+ * Word highlight on the Now Playing current line (ADR 0041), karaoke style. The word being sung
+ * fills with the theme accent (`--accent`) from left to right with a soft edge; words already sung
+ * stay accent until the line ends; words not yet sung keep the line's own colour (reduced motion:
+ * a word turns wholly accent when it starts and stays so). Each word span gets one CSS animation
+ * whose delay is the time until the word starts (negative once it has started) and whose duration
+ * is the word's length; fill mode `forwards` holds the full fill after the word ends, so words
+ * already past when the line is rebuilt are lit from the start. No style
  * is written per frame: the timings are set again only when the line, a seek, play/pause or the
  * offset changes. Word fills are not led: the 200 ms cue lead (ADR 0029) applies to line changes
  * only, so a word lights exactly when it is sung.

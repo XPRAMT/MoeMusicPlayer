@@ -1170,13 +1170,14 @@
     transition: opacity var(--lyric-cue-ms) ease;
   }
 
-  /* Word highlight (ADR 0041): the word being sung fills with the theme accent from left to right with a soft
-     edge, in time with the word; before it starts and after it ends it is the line's own colour. One CSS animation
-     per word (delay = time until the word starts, duration = its length, no fill mode), so no style is written per
-     frame and the word drops back to the line colour when it ends. The fill is the span's background clipped to its
+  /* Word highlight (ADR 0041), karaoke style: the word being sung fills with the theme accent from left to right
+     with a soft edge, words already sung stay accent until the line ends, words not yet sung keep the line's own
+     colour. One CSS animation per word (delay = time until the word starts, negative once started; duration = its
+     length; fill mode forwards), so no style is written per frame and a word holds the full fill after it ends,
+     including words already past when the line is rebuilt after a seek, pause or offset change. The fill is the span's background clipped to its
      glyphs (`background-clip: text`) with the text fill transparent while the animation runs; the gradient position
      is the registered `--lyric-word-fill` (app.css), animated from before the word's left edge to past its right
-     edge. Outside the animation the opaque text fill covers the background. No filter on the span: the shadow mode's
+     edge. Before the animation starts the opaque text fill covers the background. No filter on the span: the shadow mode's
      drop-shadow stays on the line, and the outline (`-webkit-text-stroke`) is drawn over the fill as before.
      `box-decoration-break: clone` gives each fragment of a word that wraps its own wipe. */
   .lyric-word {
@@ -1193,7 +1194,7 @@
     animation-name: lyric-word-wipe;
     animation-timing-function: linear;
     animation-iteration-count: 1;
-    animation-fill-mode: none;
+    animation-fill-mode: forwards;
   }
 
   .words-paused .lyric-word {
@@ -1211,7 +1212,7 @@
     }
   }
 
-  /* Reduced motion: no wipe, the whole word turns accent while it is sung. */
+  /* Reduced motion: no wipe, the whole word turns accent when it starts and stays accent (forwards). */
   @media (prefers-reduced-motion: reduce) {
     .lyric-word {
       animation-name: lyric-word-sing;

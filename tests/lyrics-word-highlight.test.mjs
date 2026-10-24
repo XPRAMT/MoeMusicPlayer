@@ -45,7 +45,7 @@ test('the Traditional choice swaps the word texts and keeps their timing', () =>
   assert.equal(lyricsForDisplay(lyrics, false).lines[0].words[0].t, '头');
 });
 
-test('the word being sung wipes in the accent with no fill, no filter and an instant change under reduced motion', () => {
+test('karaoke: the sung word wipes in the accent, sung words stay lit (forwards), no filter, instant under reduced motion', () => {
   const source = readFileSync(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
   const wipe = source.match(/@keyframes lyric-word-wipe\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
   assert.match(wipe, /--lyric-word-fill:\s*-12%/);
@@ -55,7 +55,8 @@ test('the word being sung wipes in the accent with no fill, no filter and an ins
   assert.match(rule, /background-clip:\s*text/);
   assert.match(rule, /var\(--accent\)/);
   assert.match(rule, /animation-name:\s*lyric-word-wipe/);
-  assert.match(rule, /animation-fill-mode:\s*none/);
+  assert.match(rule, /animation-fill-mode:\s*forwards/, 'sung words keep the full fill until the line ends');
+  assert.doesNotMatch(rule, /animation-fill-mode:\s*(both|backwards)/, 'words not yet sung stay the line colour');
   assert.doesNotMatch(rule, /filter|will-change/);
   const reduced = source.match(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.lyric-word\s*\{[^}]*\}/)?.[0] ?? '';
   assert.match(reduced, /animation-name:\s*lyric-word-sing/);
@@ -76,4 +77,14 @@ test('romanization rows get word spans only with romanizationWords; translations
     const trans = block.indexOf('lyric-translation');
     if (roma >= 0 && trans >= 0) assert.ok(roma < trans, 'romanization comes before translation');
   }
+});
+
+test('a rebuild after a seek lights the words already sung from the start and leaves later ones waiting', () => {
+  // Rebuilt at 1800 ms: word 0 ended (delay <= -duration, held by forwards), word 2 is mid-wipe.
+  const [first, empty, third] = wordHighlightTimings(words, null, 1800, 0);
+  assert.ok(first.delayMs + first.durationMs <= 0, 'the first word is past and shows the held accent');
+  assert.ok(empty.delayMs + empty.durationMs <= 0);
+  assert.ok(third.delayMs < 0 && third.delayMs + third.durationMs > 0, 'the third word is being sung');
+  const early = wordHighlightTimings(words, null, 900, 0);
+  assert.ok(early.every((t) => t.delayMs > 0), 'before the line no word is lit');
 });
