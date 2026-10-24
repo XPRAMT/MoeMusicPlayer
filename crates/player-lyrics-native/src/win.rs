@@ -590,6 +590,22 @@ fn text_width(layout: &IDWriteTextLayout) -> f32 {
     m.widthIncludingTrailingWhitespace.ceil()
 }
 
+/// The centre of the first grapheme of a row (px from its left edge): the continuous strip's anchor (ADR 0041 D10).
+fn first_glyph_centre(layout: &IDWriteTextLayout) -> f32 {
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut m = DWRITE_HIT_TEST_METRICS::default();
+    unsafe {
+        if layout
+            .HitTestTextPosition(0, false, &mut x, &mut y, &mut m)
+            .is_ok()
+        {
+            return m.left + m.width / 2.0;
+        }
+    }
+    0.0
+}
+
 /// The centre of the last grapheme of a row (px from its left edge), for the terminal glide.
 fn last_glyph_centre(layout: &IDWriteTextLayout, text: &str) -> f32 {
     use unicode_segmentation::UnicodeSegmentation;
@@ -853,13 +869,15 @@ fn rasterise_area(gfx: &Gfx, width: u32, height: u32, radius: f32) -> Result<Sur
 
 /// The none mode's karaoke (ADR 0041): a word-timed main row is two sprites of the same position, the white line
 /// and its accent copy, with complementary clips: the accent one from the row's left to the karaoke edge
-/// (`rules::karaoke_clip_x`: sung words and the sung part of the current word), the white one from the edge on. The
+/// (`rules::karaoke_glide`: one smooth curve per line, hard at the first word's start and the last word's end, the
+/// words guiding it within the speed band), the white one from the edge on. The
 /// edge wipes with the audio clock and is written only when it moved at least 1/8 device px, so a still line commits
 /// nothing and nothing is rasterised per frame.
 struct WordClip {
     /// `[lit, dim]`.
     clips: [InsetClip; 2],
-    spans: Vec<(f64, f64)>,
+    /// The edge (surface px) over seconds from the commit.
+    glide: Vec<rules::GlidePiece>,
     times: Vec<(f64, f64)>,
     width: f64,
     /// The edge last written (NaN before the first write).
@@ -868,7 +886,7 @@ struct WordClip {
 
 impl WordClip {
     fn sample(&mut self, t: f64) -> Result<bool> {
-        let x = rules::karaoke_clip_x(&self.spans, &self.times, t).clamp(0.0, self.width);
+        let x = rules::glide_value(&self.glide, t).clamp(0.0, self.width);
         if (x - self.shown).abs() < 0.125 {
             return Ok(false);
         }
@@ -1203,7 +1221,16 @@ const DEFAULT_ACCENT: [u8; 3] = [0xA9, 0xC3, 0xFE];
 
 /// (font, translation font, line count), main widths, translation widths, last glyph centre, and per line the
 /// word centres (px from the text's left edge; empty for a line without words).
-type MeasuredLines = ((u32, u32, usize), Vec<f64>, Vec<f64>, f64, Vec<Vec<f64>>);
+/// Per lyrics, size and look: main and translation widths, the last glyph centre of the last line, each line's first
+/// glyph centre and each line's word centres.
+type MeasuredLines = (
+    (u32, u32, usize),
+    Vec<f64>,
+    Vec<f64>,
+    f64,
+    Vec<f64>,
+    Vec<Vec<f64>>,
+);
 
 struct Win {
     hwnd: HWND,
@@ -2299,6 +2326,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             let mut main_widths = Vec::new();
             let mut trans_widths = Vec::new();
             let mut last_centre = 0.0;
+            let mut first_centres = Vec::new();
             let mut word_centres = Vec::new();
             for (i, (_, text, tr)) in lines.iter().enumerate() {
                 let main = text_layout(gfx, text, font, style.line_height)?;
@@ -2314,6 +2342,11 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 } else {
                     text_width(&main) as f64
                 });
+                first_centres.push(if text.is_empty() {
+                    0.0
+                } else {
+                    first_glyph_centre(&main) as f64
+                });
                 if i + 1 == lines.len() {
                     last_centre = if text.is_empty() {
                         0.0
@@ -2327,12 +2360,21 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     text_width(&text_layout(gfx, tr, trans_font, style.line_height)?) as f64
                 });
             }
-            win.measured = Some((key, main_widths, trans_widths, last_centre, word_centres));
+            win.measured = Some((
+                key,
+                main_widths,
+                trans_widths,
+                last_centre,
+                first_centres,
+                word_centres,
+            ));
         }
-        let (_, main_widths, trans_widths, last_centre, word_centres) =
+        let (_, main_widths, trans_widths, last_centre, first_centres, word_centres) =
             win.measured.clone().unwrap();
         let starts: Vec<f64> = lines.iter().map(|l| l.0).collect();
-        let layout = rules::layout_strip(&main_widths, &trans_widths, font as f64);
+        let mut layout = rules::layout_strip(&main_widths, &trans_widths, font as f64);
+        // Every line, word-timed or not, sits with its first glyph's centre on the area's centre at its start.
+        layout.anchors = first_centres;
         let last = lines.last().unwrap();
         let arrival =
             rules::final_arrival_ms(last.0, last.1, ctx.clock.duration_ms.map(|d| d + offset));
@@ -2347,6 +2389,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     rules::KnotLine {
                         start_ms: l.0,
                         cell_start: layout.starts[i],
+                        anchor: layout.anchors[i],
                         word_starts: if keep {
                             words.iter().map(|w| w.start_ms).collect()
                         } else {
@@ -2356,10 +2399,10 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     }
                 })
                 .collect();
-            rules::word_glide_knots(&knot_lines)
+            rules::word_strip_glide(&knot_lines)
         });
         let input = plan::StripInput {
-            word_knots: knots.as_deref(),
+            word_glide: knots.as_deref(),
             starts: &starts,
             layout: &layout,
             view_width: area.width,
@@ -2627,12 +2670,13 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                 for (visual, clip) in visuals.iter().zip(&clips) {
                     visual.SetClip(clip)?;
                 }
+                let spans: Vec<(f64, f64)> = spans
+                    .iter()
+                    .map(|&(l, r)| (l as f64 + margin, r as f64 + margin))
+                    .collect();
                 let mut word = WordClip {
                     clips,
-                    spans: spans
-                        .iter()
-                        .map(|&(l, r)| (l as f64 + margin, r as f64 + margin))
-                        .collect(),
+                    glide: rules::karaoke_glide(&spans, &times),
                     times,
                     width: raster.surface.width as f64,
                     shown: f64::NAN,

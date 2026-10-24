@@ -7,7 +7,7 @@ import { normalizeLyricsPreferences } from './lyrics-preferences.js';
 /** The separator between lines (one em wide). */
 export const LYRICS_STRIP_SEPARATOR = '\u3000';
 export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
-/** The continuous strip anchors a line by its LEFT edge ... */
+/** The continuous strip anchors a line by its first glyph's CENTRE (left-aligned cells, `anchors` of the layout) ... */
 export const LYRICS_STRIP_ALIGN = 'left';
 /** ... on the lyric area's horizontal CENTRE, whatever the text alignment setting and the panel width. */
 export const LYRICS_STRIP_TARGET = 'center';
@@ -58,11 +58,13 @@ export function buildLyricsStripLines(timeline, showTranslation) {
 
 /**
  * Cell of each line along the strip (px): as wide as the wider of its main text and its translation, one separator
- * apart.
+ * apart. `firstGlyphCentres` (px from the cell's left edge, one per line) is where the left anchor sits: the centre of
+ * the line's first glyph (ADR 0041 D10); missing ones anchor on the cell's left edge.
  * @param {readonly number[]} mainWidths @param {readonly number[]} translationWidths @param {number} gapPx
- * @returns {{ starts: number[], widths: number[] }}
+ * @param {readonly number[]} [firstGlyphCentres]
+ * @returns {{ starts: number[], widths: number[], anchors: number[] }}
  */
-export function layoutLyricsStrip(mainWidths, translationWidths, gapPx) {
+export function layoutLyricsStrip(mainWidths, translationWidths, gapPx, firstGlyphCentres = []) {
   const starts = [];
   const widths = [];
   let x = 0;
@@ -72,17 +74,19 @@ export function layoutLyricsStrip(mainWidths, translationWidths, gapPx) {
     widths.push(width);
     x += width + Math.max(0, gapPx);
   }
-  return { starts, widths };
+  return { starts, widths, anchors: [...firstGlyphCentres] };
 }
 
 /**
- * The point of a cell that sits on the alignment point of the window.
- * @param {{ starts: number[], widths: number[] }} layout @param {number} index @param {'left'|'center'|'right'} align
+ * The point of a cell that sits on the alignment point of the window: for `left`, the first glyph's centre when the
+ * layout has `anchors` (clamped into the cell), else the cell's left edge.
+ * @param {{ starts: number[], widths: number[], anchors?: number[] }} layout @param {number} index @param {'left'|'center'|'right'} align
  */
 export function lyricsStripAnchor(layout, index, align) {
   const start = layout.starts[index] ?? 0;
   const width = layout.widths[index] ?? 0;
-  return align === 'right' ? start + width : align === 'center' ? start + width / 2 : start;
+  const anchor = Math.min(width, Math.max(0, layout.anchors?.[index] ?? 0));
+  return align === 'right' ? start + width : align === 'center' ? start + width / 2 : start + anchor;
 }
 
 /**

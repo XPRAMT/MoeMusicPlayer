@@ -7,7 +7,9 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod glide;
 pub mod words;
+pub use glide::*;
 pub use words::*;
 
 /// The separator between lines of the continuous strip (one em wide).
@@ -38,7 +40,8 @@ impl Align {
     }
 }
 
-/// The continuous strip anchors a line by its left edge on the lyric area's centre.
+/// The continuous strip anchors a line by its first glyph's centre (`StripLayout::anchors`; the cell's left edge
+/// without them) on the lyric area's centre.
 pub const STRIP_ALIGN: Align = Align::Left;
 pub const STRIP_TARGET: Align = Align::Center;
 
@@ -151,6 +154,9 @@ pub fn line_shown_ms(
 pub struct StripLayout {
     pub starts: Vec<f64>,
     pub widths: Vec<f64>,
+    /// The first glyph's centre of each line (px from its cell's left edge): the `Align::Left` anchor (ADR 0041
+    /// D10). Missing entries anchor on the cell's left edge.
+    pub anchors: Vec<f64>,
 }
 
 /// Cells of the strip: as wide as the wider of main text and translation, one separator apart.
@@ -174,7 +180,15 @@ pub fn strip_anchor(layout: &StripLayout, index: usize, align: Align) -> f64 {
     match align {
         Align::Right => start + width,
         Align::Center => start + width / 2.0,
-        Align::Left => start,
+        Align::Left => {
+            start
+                + layout
+                    .anchors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .clamp(0.0, width.max(0.0))
+        }
     }
 }
 

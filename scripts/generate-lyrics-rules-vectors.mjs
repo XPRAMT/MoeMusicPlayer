@@ -7,7 +7,8 @@ import {
   layoutLyricsStrip, lyricsStripOffset, lyricsStripWindow, lyricsStripFocus, lyricsLineWeight,
   lyricsLineOpacityFactor, lyricsStripFinalArrivalMs, nextLyricsStripBreak, lyricsEdgeFadeWidth, lyricsEdgeFadeOpacity,
 } from '../src/lib/lyrics-strip.js';
-import { glideOffset, karaokeClipX, sungWord, wordGlideKnots, centreMaskOpacity } from '../src/lib/lyrics-word-strip.js';
+import { sungWord, centreMaskOpacity } from '../src/lib/lyrics-word-strip.js';
+import { smoothGlide, glideAt, karaokeGlide, wordStripGlide } from '../src/lib/lyrics-glide.js';
 import { findActiveLyricIndex } from '../src/lib/lyrics-window.js';
 import { lyricsDisplayOffsetMs } from '../src/lib/lyrics-timing-offset.js';
 import { getLyricScrollProgress } from '../src/lib/taskbar-lyrics-settings.js';
@@ -50,6 +51,15 @@ for (const [list, positions] of [
             expected: lyricsStripOffset(list, layout, align, positionMs, 400, target, finalLine),
           });
         }
+        // The first glyph's centre as the left anchor (ADR 0041 D10); 200 is clamped into its cell.
+        if (align === 'left') {
+          const anchors = [8, 12.5, 200, 0];
+          const anchored = layoutLyricsStrip(main, translation, gap, anchors);
+          strip.push({
+            starts: list, main, translation, gap, anchors, align, target, positionMs, viewWidth: 400, finalLine: null,
+            expected: lyricsStripOffset(list, anchored, align, positionMs, 400, target, null),
+          });
+        }
       }
     }
   }
@@ -88,17 +98,43 @@ for (const [areaWidth, areaHeight] of [[400, 40], [60, 40], [80, 40], [0, 40], [
   }
 }
 
-// Word-timed lyrics (ADR 0041 option C): knots, speed cap, glide, centre mask, sung word.
-const wordLines = [
-  { startMs: 1000, cellStart: 0, wordStarts: [1000, 1300, 1320, 1900], wordCentres: [12, 40, 70, 110] },
-  { startMs: 3000, cellStart: 160, wordStarts: [], wordCentres: [] },
-  { startMs: 5000, cellStart: 300, wordStarts: [5000, 5000, 5400, 5450, 6000], wordCentres: [10, 30, 55, 90, 120] },
+// The smoothed glide (ADR 0041 D10): pieces and samples of the core curve, the karaoke edge and the strip glide.
+const glideSamples = (/** @type {any[]} */ pieces, /** @type {number[]} */ times) => times.map((t) => ({ t, expected: glideAt(pieces, t) }));
+// 61 sample times from `from` to `to` (rounded to 0.25 ms, so every language reads the same numbers).
+const sampleTimes = (/** @type {number} */ from, /** @type {number} */ to) => {
+  const out = [];
+  for (let i = 0; i <= 60; i += 1) out.push(Math.round((from + ((to - from) * i) / 60) * 4) / 4);
+  return out;
+};
+const glide = [
+  // Dense words: many guides close together, one sharing a time, one off the band.
+  { hard: [[1000, 0], [3000, 200]], guides: [[[1100, 5], [1150, 40], [1150, 41], [1200, 42], [1300, 45], [2000, 190], [2900, 199]]], easeEnds: false },
+  // Long gap between lines (more than 3x apart: the knot's tangent is the slower stretch's upper bound).
+  { hard: [[1000, 0], [2000, 100], [30000, 200], [31000, 300]], guides: [[[1500, 70]], [[10000, 110]], []], easeEnds: true },
+  // Knots sharing a time are dropped, backward values raised.
+  { hard: [[0, 0], [0, 50], [100, 40], [200, 10]], guides: [[], [[50, 90]], []], easeEnds: true },
+  { hard: [[500, 20]], guides: [], easeEnds: true },
+].map((c) => {
+  const pieces = smoothGlide(/** @type {any} */ (c.hard), /** @type {any} */ (c.guides), c.easeEnds);
+  const end = c.hard[c.hard.length - 1][0];
+  return { ...c, pieces, samples: glideSamples(pieces, sampleTimes(c.hard[0][0] - 100, end + 100)) };
+});
+const karaokeCases = [
+  { spans: [[0, 20], [20, 30], [34, 60]], words: [[1000, 1200], [1200, 1200], [1300, 1500]] },
+  { spans: [[0, 20], [20, 40], [40, 60], [64, 80], [80, 120]], words: [[1000, 1100], [1100, 1150], [1150, 1600], [1700, 1720], [1720, 2400]] },
+  { spans: [[5, 9]], words: [[700, 700]] },
+  { spans: [], words: [] },
+].map((c) => {
+  const pieces = karaokeGlide(/** @type {any} */ (c.spans), /** @type {any} */ (c.words));
+  return { ...c, pieces, samples: glideSamples(pieces, sampleTimes(600, 2500)) };
+});
+const stripGlideLines = [
+  { startMs: 1000, cellStart: 0, anchor: 10, wordStarts: [1000, 1300, 1320, 1900], wordCentres: [12, 40, 70, 110] },
+  { startMs: 3000, cellStart: 160, anchor: 9, wordStarts: [], wordCentres: [] },
+  { startMs: 5000, cellStart: 300, anchor: 8, wordStarts: [5000, 5000, 5400, 5450, 6000], wordCentres: [10, 30, 55, 90, 120] },
 ];
-const wordKnotsVector = wordGlideKnots(wordLines);
-const wordGlide = { lines: wordLines, target: 200, knots: wordKnotsVector, samples: [] };
-for (const positionMs of [0, 1000, 1150, 1299, 1300, 1310, 1600, 2500, 3000, 4000, 4990, 5000, 5200, 5420, 5800, 6000, 9000]) {
-  wordGlide.samples.push({ positionMs, expected: glideOffset(wordKnotsVector, positionMs, 200) });
-}
+const stripGlidePieces = wordStripGlide(stripGlideLines);
+const stripGlide = { lines: stripGlideLines, pieces: stripGlidePieces, samples: glideSamples(stripGlidePieces, sampleTimes(800, 6300)) };
 const centreMask = [];
 for (const [areaWidth, emPx] of [[1000, 40], [80, 40], [300, 24], [0, 40]]) {
   for (const x of [0, 10, 39, 40, 41, 120, 130, 150, 160, 170, 178, 180, 182, 200, 470, 480, 500, 520, 600, areaWidth]) {
@@ -108,10 +144,5 @@ for (const [areaWidth, emPx] of [[1000, 40], [80, 40], [300, 24], [0, 40]]) {
 const sungWords = [[1000, 1200], [1200, 1200], [1300, 1500]];
 const sung = [999, 1000, 1199, 1200, 1250, 1400, 1500].map((t) => ({ words: sungWords, t, expected: sungWord(sungWords, t) }));
 
-const karaokeSpans = [[0, 20], [20, 30], [34, 60]];
-const karaokeWords = [[1000, 1200], [1200, 1200], [1300, 1500]];
-const karaoke = [0, 999, 1000, 1100, 1199, 1200, 1250, 1300, 1400, 1499, 1500, 9000].map((t) => ({ spans: karaokeSpans, words: karaokeWords, t, expected: karaokeClipX(karaokeSpans, karaokeWords, t) }));
-karaoke.push({ spans: [], words: [], t: 5, expected: karaokeClipX([], [], 5) });
-
-const vectors = { note: 'Generated by scripts/generate-lyrics-rules-vectors.mjs; do not edit by hand.', active, offsets, scroll, finalArrival, strip, windows, breaks, weights, opacity, edgeFade, wordGlide, centreMask, sung, karaoke };
+const vectors = { note: 'Generated by scripts/generate-lyrics-rules-vectors.mjs; do not edit by hand.', active, offsets, scroll, finalArrival, strip, windows, breaks, weights, opacity, edgeFade, glide, karaokeGlide: karaokeCases, stripGlide, centreMask, sung };
 writeFileSync(new URL('../tests/fixtures/lyrics-rules-vectors.json', import.meta.url), `${JSON.stringify(vectors, null, 1)}\n`);

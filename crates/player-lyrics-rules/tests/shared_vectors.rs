@@ -64,7 +64,10 @@ fn rules_match_the_shared_vectors() {
         );
     }
     for c in cases(&v, "strip") {
-        let layout = layout_strip(&fs(&c["main"]), &fs(&c["translation"]), f(&c["gap"]));
+        let mut layout = layout_strip(&fs(&c["main"]), &fs(&c["translation"]), f(&c["gap"]));
+        if c["anchors"].is_array() {
+            layout.anchors = fs(&c["anchors"]);
+        }
         let fin = c["finalLine"].as_object().map(|o| FinalLine {
             end_ms: o["endMs"].as_f64(),
             last_glyph_center: o["lastGlyphCenter"].as_f64(),
@@ -133,10 +136,57 @@ fn rules_match_the_shared_vectors() {
     }
 }
 
+fn pairs(v: &Value) -> Vec<(f64, f64)> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|w| (f(&w[0]), f(&w[1])))
+        .collect()
+}
+
+fn same_pieces(actual: &[GlidePiece], expected: &Value, what: &str) {
+    let expected = expected.as_array().unwrap();
+    assert_eq!(actual.len(), expected.len(), "{what}");
+    for (a, e) in actual.iter().zip(expected) {
+        for (x, k) in [a.t, a.v, a.s, a.c].into_iter().zip(e.as_array().unwrap()) {
+            close(x, f(k), what);
+        }
+    }
+}
+
 #[test]
 fn word_rules_match_the_shared_vectors() {
     let v = vectors();
-    let g = &v["wordGlide"];
+    for c in cases(&v, "glide") {
+        let guides: Vec<Vec<(f64, f64)>> =
+            c["guides"].as_array().unwrap().iter().map(pairs).collect();
+        let pieces = smooth_glide(
+            &pairs(&c["hard"]),
+            &guides,
+            c["easeEnds"].as_bool().unwrap(),
+        );
+        same_pieces(&pieces, &c["pieces"], &c["hard"].to_string());
+        for s in c["samples"].as_array().unwrap() {
+            for (x, e) in glide_at(&pieces, f(&s["t"]))
+                .into_iter()
+                .zip(fs(&s["expected"]))
+            {
+                close(x, e, &s.to_string());
+            }
+        }
+    }
+    for c in cases(&v, "karaokeGlide") {
+        let pieces = karaoke_glide(&pairs(&c["spans"]), &pairs(&c["words"]));
+        same_pieces(&pieces, &c["pieces"], "karaoke");
+        for s in c["samples"].as_array().unwrap() {
+            close(
+                glide_value(&pieces, f(&s["t"])),
+                f(&s["expected"][0]),
+                &s.to_string(),
+            );
+        }
+    }
+    let g = &v["stripGlide"];
     let lines: Vec<KnotLine> = g["lines"]
         .as_array()
         .unwrap()
@@ -144,29 +194,12 @@ fn word_rules_match_the_shared_vectors() {
         .map(|l| KnotLine {
             start_ms: f(&l["startMs"]),
             cell_start: f(&l["cellStart"]),
+            anchor: f(&l["anchor"]),
             word_starts: fs(&l["wordStarts"]),
             word_centres: fs(&l["wordCentres"]),
         })
         .collect();
-    let knots = word_glide_knots(&lines);
-    let expected: Vec<(f64, f64)> = g["knots"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|k| (f(&k[0]), f(&k[1])))
-        .collect();
-    assert_eq!(knots.len(), expected.len());
-    for (a, e) in knots.iter().zip(&expected) {
-        close(a.0, e.0, "knot time");
-        close(a.1, e.1, "knot value");
-    }
-    for s in g["samples"].as_array().unwrap() {
-        close(
-            glide_cubic(&knots, f(&s["positionMs"]), f(&g["target"]))[0],
-            f(&s["expected"]),
-            &s.to_string(),
-        );
-    }
+    same_pieces(&word_strip_glide(&lines), &g["pieces"], "strip glide");
     for c in cases(&v, "centreMask") {
         close(
             centre_mask_opacity(f(&c["x"]), f(&c["areaWidth"]), f(&c["emPx"])),
@@ -175,48 +208,10 @@ fn word_rules_match_the_shared_vectors() {
         );
     }
     for c in cases(&v, "sung") {
-        let words: Vec<(f64, f64)> = c["words"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|w| (f(&w[0]), f(&w[1])))
-            .collect();
         assert_eq!(
-            sung_word(&words, f(&c["t"])).map_or(-1, |i| i as i64),
+            sung_word(&pairs(&c["words"]), f(&c["t"])).map_or(-1, |i| i as i64),
             c["expected"].as_i64().unwrap(),
             "{c}"
         );
-    }
-    let pairs = |v: &Value| -> Vec<(f64, f64)> {
-        v.as_array()
-            .unwrap()
-            .iter()
-            .map(|w| (f(&w[0]), f(&w[1])))
-            .collect()
-    };
-    for c in cases(&v, "karaoke") {
-        close(
-            karaoke_clip_x(&pairs(&c["spans"]), &pairs(&c["words"]), f(&c["t"])),
-            f(&c["expected"]),
-            &c.to_string(),
-        );
-    }
-}
-
-#[test]
-fn the_karaoke_edge_is_continuous_per_frame() {
-    let spans = [(0.0, 20.0), (20.0, 30.0), (34.0, 60.0)];
-    let words = [(1000.0, 1200.0), (1200.0, 1200.0), (1300.0, 1500.0)];
-    let step = 1000.0 / 240.0;
-    let mut last = f64::NEG_INFINITY;
-    let mut t = 900.0;
-    while t <= 1600.0 {
-        let x = karaoke_clip_x(&spans, &words, t);
-        assert!(x >= last - 1e-12, "{t}");
-        if t > 1000.0 + step && t < 1200.0 {
-            assert!(x - last <= 20.0 / 200.0 * step + 1e-9, "{t}");
-        }
-        last = x;
-        t += step;
     }
 }

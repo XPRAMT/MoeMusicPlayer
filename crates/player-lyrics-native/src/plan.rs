@@ -166,10 +166,10 @@ pub struct StripInput<'a> {
     pub rate: f64,
     /// Lyrics time at which `rate` returns to 1 (`None` = no correction running).
     pub slew_until_ms: Option<f64>,
-    /// Word-timed lyrics (ADR 0041 option C): the glide's knots `(lyrics ms, strip px)` are the word starts
-    /// (`rules::word_glide_knots`), the target is the area's centre, and every cell stays at factor 1 (the static
-    /// centre mask dims instead of the line fades). `None`: the line glide.
-    pub word_knots: Option<&'a [(f64, f64)]>,
+    /// Word-timed lyrics (ADR 0041 D10): the smoothed word glide (`rules::word_strip_glide`, strip px over lyrics
+    /// ms), the target is the area's centre, and every cell stays at factor 1 (the static centre mask dims instead of
+    /// the line fades). `None`: the line glide.
+    pub word_glide: Option<&'a [rules::GlidePiece]>,
 }
 
 impl StripInput<'_> {
@@ -200,8 +200,8 @@ impl StripInput<'_> {
 }
 
 fn offset_at(input: &StripInput, t: f64) -> f64 {
-    if let Some(knots) = input.word_knots {
-        return rules::glide_cubic(knots, t, input.view_width / 2.0)[0];
+    if let Some(glide) = input.word_glide {
+        return input.view_width / 2.0 - rules::glide_value(glide, t);
     }
     rules::strip_offset(
         input.starts,
@@ -215,8 +215,9 @@ fn offset_at(input: &StripInput, t: f64) -> f64 {
 }
 
 fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
-    if let Some(knots) = input.word_knots {
-        return rules::glide_cubic(knots, t, input.view_width / 2.0);
+    if let Some(glide) = input.word_glide {
+        let [v, s, c] = rules::glide_at(glide, t);
+        return [input.view_width / 2.0 - v, -s, -c, 0.0];
     }
     rules::strip_cubic(
         input.starts,
@@ -230,7 +231,7 @@ fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
 }
 
 fn factor_at(input: &StripInput, index: usize, t: f64) -> f64 {
-    if input.word_knots.is_some() {
+    if input.word_glide.is_some() {
         return 1.0;
     }
     let focus = rules::strip_focus(input.starts, t, rules::FADE_MS);
@@ -250,8 +251,8 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
     if input.playing {
         let mut t = p;
         while breaks.len() < HORIZON_BREAKS {
-            let next = match input.word_knots {
-                Some(knots) => rules::next_knot_after(knots, t),
+            let next = match input.word_glide {
+                Some(glide) => rules::next_glide_break(glide, t),
                 None => rules::next_strip_break(input.starts, t, arrival),
             };
             match next {
@@ -463,7 +464,7 @@ mod tests {
             inactive_percent: 50,
             rate: 1.0,
             slew_until_ms: None,
-            word_knots: None,
+            word_glide: None,
         }
     }
 
@@ -500,27 +501,29 @@ mod tests {
     }
 
     #[test]
-    fn word_timed_plans_centre_each_word_and_keep_every_cell_whole() {
+    fn word_timed_plans_follow_the_glide_and_keep_every_cell_whole() {
         let starts = [1000.0, 3000.0];
         let layout = rules::layout_strip(&[100.0, 80.0], &[60.0, 90.0], 20.0);
         let lines = [
             rules::KnotLine {
                 start_ms: 1000.0,
                 cell_start: layout.starts[0],
+                anchor: 6.0,
                 word_starts: vec![1000.0, 1400.0, 1900.0],
                 word_centres: vec![10.0, 45.0, 85.0],
             },
             rules::KnotLine {
                 start_ms: 3000.0,
                 cell_start: layout.starts[1],
+                anchor: 7.0,
                 word_starts: vec![],
                 word_centres: vec![],
             },
         ];
-        let knots = rules::word_glide_knots(&lines);
+        let knots = rules::word_strip_glide(&lines);
         for at in [0.0, 1000.0, 1200.0, 2500.0] {
             let mut i = input(&starts, &layout, at, true);
-            i.word_knots = Some(&knots);
+            i.word_glide = Some(&knots);
             let plan = plan_strip(&i);
             // The translation row has no knots: it is a cell of the same strip, so one offset moves both rows and
             // no cell fades (the centre mask dims instead).
@@ -539,16 +542,16 @@ mod tests {
             }
             assert_eq!(
                 plan.wake_ms,
-                rules::next_knot_after(&knots, at).map(|b| b - at)
+                rules::next_glide_break(&knots, at).map(|b| b - at)
             );
         }
-        // Each word start is centred.
-        for &(t, v) in &knots {
+        // Each line start puts its first glyph's centre on the area's centre.
+        for (l, anchor) in lines.iter().zip([6.0, 7.0]) {
             let i = StripInput {
-                word_knots: Some(&knots),
-                ..input(&starts, &layout, t, true)
+                word_glide: Some(&knots),
+                ..input(&starts, &layout, l.start_ms, true)
             };
-            assert!((offset_at(&i, t) - (200.0 - v)).abs() < 1e-9);
+            assert!((offset_at(&i, l.start_ms) - (200.0 - l.cell_start - anchor)).abs() < 1e-9);
         }
     }
 
@@ -633,7 +636,7 @@ mod tests {
                 inactive_percent: 50,
                 rate: slew.map_or(1.0, |s| s.0),
                 slew_until_ms: slew.map(|s| at + s.1),
-                word_knots: None,
+                word_glide: None,
             };
             plan_strip(&i)
         };
