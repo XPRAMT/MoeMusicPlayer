@@ -936,5 +936,6 @@
   "信任": "Trust",
   "信任的憑證（SHA-256）": "Trusted certificate (SHA-256)",
   "信任這個伺服器的憑證？": "Trust this server's certificate?",
-  "伺服器無法連線": "Server unreachable"
+  "伺服器無法連線": "Server unreachable",
+  "無法播放這首歌": "This song cannot be played"
 }

@@ -636,6 +636,8 @@ export interface PlaybackSnapshot {
   canPrevious: boolean;
   /** Windows only: the output's sample-rate path. */
   outputFormat?: PlaybackOutputFormat | null;
+  /** The newest start of a track that could not happen; `sequence` grows with each one (ADR 0036). */
+  startFailure?: { kind: 'unreachable' | 'unplayable'; sequence: number } | null;
 }
 
 export interface PlaybackOutputFormat {

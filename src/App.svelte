@@ -145,11 +145,12 @@
   import { appTooltip } from './lib/app-tooltip.js';
   import { dockMarquee } from './lib/dock-marquee.js';
   import {
-    UNREACHABLE_NOTICE_VISIBLE_MS,
-    isRemoteUnreachableMessage,
-    shouldShowUnreachableNotice,
+    START_NOTICE_VISIBLE_MS,
+    classifyStartError,
+    readStartFailure,
+    shouldShowStartNotice,
     snapshotReportsNewUnreachable,
-  } from './lib/remote-unreachable-notice.js';
+  } from './lib/start-failure-notice.js';
   import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
   import { formatSyncResultLine } from './lib/sync-result-line.js';
   import { normalizeSourceScope, shouldShowSourceScopeSwitch } from './lib/source-scope.js';
@@ -735,18 +736,21 @@
     if (!showSourceScopeSwitch && librarySourceScope !== 'all' && sourcesLoadedOnce) void changeLibrarySourceScope('all');
   });
   let playbackError = $state<string | null>(null);
-  /** The auto-dismissing notice for a remote track whose server cannot be reached (ADR 0036). */
+  /** The auto-dismissing notice for a track that could not be started: its server cannot be reached, or the song cannot
+   * be played (ADR 0036). Nothing else changed: the music that plays goes on. */
   let playbackNotice = $state<string | null>(null);
   let playbackNoticeShownAt: number | null = null;
   let playbackNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The number of the newest failed start the backend reported (`null` until the first snapshot). */
+  let lastStartFailureSequence: number | null = null;
 
-  function showUnreachableNotice(): void {
+  function showStartNotice(kind: 'unreachable' | 'unplayable'): void {
     const now = performance.now();
-    if (!shouldShowUnreachableNotice(playbackNoticeShownAt, now)) return;
+    if (!shouldShowStartNotice(playbackNoticeShownAt, now)) return;
     playbackNoticeShownAt = now;
-    playbackNotice = tr('伺服器無法連線');
+    playbackNotice = kind === 'unreachable' ? tr('伺服器無法連線') : tr('無法播放這首歌');
     clearTimeout(playbackNoticeTimer);
-    playbackNoticeTimer = setTimeout(() => { playbackNotice = null; }, UNREACHABLE_NOTICE_VISIBLE_MS);
+    playbackNoticeTimer = setTimeout(() => { playbackNotice = null; }, START_NOTICE_VISIBLE_MS);
   }
   let playback = $state<PlaybackSnapshot | null>(null);
   // Playback clock (ADR 0028): the progress bar and the lyrics advance from it between the 500 ms samples.
@@ -3840,7 +3844,11 @@
       && previous !== null
       && previous.positionMs > resolved.positionMs + 50
       && resolved.positionMs < 1500;
-    if (snapshotReportsNewUnreachable(previous?.lastError, resolved.lastError)) showUnreachableNotice();
+    if (snapshotReportsNewUnreachable(previous?.lastError, resolved.lastError)) showStartNotice('unreachable');
+    // A start that did not happen (a media key, the end of the previous track, a tap) is told once.
+    const startFailure = readStartFailure(lastStartFailureSequence, resolved.startFailure);
+    lastStartFailureSequence = startFailure.sequence;
+    if (startFailure.kind) showStartNotice(startFailure.kind);
     playback = resolved;
     updatePlaybackClock(resolved);
     if (Object.hasOwn(resolved, 'queueSort')) queueSort = resolved.queueSort ?? null;
@@ -4040,9 +4048,11 @@
     } catch (error) {
       if (isLatest()) {
         const text = getErrorText(error);
-        // A server that cannot be reached is told by the transient notice, not left as a standing dock error.
-        if (isRemoteUnreachableMessage(text)) showUnreachableNotice();
-        else playbackError = text;
+        const kind = classifyStartError(text);
+        // A track that could not be started is told by the transient notice, not left as a standing dock error; a start
+        // that a newer choice replaced is not told at all.
+        if (kind === 'unreachable' || kind === 'unplayable') showStartNotice(kind);
+        else if (kind !== 'superseded') playbackError = text;
       }
     } finally {
       if (options.seek) isSeeking = false; else if (isLatest()) isSendingPlaybackCommand = false;
