@@ -13,7 +13,7 @@
 ### D1 本機歌詞順序（沒有手動選擇時）
 
 1. 內嵌歌詞（音訊檔標籤：ID3 USLT、Vorbis `LYRICS`、MP4 `©lyr`、APEv2 `Lyrics`）。
-2. 歌曲旁的同名旁檔（同資料夾、主檔名不分大小寫）：`.lrc` > `.ass` > `.srt`。
+2. 歌曲旁的同名旁檔（同資料夾、主檔名不分大小寫）：`.lrc` > `.qrc` > `.ass` > `.srt`。
 3. 都沒有才自動線上搜尋。
 
 - 內容可解析就算有，純文字也算（純文字會贏過旁檔）；看起來像字幕卻解析不出任何行（`LyricsContent::Unusable`）算沒有，往下一個來源找。
@@ -21,7 +21,7 @@
 - 歌詞選擇清單的本機候選也依這個順序排：內嵌在前，旁檔在後。
 - 所有平台同一個順序：資料庫路徑（`local_lyrics_for_track`：`track_embedded_lyrics` → `track_lyric_sidecars`）、開檔備援（Windows `find_lyrics`／`find_all_lyrics`、Android `android_find_all_lyrics`、遠端 `remote_lyric_texts`）、遠端查找快取。
 
-旁檔之間取 `.lrc` > `.ass` > `.srt`，理由：
+旁檔之間取 `.lrc` > `.qrc` > `.ass` > `.srt`，理由：
 - `.lrc` 是歌詞專用格式，最可能就是使用者為這首歌準備的；
 - ASS 有 `\k` 逐字，又常帶雙語樣式；
 - SRT 只有行級。
@@ -83,9 +83,16 @@ ASS、SRT、yrc 解析不出任何行時回 `Unusable`。
 
 ### D6 QQ qrc
 
-不解密，QQ 維持行級。理由：繞過服務方的技術保護措施有法律疑慮（台灣著作權法第 80-2 條、DMCA §1201）；公開實作多為 GPL 或沒有授權；本專案原始碼公開。
+不解密，QQ 官方端點維持行級。理由：繞過服務方的技術保護措施有法律疑慮（台灣著作權法第 80-2 條、DMCA §1201）；公開實作多為 GPL 或沒有授權；本專案原始碼公開。
 
 App 實際送出的請求仍可用：`fcg_query_lyric_new.fcg?songmid=…&songid=…&qrc=1&trans=1&roma=1`，加上 Referer `https://y.qq.com/portal/player.html`。實測對搜尋得到的歌曲回 `retcode 0`，內含 LRC，`trans` 為空字串、沒有 `qrc` 欄位。不帶 Referer 時回 `-1310`。研究時 curl 得到的 `1101`，是未帶 App 的參數與 Referer 所致。
+
+逐字來源是 AMLL TTML DB（`amll-dev/amll-ttml-db`，CC0）的 `qq-lyrics/<songmid>.qrc`，內容是明文 QRC（不是 QQ 的加密 payload），本專案自寫解析器（`player-core` 的 `parse_qrc`，不複製 LDDC、echo、myune_music 等 GPL/AGPL 專案的程式碼）：
+
+- 格式：每行 `[行起,行長]` 後接 `文字(字起,字長)`；字時間為絕對毫秒，只符合「相對行起點」讀法時才換算；`(0,0)` 是空白佔位，其前文字併入前一個字（開頭的併入下一個字）；容忍 `<Lyric_1 LyricContent="…">` XML 外殼與實體；加密的十六進位/Base64 整段內容視為 `Unusable`，不解密。
+- 偵測：`detect_lyric_format`/`parse_any_lyrics` 依內容辨識 QRC（在 yrc 之後、LRC 之前），旁檔 `.qrc` 排在 `.lrc` 之後、`.ass` 之前。
+- 線上：使用者執行線上歌詞搜尋時，每批取得的 QQ 命中前 3 筆（依既有排序）各請求一次 `raw.githubusercontent.com/…/qq-lyrics/<mid>.qrc`（2 MiB 上限、5 秒逾時、mid 只允許英數與 `_-`）；404、錯誤、逾時、過大、無逐字行都靜默視為沒有，不影響搜尋。命中則新增候選 `qqmusic-amll:<mid>`（provider 仍為 QQ，`has_word_synced_lyrics`），譯文與羅馬音從同一首的一般 QQ 候選以行起點 ±300 ms 借用（不解析 TTML）。同分時逐字候選排在行級候選之前（`rank_lyric_candidates`），因此自動套用門檻不變、同 mid 時優先逐字。
+- 授權理由：該資料庫為 CC0，但歌詞本身的權利屬權利人，所以不內建任何歌詞，也不在曲庫同步時抓取，只在使用者主動搜尋歌詞時才連線。
 
 ### D7 資料模型
 
