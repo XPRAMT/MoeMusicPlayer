@@ -5,9 +5,10 @@
   import type { Snippet } from 'svelte';
   import { tr } from './i18n.js';
   import type { LyricsLookSettings } from './ipc';
+  import { LYRICS_FONT_WEIGHT } from './lyrics-preferences.js';
   import { LYRICS_MAIN_OPACITY_PERCENT, LYRICS_SECONDARY_OPACITY_PERCENT, TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
 
-  type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent'>
+  type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight'>
     & Partial<Pick<LyricsLookSettings, 'align' | 'useCustomColor' | 'customColor' | 'animation'>>;
 
   let {
@@ -44,7 +45,7 @@
     enable?: Snippet;
     /** Page-only display settings, after 顯示譯文 and before 動畫. */
     displayExtra?: Snippet;
-    /** Page-only size settings, after 譯文大小（相對原文）. */
+    /** Page-only size settings, after 字體粗細. */
     sizeExtra?: Snippet;
     /** Page-only appearance settings, after 次要透明度 and before 對齊. */
     lookExtra?: Snippet;
@@ -104,6 +105,18 @@
       value={settings.translationScalePercent}
       aria-label={translationAriaLabel ?? tr("譯文大小（相對原文）")}
       oninput={(event) => onChange({ translationScalePercent: Number(event.currentTarget.value) })}
+    />
+  </label>
+  <label class="lyrics-preference-range">
+    <span><strong>{tr("字體粗細")}</strong><output>{settings.fontWeight}</output></span>
+    <input
+      type="range"
+      min={LYRICS_FONT_WEIGHT.min}
+      max={LYRICS_FONT_WEIGHT.max}
+      step={LYRICS_FONT_WEIGHT.step}
+      value={settings.fontWeight}
+      aria-label={tr("字體粗細")}
+      oninput={(event) => onChange({ fontWeight: Number(event.currentTarget.value) })}
     />
   </label>
   {@render sizeExtra?.()}

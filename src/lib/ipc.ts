@@ -235,6 +235,8 @@ export interface TaskbarLyricsSettings {
   mainOpacityPercent: number;
   /** Continuous: where the edge ramp starts (10 to 100, may exceed the main); no effect in none. */
   secondaryOpacityPercent: number;
+  /** Weight of the original text (100 to 1000, step 50 in the UI); translation rows are 50 lighter. Saved apart per tab. */
+  fontWeight: number;
   /** none: one line at a time; continuous: all lines in one strip that scrolls with playback (ADR 0032). */
   animation: LyricsAnimation;
 }
@@ -243,7 +245,7 @@ export type LyricsAnimation = 'none' | 'continuous';
 
 /** The look options shared by the taskbar and floating lyrics. */
 export type LyricsLookSettings = Pick<TaskbarLyricsSettings,
-  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'animation'>;
+  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight' | 'animation'>;
 
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
 export interface FloatingLyricsSettings extends LyricsLookSettings {
@@ -753,6 +755,8 @@ export interface LyricsPreferences {
   primaryFontSizePx: number;
   /** Translation and romanization size, percent of primaryFontSizePx (1–100). */
   auxiliaryScalePercent: number;
+  /** Weight of the original text (100 to 1000); translation and romanization are 50 lighter. */
+  fontWeight: number;
   lineGapPx: number;
   textEffect: LyricsTextEffect;
   simplifiedToTraditional: boolean;

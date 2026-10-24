@@ -7,10 +7,29 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   secondaryOpacityPercent: 50,
   primaryFontSizePx: 20,
   auxiliaryScalePercent: 90,
+  fontWeight: 550,
   lineGapPx: 10,
   textEffect: 'shadow',
   simplifiedToTraditional: true,
 });
+
+/**
+ * Weight of the original lyric text, saved apart by each lyrics tab (playing page, taskbar, floating); the
+ * translation and romanization rows are 50 lighter. Mirrors settings.rs `LYRICS_FONT_WEIGHT_RANGE`.
+ */
+export const LYRICS_FONT_WEIGHT = Object.freeze({ min: 100, max: 1000, step: 50, default: 550 });
+
+/** The weight of translation and romanization rows: 50 below the original, never under 1. */
+export function lyricsAuxiliaryWeight(/** @type {number} */ fontWeight) {
+  return Math.max(1, fontWeight - 50);
+}
+
+/** @param {unknown} value Round and clamp to the allowed range; anything else becomes the default (550). */
+export function normalizeLyricsFontWeight(value) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(LYRICS_FONT_WEIGHT.max, Math.max(LYRICS_FONT_WEIGHT.min, Math.round(value)))
+    : LYRICS_FONT_WEIGHT.default;
+}
 
 export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
 
@@ -54,6 +73,7 @@ export function normalizeLyricsPreferences(value) {
       DEFAULT_LYRICS_PREFERENCES.primaryFontSizePx,
     ),
     auxiliaryScalePercent: normalizeAuxiliaryScale(candidate),
+    fontWeight: normalizeLyricsFontWeight(candidate.fontWeight),
     lineGapPx: normalizeInteger(
       candidate.lineGapPx,
       LYRICS_PREFERENCE_LIMITS.lineGapPx.min,

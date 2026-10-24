@@ -38,6 +38,7 @@
     getDisplayActiveLyricIndex,
     getLyricLineOpacity,
     lyricsAuxiliaryFontSizePx,
+    lyricsAuxiliaryWeight,
     normalizeLyricsPreferences,
   } from './lyrics-preferences.js';
   import {
@@ -171,12 +172,13 @@
     const context = root ? document.createElement('canvas').getContext('2d') : null;
     if (!root || !context) return;
     const family = getComputedStyle(root).fontFamily;
-    const primary = measureInkLineHeight(context, `550 100px ${family}`, LYRICS_PRIMARY_LINE_HEIGHT);
-    const auxiliary = measureInkLineHeight(context, `400 100px ${family}`, LYRICS_AUXILIARY_LINE_HEIGHT);
+    const primary = measureInkLineHeight(context, `${preferences.fontWeight} 100px ${family}`, LYRICS_PRIMARY_LINE_HEIGHT);
+    const auxiliary = measureInkLineHeight(context, `${lyricsAuxiliaryWeight(preferences.fontWeight)} 100px ${family}`, LYRICS_AUXILIARY_LINE_HEIGHT);
     if (primary !== inkLineHeights.primary || auxiliary !== inkLineHeights.auxiliary) inkLineHeights = { primary, auxiliary };
   }
   $effect(() => {
     if (!lyricsRoot) return;
+    void preferences.fontWeight; // re-measure when the weight changes
     measureInkLineHeights();
     void document.fonts?.ready.then(() => measureInkLineHeights());
   });
@@ -834,7 +836,7 @@
   data-active-cue-index={displayTimedIndex}
   data-current-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
-  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
+  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-primary-weight:${preferences.fontWeight};--lyric-auxiliary-weight:${lyricsAuxiliaryWeight(preferences.fontWeight)};--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">{tr("播放歌曲後會在此顯示歌詞。")}</p>
@@ -1172,7 +1174,7 @@
     overflow: hidden;
     color: inherit;
     font-size: var(--lyric-primary-font-size, 14px);
-    font-weight: 550;
+    font-weight: var(--lyric-primary-weight, 550);
     /* Measured ink fit (ascenders + descenders, no extra leading); vertical room comes from the shadow padding. */
     line-height: var(--lyric-primary-line-height, 1.35);
     line-clamp: 2;
@@ -1245,6 +1247,7 @@
     overflow: visible;
     color: var(--muted);
     font-size: var(--lyric-auxiliary-font-size, 10px);
+    font-weight: var(--lyric-auxiliary-weight, 500);
     line-height: var(--lyric-auxiliary-line-height, 1.35);
     white-space: normal;
     overflow-wrap: anywhere;
