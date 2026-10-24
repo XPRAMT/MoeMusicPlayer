@@ -271,11 +271,20 @@ impl RemoteMediaIndex {
             let Ok(entries) = resolved.fs.list(&join_path(&resolved.base_path, &folder)) else {
                 continue;
             };
-            let lyrics: std::collections::HashMap<String, &crate::fs::RemoteEntry> = entries
-                .iter()
-                .filter(|entry| !entry.is_dir && entry.name.to_ascii_lowercase().ends_with(".lrc"))
-                .map(|entry| (entry.name[..entry.name.len() - 4].to_lowercase(), entry))
-                .collect();
+            // One sidecar per song: `.lrc` over `.ass` over `.srt` (ADR 0041).
+            let mut lyrics: std::collections::HashMap<String, (usize, &crate::fs::RemoteEntry)> =
+                std::collections::HashMap::new();
+            for entry in entries.iter().filter(|entry| !entry.is_dir) {
+                let Some(rank) = player_core::lyric_sidecar_rank(&entry.name) else {
+                    continue;
+                };
+                let stem = entry.name.rsplit_once('.').map_or("", |(stem, _)| stem).to_lowercase();
+                if lyrics.get(&stem).is_none_or(|(kept, _)| *kept > rank) {
+                    lyrics.insert(stem, (rank, entry));
+                }
+            }
+            let lyrics: std::collections::HashMap<String, &crate::fs::RemoteEntry> =
+                lyrics.into_iter().map(|(stem, (_, entry))| (stem, entry)).collect();
             for track in songs {
                 let MediaLocator::Remote { path, .. } = &track.locator else {
                     continue;
@@ -630,6 +639,8 @@ fn handle_entries(
     // `.lrc` files of this folder by the lower-cased name without the extension, and the audio files by the same key.
     let mut lyrics: std::collections::HashMap<String, (String, u64, Option<i64>)> =
         std::collections::HashMap::new();
+    let mut sidecar_ranks: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut audio: Vec<(String, String)> = Vec::new();
     for entry in entries {
         if entry.name.is_empty() || entry.name.starts_with('.') {
@@ -644,9 +655,14 @@ fn handle_entries(
             if !is_excluded(&join_path(base, &relative), excluded) {
                 folders.push(relative);
             }
-        } else if entry.name.to_ascii_lowercase().ends_with(".lrc") {
-            let stem = entry.name[..entry.name.len() - 4].to_lowercase();
-            lyrics.insert(stem, (entry.name.clone(), entry.size, entry.modified_ms));
+        } else if let Some(rank) = player_core::lyric_sidecar_rank(&entry.name) {
+            // One sidecar per song: `.lrc` over `.ass` over `.srt` (ADR 0041).
+            let stem = entry.name.rsplit_once('.').map_or("", |(stem, _)| stem).to_lowercase();
+            let better = sidecar_ranks.get(&stem).is_none_or(|kept| *kept > rank);
+            if better {
+                sidecar_ranks.insert(stem.clone(), rank);
+                lyrics.insert(stem, (entry.name.clone(), entry.size, entry.modified_ms));
+            }
         } else if is_remote_library_audio(&entry.name) {
             let stem = entry
                 .name

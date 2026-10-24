@@ -10,7 +10,8 @@ use std::{
 };
 
 use player_core::{
-    auto_lyric_candidate, merge_lrc_auxiliary, merge_same_timestamp_lines, parse_lrc, parse_yrc,
+    auto_lyric_candidate, merge_lrc_auxiliary, merge_lrc_auxiliary_nearest, merge_same_timestamp_lines, parse_any_lyrics, parse_lrc, parse_yrc,
+    restore_words_from_raw_karaoke, traditional_word_texts, yrc_matches_lrc, LyricsContent,
     preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
     LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics, TrackSummary,
 };
@@ -70,6 +71,22 @@ pub struct LyricLineDto {
     pub text_traditional: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation_traditional: Option<String>,
+    /// The end of the line when its source gives one (SRT, ASS, yrc).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
+    /// Word timing (ADR 0041), short keys to keep the IPC small; empty for line-level lyrics.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<LyricWordDto>,
+    /// The Traditional text of each word, cut at the same places, only when it differs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub words_traditional: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LyricWordDto {
+    pub s: u64,
+    pub e: u64,
+    pub t: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -787,7 +804,41 @@ fn raw_to_lyric_candidate(raw: RawLyricCandidate) -> Result<LyricCandidate, Prov
                 .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
         }
     }
-    if lyrics.synced {
+    // NetEase word timing (ADR 0041): the yrc becomes the lyrics when it covers the LRC; the
+    // translation and romanization aligned to it (`ytlrc`/`yromalrc`) are matched exactly, the
+    // LRC-aligned ones (`tlyric`/`romalrc`) to the nearest line within 300 ms.
+    if let Some(yrc) = raw
+        .raw_yrc
+        .as_deref()
+        .and_then(|text| parse_yrc(text).ok())
+        .filter(|yrc| lyrics.format != LyricFormat::Yrc && yrc_matches_lrc(yrc, &lyrics))
+    {
+        lyrics = yrc;
+    }
+    if lyrics.format == LyricFormat::Yrc {
+        let to_error = |error: player_core::lyrics::LyricsParseError| {
+            ProviderError::InvalidResponse(error.to_string())
+        };
+        for (aligned, fallback, kind) in [
+            (
+                raw.yrc_translation.as_deref(),
+                raw.translation.as_deref(),
+                LyricAuxiliaryKind::Translation,
+            ),
+            (
+                raw.yrc_romanization.as_deref(),
+                raw.romanization.as_deref(),
+                LyricAuxiliaryKind::Romanization,
+            ),
+        ] {
+            if let Some(aligned) = aligned {
+                merge_lrc_auxiliary(&mut lyrics, aligned, kind).map_err(to_error)?;
+            }
+            if let Some(fallback) = fallback {
+                merge_lrc_auxiliary_nearest(&mut lyrics, fallback, kind, 300).map_err(to_error)?;
+            }
+        }
+    } else if lyrics.synced {
         if let Some(translation) = raw.translation.as_deref() {
             merge_lrc_auxiliary(&mut lyrics, translation, LyricAuxiliaryKind::Translation)
                 .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
@@ -926,11 +977,10 @@ fn candidate_dto(_metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) ->
     }
 }
 
+/// Whether the lyrics a player would show have word timing. Encrypted QRC kept alongside a QQ
+/// result does not count: it is never decoded (ADR 0041).
 fn has_word_synced_lyrics(lyrics: &ParsedLyrics) -> bool {
-    if matches!(lyrics.format, LyricFormat::Yrc | LyricFormat::Qrc) {
-        return true;
-    }
-    preserved_karaoke_has_nonempty_field(lyrics, &["yrc", "qrc_base64", "qrcBase64"])
+    lyrics.lines.iter().any(|line| !line.words.is_empty())
 }
 
 fn has_translation(lyrics: &ParsedLyrics) -> bool {
@@ -1433,7 +1483,29 @@ async fn local_lyrics_for_track(
     track_id: TrackId,
     track: &TrackSummary,
 ) -> Result<LocalLyricsLookup, String> {
+    // Order (ADR 0041): the song's own embedded lyrics, then the sidecar beside it (`.lrc`, `.ass`,
+    // `.srt`, whichever the sync kept), then nothing here (the caller searches online). Content
+    // that looks like a subtitle but does not parse counts as absent.
     let started = std::time::Instant::now();
+    let embedded_known = match database
+        .track_embedded_lyrics(track_id)
+        .map_err(|error| error.to_string())?
+    {
+        Some(stored) => {
+            if let Some(lyrics) = stored.as_deref().and_then(parse_stored_lyrics) {
+                return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
+                    track.id,
+                    track,
+                    LyricProvider::Embedded,
+                    false,
+                    &lyrics,
+                )));
+            }
+            true
+        }
+        // Tags not read since this existed: look in the file below.
+        None => false,
+    };
     let mut embedded_only = false;
     let mut sidecar_oversized = false;
     match database
@@ -1441,18 +1513,15 @@ async fn local_lyrics_for_track(
         .map_err(|error| error.to_string())?
     {
         player_db::LyricSidecarLookup::Present { text: Some(text), .. } => {
-            if let Ok(lyrics) = parse_lrc(&text) {
-                if !lyrics.lines.is_empty() {
-                    return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
-                        track.id,
-                        track,
-                        LyricProvider::Sidecar,
-                        false,
-                        &lyrics,
-                    )));
-                }
+            if let Some(lyrics) = parse_stored_lyrics(&text) {
+                return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
+                    track.id,
+                    track,
+                    LyricProvider::Sidecar,
+                    false,
+                    &lyrics,
+                )));
             }
-            // A sidecar without usable lines: the embedded lyrics are next.
             embedded_only = true;
         }
         player_db::LyricSidecarLookup::Present { text: None, oversized: true } => {
@@ -1464,36 +1533,12 @@ async fn local_lyrics_for_track(
         player_db::LyricSidecarLookup::Absent => embedded_only = true,
         player_db::LyricSidecarLookup::NotScanned => {}
     }
-
-    // With the sidecar settled, the lyrics in the song's own tags come from the database too: the sync read the tags (and kept
-    // what they hold, or that they hold nothing), so the file is not opened.
-    if embedded_only {
-        if let Some(stored) = database
-            .track_embedded_lyrics(track_id)
-            .map_err(|error| error.to_string())?
-        {
-            let parsed = stored
-                .as_deref()
-                .and_then(|raw| {
-                    if looks_like_yrc(raw) {
-                        parse_yrc(raw).ok()
-                    } else {
-                        parse_lrc(raw).ok()
-                    }
-                })
-                .filter(|lyrics| !lyrics.lines.is_empty());
-            return Ok(match parsed {
-                Some(lyrics) => LocalLyricsLookup::Found(track_lyrics_dto(
-                    track.id,
-                    track,
-                    LyricProvider::Embedded,
-                    false,
-                    &lyrics,
-                )),
-                None if sidecar_oversized => LocalLyricsLookup::Oversized,
-                None => LocalLyricsLookup::Missing,
-            });
-        }
+    if embedded_known && embedded_only {
+        return Ok(if sidecar_oversized {
+            LocalLyricsLookup::Oversized
+        } else {
+            LocalLyricsLookup::Missing
+        });
     }
 
     let fingerprint = database
@@ -1697,13 +1742,10 @@ fn manual_lyrics_dto(
     }
 }
 
-fn parse_stored_lyrics(raw: &str) -> Option<ParsedLyrics> {
-    let parsed = if looks_like_yrc(raw) {
-        parse_yrc(raw).ok()
-    } else {
-        parse_lrc(raw).ok()
-    };
-    parsed.filter(|lyrics| !lyrics.lines.is_empty())
+/// A local lyric text (embedded or sidecar) read by its content (ADR 0041): LRC, yrc, SRT, ASS or
+/// plain text. A broken subtitle is `None`, like no lyrics, so the next source is tried.
+pub(crate) fn parse_stored_lyrics(raw: &str) -> Option<ParsedLyrics> {
+    parse_any_lyrics(raw).ok().and_then(LyricsContent::usable)
 }
 
 /// The current lyrics of a local source: the embedded lyrics and the `.lrc` the last sync stored
@@ -1727,7 +1769,7 @@ fn live_local_pick(
             .map_err(|error| error.to_string())?
         {
             player_db::LyricSidecarLookup::Present { text: Some(text), .. } => {
-                return Ok(parse_lrc(&text).ok().filter(|lyrics| !lyrics.lines.is_empty()));
+                return Ok(parse_stored_lyrics(&text));
             }
             player_db::LyricSidecarLookup::Present { text: None, oversized: true }
             | player_db::LyricSidecarLookup::Absent => return Ok(None),
@@ -1843,7 +1885,7 @@ async fn raw_local_lyrics(
     })
     .await
     .map_err(|error| format!("讀取 Android 本機歌詞工作失敗：{error}"))?;
-    // Same precedence as Windows `find_lyrics`: the LRC sidecar wins over embedded lyrics.
+    // Same precedence as Windows `find_lyrics`: embedded lyrics, then the sidecar.
     Ok(match found.into_iter().next() {
         Some(item) => RawLocalLyrics::Found {
             provider: item.provider,
@@ -1860,9 +1902,10 @@ struct AndroidFoundLyrics {
     lyrics: ParsedLyrics,
 }
 
-/// Android counterpart of Windows `find_all_lyrics`: the same-name `.lrc` beside a real-path
-/// track (ADR 0014) first, then embedded lyrics. `first_only` stops after the first hit (playback
-/// lookup). A legacy content:// locator is read for embedded tags only when `app` is given.
+/// Android counterpart of Windows `find_all_lyrics`, in the same order (ADR 0041): the lyrics
+/// embedded in the track's tags first, then the sidecar beside a real-path or remote track
+/// (`.lrc`, `.ass`, `.srt`). `first_only` stops after the first hit (playback lookup). A legacy
+/// content:// locator is read for embedded tags only when `app` is given.
 #[cfg(target_os = "android")]
 fn android_find_all_lyrics(
     app: Option<&AppHandle>,
@@ -1884,99 +1927,82 @@ fn android_find_all_lyrics(
     });
     let mut found = Vec::new();
     let mut oversized = false;
+    let first = |texts: &[String]| texts.iter().find_map(|text| parse_stored_lyrics(text));
 
-    if let Some(sidecar) = audio_path
-        .as_deref()
-        .filter(|_| with_sidecar)
-        .and_then(|path| tauri_plugin_media_index::fs_scan::sibling_with_extension(path, "lrc"))
-    {
-        match std::fs::read(sidecar) {
-            Ok(bytes) if bytes.len() > MAX_LYRIC_PAYLOAD_BYTES => oversized = true,
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
-                    .into_owned();
-                if let Ok(lyrics) = parse_lrc(&text) {
-                    if !lyrics.lines.is_empty() {
-                        found.push(AndroidFoundLyrics {
-                            provider: LyricProvider::Sidecar,
-                            lyrics,
-                        });
-                        if first_only {
-                            return (found, oversized);
-                        }
-                    }
-                }
-            }
-            Err(_) => {}
-        }
-    }
-
-    // A remote track (ADR 0026): the `.lrc` beside it, then its embedded lyrics, both read through the remote reader.
+    // A remote track (ADR 0026): its embedded lyrics, then the sidecar beside it, both read through the remote reader.
     if let Some((source_id, remote_path)) = locators.iter().find_map(|locator| match locator {
         player_core::MediaLocator::Remote { source_id, path } => Some((*source_id, path.clone())),
         _ => None,
     }) {
-        let (sidecar, embedded, remote_oversized) =
+        let (sidecars, embedded, remote_oversized) =
             crate::remote_media::remote_lyric_texts(source_id, &remote_path, with_sidecar);
         oversized |= remote_oversized;
-        if let Some(text) = sidecar.filter(|_| with_sidecar) {
-            if let Ok(lyrics) = parse_lrc(&text) {
-                if !lyrics.lines.is_empty() {
-                    found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });
-                    if first_only {
-                        return (found, oversized);
-                    }
-                }
+        if let Some(lyrics) = first(&embedded) {
+            found.push(AndroidFoundLyrics { provider: LyricProvider::Embedded, lyrics });
+            if first_only {
+                return (found, oversized);
             }
         }
-        for raw in &embedded {
-            let parsed = if looks_like_yrc(raw) { parse_yrc(raw) } else { parse_lrc(raw) };
-            if let Ok(lyrics) = parsed {
-                if !lyrics.lines.is_empty() {
-                    found.push(AndroidFoundLyrics { provider: LyricProvider::Embedded, lyrics });
-                    break;
-                }
-            }
+        if let Some(lyrics) = first(&sidecars) {
+            found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });
         }
         return (found, oversized);
     }
 
-    let (path, _lease) = match (audio_path, audio_uri, app) {
-        (Some(path), _, _) => (path, None),
-        (None, Some(uri), Some(app)) => match app.media_index().cache_content_uri(&uri, 512 * 1024 * 1024) {
-            Ok(lease) => (lease.path().to_path_buf(), Some(lease)),
-            Err(_) => return (found, oversized),
-        },
-        _ => return (found, oversized),
+    let tags_path = match (&audio_path, audio_uri, app) {
+        (Some(path), _, _) => Some((path.clone(), None)),
+        (None, Some(uri), Some(app)) => app
+            .media_index()
+            .cache_content_uri(&uri, 512 * 1024 * 1024)
+            .ok()
+            .map(|lease| (lease.path().to_path_buf(), Some(lease))),
+        _ => None,
     };
-    let Some(tagged) = Probe::open(&path)
-        .ok()
-        .map(|probe| probe.options(ParseOptions::new().read_properties(false)))
-        .and_then(|probe| probe.guess_file_type().ok())
-        .and_then(|probe| probe.read().ok())
-    else {
-        return (found, oversized);
-    };
-    for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
-        for raw in tagged.tags().iter().filter_map(|tag| tag.get_string(key)) {
-            if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
-                oversized = true;
-                continue;
-            }
-            let parsed = if looks_like_yrc(raw) {
-                parse_yrc(raw)
-            } else {
-                parse_lrc(raw)
-            };
-            if let Ok(lyrics) = parsed {
-                if !lyrics.lines.is_empty() {
-                    found.push(AndroidFoundLyrics {
-                        provider: LyricProvider::Embedded,
-                        lyrics,
-                    });
-                    return (found, oversized);
+    if let Some((path, _lease)) = tags_path {
+        let tagged = Probe::open(&path)
+            .ok()
+            .map(|probe| probe.options(ParseOptions::new().read_properties(false)))
+            .and_then(|probe| probe.guess_file_type().ok())
+            .and_then(|probe| probe.read().ok());
+        let mut texts = Vec::new();
+        if let Some(tagged) = &tagged {
+            for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
+                for raw in tagged.tags().iter().filter_map(|tag| tag.get_string(key)) {
+                    if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
+                        oversized = true;
+                    } else {
+                        texts.push(raw.to_owned());
+                    }
                 }
             }
+        }
+        if let Some(lyrics) = first(&texts) {
+            found.push(AndroidFoundLyrics { provider: LyricProvider::Embedded, lyrics });
+            if first_only {
+                return (found, oversized);
+            }
+        }
+    }
+
+    if let Some(path) = audio_path.as_deref().filter(|_| with_sidecar) {
+        let mut texts = Vec::new();
+        for extension in player_core::LYRIC_SIDECAR_EXTENSIONS {
+            let Some(sidecar) =
+                tauri_plugin_media_index::fs_scan::sibling_with_extension(path, extension)
+            else {
+                continue;
+            };
+            match std::fs::read(sidecar) {
+                Ok(bytes) if bytes.len() > MAX_LYRIC_PAYLOAD_BYTES => oversized = true,
+                Ok(bytes) => texts.push(
+                    String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+                        .into_owned(),
+                ),
+                Err(_) => {}
+            }
+        }
+        if let Some(lyrics) = first(&texts) {
+            found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });
         }
     }
     (found, oversized)
@@ -1989,6 +2015,8 @@ fn persisted_lyrics_dto(track: &TrackSummary, mut lyrics: TrackLyrics) -> TrackL
     if lyrics.lyrics.format == LyricFormat::Lrc {
         lyrics.lyrics.lines = merge_same_timestamp_lines(std::mem::take(&mut lyrics.lyrics.lines));
     }
+    // Rows stored before word timing kept the yrc only as the raw payload.
+    restore_words_from_raw_karaoke(&mut lyrics.lyrics);
     track_lyrics_dto(
         track.id,
         track,
@@ -2035,13 +2063,30 @@ fn track_lyrics_dto(
 }
 
 fn line_dto(line: &LyricLine) -> LyricLineDto {
+    let words_traditional = traditional_word_texts(&line.words);
     LyricLineDto {
         start_ms: line.start_ms,
         text: line.text.clone(),
         translation: line.translation.clone(),
         romanization: line.romanization.clone(),
-        text_traditional: traditional_if_changed(&line.text),
+        // With words, the line's Traditional text is its words' joined so both stay aligned.
+        text_traditional: match &words_traditional {
+            Some(words) => Some(words.concat()),
+            None if line.words.is_empty() => traditional_if_changed(&line.text),
+            None => None,
+        },
         translation_traditional: line.translation.as_deref().and_then(traditional_if_changed),
+        end_ms: line.end_ms,
+        words: line
+            .words
+            .iter()
+            .map(|word| LyricWordDto {
+                s: word.start_ms,
+                e: word.end_ms,
+                t: word.text.clone(),
+            })
+            .collect(),
+        words_traditional,
     }
 }
 
@@ -2471,7 +2516,7 @@ mod tests {
     }
 
     #[test]
-    fn lrc_translation_and_romanization_merge_only_on_exact_timestamps_and_keep_yrc_raw() {
+    fn a_matching_yrc_replaces_the_lrc_and_takes_nearby_translations_and_keeps_its_raw_payload() {
         let raw = RawLyricCandidate {
             candidate_id: "netease:1".to_owned(),
             provider: LyricProvider::NetEase,
@@ -2486,11 +2531,14 @@ mod tests {
             translation: Some("[00:01.00]譯文".to_owned()),
             romanization: Some("[00:09.00]錯誤時間".to_owned()),
             raw_yrc: Some("[1000,500](1000,500,0)primary".to_owned()),
+            yrc_translation: None,
+            yrc_romanization: None,
             raw_karaoke: None,
         };
         let candidate = raw_to_lyric_candidate(raw).expect("convert provider response");
-        assert_eq!(candidate.lyrics.format, player_core::LyricFormat::Lrc);
+        assert_eq!(candidate.lyrics.format, player_core::LyricFormat::Yrc);
         assert!(candidate.lyrics.synced);
+        assert_eq!(candidate.lyrics.lines[0].words.len(), 1);
         assert_eq!(
             candidate.lyrics.lines[0].translation.as_deref(),
             Some("譯文")
@@ -2523,6 +2571,8 @@ mod tests {
             translation: None,
             romanization: None,
             raw_yrc: Some("[1200,700](1200,200,0)逐(1400,500,0)行".to_owned()),
+            yrc_translation: None,
+            yrc_romanization: None,
             raw_karaoke: None,
         })
         .expect("convert YRC response");
@@ -2551,6 +2601,8 @@ mod tests {
             translation: None,
             romanization: None,
             raw_yrc: None,
+            yrc_translation: None,
+            yrc_romanization: None,
             raw_karaoke: Some(RawKaraokeData {
                 qrc_base64: Some("cmF3LXFyYw==".to_owned()),
                 translation_base64: None,
@@ -2828,6 +2880,7 @@ mod tests {
             text: "这只有我知道".to_owned(),
             translation: Some("君の名は".to_owned()),
             romanization: None,
+            ..LyricLine::default()
         });
         assert_eq!(simplified.text_traditional.as_deref(), Some("這只有我知道"));
         assert_eq!(simplified.translation_traditional, None, "kana lines stay");
@@ -2840,6 +2893,7 @@ mod tests {
             text: "頭髮".to_owned(),
             translation: None,
             romanization: None,
+            ..LyricLine::default()
         });
         assert_eq!(traditional.text_traditional, None);
     }
@@ -3374,13 +3428,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn embedded_subtitles_are_parsed_and_broken_ones_fall_through_to_the_sidecar() {
+        let fixture = EmbeddedFixture::new(Some("1\n00:00:01,000 --> 00:00:02,000\n內嵌字幕\n"));
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Embedded, "內嵌字幕".to_owned()))
+        );
+        let broken = EmbeddedFixture::new(Some("[Events]\nDialogue: broken"));
+        fs::write(broken.directory.0.join("track.lrc"), "[00:01.00]旁邊的 LRC").expect("write sidecar");
+        assert_eq!(
+            broken.shown().await,
+            Some((LyricsSourceDto::Local, "旁邊的 LRC".to_owned())),
+            "an unusable embedded subtitle counts as no embedded lyrics"
+        );
+    }
+
+    #[tokio::test]
     async fn saving_details_links_embedded_lyrics_over_a_same_name_lrc() {
         let fixture = EmbeddedFixture::new(Some("[00:01.00]寫入的內嵌"));
         fs::write(fixture.directory.0.join("track.lrc"), "[00:01.00]旁邊的 LRC").expect("write sidecar");
         assert_eq!(
             fixture.shown().await,
-            Some((LyricsSourceDto::Local, "旁邊的 LRC".to_owned())),
-            "normal order: the .lrc wins"
+            Some((LyricsSourceDto::Embedded, "寫入的內嵌".to_owned())),
+            "normal order (ADR 0041): embedded lyrics win over the .lrc"
         );
         super::link_embedded_lyrics(&fixture.database, fixture.track_id, 1_800_000_000_200)
             .expect("link embedded lyrics");
@@ -3445,6 +3515,7 @@ mod tests {
             text: text.to_owned(),
             translation: None,
             romanization: None,
+            ..LyricLine::default()
         };
         lyrics.lines = vec![row("二番なんて望んでない"), row("才不稀罕當第二呢")];
         let persisted = TrackLyrics {
@@ -3490,13 +3561,21 @@ mod tests {
             }
         };
 
-        let yrc = candidate_dto(&metadata, &make_candidate(LyricFormat::Yrc, true, None));
+        // Word timing is what the lines carry (ADR 0041), not the format name or a raw payload.
+        let mut worded = make_candidate(LyricFormat::Yrc, true, None);
+        worded.lyrics.lines[0].words = vec![player_core::LyricWord {
+            start_ms: 1_000,
+            end_ms: 1_500,
+            text: "line".to_owned(),
+        }];
+        let yrc = candidate_dto(&metadata, &worded);
         assert!(yrc.has_synced_lyrics);
         assert!(yrc.has_word_synced_lyrics);
+        assert!(!candidate_dto(&metadata, &make_candidate(LyricFormat::Yrc, true, None)).has_word_synced_lyrics);
 
         let qrc = candidate_dto(&metadata, &make_candidate(LyricFormat::Qrc, false, None));
         assert!(!qrc.has_synced_lyrics);
-        assert!(qrc.has_word_synced_lyrics);
+        assert!(!qrc.has_word_synced_lyrics, "encrypted QRC is never decoded");
 
         let yrc_preserved = candidate_dto(
             &metadata,
@@ -3506,7 +3585,7 @@ mod tests {
                 Some(r#"{"yrc":"[1000,500](1000,500,0)word"}"#),
             ),
         );
-        assert!(yrc_preserved.has_word_synced_lyrics);
+        assert!(!yrc_preserved.has_word_synced_lyrics);
 
         let qrc_preserved = candidate_dto(
             &metadata,
@@ -3516,7 +3595,7 @@ mod tests {
                 Some(r#"{"qrc_base64":"cXJj","translation_base64":"dHJhbnNsYXRpb24"}"#),
             ),
         );
-        assert!(qrc_preserved.has_word_synced_lyrics);
+        assert!(!qrc_preserved.has_word_synced_lyrics);
         assert!(qrc_preserved.has_translation);
         assert!(!qrc_preserved.has_romanization);
 
@@ -3524,7 +3603,7 @@ mod tests {
             &metadata,
             &make_candidate(LyricFormat::Lrc, true, Some(r#"{"qrcBase64":"cXJj"}"#)),
         );
-        assert!(qrc_camel_case.has_word_synced_lyrics);
+        assert!(!qrc_camel_case.has_word_synced_lyrics);
 
         let mut parsed_auxiliary = make_candidate(LyricFormat::Lrc, true, None);
         parsed_auxiliary.lyrics.lines[0].translation = Some("translated line".to_owned());

@@ -306,18 +306,25 @@ fn lyric_sidecars_beside(tracks: &[MediaTrackRecord]) -> Vec<player_core::LyricS
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
         };
-        let lyrics: std::collections::HashMap<String, PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("lrc"))
-            })
-            .filter_map(|path| {
-                let stem = path.file_stem()?.to_string_lossy().to_lowercase();
-                Some((stem, path))
-            })
-            .collect();
+        // One sidecar per song: `.lrc` over `.ass` over `.srt` (ADR 0041).
+        let mut lyrics: std::collections::HashMap<String, (usize, PathBuf)> =
+            std::collections::HashMap::new();
+        for path in entries.flatten().map(|entry| entry.path()) {
+            let Some(rank) = path
+                .file_name()
+                .and_then(|name| player_core::lyric_sidecar_rank(&name.to_string_lossy()))
+            else {
+                continue;
+            };
+            let Some(stem) = path.file_stem().map(|stem| stem.to_string_lossy().to_lowercase()) else {
+                continue;
+            };
+            if lyrics.get(&stem).is_none_or(|(kept, _)| *kept > rank) {
+                lyrics.insert(stem, (rank, path));
+            }
+        }
+        let lyrics: std::collections::HashMap<String, PathBuf> =
+            lyrics.into_iter().map(|(stem, (_, path))| (stem, path)).collect();
         for track in songs {
             let MediaLocator::FileSystem(path) = &track.locator else {
                 continue;

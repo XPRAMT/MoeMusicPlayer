@@ -148,25 +148,30 @@ fn embedded_cover(reader: Box<dyn RemoteStream>, path: &str) -> Option<Vec<u8>> 
         .filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_ARTWORK_BYTES)
 }
 
-/// The lyric texts of a remote track: the `.lrc` beside it, and the lyrics embedded in its tags (each raw, not yet
+/// The lyric texts of a remote track: the sidecars beside it (preferred first), and the lyrics embedded in its tags (each raw, not yet
 /// parsed). Texts larger than the lyric limit are dropped and reported through the second value.
 pub(crate) fn remote_lyric_texts(
     source_id: SourceId,
     path: &str,
     with_sidecar: bool,
-) -> (Option<String>, Vec<String>, bool) {
+) -> (Vec<String>, Vec<String>, bool) {
     let mut oversized = false;
-    let sidecar_path = remote_with_extension(path, "lrc");
-    let sidecar = with_sidecar
-        .then(|| read_remote_file_capped(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64))
-        .flatten()
-        .map(|bytes| {
-            String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
-                .into_owned()
-        });
-    if with_sidecar && sidecar.is_none() {
-        if let Some(handle) = remote_content().and_then(|c| c.open(source_id, &sidecar_path).ok()) {
-            oversized |= handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64;
+    // Every sidecar there is, in the preferred order (`.lrc`, `.ass`, `.srt`; ADR 0041).
+    let mut sidecars = Vec::new();
+    for extension in player_core::LYRIC_SIDECAR_EXTENSIONS.iter().filter(|_| with_sidecar) {
+        let sidecar_path = remote_with_extension(path, extension);
+        match read_remote_file_capped(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64) {
+            Some(bytes) => sidecars.push(
+                String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+                    .into_owned(),
+            ),
+            None => {
+                if let Some(handle) =
+                    remote_content().and_then(|c| c.open(source_id, &sidecar_path).ok())
+                {
+                    oversized |= handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64;
+                }
+            }
         }
     }
     let mut embedded = Vec::new();
@@ -188,7 +193,7 @@ pub(crate) fn remote_lyric_texts(
             }
         }
     }
-    (sidecar, embedded, oversized)
+    (sidecars, embedded, oversized)
 }
 
 #[cfg(test)]
@@ -229,7 +234,7 @@ mod tests {
 
         let (sidecar, embedded, oversized) = remote_lyric_texts(source, "a/song.wv", true);
         assert_eq!(
-            sidecar.as_deref(),
+            sidecar.first().map(String::as_str),
             Some("[00:01.00]line\n"),
             "the BOM is dropped"
         );
@@ -245,7 +250,7 @@ mod tests {
             Some(b"not really a jpeg".to_vec())
         );
         let (none, empty, _) = remote_lyric_texts(source, "a/missing.wv", true);
-        assert!(none.is_none());
+        assert!(none.is_empty());
         assert!(empty.is_empty());
         let _ = std::fs::remove_dir_all(root);
     }

@@ -51,15 +51,15 @@ fn remote_lyrics_and_covers_are_found_beside_and_inside_the_track() {
     player_core::set_remote_content(Arc::new(FolderContent { root: root.clone(), source }));
     let remote = |path: &str| vec![MediaLocator::Remote { source_id: source, path: path.to_owned() }];
 
-    // Lyrics: the sidecar wins for playback, both are offered when choosing.
+    // Lyrics (ADR 0041): the embedded lyrics win for playback, both are offered when choosing.
     let LyricsLookup::Found(found) = find_lyrics(&remote("a/song.wv")) else {
         panic!("lyrics beside the remote track");
     };
-    assert_eq!(found.provider, LyricProvider::Sidecar);
-    assert_eq!(found.lyrics.lines[0].text, "sidecar line");
+    assert_eq!(found.provider, LyricProvider::Embedded);
     let all = find_all_lyrics(&remote("a/song.wv"));
     let providers: Vec<_> = all.iter().map(|item| item.provider).collect();
-    assert_eq!(providers, vec![LyricProvider::Sidecar, LyricProvider::Embedded]);
+    assert_eq!(providers, vec![LyricProvider::Embedded, LyricProvider::Sidecar]);
+    assert_eq!(all[1].lyrics.lines[0].text, "sidecar line");
 
     // Without a sidecar the embedded lyrics (an APEv2 item of the WavPack file) are used.
     let LyricsLookup::Found(embedded) = find_lyrics(&remote("b/song.wv")) else {

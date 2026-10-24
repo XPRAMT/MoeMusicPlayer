@@ -7,7 +7,7 @@ use std::{
 };
 
 use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
-use player_core::{parse_lrc, LyricProvider, MediaLocator, ParsedLyrics, MAX_LYRIC_PAYLOAD_BYTES};
+use player_core::{parse_any_lyrics, LyricProvider, LyricsContent, MediaLocator, ParsedLyrics, MAX_LYRIC_PAYLOAD_BYTES};
 
 use crate::windows::to_extended_path;
 
@@ -27,20 +27,15 @@ pub enum LyricsLookup {
     Oversized,
 }
 
-/// Read one local source for a track. LRC sidecars take precedence over embedded tags, and an
-/// enabled content URI is ignored by this Windows-only filesystem adapter.
+/// Read one local source for a track (ADR 0041): the lyrics embedded in its tags first, then the
+/// sidecar beside it (`.lrc`, `.ass`, `.srt`). An enabled content URI is ignored by this
+/// Windows-only filesystem adapter.
 pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
-    let paths = locators
-        .iter()
-        .filter_map(|locator| match locator {
-            MediaLocator::FileSystem(path) => Some(path),
-            // Remote tracks are read separately, through the remote content provider.
-            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
-        })
-        .collect::<Vec<_>>();
-
-    let remote = remote_tracks(locators);
     let mut oversized = false;
+    if let LyricsLookup::Found(found) = find_embedded_lyrics_flag(locators, &mut oversized) {
+        return LyricsLookup::Found(found);
+    }
+    let paths = filesystem_paths(locators);
     for path in &paths {
         if let Some(lyrics) = sidecar_lyrics(path, &mut oversized) {
             return LyricsLookup::Found(FoundLyrics {
@@ -49,7 +44,7 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
             });
         }
     }
-    for (source_id, path) in &remote {
+    for (source_id, path) in &remote_tracks(locators) {
         if let Some(lyrics) = remote_sidecar_lyrics(*source_id, path, &mut oversized) {
             return LyricsLookup::Found(FoundLyrics {
                 provider: LyricProvider::Sidecar,
@@ -57,22 +52,6 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
             });
         }
     }
-    for path in &paths {
-        if let Some(lyrics) = embedded_lyrics(path, &mut oversized) {
-            return LyricsLookup::Found(FoundLyrics {
-                provider: LyricProvider::Embedded,
-                lyrics,
-            });
-        }
-    }
-    for (source_id, path) in &remote {
-        if let Some(lyrics) = remote_embedded_lyrics(*source_id, path, &mut oversized) {
-            return LyricsLookup::Found(FoundLyrics {
-                provider: LyricProvider::Embedded,
-                lyrics,
-            });
-        }
-    }
     if oversized {
         LyricsLookup::Oversized
     } else {
@@ -80,106 +59,70 @@ pub fn find_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
     }
 }
 
-/// The lyrics embedded in the tags of a track (local or remote), without looking for a `.lrc` beside it: for tracks whose
-/// sidecars the library sync already recorded.
-pub fn find_embedded_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
-    let paths = locators
-        .iter()
-        .filter_map(|locator| match locator {
-            MediaLocator::FileSystem(path) => Some(path),
-            MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    let remote = remote_tracks(locators);
-    let mut oversized = false;
-    for path in &paths {
-        if let Some(lyrics) = embedded_lyrics(path, &mut oversized) {
-            return LyricsLookup::Found(FoundLyrics {
-                provider: LyricProvider::Embedded,
-                lyrics,
-            });
-        }
-    }
-    for (source_id, path) in &remote {
-        if let Some(lyrics) = remote_embedded_lyrics(*source_id, path, &mut oversized) {
-            return LyricsLookup::Found(FoundLyrics {
-                provider: LyricProvider::Embedded,
-                lyrics,
-            });
-        }
-    }
-    if oversized {
-        LyricsLookup::Oversized
-    } else {
-        LyricsLookup::Missing
-    }
-}
-
-/// Sidecar and embedded lyrics for the same track, when both exist. Playback lookup still uses
-/// [`find_lyrics`], which returns only the sidecar when one is present.
-pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {
-    let paths = locators
+fn filesystem_paths(locators: &[MediaLocator]) -> Vec<&std::path::PathBuf> {
+    locators
         .iter()
         .filter_map(|locator| match locator {
             MediaLocator::FileSystem(path) => Some(path),
             // Remote tracks are read separately, through the remote content provider.
             MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let mut found = Vec::new();
-    let mut oversized = false;
-    let mut saw_sidecar = false;
-    let mut saw_embedded = false;
-    for path in &paths {
-        if !saw_sidecar {
-            if let Some(lyrics) = sidecar_lyrics(path, &mut oversized) {
-                found.push(FoundLyrics {
-                    provider: LyricProvider::Sidecar,
-                    lyrics,
-                });
-                saw_sidecar = true;
-            }
-        }
-        if !saw_embedded {
-            if let Some(lyrics) = embedded_lyrics(path, &mut oversized) {
-                found.push(FoundLyrics {
-                    provider: LyricProvider::Embedded,
-                    lyrics,
-                });
-                saw_embedded = true;
-            }
-        }
-        if saw_sidecar && saw_embedded {
-            break;
+fn find_embedded_lyrics_flag(locators: &[MediaLocator], oversized: &mut bool) -> LyricsLookup {
+    for path in filesystem_paths(locators) {
+        if let Some(lyrics) = embedded_lyrics(path, oversized) {
+            return LyricsLookup::Found(FoundLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
         }
     }
-    for (source_id, path) in remote_tracks(locators) {
-        if saw_sidecar && saw_embedded {
-            break;
+    for (source_id, path) in &remote_tracks(locators) {
+        if let Some(lyrics) = remote_embedded_lyrics(*source_id, path, oversized) {
+            return LyricsLookup::Found(FoundLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
         }
-        if !saw_sidecar {
-            if let Some(lyrics) = remote_sidecar_lyrics(source_id, path, &mut oversized) {
-                found.push(FoundLyrics {
-                    provider: LyricProvider::Sidecar,
-                    lyrics,
-                });
-                saw_sidecar = true;
-            }
-        }
-        if !saw_embedded {
-            if let Some(lyrics) = remote_embedded_lyrics(source_id, path, &mut oversized) {
-                found.push(FoundLyrics {
-                    provider: LyricProvider::Embedded,
-                    lyrics,
-                });
-                saw_embedded = true;
-            }
-        }
+    }
+    LyricsLookup::Missing
+}
+/// The lyrics embedded in the tags of a track (local or remote), without looking for a `.lrc` beside it: for tracks whose
+/// sidecars the library sync already recorded.
+pub fn find_embedded_lyrics(locators: &[MediaLocator]) -> LyricsLookup {
+    let mut oversized = false;
+    match find_embedded_lyrics_flag(locators, &mut oversized) {
+        LyricsLookup::Found(found) => LyricsLookup::Found(found),
+        _ if oversized => LyricsLookup::Oversized,
+        _ => LyricsLookup::Missing,
+    }
+}
+/// Embedded and sidecar lyrics for the same track, when both exist, in the playback order
+/// (embedded first, as [`find_lyrics`] uses it).
+pub fn find_all_lyrics(locators: &[MediaLocator]) -> Vec<FoundLyrics> {
+    let mut found = Vec::new();
+    let mut oversized = false;
+    if let LyricsLookup::Found(embedded) = find_embedded_lyrics_flag(locators, &mut oversized) {
+        found.push(embedded);
+    }
+    let sidecar = filesystem_paths(locators)
+        .into_iter()
+        .find_map(|path| sidecar_lyrics(path, &mut oversized))
+        .or_else(|| {
+            remote_tracks(locators)
+                .into_iter()
+                .find_map(|(source_id, path)| remote_sidecar_lyrics(source_id, path, &mut oversized))
+        });
+    if let Some(lyrics) = sidecar {
+        found.push(FoundLyrics {
+            provider: LyricProvider::Sidecar,
+            lyrics,
+        });
     }
     found
 }
-
 /// The remote tracks among `locators`: the source and the path under its root.
 fn remote_tracks(locators: &[MediaLocator]) -> Vec<(player_core::SourceId, &str)> {
     locators
@@ -191,33 +134,36 @@ fn remote_tracks(locators: &[MediaLocator]) -> Vec<(player_core::SourceId, &str)
         .collect()
 }
 
-/// The `.lrc` beside a remote track.
+/// The sidecar beside a remote track: the first of `.lrc`, `.ass`, `.srt` that holds lyrics.
 fn remote_sidecar_lyrics(
     source_id: player_core::SourceId,
     path: &str,
     oversized: &mut bool,
 ) -> Option<ParsedLyrics> {
-    let sidecar = player_core::remote_with_extension(path, "lrc");
-    let bytes = player_core::read_remote_file_capped(
-        source_id,
-        &sidecar,
-        MAX_LYRIC_PAYLOAD_BYTES as u64,
-    );
-    let Some(bytes) = bytes else {
-        // A present but oversized sidecar is reported like a local one.
-        if let Some(handle) = player_core::remote_content().and_then(|c| c.open(source_id, &sidecar).ok()) {
-            if handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64 {
-                *oversized = true;
+    player_core::LYRIC_SIDECAR_EXTENSIONS.iter().find_map(|extension| {
+        let sidecar = player_core::remote_with_extension(path, extension);
+        let bytes =
+            player_core::read_remote_file_capped(source_id, &sidecar, MAX_LYRIC_PAYLOAD_BYTES as u64);
+        let Some(bytes) = bytes else {
+            // A present but oversized sidecar is reported like a local one.
+            if let Some(handle) =
+                player_core::remote_content().and_then(|c| c.open(source_id, &sidecar).ok())
+            {
+                if handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64 {
+                    *oversized = true;
+                }
             }
-        }
-        return None;
-    };
-    let text = std::str::from_utf8(&bytes).ok()?;
-    parse_lrc(text)
-        .ok()
-        .filter(|lyrics| !lyrics.lines.is_empty())
+            return None;
+        };
+        parse_lyric_text(&bytes)
+    })
 }
 
+/// A lyric text read by its content (ADR 0041); a UTF-8 BOM is dropped, broken subtitles are none.
+fn parse_lyric_text(bytes: &[u8]) -> Option<ParsedLyrics> {
+    let text = std::str::from_utf8(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)).ok()?;
+    parse_any_lyrics(text).ok().and_then(LyricsContent::usable)
+}
 /// The lyrics embedded in a remote track's tags.
 fn remote_embedded_lyrics(
     source_id: player_core::SourceId,
@@ -235,10 +181,20 @@ fn remote_embedded_lyrics(
 }
 
 fn sidecar_lyrics(audio_path: &Path, oversized: &mut bool) -> Option<ParsedLyrics> {
+    player_core::LYRIC_SIDECAR_EXTENSIONS
+        .iter()
+        .find_map(|extension| sidecar_lyrics_with(audio_path, extension, oversized))
+}
+
+fn sidecar_lyrics_with(
+    audio_path: &Path,
+    extension: &str,
+    oversized: &mut bool,
+) -> Option<ParsedLyrics> {
     let audio_parent = audio_path.parent()?;
     let native_parent = to_extended_path(audio_parent).ok()?;
     let canonical_parent = fs::canonicalize(&native_parent).ok()?;
-    let candidate = audio_path.with_extension("lrc");
+    let candidate = audio_path.with_extension(extension);
     let native_candidate = to_extended_path(&candidate).ok()?;
     let mut file = open_regular_file_without_following_reparse_points(&native_candidate)?;
 
@@ -264,10 +220,7 @@ fn sidecar_lyrics(audio_path: &Path, oversized: &mut bool) -> Option<ParsedLyric
         *oversized = true;
         return None;
     }
-    let text = std::str::from_utf8(&bytes).ok()?;
-    parse_lrc(text)
-        .ok()
-        .filter(|lyrics| !lyrics.lines.is_empty())
+    parse_lyric_text(&bytes)
 }
 
 fn embedded_lyrics(path: &Path, oversized: &mut bool) -> Option<ParsedLyrics> {
@@ -289,10 +242,7 @@ fn lyrics_in_tags(tags: &[lofty::tag::Tag], oversized: &mut bool) -> Option<Pars
                 *oversized = true;
                 continue;
             }
-            if let Some(lyrics) = parse_lrc(raw)
-                .ok()
-                .filter(|lyrics| !lyrics.lines.is_empty())
-            {
+            if let Some(lyrics) = parse_lyric_text(raw.as_bytes()) {
                 return Some(lyrics);
             }
         }
@@ -443,14 +393,53 @@ mod tests {
 
         let found = find_all_lyrics(&only_path(audio.clone()));
         assert_eq!(found.len(), 2);
-        assert_eq!(found[0].provider, LyricProvider::Sidecar);
-        assert_eq!(found[0].lyrics.lines[0].text, "同名歌詞");
-        assert_eq!(found[1].provider, LyricProvider::Embedded);
-        assert_eq!(found[1].lyrics.lines[0].text, "嵌入式歌詞");
+        assert_eq!(found[0].provider, LyricProvider::Embedded);
+        assert_eq!(found[0].lyrics.lines[0].text, "嵌入式歌詞");
+        assert_eq!(found[1].provider, LyricProvider::Sidecar);
+        assert_eq!(found[1].lyrics.lines[0].text, "同名歌詞");
 
         match find_lyrics(&only_path(audio)) {
+            LyricsLookup::Found(found) => assert_eq!(found.provider, LyricProvider::Embedded),
+            other => panic!("playback lookup puts embedded lyrics first, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sidecars_are_tried_lrc_then_ass_then_srt_and_broken_ones_are_skipped() {
+        let dir = TestDirectory::new();
+        let audio = dir.path().join("song.mp3");
+        fs::write(&audio, b"not audio").expect("placeholder");
+        fs::write(dir.path().join("song.srt"), "1\n00:00:01,000 --> 00:00:02,000\nfrom srt\n").unwrap();
+        let lookup = |audio: &Path| match find_lyrics(&only_path(audio.to_path_buf())) {
+            LyricsLookup::Found(found) => {
+                assert_eq!(found.provider, LyricProvider::Sidecar);
+                found.lyrics.lines[0].text.clone()
+            }
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(lookup(&audio), "from srt");
+        fs::write(
+            dir.path().join("song.ass"),
+            "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,D,from ass\n",
+        )
+        .unwrap();
+        assert_eq!(lookup(&audio), "from ass");
+        // A sidecar that looks like a subtitle but does not parse is passed over.
+        fs::write(dir.path().join("song.lrc"), "1\n00:00:xx --> broken\n").unwrap();
+        assert_eq!(lookup(&audio), "from ass");
+        fs::write(dir.path().join("song.lrc"), "[00:01.00]from lrc").unwrap();
+        assert_eq!(lookup(&audio), "from lrc");
+    }
+
+    #[test]
+    fn embedded_subtitle_text_that_does_not_parse_falls_through_to_the_sidecar() {
+        let dir = TestDirectory::new();
+        let audio = dir.path().join("broken.mp3");
+        write_id3v2_unsynced_lyrics(&audio, "[Events]\nDialogue: garbage");
+        fs::write(dir.path().join("broken.lrc"), "[00:01.00]sidecar").unwrap();
+        match find_lyrics(&only_path(audio)) {
             LyricsLookup::Found(found) => assert_eq!(found.provider, LyricProvider::Sidecar),
-            other => panic!("playback lookup should keep sidecar precedence, got {other:?}"),
+            other => panic!("{other:?}"),
         }
     }
 
@@ -498,7 +487,7 @@ mod tests {
 
     /// A WavPack file whose APEv2 `Lyrics` item was written by the official `wvtag` (ADR 0025).
     #[test]
-    fn embedded_apev2_lyrics_of_a_wavpack_file_are_found_and_the_sidecar_still_wins() {
+    fn embedded_apev2_lyrics_of_a_wavpack_file_are_found_and_win_over_the_sidecar() {
         let dir = TestDirectory::new();
         let audio = dir.path().join("曲目.wv");
         fs::copy(wavpack_fixture("s16_lyrics.wv"), &audio).expect("copy the WavPack fixture");
@@ -519,11 +508,11 @@ mod tests {
         fs::write(dir.path().join("曲目.lrc"), "[00:01.00]同名歌詞").expect("write LRC sidecar");
         let found = find_all_lyrics(&only_path(audio.clone()));
         assert_eq!(found.len(), 2);
-        assert_eq!(found[0].provider, LyricProvider::Sidecar);
-        assert_eq!(found[1].provider, LyricProvider::Embedded);
+        assert_eq!(found[0].provider, LyricProvider::Embedded);
+        assert_eq!(found[1].provider, LyricProvider::Sidecar);
         match find_lyrics(&only_path(audio)) {
-            LyricsLookup::Found(found) => assert_eq!(found.provider, LyricProvider::Sidecar),
-            other => panic!("playback lookup should keep the sidecar first, got {other:?}"),
+            LyricsLookup::Found(found) => assert_eq!(found.provider, LyricProvider::Embedded),
+            other => panic!("playback lookup puts embedded lyrics first, got {other:?}"),
         }
     }
 

@@ -222,16 +222,19 @@ pub fn scan_directory(
                 }
                 continue;
             }
-            if file_type.is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("lrc"))
-            {
+            let sidecar_rank = player_core::lyric_sidecar_rank(&name.to_string_lossy());
+            if file_type.is_file() && sidecar_rank.is_some() {
                 if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) {
-                    lyric_files.insert(
-                        (parent.to_path_buf(), stem.to_string_lossy().to_lowercase()),
-                        path.clone(),
-                    );
+                    // One sidecar per song: `.lrc` over `.ass` over `.srt` (ADR 0041).
+                    let key = (parent.to_path_buf(), stem.to_string_lossy().to_lowercase());
+                    let better = lyric_files.get(&key).is_none_or(|kept: &PathBuf| {
+                        kept.file_name()
+                            .and_then(|kept| player_core::lyric_sidecar_rank(&kept.to_string_lossy()))
+                            > sidecar_rank
+                    });
+                    if better {
+                        lyric_files.insert(key, path.clone());
+                    }
                 }
                 continue;
             }

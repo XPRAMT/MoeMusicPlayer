@@ -14,7 +14,8 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const NETEASE_SEARCH_URL: &str = "https://music.163.com/api/search/get/web";
-const NETEASE_LYRIC_URL: &str = "https://music.163.com/api/song/lyric";
+/// The v1 endpoint also returns `ytlrc`/`yromalrc`: translation and romanization aligned to the yrc lines.
+const NETEASE_LYRIC_URL: &str = "https://music.163.com/api/song/lyric/v1";
 const QQ_API_URL: &str = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const QQ_LYRIC_URL: &str = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg";
 const NETEASE_CLOUD_SEARCH_URL: &str = "https://music.163.com/api/cloudsearch/pc";
@@ -67,6 +68,9 @@ pub struct RawLyricCandidate {
     pub romanization: Option<String>,
     /// NetEase's original word-timed payload, retained even when line-synced LRC is preferred.
     pub raw_yrc: Option<String>,
+    /// NetEase `ytlrc` / `yromalrc`: LRC whose times equal the yrc line starts.
+    pub yrc_translation: Option<String>,
+    pub yrc_romanization: Option<String>,
     pub raw_karaoke: Option<RawKaraokeData>,
 }
 
@@ -263,7 +267,7 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
             LyricProvider::NetEase => HttpRequest {
                 method: HttpMethod::Get,
                 url: format!(
-                    "{NETEASE_LYRIC_URL}?id={}&lv=-1&kv=-1&tv=-1&yv=-1&rv=-1",
+                    "{NETEASE_LYRIC_URL}?id={}&lv=-1&kv=-1&tv=-1&rv=-1&yv=-1&ytv=-1&yrv=-1",
                     form_component(&candidate.provider_track_id)
                 ),
                 body: None,
@@ -588,7 +592,7 @@ fn parse_netease_lyrics(
     let plain_lyrics = nested_lyric(root, "plainlyric").or(lrc_plain);
     let translation = nested_lyric(root, "tlyric");
     let romanization = nested_lyric(root, "romalrc");
-    Ok(raw_candidate(
+    let mut raw = raw_candidate(
         candidate,
         synced_lyrics,
         plain_lyrics,
@@ -596,7 +600,10 @@ fn parse_netease_lyrics(
         romanization,
         raw_yrc,
         None,
-    ))
+    );
+    raw.yrc_translation = nested_lyric(root, "ytlrc");
+    raw.yrc_romanization = nested_lyric(root, "yromalrc");
+    Ok(raw)
 }
 
 fn parse_qq_lyrics(
@@ -674,6 +681,8 @@ fn raw_candidate(
         translation,
         romanization,
         raw_yrc,
+        yrc_translation: None,
+        yrc_romanization: None,
         raw_karaoke,
     }
 }
@@ -963,7 +972,7 @@ mod tests {
         let requests = transport.requests.lock().unwrap();
         assert!(requests
             .iter()
-            .all(|request| request.url.contains("lv=-1&kv=-1&tv=-1&yv=-1&rv=-1")));
+            .all(|request| request.url.contains("/api/song/lyric/v1?") && request.url.contains("lv=-1&kv=-1&tv=-1&rv=-1&yv=-1&ytv=-1&yrv=-1")));
         assert!(requests.iter().all(|request| request
             .headers
             .iter()

@@ -422,17 +422,24 @@ impl MediaIndex for WindowsMediaIndex {
                     directories.push(entry_path);
                     continue;
                 }
+                let sidecar_rank = entry_path
+                    .file_name()
+                    .and_then(|name| player_core::lyric_sidecar_rank(&name.to_string_lossy()));
                 if entry_type.is_file()
-                    && entry_path
-                        .extension()
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("lrc"))
+                    && sidecar_rank.is_some()
                     && !self.is_excluded(&entry_path)
                 {
                     if let (Some(parent), Some(stem)) = (entry_path.parent(), entry_path.file_stem()) {
-                        lyric_files.insert(
-                            (parent.to_path_buf(), stem.to_string_lossy().to_lowercase()),
-                            entry_path.clone(),
-                        );
+                        // One sidecar per song: `.lrc` over `.ass` over `.srt` (ADR 0041).
+                        let key = (parent.to_path_buf(), stem.to_string_lossy().to_lowercase());
+                        let better = lyric_files.get(&key).is_none_or(|kept: &std::path::PathBuf| {
+                            kept.file_name()
+                                .and_then(|name| player_core::lyric_sidecar_rank(&name.to_string_lossy()))
+                                > sidecar_rank
+                        });
+                        if better {
+                            lyric_files.insert(key, entry_path.clone());
+                        }
                     }
                     continue;
                 }

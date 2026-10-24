@@ -9943,6 +9943,7 @@ mod tests {
                     text: text.to_owned(),
                     translation: (index == 18).then(|| "legacy translation".to_owned()),
                     romanization: (index == 20).then(|| "legacy romanization".to_owned()),
+                    ..Default::default()
                 })
                 .collect(),
             raw_text: raw_text.clone(),
