@@ -151,3 +151,7 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
 - **單一備份（本機與遠端一致）**：每次改寫播放清單檔（遠端清單、本機收藏含 `MyLove.m3u8`）只保留一份改寫前版本「原檔名＋`.bak`」：新內容先寫 `.moetmp-<檔名>` 並核對 → 刪舊 `.bak` → 原檔改名 `.bak` → 暫存改名為原檔名，失敗就還原；讀取後被改動的檔案拒絕寫入且不產生備份。遠端 `RemoteFs::replace_file_keeping_backup`（`rename_file`：SMB `FileRenameInformation`、WebDAV `MOVE` 加 `Overwrite: F`、`DirFs` `std::fs::rename`），本機 `favorites.rs` 的 `write_keeping_backup`。`.bak` 不被當成播放清單（`is_playlist_name`）。`playlist_export` 不產生備份。SMB／WebDAV 上的備份順序未在真實伺服器驗證。
 
 - **連不上的伺服器不得拖累其他工作**：`RemoteConnections` 每個帳號一把鎖，只在找帳號時鎖整張表，連線（最多 `CONNECT_TIMEOUT`）期間不擋其他帳號與本機工作；連線因網路失敗就記下時間，`UNREACHABLE_BACKOFF` 內該帳號的所有使用（封面、歌詞、播放、掃描）立即回 `Network` 錯誤，不各自再等一次逾時（原本全域鎖下每個呼叫依序各等約 10 秒）；編輯或刪除帳號（`forget`）清除記錄。會連伺服器的判斷（例如 `remote_cover_lookup_may_have_failed`）只在 `spawn_blocking` 執行，不在 Tauri 非同步執行緒，也不在持有資料庫連線時執行。既有規則不變：伺服器連不上時不把遠端封面記成「沒有封面」。
+
+  補充：帳號的連線包在 `GuardedFs`，連線失敗或任何操作（含已快取連線上）以 `Network` 結束，就啟動該帳號的 `UNREACHABLE_BACKOFF`（`LinkHealth`），期間所有使用立即失敗；到期後換新連線，第一次成功清除記錄。封面與歌詞查找在第一個網路錯誤後停止（`is_remote_network_error`）。
+
+- **新選的曲目取代仍在等伺服器的載入**：Android 播放 actor 在等載入確認時（`transact`）看到新的選曲／上下一首請求就放棄等待（`SUPERSEDED_MESSAGE`），`PlaybackService` 在載入尚未就緒時仍輪詢下一個指令；`moeremote` 開檔失敗回 -2 讓 Kotlin 不重試並顯示「伺服器無法連線」。Windows 音訊 worker 為載入編號（`LoadCounter`），已被取代的載入不啟動，執行中的載入其 `PrefetchReader` 在 `with_cancel` 通知後結束讀取（只限該載入進行中，播放中的串流不受影響）。
