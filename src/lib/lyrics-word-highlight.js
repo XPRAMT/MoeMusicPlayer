@@ -1,16 +1,20 @@
 /**
- * Word highlight on the Now Playing current line (ADR 0041). Only the word being sung is drawn in
- * the theme accent (`--accent`); before it starts and after it ends it is the line's own colour.
+ * Word highlight on the Now Playing current line (ADR 0041). The word being sung fills with the
+ * theme accent (`--accent`) from left to right with a soft edge; before it starts and after it
+ * ends it is the line's own colour (reduced motion: the whole word is accent while sung).
  * Each word span gets one CSS animation whose delay is the time until the word starts (negative
- * once it has started) and whose duration is the word's length; the keyframes hold the accent,
- * and without a fill mode the span falls back to its normal colour outside that window. No style
+ * once it has started) and whose duration is the word's length; without a fill mode the span
+ * falls back to its normal colour outside that window. No style
  * is written per frame: the timings are set again only when the line, a seek, play/pause or the
  * offset changes. Word fills are not led: the 200 ms cue lead (ADR 0029) applies to line changes
  * only, so a word lights exactly when it is sung.
  */
 
 /** The `@keyframes` name used by LyricsView.svelte. */
-export const LYRIC_WORD_ANIMATION = 'lyric-word-sing';
+export const LYRIC_WORD_ANIMATION = 'lyric-word-wipe';
+
+/** The `@keyframes` used instead under `prefers-reduced-motion`. */
+export const LYRIC_WORD_REDUCED_ANIMATION = 'lyric-word-sing';
 
 /**
  * Animation timings for the words of the current line.

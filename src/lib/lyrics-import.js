@@ -39,7 +39,7 @@ export function formatLrcTimestamp(ms) {
  * `<mm:ss.xx>word` per word and a closing `<mm:ss.xx>` at the last word's end (also after a word followed by
  * a pause), with the same shift. Word texts are written as given, so the line text is their concatenation.
  * Line-only lyrics are written exactly as before.
- * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null, romanization?: string | null, words?: { s: number, e: number, t: string }[] }[] }} lyrics
+ * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null, romanization?: string | null, words?: { s: number, e: number, t: string }[], romanizationWords?: { s: number, e: number, t: string }[] }[] }} lyrics
  * @param {number} [shiftMs]
  */
 export function lyricsToText(lyrics, shiftMs = 0) {
@@ -50,7 +50,9 @@ export function lyricsToText(lyrics, shiftMs = 0) {
     const words = lyrics.synced && stamp && Array.isArray(line.words) ? line.words.filter((word) => word.t) : [];
     out.push(`${stamp}${words.length > 0 ? enhancedWords(words, shift) : line.text}`);
     if (line.translation) out.push(`${stamp}${line.translation}`);
-    if (line.romanization) out.push(`${stamp}${line.romanization}`);
+    // Translations never get word stamps (they do not line up word for word); romanization does when it has word timing.
+    const romanizationWords = lyrics.synced && stamp && Array.isArray(line.romanizationWords) ? line.romanizationWords.filter((word) => word.t) : [];
+    if (line.romanization) out.push(`${stamp}${romanizationWords.length > 0 ? enhancedWords(romanizationWords, shift) : line.romanization}`);
   }
   return out.join('\n');
 }

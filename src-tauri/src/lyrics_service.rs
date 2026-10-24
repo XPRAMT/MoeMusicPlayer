@@ -80,6 +80,9 @@ pub struct LyricLineDto {
     /// The Traditional text of each word, cut at the same places, only when it differs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub words_traditional: Option<Vec<String>>,
+    /// Word timing of the romanization row; empty when it is line-level (translations never have words).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub romanization_words: Vec<LyricWordDto>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2077,17 +2080,21 @@ fn line_dto(line: &LyricLine) -> LyricLineDto {
         },
         translation_traditional: line.translation.as_deref().and_then(traditional_if_changed),
         end_ms: line.end_ms,
-        words: line
-            .words
-            .iter()
-            .map(|word| LyricWordDto {
-                s: word.start_ms,
-                e: word.end_ms,
-                t: word.text.clone(),
-            })
-            .collect(),
+        words: word_dtos(&line.words),
         words_traditional,
+        romanization_words: word_dtos(&line.romanization_words),
     }
+}
+
+fn word_dtos(words: &[player_core::LyricWord]) -> Vec<LyricWordDto> {
+    words
+        .iter()
+        .map(|word| LyricWordDto {
+            s: word.start_ms,
+            e: word.end_ms,
+            t: word.text.clone(),
+        })
+        .collect()
 }
 
 fn traditional_if_changed(text: &str) -> Option<String> {

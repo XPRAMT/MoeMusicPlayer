@@ -4179,6 +4179,13 @@ input:focus-visible {
   initial-value: 0;
 }
 
+/* The Now Playing word wipe (ADR 0041): the gradient position inside the word being sung, animated by CSS. */
+@property --lyric-word-fill {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: -12%;
+}
+
 @keyframes playback-progress-run-a { to { --progress-ratio: 1; } }
 @keyframes playback-progress-run-b { to { --progress-ratio: 1; } }
 

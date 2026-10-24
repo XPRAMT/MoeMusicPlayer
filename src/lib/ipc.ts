@@ -679,6 +679,8 @@ export interface LyricLine {
   words?: LyricWord[];
   /** Each word's Traditional text, cut at the same places, only when it differs. */
   wordsTraditional?: string[];
+  /** Word timing of the romanization row; absent when it is line-level. Translations never have words. */
+  romanizationWords?: LyricWord[];
 }
 
 export interface LyricWord {

@@ -318,8 +318,11 @@
   let wordsPlaying = $derived(effectivePlaybackState === 'playing' && (playbackClock ? playbackClock.playing : isPlaying));
   let currentLineWords = $derived.by(() => {
     const index = visibleActiveTimedIndex;
-    const words = index >= 0 ? timedLines[index]?.line.words : undefined;
-    if (!words || words.length === 0) return null;
+    const line = index >= 0 ? timedLines[index]?.line : undefined;
+    const words = line?.words ?? [];
+    // Romanization rows get word effects only with their own word timing; translation rows never do.
+    const romanizationWords = line?.romanizationWords ?? [];
+    if (words.length === 0 && romanizationWords.length === 0) return null;
     const jump = playbackClock?.jumpId ?? 0;
     const playing = wordsPlaying;
     const offset = timedOffsetMs;
@@ -329,7 +332,8 @@
     return {
       index,
       key: `${index}:${jump}:${playing}:${offset}:${timedLayout.generation}`,
-      words: wordHighlightTimings(words, null, position, offset),
+      words: words.length > 0 ? wordHighlightTimings(words, null, position, offset) : null,
+      romanizationWords: romanizationWords.length > 0 ? wordHighlightTimings(romanizationWords, null, position, offset) : null,
     };
   });
   let timedTotalHeight = $derived.by(() => { layoutRevision; return timedLayout.totalHeight; });
@@ -877,14 +881,20 @@
             aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
             {#if row.line.text?.trim()}
-              {#if currentLineWords && currentLineWords.index === timelineIndex}
+              {#if currentLineWords?.words && currentLineWords.index === timelineIndex}
                 {#key currentLineWords.key}
                   <p class="lyric-primary has-words" class:words-paused={!wordsPlaying} data-word-count={currentLineWords.words.length}>{#each currentLineWords.words as word, wordIndex (wordIndex)}<span class="lyric-word" style={`animation-delay:${word.delayMs}ms;animation-duration:${word.durationMs}ms`}>{word.text}</span>{/each}</p>
                 {/key}
               {:else}<p class="lyric-primary">{row.line.text}</p>{/if}
             {/if}
+            {#if preferences.showRomanization && row.line.romanization?.trim()}
+              {#if currentLineWords?.romanizationWords && currentLineWords.index === timelineIndex}
+                {#key currentLineWords.key}
+                  <p class="lyric-romanization has-words" class:words-paused={!wordsPlaying}>{#each currentLineWords.romanizationWords as word, wordIndex (wordIndex)}<span class="lyric-word" style={`animation-delay:${word.delayMs}ms;animation-duration:${word.durationMs}ms`}>{word.text}</span>{/each}</p>
+                {/key}
+              {:else}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
+            {/if}
             {#if preferences.showTranslation && row.line.translation?.trim()}<p class="lyric-translation">{row.line.translation}</p>{/if}
-            {#if preferences.showRomanization && row.line.romanization?.trim()}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
           </div>
         {/each}
         <div class="lyrics-spacer" data-virtual-spacer="after" style={`height:${timedWindow.afterHeight}px`} aria-hidden="true"></div>
@@ -908,8 +918,8 @@
           {@const line = lines[rowIndex]}
           <div class="lyric-line plain-lyric-line" class:empty={plainLayout.heights[rowIndex] === 0} data-lyric-index={rowIndex} use:observeLyricRow={rowIndex} style={`--lyric-gap-after:${plainLayout.gaps[rowIndex]}px`}>
             {#if line.text?.trim()}<p class="lyric-primary">{line.text}</p>{/if}
-            {#if preferences.showTranslation && line.translation?.trim()}<p class="lyric-translation">{line.translation}</p>{/if}
             {#if preferences.showRomanization && line.romanization?.trim()}<p class="lyric-romanization">{line.romanization}</p>{/if}
+            {#if preferences.showTranslation && line.translation?.trim()}<p class="lyric-translation">{line.translation}</p>{/if}
           </div>
         {/each}
         <div class="lyrics-spacer" style={`height:${plainWindow.afterHeight}px`} aria-hidden="true"></div>
@@ -1160,12 +1170,27 @@
     transition: opacity var(--lyric-cue-ms) ease;
   }
 
-  /* Word highlight (ADR 0041): the line stays in its own colour (white when current); the word being sung is the
-     theme accent. The animation only holds the accent between its delay and its end and has no fill, so a word is
-     accent exactly while it is sung and back to the line colour before and after. Colour only: no filter, no
-     per-frame style writes. */
+  /* Word highlight (ADR 0041): the word being sung fills with the theme accent from left to right with a soft
+     edge, in time with the word; before it starts and after it ends it is the line's own colour. One CSS animation
+     per word (delay = time until the word starts, duration = its length, no fill mode), so no style is written per
+     frame and the word drops back to the line colour when it ends. The fill is the span's background clipped to its
+     glyphs (`background-clip: text`) with the text fill transparent while the animation runs; the gradient position
+     is the registered `--lyric-word-fill` (app.css), animated from before the word's left edge to past its right
+     edge. Outside the animation the opaque text fill covers the background. No filter on the span: the shadow mode's
+     drop-shadow stays on the line, and the outline (`-webkit-text-stroke`) is drawn over the fill as before.
+     `box-decoration-break: clone` gives each fragment of a word that wraps its own wipe. */
   .lyric-word {
-    animation-name: lyric-word-sing;
+    background-image: linear-gradient(
+      90deg,
+      var(--accent) calc(var(--lyric-word-fill) - var(--lyric-word-edge)),
+      var(--text) calc(var(--lyric-word-fill) + var(--lyric-word-edge))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    --lyric-word-edge: 12%;
+    animation-name: lyric-word-wipe;
     animation-timing-function: linear;
     animation-iteration-count: 1;
     animation-fill-mode: none;
@@ -1173,6 +1198,24 @@
 
   .words-paused .lyric-word {
     animation-play-state: paused;
+  }
+
+  @keyframes lyric-word-wipe {
+    from {
+      --lyric-word-fill: -12%;
+      color: transparent;
+    }
+    to {
+      --lyric-word-fill: 112%;
+      color: transparent;
+    }
+  }
+
+  /* Reduced motion: no wipe, the whole word turns accent while it is sung. */
+  @media (prefers-reduced-motion: reduce) {
+    .lyric-word {
+      animation-name: lyric-word-sing;
+    }
   }
 
   @keyframes lyric-word-sing {

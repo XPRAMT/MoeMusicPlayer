@@ -45,12 +45,35 @@ test('the Traditional choice swaps the word texts and keeps their timing', () =>
   assert.equal(lyricsForDisplay(lyrics, false).lines[0].words[0].t, '头');
 });
 
-test('the lit word uses the theme accent with no fill and no filter', () => {
+test('the word being sung wipes in the accent with no fill, no filter and an instant change under reduced motion', () => {
   const source = readFileSync(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
-  const keyframes = source.match(/@keyframes lyric-word-sing\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
-  assert.match(keyframes, /color:\s*var\(--accent\)/);
+  const wipe = source.match(/@keyframes lyric-word-wipe\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+  assert.match(wipe, /--lyric-word-fill:\s*-12%/);
+  assert.match(wipe, /--lyric-word-fill:\s*112%/);
+  assert.match(wipe, /color:\s*transparent/);
   const rule = source.match(/\.lyric-word\s*\{[^}]*\}/)?.[0] ?? '';
-  assert.match(rule, /animation-name:\s*lyric-word-sing/);
+  assert.match(rule, /background-clip:\s*text/);
+  assert.match(rule, /var\(--accent\)/);
+  assert.match(rule, /animation-name:\s*lyric-word-wipe/);
   assert.match(rule, /animation-fill-mode:\s*none/);
   assert.doesNotMatch(rule, /filter|will-change/);
+  const reduced = source.match(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.lyric-word\s*\{[^}]*\}/)?.[0] ?? '';
+  assert.match(reduced, /animation-name:\s*lyric-word-sing/);
+  const sing = source.match(/@keyframes lyric-word-sing\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+  assert.match(sing, /color:\s*var\(--accent\)/);
+  const css = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
+  assert.match(css, /@property --lyric-word-fill\s*\{[^}]*syntax:\s*'<percentage>'/);
+});
+
+test('romanization rows get word spans only with romanizationWords; translations never; romanization shows before translation', () => {
+  const view = readFileSync(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
+  assert.match(view, /line\?\.romanizationWords \?\? \[\]/);
+  assert.match(view, /<p class="lyric-romanization has-words"/);
+  assert.doesNotMatch(view, /<p class="lyric-translation has-words"/);
+  const markup = view.slice(view.indexOf('</script>'));
+  for (const block of markup.split('<div class="lyric-line').slice(1)) {
+    const roma = block.indexOf('lyric-romanization');
+    const trans = block.indexOf('lyric-translation');
+    if (roma >= 0 && trans >= 0) assert.ok(roma < trans, 'romanization comes before translation');
+  }
 });

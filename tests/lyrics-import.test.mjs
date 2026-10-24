@@ -88,3 +88,13 @@ test('word-timed lines are written as enhanced LRC; line-only lyrics stay as bef
   assert.match(lyricsToText(lyrics, 100), /^\[00:01\.10\]<00:01\.10>Hello <00:01\.60>world<00:02\.35>/);
   assert.equal(lyricsToText({ synced: true, lines: [{ startMs: 5000, text: 'plain line' }] }), '[00:05.00]plain line');
 });
+
+test('translation rows stay line-level; romanization gets word stamps only with word timing', () => {
+  const words = [{ s: 1000, e: 1500, t: 'ni ' }, { s: 1500, e: 2000, t: 'hao' }];
+  const base = { startMs: 1000, text: 'ab', words: [{ s: 1000, e: 1500, t: 'a' }, { s: 1500, e: 2000, t: 'b' }], translation: 'AB', romanization: 'ni hao' };
+  assert.equal(
+    lyricsToText({ synced: true, lines: [{ ...base, romanizationWords: words }] }),
+    '[00:01.00]<00:01.00>a<00:01.50>b<00:02.00>\n[00:01.00]AB\n[00:01.00]<00:01.00>ni <00:01.50>hao<00:02.00>',
+  );
+  assert.equal(lyricsToText({ synced: true, lines: [base] }).split('\n')[2], '[00:01.00]ni hao');
+});
