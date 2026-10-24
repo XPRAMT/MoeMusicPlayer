@@ -21,6 +21,12 @@ const QQ_LYRIC_URL: &str = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_ne
 const NETEASE_CLOUD_SEARCH_URL: &str = "https://music.163.com/api/cloudsearch/pc";
 const NETEASE_SEARCH_LIMIT: usize = 10;
 const QQ_SEARCH_LIMIT: usize = 10;
+/// AMLL TTML DB (CC0): word-timed QRC plain text of QQ songs, by songmid (ADR 0041 D6).
+const AMLL_QQ_QRC_URL: &str =
+    "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/qq-lyrics";
+/// Largest AMLL file read; bigger files are treated as absent.
+pub const AMLL_MAX_BYTES: usize = 2 * 1024 * 1024;
+const AMLL_USER_AGENT: &str = "MoeMusicPlayer";
 const QQ_REFERER: &str = "https://y.qq.com/portal/player.html";
 const QQ_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
@@ -184,7 +190,7 @@ impl HttpTransport for ReqwestHttpTransport {
                     result = response.chunk() => result.map_err(|error| ProviderError::Transport(error.to_string()))?,
                 };
                 let Some(chunk) = chunk else { break };
-                if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                if body.len().saturating_add(chunk.len()) > AMLL_MAX_BYTES {
                     return Err(ProviderError::ResponseTooLarge);
                 }
                 body.extend_from_slice(&chunk);
@@ -387,13 +393,57 @@ impl<T: HttpTransport> LyricsProviderClient<T> {
         request: HttpRequest,
         cancellation: &CancellationToken,
     ) -> Result<HttpResponse, ProviderError> {
+        self.request_limited(request, cancellation, MAX_RESPONSE_BYTES)
+            .await
+    }
+
+    /// The word-timed QRC the AMLL TTML DB holds for a QQ song, or `None` when it has none (HTTP
+    /// 404). Any other failure is an error the caller may ignore; nothing here is decrypted.
+    pub async fn fetch_amll_qq_qrc(
+        &self,
+        candidate: &ProviderCandidate,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<String>, ProviderError> {
+        let mid = candidate.provider_track_id.as_str();
+        let valid_mid = !mid.is_empty()
+            && mid.len() <= 64
+            && mid
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+        if candidate.provider != LyricProvider::Qq || !valid_mid {
+            return Ok(None);
+        }
+        let request = HttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{AMLL_QQ_QRC_URL}/{}.qrc", form_component(mid)),
+            body: None,
+            headers: vec![("User-Agent".to_owned(), AMLL_USER_AGENT.to_owned())],
+        };
+        match self
+            .request_limited(request, cancellation, AMLL_MAX_BYTES)
+            .await
+        {
+            Ok(response) => Ok(String::from_utf8(response.body)
+                .ok()
+                .filter(|text| !text.trim().is_empty())),
+            Err(ProviderError::HttpStatus(404)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn request_limited(
+        &self,
+        request: HttpRequest,
+        cancellation: &CancellationToken,
+        max_bytes: usize,
+    ) -> Result<HttpResponse, ProviderError> {
         tokio::select! {
             _ = cancellation.cancelled() => Err(ProviderError::Cancelled),
             result = tokio::time::timeout(REQUEST_TIMEOUT, self.transport.send(request, cancellation)) => {
                 match result {
                     Err(_) => Err(ProviderError::Timeout),
                     Ok(Err(error)) => Err(error),
-                    Ok(Ok(response)) if response.body.len() > MAX_RESPONSE_BYTES => Err(ProviderError::ResponseTooLarge),
+                    Ok(Ok(response)) if response.body.len() > max_bytes => Err(ProviderError::ResponseTooLarge),
                     Ok(Ok(response)) if !(200..300).contains(&response.status) => Err(ProviderError::HttpStatus(response.status)),
                     Ok(Ok(response)) => Ok(response),
                 }
@@ -1185,6 +1235,95 @@ mod tests {
         assert_eq!(
             client
                 .search(LyricProvider::Qq, &metadata(), &CancellationToken::new())
+                .await,
+            Err(ProviderError::Timeout)
+        );
+    }
+
+    const AMLL_SAMPLE: &str = include_str!("../../tests/fixtures/amll-qq-sample.qrc");
+
+    #[tokio::test]
+    async fn amll_qrc_is_fetched_by_encoded_mid_and_404_means_none() {
+        let transport = MockTransport::with_responses([
+            response(AMLL_SAMPLE),
+            HttpResponse {
+                status: 404,
+                body: b"404: Not Found".to_vec(),
+            },
+        ]);
+        let client = LyricsProviderClient::new(transport.clone());
+        let token = CancellationToken::new();
+        let mut hit = candidate(LyricProvider::Qq);
+        hit.provider_track_id = "0000Dso20pNy35".into();
+        assert_eq!(
+            client.fetch_amll_qq_qrc(&hit, &token).await,
+            Ok(Some(AMLL_SAMPLE.to_owned()))
+        );
+        assert_eq!(client.fetch_amll_qq_qrc(&hit, &token).await, Ok(None));
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests[0].method, HttpMethod::Get);
+        assert_eq!(
+            requests[0].url,
+            "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/qq-lyrics/0000Dso20pNy35.qrc"
+        );
+    }
+
+    #[tokio::test]
+    async fn amll_lookup_skips_unsafe_mids_other_providers_and_fails_soft() {
+        let transport = MockTransport::with_responses([]);
+        let client = LyricsProviderClient::new(transport.clone());
+        let token = CancellationToken::new();
+        let mut hit = candidate(LyricProvider::Qq);
+        for mid in ["", "../x", "a/b", "a b", &"m".repeat(65)] {
+            hit.provider_track_id = mid.into();
+            assert_eq!(client.fetch_amll_qq_qrc(&hit, &token).await, Ok(None));
+        }
+        assert_eq!(
+            client
+                .fetch_amll_qq_qrc(&candidate(LyricProvider::NetEase), &token)
+                .await,
+            Ok(None)
+        );
+        assert!(transport.requests.lock().unwrap().is_empty());
+
+        // Over the 2 MiB cap, server errors and transport failures are errors the caller drops.
+        let oversized = HttpResponse {
+            status: 200,
+            body: vec![b'x'; AMLL_MAX_BYTES + 1],
+        };
+        let transport = MockTransport::with_results([
+            Ok(oversized),
+            Ok(HttpResponse {
+                status: 500,
+                body: vec![],
+            }),
+            Err(ProviderError::Transport("offline".into())),
+            Ok(response("  ")),
+        ]);
+        let client = LyricsProviderClient::new(transport);
+        let hit = candidate(LyricProvider::Qq);
+        assert_eq!(
+            client.fetch_amll_qq_qrc(&hit, &token).await,
+            Err(ProviderError::ResponseTooLarge)
+        );
+        assert_eq!(
+            client.fetch_amll_qq_qrc(&hit, &token).await,
+            Err(ProviderError::HttpStatus(500))
+        );
+        assert!(client.fetch_amll_qq_qrc(&hit, &token).await.is_err());
+        assert_eq!(client.fetch_amll_qq_qrc(&hit, &token).await, Ok(None));
+        // A QRC bigger than the regular 512 KiB response cap still fits under the AMLL cap.
+        let big = "x".repeat(MAX_RESPONSE_BYTES + 10);
+        let client = LyricsProviderClient::new(MockTransport::with_responses([response(&big)]));
+        assert_eq!(client.fetch_amll_qq_qrc(&hit, &token).await, Ok(Some(big)));
+    }
+
+    #[tokio::test]
+    async fn amll_lookup_wait_is_bounded_by_the_request_timeout() {
+        let client = LyricsProviderClient::new(PendingTransport);
+        assert_eq!(
+            client
+                .fetch_amll_qq_qrc(&candidate(LyricProvider::Qq), &CancellationToken::new())
                 .await,
             Err(ProviderError::Timeout)
         );

@@ -12,7 +12,7 @@ use std::{
 use player_core::{
     auto_lyric_candidate, merge_lrc_auxiliary, merge_lrc_auxiliary_nearest, merge_same_timestamp_lines, parse_any_lyrics, parse_lrc, parse_yrc,
     restore_words_from_raw_karaoke, traditional_word_texts, yrc_matches_lrc, LyricsContent,
-    preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
+    parse_qrc, preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
     LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics, TrackSummary,
 };
 use player_db::Database;
@@ -30,6 +30,9 @@ use crate::lyrics_provider::{
 
 const LYRIC_BATCH_SIZE: usize = 10;
 const MAX_CONCURRENT_LYRIC_FETCHES: usize = 3;
+/// QQ hits per fetched batch that are also looked up in the AMLL TTML DB (ADR 0041 D6).
+const AMLL_LOOKUPS_PER_BATCH: usize = 3;
+const AMLL_AUXILIARY_TOLERANCE_MS: u64 = 300;
 const HIGH_CONFIDENCE_SCORE: f32 = 0.90;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_PROVIDER_SEARCH_DURATION: Duration = Duration::from_secs(20);
@@ -710,6 +713,60 @@ async fn load_search_page<T: crate::lyrics_provider::HttpTransport + 'static>(
     Ok((hits, might_have_more))
 }
 
+enum FetchOutcome {
+    Lyrics(LyricCandidate),
+    /// The AMLL QRC text found for a QQ hit, if any.
+    Amll(ProviderCandidate, Option<String>),
+}
+
+/// A QQ candidate backed by the AMLL TTML DB: the word-timed lines from the QRC plus the
+/// translation and romanization of the same song's regular QQ candidate (matched by line start
+/// within 300 ms). `None` when the file has no word-timed lines.
+fn amll_candidate(
+    hit: &ProviderCandidate,
+    qrc: &str,
+    base: Option<&LyricCandidate>,
+) -> Option<LyricCandidate> {
+    let mut lyrics = parse_qrc(qrc).ok()?;
+    if !lyrics.lines.iter().any(|line| !line.words.is_empty()) {
+        return None;
+    }
+    if let Some(base) = base {
+        let mut used = vec![false; base.lyrics.lines.len()];
+        for line in &mut lyrics.lines {
+            let Some(start) = line.start_ms else { continue };
+            let nearest = base
+                .lyrics
+                .lines
+                .iter()
+                .enumerate()
+                .filter(|(index, other)| {
+                    !used[*index]
+                        && other.start_ms.is_some_and(|other| {
+                            other.abs_diff(start) <= AMLL_AUXILIARY_TOLERANCE_MS
+                        })
+                })
+                .min_by_key(|(_, other)| other.start_ms.unwrap_or_default().abs_diff(start));
+            if let Some((index, other)) = nearest {
+                used[index] = true;
+                line.translation = other.translation.clone();
+                line.romanization = other.romanization.clone();
+            }
+        }
+    }
+    Some(LyricCandidate {
+        candidate_id: format!("qqmusic-amll:{}", hit.provider_track_id),
+        provider: LyricProvider::Qq,
+        provider_track_id: Some(hit.provider_track_id.clone()),
+        title: hit.title.clone(),
+        artist: hit.artist.clone(),
+        album: hit.album.clone(),
+        duration_ms: hit.duration_ms,
+        lyrics,
+        score: 0.0,
+    })
+}
+
 async fn fetch_lyrics_for_hits<T: crate::lyrics_provider::HttpTransport + 'static>(
     client: Arc<LyricsProviderClient<T>>,
     hits: Vec<ProviderCandidate>,
@@ -720,6 +777,14 @@ async fn fetch_lyrics_for_hits<T: crate::lyrics_provider::HttpTransport + 'stati
     }
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_LYRIC_FETCHES));
     let mut tasks = JoinSet::new();
+    // The first few QQ hits (best ranked first) are also looked up in the AMLL TTML DB for
+    // word-timed lyrics; that lookup is optional and never fails the search.
+    let amll_hits: Vec<ProviderCandidate> = hits
+        .iter()
+        .filter(|hit| hit.provider == LyricProvider::Qq)
+        .take(AMLL_LOOKUPS_PER_BATCH)
+        .cloned()
+        .collect();
     for hit in hits {
         let client = client.clone();
         let cancellation = cancellation.clone();
@@ -730,14 +795,31 @@ async fn fetch_lyrics_for_hits<T: crate::lyrics_provider::HttpTransport + 'stati
                 permit = permits.acquire_owned() => permit.map_err(|_| ProviderError::Cancelled)?,
             };
             let raw = client.fetch_lyrics(&hit, &cancellation).await?;
-            raw_to_lyric_candidate(raw)
+            raw_to_lyric_candidate(raw).map(FetchOutcome::Lyrics)
+        });
+    }
+    for hit in amll_hits {
+        let client = client.clone();
+        let cancellation = cancellation.clone();
+        tasks.spawn(async move {
+            match client.fetch_amll_qq_qrc(&hit, &cancellation).await {
+                Ok(qrc) => Ok(FetchOutcome::Amll(hit, qrc)),
+                Err(ProviderError::Cancelled) => Err(ProviderError::Cancelled),
+                Err(_) => Ok(FetchOutcome::Amll(hit, None)),
+            }
         });
     }
     let mut candidates = Vec::new();
+    let mut amll_found = Vec::new();
     let mut first_fetch_error = None;
     while let Some(result) = tasks.join_next().await {
         match result {
-            Ok(Ok(candidate)) => {
+            Ok(Ok(FetchOutcome::Amll(hit, qrc))) => {
+                if let Some(qrc) = qrc {
+                    amll_found.push((hit, qrc));
+                }
+            }
+            Ok(Ok(FetchOutcome::Lyrics(candidate))) => {
                 if !candidate.lyrics.lines.is_empty()
                     || candidate.lyrics.raw_karaoke.is_some()
                     || !candidate.lyrics.raw_text.is_empty()
@@ -755,6 +837,15 @@ async fn fetch_lyrics_for_hits<T: crate::lyrics_provider::HttpTransport + 'stati
                 first_fetch_error.get_or_insert(ProviderError::Transport(error.to_string()));
             }
         };
+    }
+    for (hit, qrc) in amll_found {
+        let base = candidates.iter().find(|candidate| {
+            candidate.provider == LyricProvider::Qq
+                && candidate.provider_track_id.as_deref() == Some(hit.provider_track_id.as_str())
+        });
+        if let Some(candidate) = amll_candidate(&hit, &qrc, base) {
+            candidates.push(candidate);
+        }
     }
     if cancellation.is_cancelled() {
         return Err(ProviderError::Cancelled);
@@ -2637,6 +2728,197 @@ mod tests {
             .any(|reason| reason.contains("沒有可顯示的歌詞文字")));
         // No match-explanation line (title / artist / length / album) is listed any more.
         assert_eq!(qrc_candidate.reasons.len(), 1);
+    }
+
+    #[derive(Clone, Copy)]
+    enum AmllMode {
+        Found,
+        NotFound,
+        Failing,
+        Oversized,
+    }
+
+    /// The fixture providers plus a scripted AMLL TTML DB.
+    #[derive(Clone)]
+    struct AmllTransport {
+        inner: FixtureTransport,
+        mode: AmllMode,
+    }
+
+    impl HttpTransport for AmllTransport {
+        #[allow(clippy::manual_async_fn)]
+        fn send<'a>(
+            &'a self,
+            request: HttpRequest,
+            cancellation: &'a CancellationToken,
+        ) -> impl Future<Output = Result<HttpResponse, ProviderError>> + Send + 'a {
+            async move {
+                if request.url.contains("/api/search/get/web")
+                    || request.url.contains("/api/cloudsearch/pc")
+                {
+                    // No NetEase hits, so the batch holds QQ hits only.
+                    return Ok(HttpResponse {
+                        status: 200,
+                        body: br#"{"result":{"songs":[]}}"#.to_vec(),
+                    });
+                }
+                if !request.url.contains("raw.githubusercontent.com") {
+                    return self.inner.send(request, cancellation).await;
+                }
+                self.inner
+                    .requests
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(request);
+                match self.mode {
+                    AmllMode::Found => Ok(HttpResponse {
+                        status: 200,
+                        body: include_bytes!("../../tests/fixtures/amll-qq-sample.qrc").to_vec(),
+                    }),
+                    AmllMode::NotFound => Ok(HttpResponse {
+                        status: 404,
+                        body: b"404: Not Found".to_vec(),
+                    }),
+                    AmllMode::Failing => Err(ProviderError::Timeout),
+                    AmllMode::Oversized => Ok(HttpResponse {
+                        status: 200,
+                        body: vec![b'x'; crate::lyrics_provider::AMLL_MAX_BYTES + 1],
+                    }),
+                }
+            }
+        }
+    }
+
+    fn metadata_for_dto() -> LyricsTrackMetadata {
+        LyricsTrackMetadata {
+            title: None,
+            artist: None,
+            album: None,
+            duration_ms: None,
+        }
+    }
+
+    async fn amll_search(mode: AmllMode) -> (Vec<LyricCandidate>, Vec<HttpRequest>) {
+        let transport = AmllTransport {
+            inner: FixtureTransport::default(),
+            mode,
+        };
+        let metadata = LyricsTrackMetadata {
+            title: Some("Song".to_owned()),
+            artist: Some("Artist".to_owned()),
+            album: Some("Album".to_owned()),
+            duration_ms: Some(180_000),
+        };
+        let candidates = fetch_provider_candidates(
+            Arc::new(LyricsProviderClient::new(transport.clone())),
+            metadata.clone(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("search");
+        let ranked = player_core::rank_lyric_candidates(&metadata, candidates);
+        let requests = transport
+            .inner
+            .requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|request| request.url.contains("raw.githubusercontent.com"))
+            .cloned()
+            .collect();
+        (ranked, requests)
+    }
+
+    fn amll_ids(candidates: &[LyricCandidate]) -> Vec<&str> {
+        candidates
+            .iter()
+            .filter(|candidate| candidate.candidate_id.starts_with("qqmusic-amll:"))
+            .map(|candidate| candidate.candidate_id.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn amll_word_timed_candidates_are_added_for_the_first_three_qq_hits() {
+        let (ranked, requests) = amll_search(AmllMode::Found).await;
+        assert_eq!(requests.len(), 3);
+        assert!(requests
+            .iter()
+            .all(|request| request.method == HttpMethod::Get
+                && request.url.starts_with(
+                    "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/qq-lyrics/qq-"
+                )
+                && request.url.ends_with(".qrc")));
+        let ids = amll_ids(&ranked);
+        assert_eq!(ids.len(), 3);
+        let amll = ranked
+            .iter()
+            .find(|candidate| candidate.candidate_id == ids[0])
+            .expect("amll candidate");
+        assert_eq!(amll.provider, LyricProvider::Qq);
+        assert_eq!(amll.lyrics.format, LyricFormat::Qrc);
+        assert!(amll.lyrics.synced);
+        assert!(amll.lyrics.lines.iter().all(|line| !line.words.is_empty()));
+        assert!(candidate_dto(&metadata_for_dto(), amll).has_word_synced_lyrics);
+        // Next to its line-level QQ candidate of the same song, the word-timed one comes first.
+        let mid = amll.provider_track_id.clone();
+        let position = |id: &str| {
+            ranked
+                .iter()
+                .position(|item| item.candidate_id == id)
+                .unwrap()
+        };
+        assert!(
+            position(&format!("qqmusic-amll:{}", mid.as_deref().unwrap()))
+                < position(&format!("qqmusic:{}", mid.as_deref().unwrap()))
+        );
+    }
+
+    #[tokio::test]
+    async fn amll_misses_failures_and_oversized_files_add_no_candidate() {
+        for mode in [AmllMode::NotFound, AmllMode::Failing, AmllMode::Oversized] {
+            let (ranked, requests) = amll_search(mode).await;
+            assert_eq!(requests.len(), 3);
+            assert!(amll_ids(&ranked).is_empty());
+            assert!(!ranked.is_empty(), "the regular candidates are untouched");
+        }
+    }
+
+    #[test]
+    fn amll_candidate_borrows_translation_and_romanization_from_the_qq_lines() {
+        let hit = crate::lyrics_provider::ProviderCandidate {
+            candidate_id: "qqmusic:mid".to_owned(),
+            provider: LyricProvider::Qq,
+            provider_track_id: "mid".to_owned(),
+            title: Some("Song".to_owned()),
+            artist: None,
+            album: None,
+            duration_ms: Some(180_000),
+            source_url: String::new(),
+            qq_song_id: None,
+        };
+        let mut base = LyricCandidate {
+            candidate_id: "qqmusic:mid".to_owned(),
+            provider: LyricProvider::Qq,
+            provider_track_id: Some("mid".to_owned()),
+            title: None,
+            artist: None,
+            album: None,
+            duration_ms: None,
+            lyrics: parse_lrc("[00:01.20]你好\n[00:09.00]far away").unwrap(),
+            score: 0.0,
+        };
+        base.lyrics.lines[0].translation = Some("Hello".to_owned());
+        base.lyrics.lines[0].romanization = Some("nihao".to_owned());
+        base.lyrics.lines[1].translation = Some("too far".to_owned());
+        let qrc = "[1000,800]你(1000,400)好(1400,400)\n[20000,500]no(20000,500)\n";
+        let amll = super::amll_candidate(&hit, qrc, Some(&base)).expect("candidate");
+        assert_eq!(amll.candidate_id, "qqmusic-amll:mid");
+        assert_eq!(amll.lyrics.lines[0].translation.as_deref(), Some("Hello"));
+        assert_eq!(amll.lyrics.lines[0].romanization.as_deref(), Some("nihao"));
+        assert_eq!(amll.lyrics.lines[1].translation, None);
+        // Plain LRC-like or empty content has no word timing, so no candidate.
+        assert!(super::amll_candidate(&hit, "[00:01.00]x", None).is_none());
+        assert!(super::amll_candidate(&hit, "", None).is_none());
     }
 
     #[tokio::test]
