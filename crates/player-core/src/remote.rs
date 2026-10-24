@@ -37,7 +37,10 @@ pub fn is_remote_unreachable(message: &str) -> bool {
 /// up its reads once a load newer than `n` is asked for, only while load `n` is still running (a track that is
 /// playing is never cut off by the next choice).
 #[derive(Clone, Default)]
-pub struct LoadCounter(Arc<AtomicU64>);
+pub struct LoadCounter {
+    requested: Arc<AtomicU64>,
+    finished: Arc<AtomicU64>,
+}
 
 impl LoadCounter {
     pub fn new() -> Self {
@@ -46,13 +49,24 @@ impl LoadCounter {
 
     /// A load of a track was asked for (on any thread); returns its number.
     pub fn note_requested(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::SeqCst) + 1
+        self.requested.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// The player's worker is done with one load that was asked for (it started, failed or was replaced).
+    pub fn note_finished(&self) {
+        self.finished.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Whether a load was asked for and has not been dealt with yet. A walk over the queue does not start while the
+    /// user's own choice of a track is still on its way.
+    pub fn in_flight(&self) -> bool {
+        self.finished.load(Ordering::SeqCst) < self.requested.load(Ordering::SeqCst)
     }
 
     /// How many loads were asked for so far: a walk over the queue compares it before each entry, to stop once the
     /// user has chosen a track of their own.
     pub fn requested(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
+        self.requested.load(Ordering::SeqCst)
     }
 }
 
@@ -99,13 +113,13 @@ pub fn begin_load_abandonable(
     number: u64,
     abandoned: Arc<AtomicBool>,
 ) -> bool {
-    if counter.0.load(Ordering::SeqCst) > number {
+    if counter.requested.load(Ordering::SeqCst) > number {
         return false;
     }
     RUNNING_LOAD.with(|slot| {
         *slot.borrow_mut() = Some(RunningLoad {
             number,
-            requested: Arc::clone(&counter.0),
+            requested: Arc::clone(&counter.requested),
             running: Arc::new(AtomicBool::new(true)),
             abandoned,
         });

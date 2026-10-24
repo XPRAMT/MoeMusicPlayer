@@ -671,6 +671,8 @@ struct WindowsPlaybackService {
     queue_advance_pending: Mutex<bool>,
     last_position_checkpoint: Mutex<Instant>,
     restore_warning: Mutex<Option<String>>,
+    /// How many starts of a track failed so far, and why the last one did (`StartFailureNotice`).
+    start_failures: Mutex<(u64, Option<player_core::StartFailure>)>,
 }
 
 #[cfg(target_os = "windows")]
@@ -1435,7 +1437,27 @@ impl WindowsPlaybackService {
             queue_advance_pending: Mutex::new(false),
             last_position_checkpoint: Mutex::new(Instant::now()),
             restore_warning: Mutex::new(None),
+            start_failures: Mutex::new((0, None)),
         }
+    }
+
+    /// A track could not be started (nothing changed: the music that plays goes on). The snapshot carries it to the
+    /// front end, which tells the user.
+    fn note_start_failure(&self, failure: player_core::StartFailure) {
+        let mut failures = self
+            .start_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        failures.0 += 1;
+        failures.1 = Some(failure);
+    }
+
+    /// The text of a failed load for the caller of a command, noting the failure for the snapshot.
+    fn load_failure_message(&self, error: &AudioError) -> String {
+        if let Some(failure) = start_failure_of(error) {
+            self.note_start_failure(failure);
+        }
+        playback_audio_error_message(error)
     }
 
     fn accounting_id_for(&self, track_id: TrackId) -> PlaybackAccountingId {
@@ -1617,6 +1639,16 @@ impl WindowsPlaybackService {
             can_next,
             can_previous,
             output_format: audio.resampling.as_ref().map(playback_output_format),
+            start_failure: {
+                let failures = self
+                    .start_failures
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                failures.1.map(|failure| StartFailureNotice {
+                    kind: failure.name(),
+                    sequence: failures.0,
+                })
+            },
         }
     }
 }
@@ -2092,9 +2124,7 @@ fn apply_system_media_event(
                 replacement_queue,
                 target_cursor,
             } = change;
-            ticket
-                .wait(Duration::from_secs(2))
-                .map_err(|error| playback_audio_error_message(&error))?;
+            wait_track_load(playback, ticket)?;
             commit_track_change(database, playback, track, replacement_queue, target_cursor)?;
         }
         SystemMediaEvent::PauseRequested => {
@@ -2128,9 +2158,7 @@ fn apply_system_media_event(
                         replacement_queue,
                         target_cursor,
                     } = change;
-                    ticket
-                        .wait(Duration::from_secs(2))
-                        .map_err(|error| playback_audio_error_message(&error))?;
+                    wait_track_load(playback, ticket)?;
                     commit_track_change(
                         database,
                         playback,
@@ -2150,9 +2178,7 @@ fn apply_system_media_event(
                         replacement_queue,
                         target_cursor,
                     } = change;
-                    ticket
-                        .wait(Duration::from_secs(2))
-                        .map_err(|error| playback_audio_error_message(&error))?;
+                    wait_track_load(playback, ticket)?;
                     commit_track_change(
                         database,
                         playback,
@@ -2240,13 +2266,18 @@ fn playback_audio_error_message(error: &AudioError) -> String {
         AudioError::CommandQueueFull => "音訊服務忙碌，請稍後再試。".to_owned(),
         AudioError::CommandTimeout => "音訊命令逾時，請查看播放器狀態後重試。".to_owned(),
         AudioError::UnsupportedPlatform => "此平台尚未提供本機音訊播放服務。".to_owned(),
+        // A load that a newer choice of track replaced: nothing shows it (the front end ignores this text).
+        AudioError::FileOpen { .. } if error.is_superseded() => {
+            player_core::LOAD_SUPERSEDED.to_owned()
+        }
         // A track on a server that cannot be reached says so (instead of blaming the file).
         AudioError::FileOpen { message, .. } if player_core::is_remote_unreachable(message) => {
             player_core::REMOTE_LINK_LOST.to_owned()
         }
-        AudioError::FileOpen { .. } => "無法開啟曲目檔案，請確認檔案仍可讀取。".to_owned(),
-        AudioError::UnsupportedFormat { .. } => "此音訊格式目前尚未支援。".to_owned(),
-        AudioError::Decode { .. } => "曲目解碼失敗。".to_owned(),
+        // A track that cannot be started for any other reason (the front end shows one notice for this text).
+        AudioError::FileOpen { .. }
+        | AudioError::UnsupportedFormat { .. }
+        | AudioError::Decode { .. } => player_core::TRACK_UNPLAYABLE.to_owned(),
         AudioError::Seek(_) => "無法移動到指定播放位置。".to_owned(),
         AudioError::Backend(_) => "音訊輸出發生錯誤。".to_owned(),
         AudioError::BackendUnavailable => "音訊輸出裝置目前無法使用。".to_owned(),
@@ -2254,6 +2285,47 @@ fn playback_audio_error_message(error: &AudioError) -> String {
         AudioError::InvalidVolume => "音量設定值無效。".to_owned(),
         AudioError::RemoteLinkLost(message) => message.clone(),
     }
+}
+
+/// Why a track could not be started, for the audio error of a load (`None` for a replaced load and for errors that are
+/// not about the track).
+#[cfg(target_os = "windows")]
+fn start_failure_of(error: &AudioError) -> Option<player_core::StartFailure> {
+    match error {
+        AudioError::FileOpen { .. } if error.is_superseded() => None,
+        AudioError::FileOpen { message, .. } if player_core::is_remote_unreachable(message) => {
+            Some(player_core::StartFailure::Unreachable)
+        }
+        AudioError::FileOpen { .. }
+        | AudioError::UnsupportedFormat { .. }
+        | AudioError::Decode { .. } => Some(player_core::StartFailure::Unplayable),
+        _ => None,
+    }
+}
+
+/// The server a remote track is on (the account of its source), or `None` for a local file. `uri` is the text form of
+/// the locator (`moeremote://<source id>/<path>`).
+#[cfg(any(target_os = "windows", target_os = "android"))]
+fn remote_server_key_of(uri: &str) -> Option<String> {
+    let player_core::MediaLocator::Remote { source_id, .. } =
+        player_core::parse_remote_locator_uri(uri)?
+    else {
+        return None;
+    };
+    Some(
+        player_core::remote_content()
+            .map_or_else(|| source_id.to_string(), |content| content.server_key(source_id)),
+    )
+}
+
+/// The failure of the newest start of a track that did not happen, with a number that grows with each one, so the
+/// front end shows its notice once per failure whichever way the start was asked for (a tap, a media key, the end of the
+/// previous track). `kind` is `unreachable` or `unplayable`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartFailureNotice {
+    kind: &'static str,
+    sequence: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -2418,6 +2490,8 @@ struct PlaybackSnapshot {
     can_previous: bool,
     /// Windows only: the output's sample-rate path for the playback settings.
     output_format: Option<PlaybackOutputFormat>,
+    /// The newest start of a track that could not happen (ADR 0036).
+    start_failure: Option<StartFailureNotice>,
 }
 
 /// Who converts the current track's sample rate.
@@ -2625,6 +2699,7 @@ mod playback_queue_ipc_tests {
             }),
             can_next: true,
             can_previous: false,
+            start_failure: None,
             output_format: Some(PlaybackOutputFormat {
                 mode: ResamplingMode::WindowsBuiltin,
                 source_rate_hz: Some(44_100),
@@ -9153,23 +9228,7 @@ async fn playback_get_snapshot(state: State<'_, AppState>) -> Result<PlaybackSna
     {
         let playback = windows_playback_service(&state)?;
         if let Some(database) = state.database.as_ref() {
-            if let Some(change) = advance_ended_playback(database, playback)? {
-                let PreparedTrackChange {
-                    ticket,
-                    track,
-                    replacement_queue,
-                    target_cursor,
-                } = change;
-                let result = await_playback_ack(ticket).await;
-                if playback.player.snapshot().state != AudioPlaybackState::Ended {
-                    *playback
-                        .queue_advance_pending
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
-                }
-                result?;
-                commit_track_change(database, playback, track, replacement_queue, target_cursor)?;
-            }
+            advance_ended_queue(database, playback).await?;
             checkpoint_playback_position(database, playback, false)?;
         }
         if let Some(system_media) = state.system_media.as_ref() {
@@ -9638,8 +9697,9 @@ async fn playback_play(
             target_cursor,
         } = change;
         // A track on a server opens its file there first, which can take a few seconds; a newer choice of track ends
-        // this wait early (the audio worker answers the replaced load at once).
-        await_playback_ack_within(ticket, Duration::from_secs(10)).await?;
+        // this wait early (the audio worker answers the replaced load at once). Until the file has opened nothing
+        // changes: the music that plays goes on, and the queue and the current track stay as they are.
+        await_track_load(service, ticket).await?;
         commit_track_change(database, service, track, replacement_queue, target_cursor)?;
         Ok(service.snapshot())
     }
@@ -9767,7 +9827,7 @@ async fn playback_next(state: State<'_, AppState>) -> Result<PlaybackSnapshot, S
                 replacement_queue,
                 target_cursor,
             } = change;
-            await_playback_ack(ticket).await?;
+            await_track_load(service, ticket).await?;
             commit_track_change(database, service, track, replacement_queue, target_cursor)?;
         }
         Ok(service.snapshot())
@@ -9804,7 +9864,7 @@ async fn playback_previous(state: State<'_, AppState>) -> Result<PlaybackSnapsho
                 replacement_queue,
                 target_cursor,
             } = change;
-            await_playback_ack(ticket).await?;
+            await_track_load(service, ticket).await?;
             commit_track_change(database, service, track, replacement_queue, target_cursor)?;
         }
         Ok(service.snapshot())
@@ -11321,60 +11381,152 @@ fn navigate_queue(
         .transpose()
 }
 
+/// The playing track ended: start the next entry of the queue that can be started (ADR 0036). Each entry after the
+/// current one is tried once, in traversal order, and a failure goes on to the next (see `player_core::NaturalWalk`
+/// for the repeat modes and for skipping a server that cannot be reached). The queue cursor and the current track
+/// change only when an entry has started. When none could be started the player stays at the end of the track and the
+/// last failure is noted for the front end's notice. A choice of the user (any load asked for meanwhile) ends the walk.
 #[cfg(target_os = "windows")]
-fn advance_ended_playback(
+async fn advance_ended_queue(
     database: &Database,
     service: &WindowsPlaybackService,
-) -> Result<Option<PreparedTrackChange>, String> {
+) -> Result<(), String> {
+    let Some(mut walk) = begin_ended_walk(service) else {
+        return Ok(());
+    };
+    let mut loads_seen = service.player.loads_requested();
+    loop {
+        // Ask for the next entry under the gate, so a choice of the user cannot slip in between the check and the ask.
+        let attempt = {
+            let _gate = service
+                .command_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if service.player.snapshot().state != AudioPlaybackState::Ended
+                || service.player.loads_requested() != loads_seen
+                || service.player.load_in_flight()
+            {
+                // Something else has been started (or chosen) meanwhile: not this walk's business any more.
+                return Ok(());
+            }
+            let queue = service
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(queue) = queue.as_ref() else {
+                return Ok(());
+            };
+            let server_of = |cursor: usize| {
+                queue
+                    .track_at_cursor(cursor)
+                    .and_then(|track_id| ended_walk_server_key(database, service, track_id))
+            };
+            let Some(cursor) = walk.next_candidate(server_of) else {
+                break;
+            };
+            let Some(track_id) = queue.track_at_cursor(cursor) else {
+                break;
+            };
+            let server = ended_walk_server_key(database, service, track_id);
+            match prepare_track_load(database, service, track_id, true) {
+                Ok((ticket, track)) => {
+                    loads_seen = service.player.loads_requested();
+                    Ok((ticket, track, cursor, server))
+                }
+                Err(_) => Err(server),
+            }
+        };
+        match attempt {
+            Ok((ticket, track, cursor, server)) => {
+                let answer = tauri::async_runtime::spawn_blocking(move || ticket.wait(TRACK_LOAD_WAIT))
+                    .await
+                    .map_err(|error| format!("等待播放命令工作失敗：{error}"))?;
+                match answer {
+                    Ok(_) => {
+                        reset_queue_advance_pending(service);
+                        commit_track_change(database, service, track, None, Some(cursor))?;
+                        return Ok(());
+                    }
+                    // A newer choice replaced this start: that choice goes on, this walk ends without a word.
+                    Err(error) if error.is_superseded() => return Ok(()),
+                    Err(error) => {
+                        let failure = start_failure_of(&error)
+                            .unwrap_or(player_core::StartFailure::Unplayable);
+                        walk.failed(failure, server);
+                    }
+                }
+            }
+            // The entry could not even be asked for (its file is gone from the library, say).
+            Err(server) => walk.failed(player_core::StartFailure::Unplayable, server),
+        }
+    }
+    match walk.final_failure() {
+        Some(failure) => service.note_start_failure(failure),
+        // Nothing to try (the last entry of a queue that does not repeat): an ordinary end.
+        None => reset_queue_advance_pending(service),
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn reset_queue_advance_pending(service: &WindowsPlaybackService) {
+    *service
+        .queue_advance_pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+}
+
+/// Start a walk over the queue when the player has just reached the end of a track (and none is under way).
+#[cfg(target_os = "windows")]
+fn begin_ended_walk(service: &WindowsPlaybackService) -> Option<player_core::NaturalWalk> {
     let _gate = service
         .command_gate
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if service.player.snapshot().state != AudioPlaybackState::Ended {
-        *service
-            .queue_advance_pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
-        return Ok(None);
+        reset_queue_advance_pending(service);
+        return None;
+    }
+    // The user has chosen a track and the player has not got to it yet: that choice is what happens next.
+    if service.player.load_in_flight() {
+        return None;
     }
     let mut pending = service
         .queue_advance_pending
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if *pending {
-        return Ok(None);
+        return None;
     }
-    *pending = true;
-    drop(pending);
-
-    let target = service
+    let walk = service
         .queue
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
-        .and_then(|queue| queue.preview_next(false));
-    let Some((track_id, cursor)) = target else {
-        *service
-            .queue_advance_pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
-        return Ok(None);
-    };
-    match prepare_track_load(database, service, track_id, true) {
-        Ok((ticket, track)) => Ok(Some(PreparedTrackChange {
-            ticket,
-            track,
-            replacement_queue: None,
-            target_cursor: Some(cursor),
-        })),
-        Err(error) => {
-            *service
-                .queue_advance_pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
-            Err(error)
-        }
+        .map(|queue| player_core::NaturalWalk::new(queue.len(), queue.cursor(), queue.repeat_mode()))?;
+    // Stays set while the player rests at the end (every attempt failed), so the walk is not started again every
+    // poll; it is cleared as soon as the player leaves the ended state.
+    *pending = true;
+    Some(walk)
+}
+
+/// The server of a queue entry (`None` for a file on this computer).
+#[cfg(target_os = "windows")]
+fn ended_walk_server_key(
+    database: &Database,
+    service: &WindowsPlaybackService,
+    track_id: TrackId,
+) -> Option<String> {
+    if service
+        .external_tracks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains_key(&track_id)
+    {
+        return None;
     }
+    let path = database.resolve_playable_filesystem_locator(track_id).ok()?;
+    remote_server_key_of(path.to_str()?)
 }
 
 #[cfg(target_os = "windows")]
@@ -11524,6 +11676,36 @@ fn set_playback_dsee_hx(
 #[cfg(target_os = "windows")]
 async fn await_playback_ack(ticket: CommandTicket) -> Result<(), String> {
     await_playback_ack_within(ticket, Duration::from_secs(2)).await
+}
+
+/// How long a command that starts another track is waited for: the audio worker gives a file on a server up after 15
+/// seconds, and answers then.
+#[cfg(target_os = "windows")]
+const TRACK_LOAD_WAIT: Duration = Duration::from_secs(20);
+
+/// Wait for the answer of a load of another track. A failure is noted for the snapshot (the front end shows its notice);
+/// the error text is one the front end recognises (`REMOTE_LINK_LOST`, `TRACK_UNPLAYABLE`, or `LOAD_SUPERSEDED` for a
+/// load a newer choice replaced).
+#[cfg(target_os = "windows")]
+async fn await_track_load(
+    service: &WindowsPlaybackService,
+    ticket: CommandTicket,
+) -> Result<(), String> {
+    let answer = tauri::async_runtime::spawn_blocking(move || ticket.wait(TRACK_LOAD_WAIT))
+        .await
+        .map_err(|error| format!("等待播放命令工作失敗：{error}"))?;
+    answer
+        .map(|_| ())
+        .map_err(|error| service.load_failure_message(&error))
+}
+
+/// As [`await_track_load`], for callers that are not async.
+#[cfg(target_os = "windows")]
+fn wait_track_load(service: &WindowsPlaybackService, ticket: CommandTicket) -> Result<(), String> {
+    ticket
+        .wait(TRACK_LOAD_WAIT)
+        .map(|_| ())
+        .map_err(|error| service.load_failure_message(&error))
 }
 
 #[cfg(target_os = "windows")]
@@ -15402,5 +15584,302 @@ mod windows_library_integration_tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    // --- Starting another track (ADR 0036): prepare, then commit -------------------------------------------------
+
+    /// A backend that cannot open the files in `failing`, leaves what is loaded alone when it cannot (as a real one
+    /// must), and reports `ended` as an empty sink.
+    struct ScriptedLoads {
+        failing: Arc<Mutex<Vec<PathBuf>>>,
+        attempts: Arc<Mutex<Vec<PathBuf>>>,
+        ended: Arc<std::sync::atomic::AtomicBool>,
+        loaded: bool,
+    }
+
+    impl AudioBackend for ScriptedLoads {
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.attempts.lock().unwrap().push(path.to_path_buf());
+            if self.failing.lock().unwrap().iter().any(|failing| failing == path) {
+                return Err(AudioError::FileOpen {
+                    path: path.to_path_buf(),
+                    message: "no such file".to_owned(),
+                });
+            }
+            self.loaded = true;
+            self.ended.store(false, Ordering::SeqCst);
+            Ok(Some(Duration::from_secs(60)))
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.loaded = false;
+            Ok(())
+        }
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            Ok(position)
+        }
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn position(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+        fn is_empty(&self) -> bool {
+            !self.loaded || self.ended.load(Ordering::SeqCst)
+        }
+    }
+
+    struct WalkFixture {
+        database: Database,
+        service: WindowsPlaybackService,
+        failing: Arc<Mutex<Vec<PathBuf>>>,
+        attempts: Arc<Mutex<Vec<PathBuf>>>,
+        ended: Arc<std::sync::atomic::AtomicBool>,
+        /// The tracks in queue order.
+        order: Vec<TrackId>,
+        _directory: TestDirectory,
+    }
+
+    impl WalkFixture {
+        /// Three tracks in the queue, the first one playing.
+        fn playing_first_of_three() -> Self {
+            let directory = TestDirectory::new();
+            let source = directory.0.join("walk-source");
+            fs::create_dir_all(&source).unwrap();
+            for name in ["one", "two", "three"] {
+                write_tagged_mp3(&source.join(format!("track-{name}.mp3")));
+            }
+            let mut database = Database::open(directory.0.join("library.sqlite3")).unwrap();
+            add_windows_folder_to_database(&database, source.to_str().unwrap()).unwrap();
+            sync_windows_sources(&mut database).unwrap();
+            let tracks = database
+                .list_tracks_page(ListTracksQuery {
+                    query: None,
+                    field_filter: None,
+                    offset: 0,
+                    limit: 10,
+                    sort: Default::default(),
+                })
+                .unwrap();
+            assert_eq!(tracks.total_count, 3);
+            let failing = Arc::new(Mutex::new(Vec::new()));
+            let attempts = Arc::new(Mutex::new(Vec::new()));
+            let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (backend_failing, backend_attempts, backend_ended) = (
+                Arc::clone(&failing),
+                Arc::clone(&attempts),
+                Arc::clone(&ended),
+            );
+            let player = PlayerHandle::with_backend_factory(move || {
+                Ok(Box::new(ScriptedLoads {
+                    failing: Arc::clone(&backend_failing),
+                    attempts: Arc::clone(&backend_attempts),
+                    ended: Arc::clone(&backend_ended),
+                    loaded: false,
+                }) as Box<dyn AudioBackend>)
+            })
+            .unwrap();
+            let service = WindowsPlaybackService::new(player);
+            let change = play_track_from_database(
+                &database,
+                &service,
+                &tracks.items[0].id.to_string(),
+                Some(PlaybackQueueSource::Library {
+                    query: None,
+                    query_alternates: Vec::new(),
+                    field_filter: None,
+                    sort: Default::default(),
+                }),
+            )
+            .unwrap();
+            change.ticket.wait(Duration::from_secs(2)).unwrap();
+            commit_track_change(
+                &database,
+                &service,
+                change.track,
+                change.replacement_queue,
+                change.target_cursor,
+            )
+            .unwrap();
+            let snapshot = service
+                .queue
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(PlaybackQueue::snapshot)
+                .unwrap();
+            let order = snapshot
+                .play_order
+                .iter()
+                .map(|index| snapshot.entries[*index].track_id)
+                .collect();
+            attempts.lock().unwrap().clear();
+            Self {
+                database,
+                service,
+                failing,
+                attempts,
+                ended,
+                order,
+                _directory: directory,
+            }
+        }
+
+        fn path_of(&self, index: usize) -> PathBuf {
+            self.database
+                .resolve_playable_filesystem_locator(self.order[index])
+                .unwrap()
+        }
+
+        fn fail(&self, index: usize) {
+            self.failing.lock().unwrap().push(self.path_of(index));
+        }
+
+        fn cursor(&self) -> usize {
+            self.service.queue.lock().unwrap().as_ref().unwrap().cursor()
+        }
+
+        fn end_the_track(&self) {
+            self.ended.store(true, Ordering::SeqCst);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while self.service.player.snapshot().state != AudioPlaybackState::Ended {
+                assert!(Instant::now() < deadline, "the track never ended");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn walk(&self) {
+            tauri::async_runtime::block_on(super::advance_ended_queue(
+                &self.database,
+                &self.service,
+            ))
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_manual_start_that_fails_changes_nothing_and_the_music_goes_on() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.fail(1);
+        let change = navigate_queue(&fixture.database, &fixture.service, true)
+            .unwrap()
+            .expect("there is a next entry");
+        let error = change.ticket.wait(Duration::from_secs(2)).unwrap_err();
+        assert_eq!(
+            fixture.service.load_failure_message(&error),
+            player_core::TRACK_UNPLAYABLE
+        );
+        // Nothing was committed: the queue, the current track and the audio are as they were.
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "playing");
+        assert!(snapshot.is_playing);
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        assert_eq!(snapshot.current_track.map(|track| track.id), Some(fixture.order[0]));
+        assert_eq!(fixture.cursor(), 0);
+        assert_eq!(
+            fixture.attempts.lock().unwrap().len(),
+            1,
+            "one attempt, no skipping to the next entry"
+        );
+        let notice = snapshot.start_failure.expect("the failure is noted");
+        assert_eq!((notice.kind, notice.sequence), ("unplayable", 1));
+    }
+
+    #[test]
+    fn when_a_track_ends_the_walk_goes_past_a_failure_to_the_next_entry_that_loads() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.fail(1);
+        fixture.end_the_track();
+        fixture.walk();
+        assert_eq!(fixture.cursor(), 2);
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "playing");
+        assert_eq!(snapshot.current_track.map(|track| track.id), Some(fixture.order[2]));
+        assert!(snapshot.start_failure.is_none(), "an entry started: nothing to report");
+        let attempts = fixture.attempts.lock().unwrap().clone();
+        assert_eq!(attempts, vec![fixture.path_of(1), fixture.path_of(2)]);
+    }
+
+    #[test]
+    fn when_no_entry_loads_the_player_rests_at_the_end_with_one_notice_and_does_not_try_again() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.fail(1);
+        fixture.fail(2);
+        fixture.end_the_track();
+        fixture.walk();
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "ended");
+        assert_eq!(fixture.cursor(), 0, "the cursor moves only for an entry that started");
+        assert_eq!(snapshot.current_track.map(|track| track.id), Some(fixture.order[0]));
+        let notice = snapshot.start_failure.expect("the last failure is reported");
+        assert_eq!((notice.kind, notice.sequence), ("unplayable", 1));
+        assert_eq!(fixture.attempts.lock().unwrap().len(), 2);
+        // The next poll does not start the walk again.
+        fixture.walk();
+        assert_eq!(fixture.attempts.lock().unwrap().len(), 2);
+        assert_eq!(fixture.service.snapshot().start_failure.unwrap().sequence, 1);
+    }
+
+    #[test]
+    fn repeat_one_retries_only_the_track_that_ended_and_repeat_off_stops_after_the_last_entry() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture
+            .service
+            .queue
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .set_repeat_mode(QueueRepeatMode::One);
+        fixture.fail(0);
+        fixture.end_the_track();
+        fixture.walk();
+        assert_eq!(*fixture.attempts.lock().unwrap(), vec![fixture.path_of(0)]);
+        assert_eq!(fixture.service.snapshot().state, "ended");
+
+        // Repeat-off, last entry: nothing to try and nothing to report.
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture
+            .service
+            .queue
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .set_cursor(2)
+            .unwrap();
+        fixture.end_the_track();
+        fixture.walk();
+        assert!(fixture.attempts.lock().unwrap().is_empty());
+        assert!(fixture.service.snapshot().start_failure.is_none());
+    }
+
+    #[test]
+    fn a_choice_made_while_the_walk_runs_ends_the_walk_without_a_word() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.fail(1);
+        fixture.end_the_track();
+        // The user picks the last track before the walk gets to ask for anything.
+        let change = play_track_from_database(
+            &fixture.database,
+            &fixture.service,
+            &fixture.order[2].to_string(),
+            None,
+        )
+        .unwrap();
+        let begun = fixture.service.player.loads_requested();
+        fixture.walk();
+        assert_eq!(
+            fixture.service.player.loads_requested(),
+            begun,
+            "the walk asked for nothing: the user's choice is newer"
+        );
+        change.ticket.wait(Duration::from_secs(2)).unwrap();
+        assert!(fixture.service.snapshot().start_failure.is_none());
     }
 }

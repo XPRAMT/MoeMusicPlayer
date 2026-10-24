@@ -309,6 +309,29 @@ impl FakeNative {
         self.event_sender.send(event).expect("send fake native ACK");
     }
 
+    /// The service refused the load before switching to it (its file could not be opened): the track that plays is
+    /// left alone, which the acknowledgement says with `retained`.
+    fn refuse_load(&mut self, command: &NativeCommand, error: &str) {
+        assert_eq!(command.op, "load");
+        self.event_id = self.event_id.saturating_add(1).max(1);
+        let event_json = serde_json::json!({
+            "v": 1,
+            "kind": "ack",
+            "eventId": self.event_id.to_string(),
+            "commandId": command.command_id,
+            "requestId": command.request_id,
+            "serviceGeneration": self.snapshot.service_generation,
+            "error": error,
+            "retained": true,
+            "snapshot": self.snapshot,
+        });
+        let event: NativeEvent =
+            serde_json::from_value(event_json).expect("Kotlin-compatible refused load ACK DTO");
+        self.event_sender
+            .send(event)
+            .expect("send fake refused load ACK");
+    }
+
     fn fail_load(&mut self, command: &NativeCommand, error: &str) {
         assert_eq!(command.op, "load");
         self.snapshot.service_generation = self.snapshot.service_generation.max(1);
@@ -556,7 +579,12 @@ fn failed_load_keeps_queue_cursor_and_saved_position_then_play_reloads_logical_c
     let load_error = "Android source became unavailable during load.";
     harness.fake.fail_load(&failed_load, load_error);
     let (actor, result) = handle.join().expect("failed replacement action thread");
-    assert_eq!(result.err().as_deref(), Some(load_error));
+    // A load that failed after the switch (the track that played is gone) is reported in words the front end shows.
+    assert_eq!(
+        result.err().as_deref(),
+        Some(player_core::TRACK_UNPLAYABLE),
+        "the native text was {load_error}"
+    );
     harness.actor = Some(actor);
 
     let failed_snapshot = harness.actor().publish_snapshot();
@@ -816,6 +844,10 @@ fn a_newer_choice_of_track_takes_over_from_a_load_that_is_still_awaited() {
     assert!(actor.current_track.is_none());
     assert!(actor.queue.is_none());
 
+    // The service is told the stale load is not wanted (so a file it is still checking is not switched to).
+    let cancel = harness.fake.next_command();
+    assert_eq!(cancel.op, "cancel_load");
+    assert_eq!(cancel.target_command_id.as_deref(), Some(stale_load.command_id.as_str()));
     // The stale load is acknowledged late: it is ignored.
     harness.fake.ack(&stale_load);
 
@@ -882,4 +914,315 @@ fn a_failed_load_of_a_remote_track_says_the_server_is_unreachable() {
     }
     assert!(!remote_load_failure_is_unreachable(SUPERSEDED_MESSAGE));
     assert!(!remote_load_failure_is_unreachable("Source error"));
+}
+
+/// An actor playing the first entry of the duplicate-entry playlist (`first`, `first`, `second`).
+fn playing_first_entry(
+    temporary: &TemporaryDatabase,
+    fixture: &FixtureTracks,
+    repeat: QueueRepeatMode,
+) -> ActorFixture {
+    let seed_db = temporary.open();
+    let mut queue = super::queue_for_track(
+        &seed_db,
+        fixture.first,
+        Some(playlist_source(fixture.playlist_id, 0)),
+    )
+    .expect("construct queue from the first playlist slot");
+    queue.set_repeat_mode(repeat);
+    seed_db
+        .save_playback_session(&PlaybackSessionCheckpoint {
+            queue: queue.snapshot(),
+            position_ms: 1_000,
+        })
+        .expect("save the baseline session");
+    let native = playing_snapshot(fixture.first, 3, "playing", 1_000);
+    let mut harness = ActorFixture::with_snapshot(temporary.open(), native.clone());
+    let current_track = harness
+        .actor()
+        .database
+        .get_track_summary(fixture.first)
+        .expect("read the current track")
+        .expect("the track exists");
+    harness.actor_mut().current_track = Some(current_track);
+    harness.actor_mut().queue = Some(queue);
+    harness.actor_mut().meter.observe(&native, Instant::now());
+    let runtime_id = harness.actor().runtime_id;
+    harness
+        .actor()
+        .database
+        .register_playback_statistics_runtime(runtime_id, Some(std::process::id()), None)
+        .expect("register the statistics runtime");
+    harness.publish_fixture_state();
+    harness
+}
+
+#[test]
+fn a_load_the_service_refuses_leaves_the_playing_track_the_queue_and_the_session_alone() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    let before = harness.actor().publish_snapshot();
+    assert!(before.start_failure.is_none());
+
+    let selected = fixture.second.to_string();
+    let source = playlist_source(fixture.playlist_id, 2);
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, move |actor| {
+        actor.handle_action(
+            "tap-a-bad-track",
+            PlaybackAction::SelectTrack {
+                track_id: selected,
+                source: Some(source),
+            },
+        )
+    });
+    let load = harness.fake.next_command();
+    assert_eq!(load.op, "load");
+    harness.fake.refuse_load(&load, "Cannot open the file");
+    let (actor, result) = handle.join().expect("tap thread");
+    // One attempt: the notice text, no other command (no skipping to a next entry).
+    assert_eq!(result.err().as_deref(), Some(player_core::TRACK_UNPLAYABLE));
+    harness.fake.no_command();
+    harness.actor = Some(actor);
+
+    // The music that plays is untouched.
+    let after = harness.actor().publish_snapshot();
+    assert_eq!(
+        harness.actor().native.track_id.as_deref(),
+        Some(fixture.first.to_string().as_str())
+    );
+    assert_eq!(harness.actor().native.state, "playing");
+    assert_eq!(after.state, "playing");
+    assert!(after.is_playing);
+    assert_eq!(
+        after.current_track.as_ref().map(|track| track.id),
+        Some(fixture.first)
+    );
+    assert_eq!(after.position_ms, 1_000);
+    assert!(after.last_error.is_none(), "{:?}", after.last_error);
+    assert_eq!(
+        harness.actor().queue.as_ref().map(PlaybackQueue::cursor),
+        Some(0)
+    );
+    // The failure is noted once for the front end.
+    let notice = after.start_failure.expect("the failure is in the snapshot");
+    assert_eq!((notice.kind, notice.sequence), ("unplayable", 1));
+    // The session was not rewritten.
+    let saved = temporary
+        .open()
+        .load_playback_session()
+        .expect("read the session")
+        .expect("the baseline session");
+    assert_eq!(saved.queue.cursor, 0);
+    assert_eq!(saved.position_ms, 1_000);
+    // The listening of the track that plays goes on and counts.
+    let playing_later = NativePlaybackSnapshot {
+        position_ms: 1_600,
+        ..harness.actor().native.clone()
+    };
+    harness
+        .actor_mut()
+        .meter
+        .observe(&playing_later, Instant::now() + Duration::from_millis(600));
+    assert!(
+        harness.actor().meter.anchor.is_some(),
+        "the meter still follows the playing track"
+    );
+}
+
+#[test]
+fn a_server_that_cannot_be_reached_is_told_as_such_and_changes_nothing() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| {
+        actor.handle_action("next", PlaybackAction::Next { natural: false })
+    });
+    let load = harness.fake.next_command();
+    harness
+        .fake
+        .refuse_load(&load, player_core::REMOTE_LINK_LOST);
+    let (actor, result) = handle.join().expect("next thread");
+    assert_eq!(result.err().as_deref(), Some(player_core::REMOTE_LINK_LOST));
+    harness.fake.no_command();
+    harness.actor = Some(actor);
+    let after = harness.actor().publish_snapshot();
+    assert_eq!(after.state, "playing");
+    assert_eq!(
+        after.start_failure.map(|notice| notice.kind),
+        Some("unreachable")
+    );
+    assert_eq!(
+        harness.actor().queue.as_ref().map(PlaybackQueue::cursor),
+        Some(0)
+    );
+}
+
+#[test]
+fn when_a_track_ends_the_walk_goes_past_a_failure_to_the_next_entry_that_loads() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness.actor_mut().native.state = "ended".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| actor.navigate("end", true, true));
+
+    // Entry 1 (the same file again) cannot be opened.
+    let first_try = harness.fake.next_command();
+    assert_eq!(first_try.op, "load");
+    assert_eq!(first_try.play_when_ready, Some(true));
+    harness.fake.refuse_load(&first_try, "Cannot open the file");
+    // The walk goes on: entry 2 opens.
+    let second_try = harness.fake.next_command();
+    assert_eq!(second_try.op, "load");
+    assert_eq!(
+        second_try.track_id.as_deref(),
+        Some(fixture.second.to_string().as_str())
+    );
+    harness.fake.ack(&second_try);
+    let capabilities = harness.fake.next_command();
+    assert_eq!(capabilities.op, "set_capabilities");
+    harness.fake.ack(&capabilities);
+    let (actor, result) = handle.join().expect("walk thread");
+    assert!(result.is_ok(), "{:?}", result.err());
+    harness.actor = Some(actor);
+
+    // Only the entry that started was committed.
+    let queue = harness.actor().queue.as_ref().expect("queue");
+    assert_eq!(queue.cursor(), 2);
+    assert_eq!(
+        harness.actor().current_track.as_ref().map(|track| track.id),
+        Some(fixture.second)
+    );
+    assert!(
+        harness.actor().start_failures.1.is_none(),
+        "an entry started: nothing to report"
+    );
+    let saved = temporary
+        .open()
+        .load_playback_session()
+        .expect("read the session")
+        .expect("session");
+    assert_eq!(saved.queue.cursor, 2);
+}
+
+#[test]
+fn when_every_entry_fails_the_player_rests_at_the_end_and_the_last_failure_is_reported() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness.actor_mut().native.state = "ended".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| actor.navigate("end", true, true));
+    for message in ["Cannot open the file", player_core::REMOTE_LINK_LOST] {
+        let attempt = harness.fake.next_command();
+        assert_eq!(attempt.op, "load");
+        harness.fake.refuse_load(&attempt, message);
+    }
+    let (actor, result) = handle.join().expect("walk thread");
+    assert!(result.is_ok(), "{:?}", result.err());
+    harness.fake.no_command();
+    harness.actor = Some(actor);
+    let snapshot = harness.actor().publish_snapshot();
+    assert_eq!(snapshot.state, "ended");
+    assert!(!snapshot.is_playing);
+    // The unreachable server is what the user is told, whichever failed last.
+    assert_eq!(
+        snapshot.start_failure.map(|notice| notice.kind),
+        Some("unreachable")
+    );
+    assert_eq!(
+        harness.actor().queue.as_ref().map(PlaybackQueue::cursor),
+        Some(0)
+    );
+}
+
+#[test]
+fn repeat_one_retries_only_the_same_track_and_repeat_off_stops_after_the_last_entry() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+
+    // Repeat-one: one attempt at the track that ended, no walking.
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::One);
+    harness.actor_mut().native.state = "ended".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| actor.navigate("end", true, true));
+    let attempt = harness.fake.next_command();
+    assert_eq!(
+        attempt.track_id.as_deref(),
+        Some(fixture.first.to_string().as_str())
+    );
+    harness.fake.refuse_load(&attempt, "Cannot open the file");
+    let (actor, result) = handle.join().expect("walk thread");
+    assert!(result.is_ok());
+    harness.fake.no_command();
+    assert_eq!(actor.publish_snapshot().state, "ended");
+
+    // Repeat-off at the last entry: nothing to try, an ordinary end without a notice.
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness
+        .actor_mut()
+        .queue
+        .as_mut()
+        .expect("queue")
+        .set_cursor(2)
+        .expect("last entry");
+    harness.actor_mut().native.state = "ended".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| actor.navigate("end", true, true));
+    let (actor, result) = handle.join().expect("walk thread");
+    assert!(result.is_ok());
+    harness.fake.no_command();
+    let snapshot = actor.publish_snapshot();
+    assert_eq!(snapshot.state, "ended");
+    assert!(snapshot.start_failure.is_none());
+}
+
+#[test]
+fn a_choice_of_the_user_ends_the_walk_before_its_next_entry() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness.actor_mut().native.state = "ended".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| actor.navigate("end", true, true));
+    let attempt = harness.fake.next_command();
+    assert_eq!(attempt.op, "load");
+    // The user taps a track while the first entry is still being opened.
+    let (response, _answer) = mpsc::sync_channel(1);
+    harness
+        .shared
+        .requests
+        .try_send(ActorRequest::Command {
+            request_id: "tap".to_owned(),
+            action: PlaybackAction::select_track(fixture.second.to_string(), None),
+            response,
+        })
+        .expect("queue the user's choice");
+    let (actor, result) = handle.join().expect("walk thread");
+    assert_eq!(result.err().as_deref(), Some(SUPERSEDED_MESSAGE));
+    assert_eq!(harness.fake.next_command().op, "cancel_load");
+    assert_eq!(
+        actor.held_requests.len(),
+        1,
+        "the user's choice is handled next"
+    );
+    assert!(
+        actor.start_failures.1.is_none(),
+        "a replaced start reports nothing"
+    );
 }

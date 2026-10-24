@@ -494,6 +494,18 @@ impl player_core::RemoteContent for RemoteFiles {
     fn release(&self, source_id: SourceId, path: &str) {
         self.release_streams(source_id, path);
     }
+
+    fn server_key(&self, source_id: SourceId) -> String {
+        // The account is the server: every source of one account is down together (`RemoteConnections`).
+        let data_dir = self.settings.data_directory().map(Path::to_path_buf);
+        match (data_dir, self.settings.snapshot()) {
+            (Some(data_dir), Ok(settings)) => self
+                .connections
+                .resolver(data_dir, &settings)
+                .account_id(source_id),
+            _ => source_id.to_string(),
+        }
+    }
 }
 
 impl RemoteFiles {

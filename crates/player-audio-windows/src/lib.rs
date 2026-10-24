@@ -861,6 +861,11 @@ impl PlayerHandle {
         self.inner.loads.requested()
     }
 
+    /// Whether a load has been asked for that the worker has not dealt with yet.
+    pub fn load_in_flight(&self) -> bool {
+        self.inner.loads.in_flight()
+    }
+
     pub fn request_play(&self) -> Result<CommandTicket, AudioError> {
         self.enqueue_with_ack(Command::Play)
     }
@@ -1112,8 +1117,16 @@ impl PlayerHandle {
             load_number,
         }) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => Err(AudioError::CommandQueueFull),
-            Err(TrySendError::Disconnected(_)) => Err(AudioError::WorkerStopped),
+            Err(error) => {
+                // A load that never reached the worker is not waiting for anything.
+                if load_number != 0 {
+                    self.inner.loads.note_finished();
+                }
+                Err(match error {
+                    TrySendError::Full(_) => AudioError::CommandQueueFull,
+                    TrySendError::Disconnected(_) => AudioError::WorkerStopped,
+                })
+            }
         }
     }
 }
@@ -1316,7 +1329,7 @@ fn worker_loop(
                 let queued = if queued.load_number != 0 {
                     // The newest choice of track replaces the one whose file is still being checked.
                     if let Some(older) = pending.take() {
-                        older.abandon_with(AudioError::superseded());
+                        older.abandon_with(AudioError::superseded(), &loads);
                     }
                     match start_probe(queued, &backend, &supervisor, &loads) {
                         Ok(started) => {
@@ -1329,7 +1342,7 @@ fn worker_loop(
                     if matches!(queued.command, Command::Stop) {
                         // Stopping ends the choice of a track whose file was still being checked.
                         if let Some(older) = pending.take() {
-                            older.abandon_with(AudioError::superseded());
+                            older.abandon_with(AudioError::superseded(), &loads);
                         }
                     }
                     Some(queued)
@@ -1369,6 +1382,7 @@ fn worker_loop(
                 }
                 // The file does not open: nothing changes, only the caller is told.
                 PendingPoll::Failed(queued, error) => {
+                    loads.note_finished();
                     if let Some(acknowledgement) = queued.acknowledgement {
                         let _ = acknowledgement.try_send(Err(error));
                     }
@@ -1427,6 +1441,7 @@ fn run_queued(
     };
     if queued.load_number != 0 {
         player_core::end_load();
+        loads.note_finished();
     }
     update_position(backend, snapshot, events, meter);
     if let Some(acknowledgement) = queued.acknowledgement {
@@ -1515,8 +1530,9 @@ fn start_probe(
 
 impl PendingLoad {
     /// Answer the load with `error` and drop it; its helper thread stops reading.
-    fn abandon_with(self, error: AudioError) {
+    fn abandon_with(self, error: AudioError, loads: &player_core::LoadCounter) {
         self.abandoned.store(true, AtomicOrdering::SeqCst);
+        loads.note_finished();
         if let Some(acknowledgement) = self.queued.acknowledgement {
             let _ = acknowledgement.try_send(Err(error));
         }

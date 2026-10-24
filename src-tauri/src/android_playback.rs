@@ -19,8 +19,9 @@ use std::{
 };
 
 use player_core::{
-    display_track_title, MediaLocator, PlaybackCheckpoint, PlaybackQueue, PlaybackQueueSnapshot,
-    QueueRepeatMode, QueueTrackListeningStats, TrackId, TrackListSort, TrackSummary,
+    display_track_title, MediaLocator, NaturalWalk, PlaybackCheckpoint, PlaybackQueue,
+    PlaybackQueueSnapshot, QueueRepeatMode, QueueTrackListeningStats, StartFailure, TrackId,
+    TrackListSort, TrackSummary,
 };
 use player_db::{Database, PlaybackSessionCheckpoint};
 use serde::{Deserialize, Serialize};
@@ -160,6 +161,9 @@ struct NativeCommand {
     can_next: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     can_previous: Option<bool>,
+    /// `cancel_load`: the command id of the load that is no longer wanted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_command_id: Option<String>,
 }
 
 /// Covers larger than this are not sent to the service (the notification shows a small picture anyway).
@@ -212,6 +216,10 @@ struct NativeEvent {
     track_id: Option<String>,
     position_ms: Option<u64>,
     snapshot: Option<NativePlaybackSnapshot>,
+    /// On a failed load: the track that was playing was left alone (the new file could not be opened first), so
+    /// nothing of the old state is lost (ADR 0036).
+    #[serde(default)]
+    retained: Option<bool>,
 }
 
 fn parse_event_id(value: &str) -> Option<u64> {
@@ -374,6 +382,7 @@ fn empty_snapshot(shuffle: bool, repeat_mode: RepeatMode) -> PlaybackSnapshot {
         can_next: false,
         can_previous: false,
         output_format: None,
+        start_failure: None,
     }
 }
 
@@ -417,6 +426,8 @@ struct AndroidActor {
     resume_on_restore: bool,
     resume_reported: std::cell::Cell<bool>,
     resume_sink: Option<Arc<dyn Fn(bool) + Send + Sync>>,
+    /// How many starts of a track failed so far, and why the last one did (`PlaybackSnapshot::start_failure`).
+    start_failures: (u64, Option<StartFailure>),
 }
 
 impl AndroidActor {
@@ -455,6 +466,58 @@ impl AndroidActor {
             resume_on_restore: false,
             resume_reported: std::cell::Cell::new(false),
             resume_sink: None,
+            start_failures: (0, None),
+        }
+    }
+
+    /// A track could not be started; nothing changed. The snapshot carries it to the front end.
+    fn note_start_failure(&mut self, failure: StartFailure) {
+        self.start_failures.0 += 1;
+        self.start_failures.1 = Some(failure);
+    }
+
+    /// The error of a manual start, in words the front end recognises, noted for the snapshot. A start that a newer
+    /// choice replaced stays "superseded" (nothing shows it).
+    fn start_error(&mut self, error: String) -> String {
+        match StartFailure::from_message(&error) {
+            None => error,
+            Some(failure) => {
+                self.note_start_failure(failure);
+                failure.message().to_owned()
+            }
+        }
+    }
+
+    /// The server a track is on (`None` for a local file).
+    fn server_key_of_track(&self, track_id: TrackId) -> Option<String> {
+        let uri = crate::android_dsd::playable_uri(&self.database, track_id).ok()?;
+        crate::remote_server_key_of(&uri)
+    }
+
+    /// Close the listening segment of the track that is being replaced, as of now: it kept playing while the new file
+    /// was opened, and that time counts. The newest snapshot of it still waiting in the queue is used.
+    fn seal_outgoing_segment(&mut self) {
+        self.drain_native_events();
+        let fresh = self
+            .deferred_events
+            .iter()
+            .rev()
+            .filter(|event| event.kind == "snapshot")
+            .filter_map(|event| event.snapshot.as_ref())
+            .find(|snapshot| {
+                snapshot.track_id == self.native.track_id
+                    && snapshot.media_key == self.native.media_key
+                    && snapshot.load_instance == self.native.load_instance
+            })
+            .cloned();
+        self.meter
+            .seal_segment(fresh.as_ref().unwrap_or(&self.native), Instant::now());
+    }
+
+    /// Save what the meter has counted after a switch of tracks; a failure shows as the stats status.
+    fn flush_statistics_after_switch(&mut self) {
+        if let Err(error) = self.flush_statistics() {
+            self.stats_status = Some(error);
         }
     }
 
@@ -512,9 +575,9 @@ impl AndroidActor {
         action: PlaybackAction,
     ) -> Result<PlaybackSnapshot, String> {
         match action {
-            PlaybackAction::SelectTrack { track_id, source } => {
-                self.select_track(request_id, &track_id, source)
-            }
+            PlaybackAction::SelectTrack { track_id, source } => self
+                .select_track(request_id, &track_id, source)
+                .map_err(|error| self.start_error(error)),
             PlaybackAction::Play => {
                 if self.native.track_id.is_none() || self.native.media_key.is_none() {
                     let logical_track_id = self
@@ -543,8 +606,12 @@ impl AndroidActor {
                 }
                 self.native_command(request_id, "set_volume", None, None, Some(volume))
             }
-            PlaybackAction::Next { natural } => self.navigate(request_id, true, natural),
-            PlaybackAction::Previous => self.navigate(request_id, false, false),
+            PlaybackAction::Next { natural } => self
+                .navigate(request_id, true, natural)
+                .map_err(|error| self.start_error(error)),
+            PlaybackAction::Previous => self
+                .navigate(request_id, false, false)
+                .map_err(|error| self.start_error(error)),
             PlaybackAction::SetRepeat(mode) => {
                 self.repeat_mode = mode;
                 if let Some(queue) = self.queue.as_mut() {
@@ -707,47 +774,7 @@ impl AndroidActor {
             }
             return self.reload_current_for_explicit_play(request_id, track_id);
         }
-        let track = self
-            .database
-            .get_track_summary(track_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
-            .map_err(|error| error.to_string())?;
-        self.meter.seal_segment(&self.native, Instant::now());
-        self.flush_statistics()?;
-        let command = self.new_command(
-            request_id,
-            "load",
-            Some(track_id.to_string()),
-            Some(uri),
-            Some(self.native_metadata(&track)),
-            Some(0),
-            None,
-            Some(true),
-            None,
-            None,
-        );
-        let native = match self.transact(command) {
-            Ok(native) => native,
-            Err(error) => {
-                self.meter.reset_segment(&self.native, Instant::now());
-                return Err(error);
-            }
-        };
-        self.native = native;
-        self.restored_position_ms = None;
-        self.current_track = Some(track);
-        self.queue
-            .as_mut()
-            .ok_or_else(|| "播放佇列在曲目切換期間消失。".to_owned())?
-            .set_cursor(cursor)
-            .map_err(|error| format!("播放佇列游標無效：{error}"))?;
-        self.publish_queue();
-        self.checkpoint_position(true)?;
-        self.last_flush = Instant::now();
-        self.update_capabilities(request_id)?;
-        self.publish_snapshot_checked(false)
+        self.start_entry(request_id, track_id, cursor, true)
     }
 
     fn load_track_and_replace_queue(
@@ -758,8 +785,6 @@ impl AndroidActor {
         replacement_queue: PlaybackQueue,
         play_when_ready: bool,
     ) -> Result<PlaybackSnapshot, String> {
-        self.meter.seal_segment(&self.native, Instant::now());
-        self.flush_statistics()?;
         let command = self.new_command(
             request_id,
             "load",
@@ -772,14 +797,9 @@ impl AndroidActor {
             None,
             None,
         );
-        let native = match self.transact(command) {
-            Ok(native) => native,
-            Err(error) => {
-                self.meter.reset_segment(&self.native, Instant::now());
-                return Err(error);
-            }
-        };
-        self.native = native;
+        // Nothing is committed unless the new track has been opened; a failure leaves the track that plays alone.
+        self.native = self.transact(command)?;
+        self.flush_statistics_after_switch();
         self.restored_position_ms = None;
         self.current_track = Some(track);
         self.queue = Some(replacement_queue);
@@ -790,41 +810,22 @@ impl AndroidActor {
         self.publish_snapshot_checked(false)
     }
 
-    fn navigate(
+    /// Start the queue entry at `target_cursor` (`track_id`): the file is opened first, and only then do the current
+    /// track, the queue cursor and the saved session change. A failure changes nothing.
+    fn start_entry(
         &mut self,
         request_id: &str,
-        next: bool,
-        natural: bool,
+        track_id: TrackId,
+        target_cursor: usize,
+        play_when_ready: bool,
     ) -> Result<PlaybackSnapshot, String> {
-        let Some(queue) = self.queue.as_ref() else {
-            return Ok(self.publish_snapshot());
-        };
-        let preview = if next {
-            queue.preview_next(!natural)
-        } else {
-            queue.preview_previous()
-        };
-        let Some((track_id, target_cursor)) = preview else {
-            if natural {
-                self.native.state = "ended".to_owned();
-                self.native.position_ms =
-                    self.native.duration_ms.unwrap_or(self.native.position_ms);
-                self.meter.seal_segment(&self.native, Instant::now());
-                self.checkpoint_position(true)?;
-                self.flush_statistics()?;
-            }
-            return Ok(self.publish_snapshot());
-        };
         let track = self
             .database
             .get_track_summary(track_id)
             .map_err(|error| error.to_string())?
-            .ok_or_else(|| "佇列中的曲目暫時不在曲庫中。".to_owned())?;
+            .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
         let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
-        let play_when_ready = natural || counts_as_playing(&self.native.state);
-        self.meter.seal_segment(&self.native, Instant::now());
-        self.flush_statistics()?;
         let command = self.new_command(
             request_id,
             "load",
@@ -837,25 +838,97 @@ impl AndroidActor {
             None,
             None,
         );
-        let native = match self.transact(command) {
-            Ok(native) => native,
-            Err(error) => {
-                self.meter.reset_segment(&self.native, Instant::now());
-                return Err(error);
-            }
-        };
-        self.native = native;
+        self.native = self.transact(command)?;
+        self.flush_statistics_after_switch();
         self.restored_position_ms = None;
         self.current_track = Some(track);
         self.queue
             .as_mut()
-            .ok_or_else(|| "播放佇列在切換期間消失。".to_owned())?
+            .ok_or_else(|| "播放佇列在曲目切換期間消失。".to_owned())?
             .set_cursor(target_cursor)
             .map_err(|error| format!("播放佇列游標無效：{error}"))?;
         self.publish_queue();
         self.checkpoint_position(true)?;
         self.update_capabilities(request_id)?;
         self.publish_snapshot_checked(false)
+    }
+
+    /// Next or previous by the user's own action (the screen, the notification, a headset): one attempt.
+    fn navigate(
+        &mut self,
+        request_id: &str,
+        next: bool,
+        natural: bool,
+    ) -> Result<PlaybackSnapshot, String> {
+        if next && natural {
+            return self.start_after_natural_end(request_id);
+        }
+        let Some(queue) = self.queue.as_ref() else {
+            return Ok(self.publish_snapshot());
+        };
+        let preview = if next {
+            queue.preview_next(true)
+        } else {
+            queue.preview_previous()
+        };
+        let Some((track_id, target_cursor)) = preview else {
+            return Ok(self.publish_snapshot());
+        };
+        let play_when_ready = counts_as_playing(&self.native.state);
+        self.start_entry(request_id, track_id, target_cursor, play_when_ready)
+    }
+
+    /// The playing track ended: start the next entry of the queue that can be started (ADR 0036). Each entry is tried
+    /// once in traversal order and a failure goes on to the next (`player_core::NaturalWalk` decides: the repeat modes,
+    /// and a server that could not be reached is skipped without trying its other entries). The cursor and the current
+    /// track change only for the entry that starts. When none starts, the player rests at the end of the track and the
+    /// last failure is noted. A choice of the user ends the walk.
+    fn start_after_natural_end(&mut self, request_id: &str) -> Result<PlaybackSnapshot, String> {
+        let Some(queue) = self.queue.as_ref() else {
+            return Ok(self.publish_snapshot());
+        };
+        let mut walk = NaturalWalk::new(queue.len(), queue.cursor(), queue.repeat_mode());
+        loop {
+            if self.choosing_request_waits() {
+                return Err(SUPERSEDED_MESSAGE.to_owned());
+            }
+            let candidate = {
+                let queue = self.queue.as_ref();
+                walk.next_candidate(|cursor| {
+                    queue
+                        .and_then(|queue| queue.track_at_cursor(cursor))
+                        .and_then(|track_id| self.server_key_of_track(track_id))
+                })
+            };
+            let Some(cursor) = candidate else {
+                break;
+            };
+            let Some(track_id) = self
+                .queue
+                .as_ref()
+                .and_then(|queue| queue.track_at_cursor(cursor))
+            else {
+                break;
+            };
+            let server = self.server_key_of_track(track_id);
+            match self.start_entry(request_id, track_id, cursor, true) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => match StartFailure::from_message(&error) {
+                    // Replaced by a choice of the user: that choice goes on.
+                    None => return Err(error),
+                    Some(failure) => walk.failed(failure, server),
+                },
+            }
+        }
+        if let Some(failure) = walk.final_failure() {
+            self.note_start_failure(failure);
+        }
+        self.native.state = "ended".to_owned();
+        self.native.position_ms = self.native.duration_ms.unwrap_or(self.native.position_ms);
+        self.meter.seal_segment(&self.native, Instant::now());
+        self.checkpoint_position(true)?;
+        self.flush_statistics()?;
+        Ok(self.publish_snapshot())
     }
 
     fn reload_current_for_explicit_play(
@@ -876,7 +949,6 @@ impl AndroidActor {
         } else {
             self.restored_position_ms.unwrap_or(self.native.position_ms)
         };
-        self.meter.seal_segment(&self.native, Instant::now());
         let command = self.new_command(
             request_id,
             "load",
@@ -983,7 +1055,26 @@ impl AndroidActor {
             play_when_ready,
             can_next,
             can_previous,
+            target_command_id: None,
         }
+    }
+
+    /// Tell the service a load is no longer wanted: if its file is still being checked, it is not switched to.
+    fn cancel_native_load(&mut self, command: &NativeCommand) {
+        let mut cancel = self.new_command(
+            &command.request_id,
+            "cancel_load",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        cancel.target_command_id = Some(command.command_id.clone());
+        let _ = self.commands.try_send(cancel);
     }
 
     fn transact(&mut self, command: NativeCommand) -> Result<NativePlaybackSnapshot, String> {
@@ -1017,10 +1108,14 @@ impl AndroidActor {
         let preemptible = command.op == "load";
         loop {
             if preemptible && self.choosing_request_waits() {
+                self.cancel_native_load(&command);
                 return Err(SUPERSEDED_MESSAGE.to_owned());
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                if preemptible {
+                    self.cancel_native_load(&command);
+                }
                 return Err("Android 播放服務沒有在期限內確認命令。".to_owned());
             }
             let slice = if preemptible {
@@ -1039,6 +1134,11 @@ impl AndroidActor {
                                 && event.request_id.as_deref() == Some(request_id.as_str()) =>
                         {
                             if let Some(error) = event.error.clone() {
+                                if event.retained == Some(true) {
+                                    // The new file could not be opened and the service left the track that plays
+                                    // alone: nothing of the old state is lost.
+                                    return Err(error);
+                                }
                                 self.invalidate_failed_load(
                                     &command,
                                     &error,
@@ -1107,6 +1207,9 @@ impl AndroidActor {
                                 self.event_fence
                                     .advance_snapshot_watermark(generation, event_id);
                             }
+                            if command.op == "load" {
+                                self.seal_outgoing_segment();
+                            }
                             self.meter.observe(&snapshot, Instant::now());
                             self.native = snapshot.clone();
                             return Ok(snapshot);
@@ -1117,6 +1220,9 @@ impl AndroidActor {
                 Err(RecvTimeoutError::Timeout) => {
                     self.periodic_checkpoint();
                     if Instant::now() >= deadline {
+                        if preemptible {
+                            self.cancel_native_load(&command);
+                        }
                         let error = "Android 播放服務沒有在期限內確認命令。";
                         self.invalidate_failed_load(
                             &command,
@@ -1153,6 +1259,7 @@ impl AndroidActor {
             return;
         }
 
+        self.seal_outgoing_segment();
         let logical_position = if self.native.track_id.is_some() {
             self.native.position_ms
         } else {
@@ -1295,7 +1402,6 @@ impl AndroidActor {
         } else {
             self.restored_position_ms.unwrap_or(self.native.position_ms)
         };
-        self.meter.seal_segment(&self.native, Instant::now());
         let command = self.new_command(
             request_id,
             "load",
@@ -1344,11 +1450,15 @@ impl AndroidActor {
         match event.action.as_deref() {
             Some("next") => {
                 let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed).to_string();
-                let _ = self.navigate(&request_id, true, false);
+                if let Err(error) = self.navigate(&request_id, true, false) {
+                    self.start_error(error);
+                }
             }
             Some("previous") => {
                 let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed).to_string();
-                let _ = self.navigate(&request_id, false, false);
+                if let Err(error) = self.navigate(&request_id, false, false) {
+                    self.start_error(error);
+                }
             }
             Some("seek") => {
                 if let Some(position) = event.position_ms {
@@ -1443,6 +1553,10 @@ impl AndroidActor {
             can_next: queue.is_some_and(PlaybackQueue::can_next),
             can_previous: queue.is_some_and(PlaybackQueue::can_previous),
             output_format: None,
+            start_failure: self.start_failures.1.map(|failure| crate::StartFailureNotice {
+                kind: failure.name(),
+                sequence: self.start_failures.0,
+            }),
         };
         *self
             .shared
@@ -1917,6 +2031,7 @@ mod tests {
             play_when_ready: Some(false),
             can_next: None,
             can_previous: None,
+            target_command_id: None,
         };
         let json = serde_json::to_value(command).expect("serialize command");
         assert_eq!(
@@ -2008,6 +2123,7 @@ mod tests {
             track_id: Some(track_id),
             position_ms: None,
             snapshot: None,
+            retained: None,
         };
         assert!(fence.matches_transport(&active, &queued_next));
         assert!(fence.accept_transport(7, 11)); // ACK watermark does not consume transport
@@ -2044,6 +2160,7 @@ mod tests {
             play_when_ready: Some(false),
             can_next: None,
             can_previous: None,
+            target_command_id: None,
         };
         let delayed_old_slot = NativePlaybackSnapshot {
             media_key: Some("load-7".into()),
