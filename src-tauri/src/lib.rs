@@ -2312,10 +2312,10 @@ fn remote_server_key_of(uri: &str) -> Option<String> {
     else {
         return None;
     };
-    Some(
-        player_core::remote_content()
-            .map_or_else(|| source_id.to_string(), |content| content.server_key(source_id)),
-    )
+    Some(player_core::remote_content().map_or_else(
+        || source_id.to_string(),
+        |content| content.server_key(source_id),
+    ))
 }
 
 /// The failure of the newest start of a track that did not happen, with a number that grows with each one, so the
@@ -11438,9 +11438,10 @@ async fn advance_ended_queue(
         };
         match attempt {
             Ok((ticket, track, cursor, server)) => {
-                let answer = tauri::async_runtime::spawn_blocking(move || ticket.wait(TRACK_LOAD_WAIT))
-                    .await
-                    .map_err(|error| format!("等待播放命令工作失敗：{error}"))?;
+                let answer =
+                    tauri::async_runtime::spawn_blocking(move || ticket.wait(TRACK_LOAD_WAIT))
+                        .await
+                        .map_err(|error| format!("等待播放命令工作失敗：{error}"))?;
                 match answer {
                     Ok(_) => {
                         reset_queue_advance_pending(service);
@@ -11503,7 +11504,9 @@ fn begin_ended_walk(service: &WindowsPlaybackService) -> Option<player_core::Nat
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
-        .map(|queue| player_core::NaturalWalk::new(queue.len(), queue.cursor(), queue.repeat_mode()))?;
+        .map(|queue| {
+            player_core::NaturalWalk::new(queue.len(), queue.cursor(), queue.repeat_mode())
+        })?;
     // Stays set while the player rests at the end (every attempt failed), so the walk is not started again every
     // poll; it is cleared as soon as the player leaves the ended state.
     *pending = true;
@@ -11525,7 +11528,9 @@ fn ended_walk_server_key(
     {
         return None;
     }
-    let path = database.resolve_playable_filesystem_locator(track_id).ok()?;
+    let path = database
+        .resolve_playable_filesystem_locator(track_id)
+        .ok()?;
     remote_server_key_of(path.to_str()?)
 }
 
@@ -15600,7 +15605,13 @@ mod windows_library_integration_tests {
     impl AudioBackend for ScriptedLoads {
         fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
             self.attempts.lock().unwrap().push(path.to_path_buf());
-            if self.failing.lock().unwrap().iter().any(|failing| failing == path) {
+            if self
+                .failing
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|failing| failing == path)
+            {
                 return Err(AudioError::FileOpen {
                     path: path.to_path_buf(),
                     message: "no such file".to_owned(),
@@ -15741,7 +15752,13 @@ mod windows_library_integration_tests {
         }
 
         fn cursor(&self) -> usize {
-            self.service.queue.lock().unwrap().as_ref().unwrap().cursor()
+            self.service
+                .queue
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .cursor()
         }
 
         fn end_the_track(&self) {
@@ -15779,7 +15796,10 @@ mod windows_library_integration_tests {
         assert_eq!(snapshot.state, "playing");
         assert!(snapshot.is_playing);
         assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
-        assert_eq!(snapshot.current_track.map(|track| track.id), Some(fixture.order[0]));
+        assert_eq!(
+            snapshot.current_track.map(|track| track.id),
+            Some(fixture.order[0])
+        );
         assert_eq!(fixture.cursor(), 0);
         assert_eq!(
             fixture.attempts.lock().unwrap().len(),
@@ -15799,8 +15819,14 @@ mod windows_library_integration_tests {
         assert_eq!(fixture.cursor(), 2);
         let snapshot = fixture.service.snapshot();
         assert_eq!(snapshot.state, "playing");
-        assert_eq!(snapshot.current_track.map(|track| track.id), Some(fixture.order[2]));
-        assert!(snapshot.start_failure.is_none(), "an entry started: nothing to report");
+        assert_eq!(
+            snapshot.current_track.map(|track| track.id),
+            Some(fixture.order[2])
+        );
+        assert!(
+            snapshot.start_failure.is_none(),
+            "an entry started: nothing to report"
+        );
         let attempts = fixture.attempts.lock().unwrap().clone();
         assert_eq!(attempts, vec![fixture.path_of(1), fixture.path_of(2)]);
     }
@@ -15814,15 +15840,27 @@ mod windows_library_integration_tests {
         fixture.walk();
         let snapshot = fixture.service.snapshot();
         assert_eq!(snapshot.state, "ended");
-        assert_eq!(fixture.cursor(), 0, "the cursor moves only for an entry that started");
-        assert_eq!(snapshot.current_track.map(|track| track.id), Some(fixture.order[0]));
-        let notice = snapshot.start_failure.expect("the last failure is reported");
+        assert_eq!(
+            fixture.cursor(),
+            0,
+            "the cursor moves only for an entry that started"
+        );
+        assert_eq!(
+            snapshot.current_track.map(|track| track.id),
+            Some(fixture.order[0])
+        );
+        let notice = snapshot
+            .start_failure
+            .expect("the last failure is reported");
         assert_eq!((notice.kind, notice.sequence), ("unplayable", 1));
         assert_eq!(fixture.attempts.lock().unwrap().len(), 2);
         // The next poll does not start the walk again.
         fixture.walk();
         assert_eq!(fixture.attempts.lock().unwrap().len(), 2);
-        assert_eq!(fixture.service.snapshot().start_failure.unwrap().sequence, 1);
+        assert_eq!(
+            fixture.service.snapshot().start_failure.unwrap().sequence,
+            1
+        );
     }
 
     #[test]

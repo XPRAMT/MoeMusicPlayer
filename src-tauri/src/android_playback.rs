@@ -1553,10 +1553,13 @@ impl AndroidActor {
             can_next: queue.is_some_and(PlaybackQueue::can_next),
             can_previous: queue.is_some_and(PlaybackQueue::can_previous),
             output_format: None,
-            start_failure: self.start_failures.1.map(|failure| crate::StartFailureNotice {
-                kind: failure.name(),
-                sequence: self.start_failures.0,
-            }),
+            start_failure: self
+                .start_failures
+                .1
+                .map(|failure| crate::StartFailureNotice {
+                    kind: failure.name(),
+                    sequence: self.start_failures.0,
+                }),
         };
         *self
             .shared
