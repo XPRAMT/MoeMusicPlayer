@@ -70,6 +70,8 @@ object FloatingLyricsOverlay {
     private var align = "center"
     private var fontSizePx = 28
     private var translationScalePercent = 80
+    /** Weight of the original text (this tab's own `fontWeight`); the translation row is 50 lighter. */
+    private var fontWeight = FloatingLyricsRules.DEFAULT_FONT_WEIGHT
     private var useCustomColor = false
     private var customColor = "#00e1ff"
     private var showTranslation = true
@@ -226,6 +228,7 @@ object FloatingLyricsOverlay {
         align = settings.optString("align", "center")
         fontSizePx = settings.optInt("fontSizePx", 28).coerceIn(1, 50)
         translationScalePercent = settings.optInt("translationScalePercent", 80).coerceIn(1, 100)
+        fontWeight = FloatingLyricsRules.fontWeight(settings.optInt("fontWeight", FloatingLyricsRules.DEFAULT_FONT_WEIGHT))
         useCustomColor = settings.optBoolean("useCustomColor", false)
         customColor = settings.optString("customColor", "#00e1ff")
         showTranslation = settings.optBoolean("showTranslation", true)
@@ -603,7 +606,8 @@ object FloatingLyricsOverlay {
             val shadow = if (effectiveEffect == "shadow") (FloatingLyricsRules.SHADOW_ALPHA shl 24) or effect else 0
             val strokeWidth = if (effectiveEffect == "stroke") maxOf(1f, px * 0.08f) else 0f
             val strokeColor = if (effectiveEffect == "stroke") 0x80000000.toInt() or effect else 0
-            view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor)
+            val weight = if (view === mainText) fontWeight else FloatingLyricsRules.auxiliaryFontWeight(fontWeight)
+            view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor, weight)
             if (view === mainText) view.setAccent(accentColor)
             // Animation "none": the line at the main opacity; "continuous": 1, the static mask carries main and secondary.
             view.alpha = FloatingLyricsRules.lineViewAlpha(animation, mainOpacityPercent)
@@ -714,7 +718,7 @@ object FloatingLyricsOverlay {
      * using the same cells (each cell as wide as the wider text, one U+3000 of the main line apart).
      */
     private fun stripFor(main: LyricLineView, second: LyricLineView?): Strip? {
-        val key = listOf(lines, showTranslation, main.textWidth("\u3000"), second?.textWidth("\u3000"))
+        val key = listOf(lines, showTranslation, main.textWidth("\u3000"), second?.textWidth("\u3000"), fontWeight)
         main.setKaraoke(null, null, 0.0)
         strip?.let { if (it.key == key) return it }
         val keptLines = lines.filter { line ->

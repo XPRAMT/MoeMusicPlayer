@@ -9,6 +9,8 @@ internal data class LineLook(
     val strokeWidth: Float,
     val strokeColor: Int,
     val density: Float,
+    /** Font weight of this line's typeface: lines drawn at another weight are other bitmaps. */
+    val weight: Int = FloatingLyricsRules.DEFAULT_FONT_WEIGHT,
 )
 
 /**

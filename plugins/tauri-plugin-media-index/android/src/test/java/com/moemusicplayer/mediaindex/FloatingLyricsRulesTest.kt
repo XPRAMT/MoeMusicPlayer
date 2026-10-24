@@ -226,7 +226,7 @@ class FloatingLyricsRulesTest {
         cache.setLook(look.copy())
         assertEquals(2, cache.size)
         for (changed in listOf(look.copy(sizePx = 41f), look.copy(color = 0), look.copy(shadowRadius = 0f),
-            look.copy(shadowColor = 1), look.copy(strokeWidth = 1f), look.copy(strokeColor = 1), look.copy(density = 3f))) {
+            look.copy(shadowColor = 1), look.copy(strokeWidth = 1f), look.copy(strokeColor = 1), look.copy(density = 3f), look.copy(weight = 700))) {
             cache.get("a")
             cache.setLook(changed)
             assertEquals(0, cache.size)
@@ -236,6 +236,28 @@ class FloatingLyricsRulesTest {
         cache.retain(setOf("b"))
         assertEquals(listOf("a", "c"), released.sorted())
         assertEquals(1, cache.size)
+    }
+
+    @Test
+    fun fontWeightRangesAndTheTranslationOffsetMatchTheSettings() {
+        assertEquals(550, FloatingLyricsRules.DEFAULT_FONT_WEIGHT)
+        assertEquals(100, FloatingLyricsRules.fontWeight(0))
+        assertEquals(1000, FloatingLyricsRules.fontWeight(5_000))
+        assertEquals(300, FloatingLyricsRules.fontWeight(300))
+        assertEquals(500, FloatingLyricsRules.auxiliaryFontWeight(550))
+        assertEquals(50, FloatingLyricsRules.auxiliaryFontWeight(100))
+        assertEquals(950, FloatingLyricsRules.auxiliaryFontWeight(1000))
+    }
+
+    @Test
+    fun weightToTypefaceUsesTheExactWeightFromApi28AndBoldFrom600Before() {
+        assertEquals(FloatingLyricsRules.TypefaceChoice(550, false), FloatingLyricsRules.typefaceChoice(550, 28))
+        assertEquals(FloatingLyricsRules.TypefaceChoice(700, true), FloatingLyricsRules.typefaceChoice(700, 34))
+        assertEquals(FloatingLyricsRules.TypefaceChoice(1000, true), FloatingLyricsRules.typefaceChoice(5_000, 34))
+        assertEquals(FloatingLyricsRules.TypefaceChoice(null, false), FloatingLyricsRules.typefaceChoice(550, 27))
+        assertEquals(FloatingLyricsRules.TypefaceChoice(null, false), FloatingLyricsRules.typefaceChoice(599, 24))
+        assertEquals(FloatingLyricsRules.TypefaceChoice(null, true), FloatingLyricsRules.typefaceChoice(600, 24))
+        assertEquals(FloatingLyricsRules.TypefaceChoice(null, true), FloatingLyricsRules.typefaceChoice(1000, 26))
     }
 
     @Test

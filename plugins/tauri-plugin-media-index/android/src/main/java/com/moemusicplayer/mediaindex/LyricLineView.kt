@@ -23,6 +23,7 @@ internal class LyricLineView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
         typeface = Typeface.DEFAULT
     }
+    private var fontWeight = FloatingLyricsRules.DEFAULT_FONT_WEIGHT
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
         typeface = Typeface.DEFAULT
         style = Paint.Style.STROKE
@@ -91,7 +92,7 @@ internal class LyricLineView(context: Context) : View(context) {
     private fun styleAccent() {
         accentPaint.set(paint)
         accentPaint.color = accent
-        accentRasters.setLook(LineLook(paint.textSize, accent, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density))
+        accentRasters.setLook(LineLook(paint.textSize, accent, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density, fontWeight))
     }
 
     /**
@@ -138,8 +139,25 @@ internal class LyricLineView(context: Context) : View(context) {
         invalidate()
     }
 
-    fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int, strokeWidth: Float, strokeColor: Int) {
-        val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius || this.strokeWidth != strokeWidth
+    /** The typeface for `weight`: any weight on API 28+, bold from 600 on older systems (see `typefaceChoice`). */
+    private fun typefaceFor(weight: Int): Typeface {
+        val choice = FloatingLyricsRules.typefaceChoice(weight, android.os.Build.VERSION.SDK_INT)
+        return if (choice.weight != null) {
+            Typeface.create(Typeface.DEFAULT, choice.weight, false)
+        } else {
+            Typeface.create(Typeface.DEFAULT, if (choice.bold) Typeface.BOLD else Typeface.NORMAL)
+        }
+    }
+
+    /** `weight` is this view's own (the original text's, or 50 lighter for the translation). A change re-measures and re-rasterises. */
+    fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int, strokeWidth: Float, strokeColor: Int, weight: Int = FloatingLyricsRules.DEFAULT_FONT_WEIGHT) {
+        val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius || this.strokeWidth != strokeWidth || fontWeight != weight
+        if (fontWeight != weight || paint.typeface == null) {
+            fontWeight = weight
+            val face = typefaceFor(weight)
+            paint.typeface = face
+            outlinePaint.typeface = face
+        }
         paint.textSize = sizePx
         paint.color = color
         this.color = color
@@ -154,7 +172,7 @@ internal class LyricLineView(context: Context) : View(context) {
         if (shadowRadius > 0f) paint.setShadowLayer(shadowRadius, 0f, 0f, shadowColor) else paint.clearShadowLayer()
         styleDim()
         fadeAlpha = -1
-        rasters.setLook(LineLook(sizePx, color, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density))
+        rasters.setLook(LineLook(sizePx, color, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density, weight))
         styleAccent()
         if (resize) requestLayout()
         invalidate()
@@ -176,6 +194,7 @@ internal class LyricLineView(context: Context) : View(context) {
 
     /** `target` as `paint` at `factor` of its opacity: the text and, as the shadow colour is not opaque, the shadow too. */
     private fun style(target: Paint, factor: Float) {
+        target.typeface = paint.typeface
         target.textSize = paint.textSize
         target.color = color
         target.alpha = Math.round(android.graphics.Color.alpha(color) * factor)

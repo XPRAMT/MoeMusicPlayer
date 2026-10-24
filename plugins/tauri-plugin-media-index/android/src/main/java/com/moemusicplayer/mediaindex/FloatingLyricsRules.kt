@@ -37,6 +37,29 @@ object FloatingLyricsRules {
     fun lineViewAlpha(animation: String, mainPercent: Int): Float =
         if (animation == "continuous") 1f else mainOpacityPercent(mainPercent) / 100f
 
+    /** Font weight of the original text: settings.rs `LYRICS_FONT_WEIGHT_RANGE` (100-1000) and default 550. */
+    const val DEFAULT_FONT_WEIGHT = 550
+    const val MIN_FONT_WEIGHT = 100
+    const val MAX_FONT_WEIGHT = 1000
+    fun fontWeight(value: Int): Int = value.coerceIn(MIN_FONT_WEIGHT, MAX_FONT_WEIGHT)
+
+    /** Translation rows are 50 lighter than the original text, never below 1. */
+    fun auxiliaryFontWeight(weight: Int): Int = maxOf(1, fontWeight(weight) - 50)
+
+    /** `Typeface.create(family, weight, italic)` takes any weight from API 28; older systems only know normal and bold. */
+    const val WEIGHTED_TYPEFACE_API = 28
+
+    /** On API < 28: bold from 600 (CSS's "semi-bold and heavier"), otherwise normal. */
+    fun legacyBold(weight: Int): Boolean = weight >= 600
+
+    /** Which typeface a weight maps to on `sdkInt`: an exact `weight` (API 28+) or only the `bold` flag (older). */
+    data class TypefaceChoice(val weight: Int?, val bold: Boolean)
+
+    fun typefaceChoice(weight: Int, sdkInt: Int): TypefaceChoice {
+        val value = maxOf(1, minOf(MAX_FONT_WEIGHT, weight))
+        return if (sdkInt >= WEIGHTED_TYPEFACE_API) TypefaceChoice(value, value >= 600) else TypefaceChoice(null, legacyBold(value))
+    }
+
     /** Same range as settings.rs `FloatingLyricsSettings::WIDTH_RANGE_PX` (dp here). */
     /** Stored lyric area width (dp); on screen it is also kept within the screen (`overlayWidth`). */
     fun widthDp(value: Int): Int = value.coerceIn(100, 8192)
