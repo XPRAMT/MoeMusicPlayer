@@ -143,7 +143,15 @@ internal object WordLyricsRules {
         return doubleArrayOf(p.v + u * (p.s + p.c * u), p.s + 2 * p.c * u, p.c)
     }
 
-    fun glideValue(pieces: List<GlidePiece>, time: Double): Double = glideAt(pieces, time)[0]
+    /** The value at `time` (`glide_at`'s first component) without an allocation. */
+    fun glideValue(pieces: List<GlidePiece>, time: Double): Double {
+        if (pieces.isEmpty()) return 0.0
+        val i = pieceIndex(pieces, time)
+        if (i < 0) return pieces[0].v
+        val p = pieces[i]
+        val u = time - p.t
+        return p.v + u * (p.s + p.c * u)
+    }
 
     /** True while the glide still moves at `time` (frames are wanted). */
     fun glideMoving(pieces: List<GlidePiece>, time: Double): Boolean =
@@ -184,43 +192,89 @@ internal object WordLyricsRules {
         return knots
     }
 
+    /** The strip's word glide knots as parallel arrays (lyrics ms, strip px), built once per strip for [knotValue]. */
+    class WordKnots(val times: DoubleArray, val values: DoubleArray) {
+        companion object {
+            fun of(knots: List<Pair<Double, Double>>): WordKnots =
+                WordKnots(DoubleArray(knots.size) { knots[it].first }, DoubleArray(knots.size) { knots[it].second })
+        }
+    }
+
     /**
      * The word glide at lyrics time `time` as `[value, speed, c2, c3]` (`knot_cubic`): the monotone C1 cubic Hermite
      * through [knots] (tangents 0 at the first and last knot, inside the weighted harmonic mean of the neighbouring
      * slopes, Fritsch-Butland); the value at `time + u` is `value + speed u + c2 u^2 + c3 u^3` up to the next knot.
      */
     fun knotCubic(knots: List<Pair<Double, Double>>, time: Double): DoubleArray {
-        val count = knots.size
-        if (count == 0) return doubleArrayOf(0.0, 0.0, 0.0, 0.0)
-        fun tangent(k: Int): Double {
-            if (k == 0 || k >= count - 1) return 0.0
-            val h0 = knots[k].first - knots[k - 1].first
-            val h1 = knots[k + 1].first - knots[k].first
-            if (h0 <= 0 || h1 <= 0) return 0.0
-            val d0 = (knots[k].second - knots[k - 1].second) / h0
-            val d1 = (knots[k + 1].second - knots[k].second) / h1
-            if (d0 <= 0 || d1 <= 0) return 0.0
-            val w0 = 2 * h1 + h0
-            val w1 = h1 + 2 * h0
-            return (w0 + w1) / (w0 / d0 + w1 / d1)
-        }
-        var index = -1
-        while (index + 1 < count && knots[index + 1].first <= time) index++
-        if (index < 0) return doubleArrayOf(knots[0].second, 0.0, 0.0, 0.0)
-        if (index >= count - 1) return doubleArrayOf(knots[count - 1].second, 0.0, 0.0, 0.0)
-        val t0 = knots[index].first
-        val v0 = knots[index].second
-        val h = knots[index + 1].first - t0
-        val m0 = tangent(index)
-        val m1 = tangent(index + 1)
-        val d = (knots[index + 1].second - v0) / h
-        val c2 = (3 * d - 2 * m0 - m1) / h
-        val c3 = (m0 + m1 - 2 * d) / (h * h)
-        val u = time - t0
-        return doubleArrayOf(v0 + u * (m0 + u * (c2 + u * c3)), m0 + u * (2 * c2 + 3 * c3 * u), c2 + 3 * c3 * u, c3)
+        if (knots.isEmpty()) return doubleArrayOf(0.0, 0.0, 0.0, 0.0)
+        val k = WordKnots.of(knots)
+        val out = DoubleArray(4)
+        knotEval(k.times, k.values, time, out)
+        return out
     }
 
     fun knotValue(knots: List<Pair<Double, Double>>, time: Double): Double = knotCubic(knots, time)[0]
+
+    /** [knotValue] on prepared knots: a binary search for the segment, no allocation, the same numbers. */
+    fun knotValue(knots: WordKnots, time: Double): Double = knotEval(knots.times, knots.values, time, null)
+
+    /** The value at `time`; with `out` also `[value, speed, c2, c3]` written into it. */
+    private fun knotEval(times: DoubleArray, values: DoubleArray, time: Double, out: DoubleArray?): Double {
+        val count = times.size
+        if (count == 0) {
+            out?.fill(0.0)
+            return 0.0
+        }
+        // The last knot at or before `time` (-1 before the first).
+        var lo = 0
+        var hi = count
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (times[mid] <= time) lo = mid + 1 else hi = mid
+        }
+        val index = lo - 1
+        if (index < 0 || index >= count - 1) {
+            val value = values[if (index < 0) 0 else count - 1]
+            if (out != null) {
+                out[0] = value
+                out[1] = 0.0
+                out[2] = 0.0
+                out[3] = 0.0
+            }
+            return value
+        }
+        val t0 = times[index]
+        val v0 = values[index]
+        val h = times[index + 1] - t0
+        val m0 = knotTangent(times, values, index)
+        val m1 = knotTangent(times, values, index + 1)
+        val d = (values[index + 1] - v0) / h
+        val c2 = (3 * d - 2 * m0 - m1) / h
+        val c3 = (m0 + m1 - 2 * d) / (h * h)
+        val u = time - t0
+        val value = v0 + u * (m0 + u * (c2 + u * c3))
+        if (out != null) {
+            out[0] = value
+            out[1] = m0 + u * (2 * c2 + 3 * c3 * u)
+            out[2] = c2 + 3 * c3 * u
+            out[3] = c3
+        }
+        return value
+    }
+
+    private fun knotTangent(times: DoubleArray, values: DoubleArray, k: Int): Double {
+        val count = times.size
+        if (k == 0 || k >= count - 1) return 0.0
+        val h0 = times[k] - times[k - 1]
+        val h1 = times[k + 1] - times[k]
+        if (h0 <= 0 || h1 <= 0) return 0.0
+        val d0 = (values[k] - values[k - 1]) / h0
+        val d1 = (values[k + 1] - values[k]) / h1
+        if (d0 <= 0 || d1 <= 0) return 0.0
+        val w0 = 2 * h1 + h0
+        val w1 = h1 + 2 * h0
+        return (w0 + w1) / (w0 / d0 + w1 / d1)
+    }
 
     /**
      * The static continuous-mode mask's gradient stops `(offset 0..1, opacity)` (`centre_mask_stops`, experimental):

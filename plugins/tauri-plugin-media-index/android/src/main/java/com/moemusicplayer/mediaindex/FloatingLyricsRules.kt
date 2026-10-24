@@ -11,15 +11,27 @@ object FloatingLyricsRules {
     /** Terminal continuous-lyrics glide estimate per user-perceived character. */
     const val LYRICS_MS_PER_GRAPHEME = 500L
 
-    /** Estimate the terminal glide end from the last line's graphemes, capped at track end when known. */
-    fun finalLineArrivalMs(lineStartMs: Long, text: String, trackEndMs: Long?): Long {
+    /** "No time" for the primitive (allocation-free) overloads that otherwise take a `Long?`. */
+    const val NO_TIME = Long.MIN_VALUE
+
+    /** Number of user-perceived characters (grapheme clusters) of `text`. */
+    fun graphemeCount(text: String): Int {
         val iterator = java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
         iterator.setText(text)
         var graphemes = 0
         iterator.first()
         while (iterator.next() != java.text.BreakIterator.DONE) graphemes++
+        return graphemes
+    }
+
+    /** Estimate the terminal glide end from the last line's graphemes, capped at track end when known. */
+    fun finalLineArrivalMs(lineStartMs: Long, text: String, trackEndMs: Long?): Long =
+        finalLineArrivalFromGraphemes(lineStartMs, graphemeCount(text), trackEndMs ?: NO_TIME)
+
+    /** [finalLineArrivalMs] with the grapheme count known already (counted once per strip); `trackEndMs` [NO_TIME] when unknown. */
+    fun finalLineArrivalFromGraphemes(lineStartMs: Long, graphemes: Int, trackEndMs: Long): Long {
         val estimated = lineStartMs + maxOf(1, graphemes) * LYRICS_MS_PER_GRAPHEME
-        return trackEndMs?.let { minOf(estimated, it) } ?: estimated
+        return if (trackEndMs != NO_TIME) minOf(estimated, trackEndMs) else estimated
     }
 
     /** Main opacity: same range and default as settings.rs `MAIN_OPACITY_RANGE_PERCENT` (1-100, 100). */
@@ -108,18 +120,32 @@ object FloatingLyricsRules {
      * at shift `offset`, found by binary search on the sorted cells, so a frame never walks the whole song.
      */
     fun stripWindow(cellStarts: FloatArray, cellWidths: FloatArray, offset: Float, viewWidth: Float, marginPx: Float): IntRange {
+        val packed = stripWindowPacked(cellStarts, cellWidths, offset, viewWidth, marginPx)
+        return windowFirst(packed)..windowLast(packed)
+    }
+
+    /**
+     * [stripWindow] without an allocation: the first cell in the high 32 bits and the last cell plus one in the low 32
+     * (an empty window has both equal); read it with [windowFirst] / [windowLast].
+     */
+    fun stripWindowPacked(cellStarts: FloatArray, cellWidths: FloatArray, offset: Float, viewWidth: Float, marginPx: Float): Long {
         val left = -offset - maxOf(0f, marginPx)
         val right = -offset + maxOf(0f, viewWidth) + maxOf(0f, marginPx)
         var lo = 0
         var hi = cellStarts.size
         while (lo < hi) {
             val mid = (lo + hi) ushr 1
-            if (cellStarts[mid] + cellWidths.getOrElse(mid) { 0f } < left) lo = mid + 1 else hi = mid
+            if (cellStarts[mid] + (if (mid < cellWidths.size) cellWidths[mid] else 0f) < left) lo = mid + 1 else hi = mid
         }
         var last = lo - 1
         while (last + 1 < cellStarts.size && cellStarts[last + 1] <= right) last++
-        return lo..last
+        return (lo.toLong() shl 32) or ((last + 1).toLong() and 0xffffffffL)
     }
+
+    fun windowFirst(packed: Long): Int = (packed ushr 32).toInt()
+
+    /** Last cell of a [stripWindowPacked] window (first - 1 when empty). */
+    fun windowLast(packed: Long): Int = (packed and 0xffffffffL).toInt() - 1
 
     /** The point of a cell that sits on the view's alignment point. */
     fun stripAnchor(cellStarts: FloatArray, cellWidths: FloatArray, index: Int, align: String, anchors: FloatArray = FloatArray(0)): Float {
@@ -153,53 +179,99 @@ object FloatingLyricsRules {
         lastGlyphCenters: FloatArray = FloatArray(0),
         firstGlyphCenters: FloatArray = FloatArray(0),
     ): Float {
+        val knots = stripKnots(
+            startTimesMs, cellStarts, cellWidths, align, finalArrivalMs ?: NO_TIME, mainTextWidths, lastGlyphCenters, firstGlyphCenters,
+        ) ?: return 0f
+        return stripKnotsOffset(knots, lyricsMs, stripTarget(viewWidth, targetAlign))
+    }
+
+    /** The strip glide's knots (time ms, anchor px) built once per strip; the per-frame [stripKnotsOffset] only reads them. */
+    class StripKnots(val times: DoubleArray, val values: DoubleArray, val endMs: Long)
+
+    /**
+     * The knots of [stripOffset]: one per line start (its anchor) and, when `finalArrivalMs` ([NO_TIME]: none) is after
+     * the last start, the terminal knot (the last main-text glyph centre). Null when there are no lines.
+     */
+    fun stripKnots(
+        startTimesMs: LongArray,
+        cellStarts: FloatArray,
+        cellWidths: FloatArray,
+        align: String,
+        finalArrivalMs: Long,
+        mainTextWidths: FloatArray = cellWidths,
+        lastGlyphCenters: FloatArray = FloatArray(0),
+        firstGlyphCenters: FloatArray = FloatArray(0),
+    ): StripKnots? {
         val count = minOf(startTimesMs.size, cellStarts.size)
-        if (count == 0) return 0f
-        val target = when (targetAlign) {
-            "right" -> viewWidth.toDouble()
-            "center" -> viewWidth / 2.0
-            else -> 0.0
-        }
+        if (count == 0) return null
         val last = count - 1
-        val end = finalArrivalMs?.takeIf { it > startTimesMs[last] }
-        val knots = count + if (end != null) 1 else 0
-        fun time(k: Int): Double = (if (k < count) startTimesMs[k] else end!!).toDouble()
-        fun value(k: Int): Double {
-            if (k < count) return stripAnchor(cellStarts, cellWidths, k, align, firstGlyphCenters).toDouble()
+        val hasEnd = finalArrivalMs != NO_TIME && finalArrivalMs > startTimesMs[last]
+        val knots = count + if (hasEnd) 1 else 0
+        val times = DoubleArray(knots)
+        val values = DoubleArray(knots)
+        for (k in 0 until count) {
+            times[k] = startTimesMs[k].toDouble()
+            values[k] = stripAnchor(cellStarts, cellWidths, k, align, firstGlyphCenters).toDouble()
+        }
+        if (hasEnd) {
             val mainWidth = maxOf(0f, mainTextWidths.getOrElse(last) { cellWidths.getOrElse(last) { 0f } })
             val glyphCenter = lastGlyphCenters.getOrElse(last) { mainWidth }.coerceIn(0f, mainWidth)
-            return maxOf(
+            times[count] = finalArrivalMs.toDouble()
+            values[count] = maxOf(
                 stripAnchor(cellStarts, cellWidths, last, align, firstGlyphCenters).toDouble(),
                 cellStarts.getOrElse(last) { 0f }.toDouble() + glyphCenter,
             )
         }
-        fun tangent(k: Int): Double {
-            if (k <= 0 || k >= knots - 1) return 0.0
-            val h0 = time(k) - time(k - 1)
-            val h1 = time(k + 1) - time(k)
-            if (h0 <= 0 || h1 <= 0) return 0.0
-            val d0 = (value(k) - value(k - 1)) / h0
-            val d1 = (value(k + 1) - value(k)) / h1
-            if (d0 <= 0 || d1 <= 0) return 0.0
-            val w0 = 2 * h1 + h0
-            val w1 = h1 + 2 * h0
-            return (w0 + w1) / (w0 / d0 + w1 / d1)
-        }
+        return StripKnots(times, values, if (hasEnd) finalArrivalMs else NO_TIME)
+    }
+
+    /** The alignment point inside a view `viewWidth` wide. */
+    fun stripTarget(viewWidth: Float, targetAlign: String): Double = when (targetAlign) {
+        "right" -> viewWidth.toDouble()
+        "center" -> viewWidth / 2.0
+        else -> 0.0
+    }
+
+    /** [stripOffset] from prepared knots: a binary search for the segment and no allocation. */
+    fun stripKnotsOffset(knots: StripKnots, lyricsMs: Long, target: Double): Float {
+        val times = knots.times
+        val values = knots.values
+        val count = times.size
         val p = lyricsMs.toDouble()
-        var index = -1
-        while (index + 1 < knots && time(index + 1) <= p) index++
-        if (index < 0) return (target - value(0)).toFloat()
-        if (index >= knots - 1) return (target - value(knots - 1)).toFloat()
-        val t0 = time(index)
-        val h = time(index + 1) - t0
-        val v0 = value(index)
-        val m0 = tangent(index)
-        val m1 = tangent(index + 1)
-        val d = (value(index + 1) - v0) / h
+        // The last knot at or before p (-1 before the first).
+        var lo = 0
+        var hi = count
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (times[mid] <= p) lo = mid + 1 else hi = mid
+        }
+        val index = lo - 1
+        if (index < 0) return (target - values[0]).toFloat()
+        if (index >= count - 1) return (target - values[count - 1]).toFloat()
+        val t0 = times[index]
+        val h = times[index + 1] - t0
+        val v0 = values[index]
+        val m0 = knotTangent(times, values, index)
+        val m1 = knotTangent(times, values, index + 1)
+        val d = (values[index + 1] - v0) / h
         val c2 = (3 * d - 2 * m0 - m1) / h
         val c3 = (m0 + m1 - 2 * d) / (h * h)
         val u = p - t0
         return (target - (v0 + u * (m0 + u * (c2 + u * c3)))).toFloat()
+    }
+
+    /** Fritsch-Butland tangent at knot `k`: 0 at the ends and where a neighbour has no time or no rise. */
+    private fun knotTangent(times: DoubleArray, values: DoubleArray, k: Int): Double {
+        if (k <= 0 || k >= times.size - 1) return 0.0
+        val h0 = times[k] - times[k - 1]
+        val h1 = times[k + 1] - times[k]
+        if (h0 <= 0 || h1 <= 0) return 0.0
+        val d0 = (values[k] - values[k - 1]) / h0
+        val d1 = (values[k + 1] - values[k]) / h1
+        if (d0 <= 0 || d1 <= 0) return 0.0
+        val w0 = 2 * h1 + h0
+        val w1 = h1 + 2 * h0
+        return (w0 + w1) / (w0 / d0 + w1 / d1)
     }
 
     /**
@@ -263,11 +335,30 @@ object FloatingLyricsRules {
         playing: Boolean,
         resyncMs: Long = 250,
         slewMs: Double = 750.0,
+    ): Double = smoothPosition(
+        previousMs ?: 0.0, previousMs != null, previousAtMs.toDouble(), reportedMs, reportedAtMs.toDouble(), nowMs.toDouble(),
+        playing, resyncMs, slewMs,
+    )
+
+    /**
+     * [smoothPositionMs] on a fractional millisecond clock (the display frame's time is not a whole millisecond) and
+     * without boxing: `hasPrevious` false = no previous position. Whole-millisecond inputs give the same result.
+     */
+    fun smoothPosition(
+        previousMs: Double,
+        hasPrevious: Boolean,
+        previousAtMs: Double,
+        reportedMs: Long,
+        reportedAtMs: Double,
+        nowMs: Double,
+        playing: Boolean,
+        resyncMs: Long = 250,
+        slewMs: Double = 750.0,
     ): Double {
         if (!playing) return reportedMs.toDouble()
-        val carried = (reportedMs + maxOf(0L, nowMs - reportedAtMs)).toDouble()
-        if (previousMs == null) return carried
-        val step = maxOf(0L, nowMs - previousAtMs).toDouble()
+        val carried = reportedMs + maxOf(0.0, nowMs - reportedAtMs)
+        if (!hasPrevious) return carried
+        val step = maxOf(0.0, nowMs - previousAtMs)
         val drift = carried - (previousMs + step)
         if (kotlin.math.abs(drift) >= resyncMs) return carried
         val rate = (1.0 + drift / slewMs).coerceIn(0.5, 1.5)
@@ -371,10 +462,14 @@ object FloatingLyricsRules {
     }
 
     /** From the line's start to the next line's (the end of the track for the last one); at least one second. */
-    fun lineDurationMs(starts: LongArray, index: Int, durationMs: Long?, offsetMs: Long): Long {
+    fun lineDurationMs(starts: LongArray, index: Int, durationMs: Long?, offsetMs: Long): Long =
+        lineDurationMs(starts, index, durationMs ?: NO_TIME, offsetMs)
+
+    /** [lineDurationMs] without boxing: `durationMs` [NO_TIME] (or not positive) when the track length is unknown. */
+    fun lineDurationMs(starts: LongArray, index: Int, durationMs: Long, offsetMs: Long): Long {
         val start = starts[index]
         val next = if (index + 1 < starts.size) starts[index + 1]
-        else if (durationMs != null && durationMs > 0) durationMs - offsetMs
+        else if (durationMs != NO_TIME && durationMs > 0) durationMs - offsetMs
         else start + LAST_LINE_FALLBACK_MS
         return maxOf(1_000L, next - start)
     }
