@@ -59,7 +59,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 線上歌詞自動套用（`player-core` `auto_lyric_candidate`）：候選須同時標題正規化相似度 ≥ 0.88（`AUTO_MATCH_TITLE_MIN_SIMILARITY`）、時長差 ≤ 2 秒（`AUTO_MATCH_MAX_DURATION_DIFF_MS`，任一方未知即不合格）且為同步歌詞；加權分數（標題 0.55／演出者 0.25／時長 0.15／專輯 0.05）只用於在合格者中排序。手動選擇永遠優先。
 
-本機歌詞選擇：選「同名 LRC」`local:sidecar` 或「內嵌歌詞」`local:embedded` 時，`track_lyrics` 手動列只存來源參照，每次讀取取當下內容（同步存的 `track_embedded_lyrics`／旁檔，沒有才讀檔），該來源為空就照 LRC → 內嵌 → 自動快取往下找；舊版本機手動列的文字快照一律忽略（`lyrics_service.rs` 的 `manual_lyrics_dto`／`live_local_pick`）；線上（網易雲／QQ）手動選擇仍用存下的文字。Windows `find_all_lyrics` 與 Android `android_find_all_lyrics` 都依序讀同名 `.lrc` 與內嵌歌詞（播放取第一個，候選清單列出全部）。
+本機歌詞（ADR 0041）：沒有手動選擇時依「內嵌 → 旁檔（`.lrc` > `.ass` > `.srt`）→ 線上」，所有平台、資料庫與開檔路徑相同；內容以 `parse_any_lyrics` 依內容判斷（LRC／yrc／SRT／ASS／純文字），看似字幕卻解析不出的（`Unusable`）視同沒有。選「同名 LRC」`local:sidecar` 或「內嵌歌詞」`local:embedded` 時手動列只存來源參照、每次讀當下內容；線上手動選擇仍用存下的文字。候選清單的本機項目也是內嵌在前。播放頁目前行有逐字時只有正在唱的字是 `var(--accent)`（`lyrics-word-highlight.js`），工作列、浮動與 Android 仍為行級。
 
 簡繁轉換（ADR 0030）全專案只有一份：`crates/player-zh`，OpenCC 上游 ver.1.4.2 原檔放在 `crates/player-zh/data/opencc-1.4.2/`（`SOURCE.md` 記版本與 SHA-256，`.gitattributes` 設 `-text`），`include_str!` 內嵌。只換字形不換用詞：`to_traditional`＝STPhrases＋STCharacters（含 keep-只 覆寫）→ TWVariantsPhrases＋TWVariants；`to_simplified`＝TWVariantsRevPhrases＋TWVariantsRev → TSPhrases＋TSCharacters；含日文假名的整行或欄位不轉。使用者規則：簡體「只」一律不轉「隻」（由 STPhrases 推導覆寫表還原）。用途：歌詞顯示（`LyricLineDto` 的 `textTraditional`／`translationTraditional`，前端 `lyricsForDisplay` 同步挑選）；線上歌詞一律只用簡體搜（`lyrics_search` 自行轉簡，前端不送 `queryAlternates`）；曲庫搜尋由 player-db `search_terms_json` 加 `search_alternates`；身份鍵 `music_identity_key` 用 `to_traditional`（只在每連線的 TEMP 表）；候選評分 `fold_to_simplified`。`opencc-js` 只剩 devDependency（`scripts/i18n-catalog.mjs` 的 twp→cn、`scripts/generate-zh-convert-fixture.mjs` 重產 `tests/fixtures/zh-convert-opencc-js.json`；差異只能是 `tests/fixtures/zh-convert-differences.json` 記錄的項目）。前端不得再引入任何簡繁轉換。
 
@@ -135,7 +135,7 @@ Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 proce
 
 曲庫同步（ADR 0040，`crates/player-core/src/sync.rs`）：查資料庫分類 → 平行讀標籤 → 依原順序寫入；`cancel_library_sync` 取消時已讀進度以「不完整」寫入（不對帳、不移除），下次續掃。資料夾與播放清單共用進度流程（`src-tauri/src/playlist_scan_index.rs` 的 `PlaylistScanIndex`）；新增來源種類只需提供查詢、`.lrc` 查找與標籤讀取三個函式，不要另寫索引與進度。標籤讀取在 `player-track-metadata`（`scan_parse_options` 一律不讀封面）。
 
-`.lrc` 與內嵌歌詞隨同步存入資料庫（ADR 0040）：`track_lyric_sidecars`、`lyric_sidecar_sources`、`track_embedded_lyrics`；只有 `Complete` 掃描才刪除沒看到的 `.lrc`。播放時 `lyrics_service::local_lyrics_for_track` 先問 `Database::track_lyric_sidecar`：`Present`／`Absent` 不開檔，`NotScanned` 或尚無內嵌列時才開檔查找；遠端開檔結果另存 `remote_lyric_cache`。
+旁檔（`.lrc`／`.ass`／`.srt`，一首只記排序最前者）與內嵌歌詞隨同步存入資料庫（ADR 0040）：`track_lyric_sidecars`、`lyric_sidecar_sources`、`track_embedded_lyrics`；只有 `Complete` 掃描才刪除沒看到的旁檔。播放時 `local_lyrics_for_track` 先用資料庫的內嵌歌詞，再用旁檔，都已知時不開檔；`NotScanned` 或尚無內嵌列時才開檔查找；遠端開檔結果另存 `remote_lyric_cache`。
 
 冷建庫效能（ADR 0027）：設 `MOE_LIBRARY_PROFILE=<檔案.jsonl>` 寫出各階段事件；無 GUI 基準 `scripts\profile-cold-library.ps1 -MusicRoot D:\Music -Runs 5`（不碰播放器與 UserData）；冷建庫批次模式 `player-db` 的 `BulkBuild`。下一步：GUI 冷建庫量測、依磁碟實體位置排序讀取、冷狀態量 HDD 執行緒數。
 
