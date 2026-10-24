@@ -57,3 +57,34 @@ test('the import button is always enabled', async () => {
   assert.ok(button, 'import button found');
   assert.doesNotMatch(button[0], /disabled/);
 });
+
+test('word-timed lines are written as enhanced LRC; line-only lyrics stay as before', () => {
+  const lyrics = {
+    synced: true,
+    lines: [
+      {
+        startMs: 1000,
+        text: 'Hello world',
+        translation: '你好世界',
+        words: [
+          { s: 1000, e: 1500, t: 'Hello ' },
+          { s: 1500, e: 2253, t: 'world' },
+        ],
+      },
+      { startMs: 3000, text: 'a b', words: [{ s: 3000, e: 3200, t: 'a ' }, { s: 3500, e: 3900, t: 'b' }] },
+      { startMs: 5000, text: 'plain line' },
+    ],
+  };
+  assert.equal(
+    lyricsToText(lyrics),
+    [
+      '[00:01.00]<00:01.00>Hello <00:01.50>world<00:02.25>',
+      '[00:01.00]你好世界',
+      '[00:03.00]<00:03.00>a <00:03.20><00:03.50>b<00:03.90>',
+      '[00:05.00]plain line',
+    ].join('\n'),
+  );
+  // The shift moves word stamps too.
+  assert.match(lyricsToText(lyrics, 100), /^\[00:01\.10\]<00:01\.10>Hello <00:01\.60>world<00:02\.35>/);
+  assert.equal(lyricsToText({ synced: true, lines: [{ startMs: 5000, text: 'plain line' }] }), '[00:05.00]plain line');
+});

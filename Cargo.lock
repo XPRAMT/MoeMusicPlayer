@@ -4181,6 +4181,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "lofty",
+ "player-core",
  "player-dsd",
  "player-formats",
  "player-opus",

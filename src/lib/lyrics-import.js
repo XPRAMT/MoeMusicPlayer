@@ -35,8 +35,11 @@ export function formatLrcTimestamp(ms) {
  * by the backend parser). Translation and romanization, when present, follow the original
  * line as extra lines with the same timestamp (the bilingual LRC convention the parser reads).
  * `shiftMs` (see importTimestampShiftMs) is added to every timestamp; one that would go below 0 is written as 0.
- * Only line timestamps are written (no word-level timing), so there is nothing else to shift.
- * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null, romanization?: string | null }[] }} lyrics
+ * Lines with word timing (ADR 0041) are written as enhanced LRC (A2 extension): the line stamp, then
+ * `<mm:ss.xx>word` per word and a closing `<mm:ss.xx>` at the last word's end (also after a word followed by
+ * a pause), with the same shift. Word texts are written as given, so the line text is their concatenation.
+ * Line-only lyrics are written exactly as before.
+ * @param {{ synced: boolean, lines: { startMs: number | null, text: string, translation?: string | null, romanization?: string | null, words?: { s: number, e: number, t: string }[] }[] }} lyrics
  * @param {number} [shiftMs]
  */
 export function lyricsToText(lyrics, shiftMs = 0) {
@@ -44,9 +47,23 @@ export function lyricsToText(lyrics, shiftMs = 0) {
   const shift = Number.isFinite(shiftMs) ? shiftMs : 0;
   for (const line of lyrics.lines) {
     const stamp = lyrics.synced && line.startMs != null ? formatLrcTimestamp(Math.max(0, line.startMs + shift)) : '';
-    out.push(`${stamp}${line.text}`);
+    const words = lyrics.synced && stamp && Array.isArray(line.words) ? line.words.filter((word) => word.t) : [];
+    out.push(`${stamp}${words.length > 0 ? enhancedWords(words, shift) : line.text}`);
     if (line.translation) out.push(`${stamp}${line.translation}`);
     if (line.romanization) out.push(`${stamp}${line.romanization}`);
   }
   return out.join('\n');
+}
+
+/** @param {{ s: number, e: number, t: string }[]} words @param {number} shift */
+function enhancedWords(words, shift) {
+  const stamp = (/** @type {number} */ ms) => `<${formatLrcTimestamp(Math.max(0, ms + shift)).slice(1, -1)}>`;
+  let out = '';
+  words.forEach((current, index) => {
+    out += `${stamp(current.s)}${current.t}`;
+    const next = words[index + 1];
+    // Enhanced LRC words end at the next stamp; write the end only where it differs (a pause, or the last word).
+    if (!next || Math.round((next.s - current.e) / 10) > 0) out += stamp(current.e);
+  });
+  return out;
 }

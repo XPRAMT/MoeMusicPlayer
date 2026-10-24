@@ -32,6 +32,7 @@ player-wavpack = { path = "../player-wavpack" }
 player-opus = { path = "../player-opus" }
 
 [dev-dependencies]
+player-core = { path = "../player-core" }
 player-dsd = { path = "../player-dsd", features = ["id3", "testing"] }
 player-opus = { path = "../player-opus", features = ["testing"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

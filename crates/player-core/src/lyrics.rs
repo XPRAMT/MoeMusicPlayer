@@ -192,18 +192,20 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
             }
         }
 
-        let text = remainder.trim().to_owned();
+        let (text, words) = match enhanced_lrc_words(remainder.trim(), offset_ms) {
+            Some((text, words)) => (text, words),
+            None => (remainder.trim().to_owned(), Vec::new()),
+        };
         // `[00:01.00][00:01.00]text` names one cue twice; it must not turn into its own
         // translation when same-timestamp rows are folded below.
         timestamps.sort_unstable();
         timestamps.dedup();
         if !timestamps.is_empty() {
             if !text.is_empty() {
-                lines.extend(
-                    timestamps
-                        .into_iter()
-                        .map(|start_ms| LyricLine::timed(start_ms, text.clone())),
-                );
+                lines.extend(timestamps.into_iter().map(|start_ms| LyricLine {
+                    words: words.clone(),
+                    ..LyricLine::timed(start_ms, text.clone())
+                }));
             }
         } else if !text.is_empty() && !is_lrc_metadata_tag(text.as_str()) {
             plain_lines.push(LyricLine::untimed(text));
@@ -213,6 +215,7 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
     // Stable sort keeps file order inside one timestamp, which defines the role of each row.
     lines.sort_by_key(|line| line.start_ms.unwrap_or_default());
     let mut lines = merge_same_timestamp_lines(lines);
+    close_open_enhanced_words(&mut lines);
     let synced = !lines.is_empty();
     if !synced {
         lines = plain_lines;
@@ -299,6 +302,7 @@ pub fn merge_same_timestamp_lines(lines: Vec<LyricLine>) -> Vec<LyricLine> {
                     1 if previous.translation.is_none() => previous.translation = Some(line.text),
                     2 if previous.romanization.is_none() => {
                         previous.romanization = Some(line.text);
+                        previous.romanization_words = line.words;
                     }
                     _ => {}
                 }
@@ -491,6 +495,78 @@ fn parse_lrc_timestamp(value: &str) -> Option<u64> {
         .checked_mul(60_000)?
         .checked_add(whole_seconds.checked_mul(1_000)?)?
         .checked_add(fraction_ms)
+}
+
+/// A word whose end is not written yet (enhanced LRC without a closing stamp); closed by
+/// [`close_open_enhanced_words`] at the next line's start.
+const OPEN_WORD_END: u64 = u64::MAX;
+
+/// Enhanced LRC (A2 extension) word stamps: `<mm:ss.xx>word <mm:ss.xx>word<mm:ss.xx>`. Each word
+/// runs from its stamp to the next one; a final stamp with no text after it is the end of the last
+/// word. Text before the first stamp joins the first word. Returns the line text (stamps removed,
+/// the words joined) and the words, or `None` when the text has no word stamp.
+fn enhanced_lrc_words(text: &str, offset_ms: i64) -> Option<(String, Vec<LyricWord>)> {
+    let mut stamps: Vec<(u64, String)> = Vec::new();
+    let mut leading = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let found = rest.find('<').and_then(|open| {
+            let close = open + rest[open..].find('>')?;
+            parse_lrc_timestamp(&rest[open + 1..close]).map(|ms| (open, close, ms))
+        });
+        let Some((open, close, ms)) = found else {
+            match stamps.last_mut() {
+                Some((_, word)) => word.push_str(rest),
+                None => leading.push_str(rest),
+            }
+            break;
+        };
+        match stamps.last_mut() {
+            Some((_, word)) => word.push_str(&rest[..open]),
+            None => leading.push_str(&rest[..open]),
+        }
+        stamps.push((apply_offset(ms, offset_ms), String::new()));
+        rest = &rest[close + 1..];
+    }
+    if stamps.is_empty() {
+        return None;
+    }
+    if let Some((_, first)) = stamps.first_mut() {
+        first.insert_str(0, &leading);
+    }
+    let mut words = Vec::with_capacity(stamps.len());
+    for (index, (start_ms, word)) in stamps.iter().enumerate() {
+        let next = stamps.get(index + 1).map(|(next, _)| *next);
+        if word.is_empty() {
+            // The closing stamp, or the end of a word followed by a pause before the next one.
+            continue;
+        }
+        words.push(LyricWord {
+            start_ms: *start_ms,
+            end_ms: next.map_or(OPEN_WORD_END, |next| next.max(*start_ms)),
+            text: word.clone(),
+        });
+    }
+    let line: String = words.iter().map(|word| word.text.as_str()).collect();
+    Some((line, words))
+}
+
+/// The last word of an enhanced LRC line without a closing stamp ends at the next line's start
+/// (or at its own start on the last line).
+fn close_open_enhanced_words(lines: &mut [LyricLine]) {
+    for index in 0..lines.len() {
+        let next_start = lines.get(index + 1).and_then(|line| line.start_ms);
+        let line = &mut lines[index];
+        for word in line
+            .words
+            .iter_mut()
+            .chain(line.romanization_words.iter_mut())
+        {
+            if word.end_ms == OPEN_WORD_END {
+                word.end_ms = next_start.unwrap_or(word.start_ms).max(word.start_ms);
+            }
+        }
+    }
 }
 
 fn apply_offset(timestamp_ms: u64, offset_ms: i64) -> u64 {
@@ -848,6 +924,70 @@ fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
         std::mem::swap(&mut previous, &mut current);
     }
     previous[right.len()]
+}
+
+#[cfg(test)]
+mod enhanced_lrc_tests {
+    use super::*;
+
+    #[test]
+    fn enhanced_lrc_words_are_read_with_translation_and_romanization() {
+        let input = "[00:01.00]<00:01.00>Hello <00:01.50>world<00:02.25>
+[00:01.00]你好世界
+[00:01.00]<00:01.00>ha <00:01.50>ro<00:02.00>
+[00:03.00]<00:03.00>next <00:03.40>line
+";
+        let parsed = parse_lrc(input).unwrap();
+        assert!(parsed.synced);
+        assert_eq!(
+            crate::detect_lyric_format(input),
+            crate::lyric_formats::DetectedLyricFormat::Lrc
+        );
+        let first = &parsed.lines[0];
+        assert_eq!(first.text, "Hello world");
+        assert_eq!(first.translation.as_deref(), Some("你好世界"));
+        assert_eq!(first.romanization.as_deref(), Some("ha ro"));
+        assert_eq!(
+            first.words,
+            vec![
+                LyricWord {
+                    start_ms: 1000,
+                    end_ms: 1500,
+                    text: "Hello ".into()
+                },
+                LyricWord {
+                    start_ms: 1500,
+                    end_ms: 2250,
+                    text: "world".into()
+                },
+            ]
+        );
+        assert_eq!(first.romanization_words.len(), 2);
+        // No closing stamp: the last word ends at the next line, or at its start on the last line.
+        assert_eq!(
+            parsed.lines[1].words[1],
+            LyricWord {
+                start_ms: 3400,
+                end_ms: 3400,
+                text: "line".into()
+            }
+        );
+    }
+
+    #[test]
+    fn plain_lrc_has_no_words_and_offset_moves_word_stamps() {
+        let parsed = parse_lrc("[00:01.00]plain <not a stamp>").unwrap();
+        assert!(parsed.lines[0].words.is_empty());
+        assert_eq!(parsed.lines[0].text, "plain <not a stamp>");
+        let parsed = parse_lrc(
+            "[offset:500]
+[00:01.00]<00:01.00>a<00:01.20>b<00:01.40>",
+        )
+        .unwrap();
+        assert_eq!(parsed.lines[0].start_ms, Some(1500));
+        assert_eq!(parsed.lines[0].words[0].start_ms, 1500);
+        assert_eq!(parsed.lines[0].words[1].end_ms, 1900);
+    }
 }
 
 #[cfg(test)]
