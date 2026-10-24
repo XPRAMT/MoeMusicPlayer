@@ -235,7 +235,7 @@ async page => {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
   await quickSettings.getByRole('tab', { name: '歌詞' }).click();
-  for (const label of ['非目前歌詞透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
+  for (const label of ['主要透明度', '次要透明度', '原文字級', '譯文與羅馬拼音字級', '歌詞句間距']) {
     assert.equal(await quickSettings.locator(`input[aria-label="${label}"]`).count(), 1, `drawer exposes ${label}`);
   }
   assert.equal(await quickSettings.getByRole('checkbox', { name: '簡體轉繁體' }).count(), 1, 'drawer exposes simplified-to-traditional');

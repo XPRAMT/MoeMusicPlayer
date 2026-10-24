@@ -125,15 +125,6 @@ fn rules_match_the_shared_vectors() {
             &c.to_string(),
         );
     }
-    for c in cases(&v, "opacity") {
-        let inactive = normalize_inactive_opacity_percent(f(&c["inactive"]));
-        let actual = line_opacity_factor(
-            f(&c["weight"]),
-            inactive,
-            Animation::parse(c["animation"].as_str().unwrap()),
-        );
-        close(actual, f(&c["expected"]), &c.to_string());
-    }
 }
 
 fn pairs(v: &Value) -> Vec<(f64, f64)> {
@@ -221,7 +212,8 @@ fn word_rules_match_the_shared_vectors() {
                 f(&c["x"]),
                 f(&c["areaWidth"]),
                 f(&c["emPx"]),
-                f(&c["inactive"]),
+                f(&c["main"]),
+                f(&c["secondary"]),
             ),
             f(&c["expected"]),
             &c.to_string(),

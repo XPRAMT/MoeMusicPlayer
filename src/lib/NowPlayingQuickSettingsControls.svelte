@@ -104,19 +104,22 @@
         fontSizePx: lyrics.primaryFontSizePx,
         translationScalePercent: lyrics.auxiliaryScalePercent,
         textEffect: lyrics.textEffect,
+        mainOpacityPercent: lyrics.mainOpacityPercent,
+        secondaryOpacityPercent: lyrics.secondaryOpacityPercent,
       }}
       onChange={(patch) => onLyricsChange({
         ...(patch.showTranslation !== undefined ? { showTranslation: patch.showTranslation } : {}),
         ...(patch.fontSizePx !== undefined ? { primaryFontSizePx: patch.fontSizePx } : {}),
         ...(patch.translationScalePercent !== undefined ? { auxiliaryScalePercent: patch.translationScalePercent } : {}),
         ...(patch.textEffect !== undefined ? { textEffect: patch.textEffect } : {}),
+        ...(patch.mainOpacityPercent !== undefined ? { mainOpacityPercent: patch.mainOpacityPercent } : {}),
+        ...(patch.secondaryOpacityPercent !== undefined ? { secondaryOpacityPercent: patch.secondaryOpacityPercent } : {}),
       })}
       idPrefix={lyricsIdPrefix}
       fontAriaLabel={tr("歌詞字體大小")}
       translationAriaLabel={tr("譯文與羅馬拼音大小（相對原文）")}
       withAlign={false}
       withColor={false}
-      withOpacity={false}
       withAnimation={false}
     >
       {#snippet displayExtra()}
@@ -133,12 +136,6 @@
         <label class="lyrics-preference-range">
           <span><strong>{tr("句間距")}</strong><output>{lyrics.lineGapPx}px</output></span>
           <input type="range" min="0" max="50" step="1" value={lyrics.lineGapPx} aria-label={tr("歌詞句間距")} oninput={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ lineGapPx: Number(event.currentTarget.value) }, true)} />
-        </label>
-      {/snippet}
-      {#snippet lookExtra()}
-        <label class="lyrics-preference-range">
-          <span><strong>{tr("非目前歌詞透明度")}</strong><output>{lyrics.inactiveOpacityPercent}%</output></span>
-          <input type="range" min="10" max="100" step="1" value={lyrics.inactiveOpacityPercent} aria-label={tr("非目前歌詞透明度")} oninput={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) })} onchange={(event) => onLyricsChange({ inactiveOpacityPercent: Number(event.currentTarget.value) }, true)} />
         </label>
       {/snippet}
     </LyricsLookSettings>

@@ -85,7 +85,6 @@ enum Cmd {
     ClickThrough(String, bool),
     Lyrics(Option<LyricsData>),
     Playback(PlaybackSample),
-    Inactive(u32),
     /// The theme accent (word highlight in the none mode, ADR 0041).
     Accent([u8; 3]),
     Delay {
@@ -165,11 +164,6 @@ impl NativeLyrics {
     }
     pub fn set_playback(&self, sample: PlaybackSample) {
         self.send(Cmd::Playback(sample));
-    }
-    pub fn set_inactive_opacity(&self, percent: u32) {
-        self.send(Cmd::Inactive(rules::normalize_inactive_opacity_percent(
-            percent as f64,
-        )));
     }
     pub fn set_accent(&self, rgb: [u8; 3]) {
         self.send(Cmd::Accent(rgb));
@@ -1403,7 +1397,6 @@ struct Renderer {
     windows: HashMap<String, Win>,
     lyrics: Option<LyricsData>,
     clock: Clock,
-    inactive: u32,
     accent: [u8; 3],
     delay: Option<(String, f64)>,
     events: Arc<dyn Events>,
@@ -1450,7 +1443,6 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
             at: Instant::now(),
             duration_ms: None,
         },
-        inactive: rules::DEFAULT_INACTIVE_OPACITY_PERCENT,
         accent: DEFAULT_ACCENT,
         delay: None,
         events,
@@ -1852,12 +1844,6 @@ impl Renderer {
                     self.mark_all();
                 }
             }
-            Cmd::Inactive(percent) => {
-                if self.inactive != percent {
-                    self.inactive = percent;
-                    self.mark_all();
-                }
-            }
             Cmd::Delay {
                 track_id,
                 delay_sec,
@@ -1987,7 +1973,6 @@ impl Renderer {
         let ctx = Context {
             lyrics: self.lyrics.as_ref(),
             clock: &self.clock,
-            inactive: self.inactive,
             accent: self.accent,
             delay: self.delay.as_ref(),
             now: Instant::now(),
@@ -2120,7 +2105,6 @@ fn destroy(win: Win) {
 struct Context<'a> {
     lyrics: Option<&'a LyricsData>,
     clock: &'a Clock,
-    inactive: u32,
     accent: [u8; 3],
     delay: Option<&'a (String, f64)>,
     /// The plan's time 0 (when the plan is made).
@@ -2239,7 +2223,11 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         X: w as f32,
         Y: h as f32,
     })?;
-    let opacity = (look.opacity_percent.clamp(1.0, 100.0) / 100.0) as f32;
+    // Animation "none": the shown line at the main opacity. "continuous": the container is opaque, the static mask
+    // carries the main and the secondary opacity.
+    let opacity = plan::container_opacity(look.animation, look.main_opacity_percent);
+    let (mask_main, mask_secondary) =
+        plan::mask_percents(look.main_opacity_percent, look.secondary_opacity_percent);
 
     if floating {
         chrome(gfx, win, &root, area, w, h, scale, &look)?;
@@ -2388,7 +2376,6 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             }),
             at_ms: position + offset,
             playing,
-            inactive_percent: ctx.inactive,
             rate: ctx.clock.slew(ctx.now).map_or(1.0, |s| s.0),
             slew_until_ms: ctx.clock.slew(ctx.now).map(|s| position + offset + s.1),
         };
@@ -2474,7 +2461,8 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             font as f64 * clip_room,
             Mask::Centre {
                 em: font as f64,
-                inactive: ctx.inactive,
+                main: mask_main,
+                secondary: mask_secondary,
             },
         )?;
         // The strip glides (opacity is the static mask only): sampled per frame from the plan (`Live`), in 1/8 device px steps
@@ -2733,25 +2721,39 @@ enum Mask {
     /// Line-timed lyrics: the square edge fade (`sampling::edge_fade_stops`).
     Edge,
     /// Continuous mode, line- and word-timed (experimental, ADR 0041 D10): the static mask
-    /// (`rules::centre_mask_stops`) at the main row's em and the inactive-lyrics opacity, the same for the
-    /// translation row so both fade at the same places.
-    Centre { em: f64, inactive: u32 },
+    /// (`rules::centre_mask_stops`) at the main row's em and the main and secondary opacity (whole percents), the
+    /// same for the translation row so both fade at the same places.
+    Centre { em: f64, main: u32, secondary: u32 },
 }
 
 impl Mask {
     fn stops(self, area: Area) -> Vec<(f64, f64)> {
         match self {
             Mask::Edge => sampling::edge_fade_stops(area.width, area.height),
-            Mask::Centre { em, inactive } => {
-                rules::centre_mask_stops(area.width, em, f64::from(inactive) / 100.0)
-            }
+            Mask::Centre {
+                em,
+                main,
+                secondary,
+            } => rules::centre_mask_stops(
+                area.width,
+                em,
+                f64::from(main) / 100.0,
+                f64::from(secondary) / 100.0,
+            ),
         }
     }
     fn key(self) -> i64 {
         match self {
             Mask::Edge => 0,
-            Mask::Centre { em, inactive } => {
-                ((em * 64.0).round() as i64) | i64::from(inactive) << 32 | 1 << 48
+            Mask::Centre {
+                em,
+                main,
+                secondary,
+            } => {
+                ((em * 64.0).round() as i64)
+                    | i64::from(main) << 24
+                    | i64::from(secondary) << 32
+                    | 1 << 48
             }
         }
     }

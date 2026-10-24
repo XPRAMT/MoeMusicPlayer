@@ -5,8 +5,21 @@ import { normalizeLyricsAnimation } from './lyrics-strip.js';
 export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, default: 20 });
 /** The translation line as a percentage of the main line (100 = the same size). */
 export const TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
-/** Opacity of the whole lyric (main line and translation alike); never fully invisible. */
-export const LYRICS_OPACITY_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
+/**
+ * Main opacity (never fully invisible) and secondary opacity, absolute percentages that are not clamped against each
+ * other (the secondary may exceed the main). Animation "none": the main is the shown line's opacity and the secondary
+ * has no effect; "continuous": the main is the strip's centre, the secondary where the edge ramp starts (ADR 0041
+ * D10). Each lyrics tab saves its own pair; the former `opacityPercent` is ignored.
+ */
+export const LYRICS_MAIN_OPACITY_PERCENT = Object.freeze({ min: 1, max: 100, default: 100 });
+export const LYRICS_SECONDARY_OPACITY_PERCENT = Object.freeze({ min: 10, max: 100, default: 50 });
+
+/** @param {unknown} value @param {{ min: number, max: number, default: number }} range */
+export function normalizeLyricsOpacity(value, range) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(range.max, Math.max(range.min, Math.round(value)))
+    : range.default;
+}
 export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right']);
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#00e1ff';
 
@@ -16,7 +29,7 @@ export const TASKBAR_LYRICS_DISPLAY_MODES = Object.freeze(['all', 'playerMonitor
 /** Same cap as settings.rs `MAX_CUSTOM_MONITORS`. */
 export const TASKBAR_LYRICS_MAX_CUSTOM_MONITORS = 32;
 
-/** @typedef {{ animation: 'none'|'continuous', enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], opacityPercent: number }} TaskbarLyricsSettings */
+/** @typedef {{ animation: 'none'|'continuous', enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], mainOpacityPercent: number, secondaryOpacityPercent: number }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
@@ -30,7 +43,8 @@ export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   textEffect: 'shadow',
   displayMode: 'all',
   customMonitors: /** @type {string[]} */ (/** @type {unknown} */ (Object.freeze([]))),
-  opacityPercent: LYRICS_OPACITY_PERCENT.default,
+  mainOpacityPercent: LYRICS_MAIN_OPACITY_PERCENT.default,
+  secondaryOpacityPercent: LYRICS_SECONDARY_OPACITY_PERCENT.default,
   animation: 'none',
 });
 
@@ -81,9 +95,6 @@ export function normalizeTaskbarLyricsSettings(value) {
   const scale = typeof source.translationScalePercent === 'number' && Number.isFinite(source.translationScalePercent)
     ? Math.min(TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.max, Math.max(TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT.min, Math.round(source.translationScalePercent)))
     : defaults.translationScalePercent;
-  const opacity = typeof source.opacityPercent === 'number' && Number.isFinite(source.opacityPercent)
-    ? Math.min(LYRICS_OPACITY_PERCENT.max, Math.max(LYRICS_OPACITY_PERCENT.min, Math.round(source.opacityPercent)))
-    : defaults.opacityPercent;
   return {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : defaults.enabled,
     align: TASKBAR_LYRICS_ALIGNMENTS.includes(/** @type {string} */ (source.align))
@@ -101,7 +112,8 @@ export function normalizeTaskbarLyricsSettings(value) {
       ? /** @type {'all'|'playerMonitor'|'custom'} */ (source.displayMode)
       : defaults.displayMode,
     customMonitors: normalizeTaskbarLyricsMonitorIds(source.customMonitors),
-    opacityPercent: opacity,
+    mainOpacityPercent: normalizeLyricsOpacity(source.mainOpacityPercent, LYRICS_MAIN_OPACITY_PERCENT),
+    secondaryOpacityPercent: normalizeLyricsOpacity(source.secondaryOpacityPercent, LYRICS_SECONDARY_OPACITY_PERCENT),
     animation: normalizeLyricsAnimation(source.animation),
   };
 }

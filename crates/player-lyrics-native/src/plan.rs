@@ -147,7 +147,7 @@ pub struct StripPlan {
     pub offset: Cubics,
     /// Cells to draw (inclusive), `None` when nothing is in view.
     pub cells: Option<(usize, usize)>,
-    /// Opacity factor keys per drawn cell (relative to the window opacity).
+    /// Opacity factor keys per drawn cell (always 1: the static mask dims).
     pub opacity: Vec<(usize, Keys)>,
     /// Re-plan this many ms from now (the next line start), `None` when nothing changes any more.
     pub wake_ms: Option<f64>,
@@ -161,7 +161,6 @@ pub struct StripInput<'a> {
     /// Lyrics time now (playback position plus the display offset).
     pub at_ms: f64,
     pub playing: bool,
-    pub inactive_percent: u32,
     /// Lyrics ms per wall ms while a small drift is being absorbed (1 otherwise, always > 0).
     pub rate: f64,
     /// Lyrics time at which `rate` returns to 1 (`None` = no correction running).
@@ -228,6 +227,28 @@ fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
         rules::STRIP_TARGET,
         input.final_line,
     )
+}
+
+/// The opacity of the container the lyrics are drawn in (ADR 0041 D10). Animation "none": the shown line at the main
+/// opacity (1–100 %). "continuous": 1, because the static mask carries both the main and the secondary opacity.
+pub fn container_opacity(animation: rules::Animation, main_percent: f64) -> f32 {
+    match animation {
+        rules::Animation::None => (main_percent.clamp(1.0, 100.0) / 100.0) as f32,
+        rules::Animation::Continuous => 1.0,
+    }
+}
+
+/// The mask's `(main, secondary)` opacities as whole percents: main 1–100, secondary 10–100, each on its own (the
+/// secondary may exceed the main).
+pub fn mask_percents(main_percent: f64, secondary_percent: f64) -> (u32, u32) {
+    let whole = |v: f64, lo: f64| {
+        if v.is_finite() {
+            v.round().clamp(lo, 100.0) as u32
+        } else {
+            100
+        }
+    };
+    (whole(main_percent, 1.0), whole(secondary_percent, 10.0))
 }
 
 /// Every cell's opacity factor: 1. In continuous mode the opacity comes only from the static mask fixed to the lyric
@@ -433,7 +454,6 @@ mod tests {
             }),
             at_ms: at,
             playing,
-            inactive_percent: 50,
             rate: 1.0,
             slew_until_ms: None,
             word_glide: None,
@@ -613,7 +633,6 @@ mod tests {
                 final_line: None,
                 at_ms: at,
                 playing: true,
-                inactive_percent: 50,
                 rate: slew.map_or(1.0, |s| s.0),
                 slew_until_ms: slew.map(|s| at + s.1),
                 word_glide: None,
@@ -720,5 +739,24 @@ mod tests {
             t += 0.005;
         }
         assert!((plan.wake_ms.unwrap() - (750.0 + (3000.0 - 2825.0))).abs() < 1e-6);
+    }
+
+    #[test]
+    fn opacity_follows_the_animation_and_the_two_settings() {
+        use rules::Animation::{Continuous, None};
+        assert_eq!(container_opacity(None, 60.0), 0.6);
+        assert_eq!(container_opacity(None, 0.0), 0.01);
+        assert_eq!(container_opacity(None, 250.0), 1.0);
+        // Continuous: the container is opaque, the mask dims.
+        assert_eq!(container_opacity(Continuous, 60.0), 1.0);
+        assert_eq!(mask_percents(60.0, 30.0), (60, 30));
+        assert_eq!(
+            mask_percents(30.0, 80.0),
+            (30, 80),
+            "secondary may exceed main"
+        );
+        assert_eq!(mask_percents(0.0, 0.0), (1, 10));
+        assert_eq!(mask_percents(300.0, 300.0), (100, 100));
+        assert_eq!(mask_percents(f64::NAN, f64::NAN), (100, 100));
     }
 }

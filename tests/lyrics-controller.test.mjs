@@ -131,14 +131,16 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
   assert.deepEqual(normalizeLyricsPreferences({
     showTranslation: true,
     showRomanization: false,
-    inactiveOpacityPercent: 1,
+    mainOpacityPercent: 0,
+    secondaryOpacityPercent: 1,
     primaryFontSizePx: 99,
     auxiliaryFontSizePx: 4,
     lineGapPx: 99,
   }), {
     showTranslation: true,
     showRomanization: false,
-    inactiveOpacityPercent: 10,
+    mainOpacityPercent: 1,
+    secondaryOpacityPercent: 10,
     primaryFontSizePx: 50,
     auxiliaryScalePercent: 4,
     lineGapPx: 50,
@@ -146,7 +148,15 @@ test('lyrics preferences use defaults and enforce the IPC-supported bounds', () 
     simplifiedToTraditional: true,
   });
   assert.equal(normalizeLyricsPreferences({ simplifiedToTraditional: true }).simplifiedToTraditional, true);
-  assert.equal(normalizeLyricsPreferences({ inactiveOpacityPercent: 100.4 }).inactiveOpacityPercent, 100);
+  assert.equal(normalizeLyricsPreferences({ secondaryOpacityPercent: 100.4 }).secondaryOpacityPercent, 100);
+  assert.equal(normalizeLyricsPreferences({ mainOpacityPercent: 250 }).mainOpacityPercent, 100);
+  // The former shared key is ignored, not converted; the new fields default (main 100, secondary 50).
+  const former = normalizeLyricsPreferences({ inactiveOpacityPercent: 70 });
+  assert.deepEqual([former.mainOpacityPercent, former.secondaryOpacityPercent], [100, 50]);
+  assert.equal('inactiveOpacityPercent' in former, false);
+  // No clamping between the two: the secondary may exceed the main.
+  const crossed = normalizeLyricsPreferences({ mainOpacityPercent: 30, secondaryOpacityPercent: 90 });
+  assert.deepEqual([crossed.mainOpacityPercent, crossed.secondaryOpacityPercent], [30, 90]);
   assert.equal(normalizeLyricsPreferences({ lineGapPx: -1 }).lineGapPx, 0);
   assert.equal(normalizeLyricsPreferences({ primaryFontSizePx: -1 }).primaryFontSizePx, 1);
   assert.equal(normalizeLyricsPreferences({ auxiliaryScalePercent: -1 }).auxiliaryScalePercent, 1);
@@ -260,16 +270,21 @@ test('plain virtual window uses variable prefix offsets and bounds rows at dista
   assert.equal(findLyricsRowAtOffset(layout, targetOffset), 80_000);
 });
 
-test('plain, stopped, and cue-less lyrics stay fully opaque; playing and paused keep the cue', () => {
-  const dimOpacity = 0.35;
+test('the current line takes the main opacity, the others the secondary; no cue shows every line at the main', () => {
   assert.equal(getDisplayActiveLyricIndex(2, 'playing'), 2);
   assert.equal(getDisplayActiveLyricIndex(2, 'paused'), 2);
   assert.equal(getDisplayActiveLyricIndex(2, 'buffering'), 2, 'a seek while playing keeps the highlight');
   assert.equal(getDisplayActiveLyricIndex(2, 'stopped'), -1);
   assert.equal(getDisplayActiveLyricIndex(-1, 'playing'), -1);
-  assert.equal(getLyricLineOpacity(1, 2, 35), dimOpacity);
-  assert.equal(getLyricLineOpacity(2, 2, 35), 1);
-  assert.equal(getLyricLineOpacity(1, -1, 35), 1);
+  assert.equal(getLyricLineOpacity(1, 2, 100, 35), 0.35);
+  assert.equal(getLyricLineOpacity(2, 2, 100, 35), 1);
+  assert.equal(getLyricLineOpacity(1, -1, 100, 35), 1);
+  // Absolute values: main 60 shows the current line at 0.6, and the secondary may be brighter than the main.
+  assert.equal(getLyricLineOpacity(2, 2, 60, 35), 0.6);
+  assert.equal(getLyricLineOpacity(1, 2, 60, 35), 0.35);
+  assert.equal(getLyricLineOpacity(1, 2, 30, 80), 0.8);
+  assert.equal(getLyricLineOpacity(2, 2, 30, 80), 0.3);
+  assert.equal(getLyricLineOpacity(1, -1, 60, 35), 0.6);
 });
 
 test('local lyrics avoid remote search and repeated same-track updates do not reload them', async () => {

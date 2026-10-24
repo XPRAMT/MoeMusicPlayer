@@ -11,7 +11,6 @@ import {
   lyricsGraphemeCount,
   lyricsStripFinalArrivalMs,
   layoutLyricsStrip,
-  lyricsLineOpacityFactor,
   lyricsLineWeight,
   lyricsStripFocus,
   lyricsStripAnchor,
@@ -158,8 +157,14 @@ test('the final glide estimates 500 ms per grapheme and stops no later than trac
 
 // Line fades (ADR 0032): lines start at 1000, 5000 and 9000 ms.
 const FADE_STARTS = [1000, 5000, 9000];
-const factorAt = (index, positionMs, inactive = 50, animation = 'continuous') =>
-  lyricsLineOpacityFactor(lyricsLineWeight(lyricsStripFocus(FADE_STARTS, positionMs), index), inactive, animation);
+// A line's opacity factor from its weight, as a line-fading renderer would: `secondary` percent for a line that is not
+// current, 100 for the current one, linear in between (the windows no longer fade lines; this pins the weights).
+const weightFactor = (weight, secondary) => {
+  const s = secondary / 100;
+  return s + (1 - s) * Math.min(1, Math.max(0, weight));
+};
+const factorAt = (index, positionMs, secondary = 50) =>
+  weightFactor(lyricsLineWeight(lyricsStripFocus(FADE_STARTS, positionMs), index), secondary);
 
 test('the fade lasts 200 ms and ends exactly when the next line starts', () => {
   assert.equal(LYRICS_FADE_MS, 200);
@@ -200,25 +205,12 @@ test('80% main opacity x 50% not-current gives 40% for the lines around the curr
   assert.equal(main * factorAt(1, 5000), 0.8);
 });
 
-test('a not-current opacity of 100% does not dim anything, and the setting is normalized', () => {
+test('a not-current opacity of 100% does not dim anything', () => {
   for (const position of [0, 900, 950, 1000, 3000, 4900, 5000, 9000, 20000]) {
     for (const index of [0, 1, 2]) assert.equal(factorAt(index, position, 100), 1);
   }
-  assert.equal(lyricsLineOpacityFactor(0, 5), 0.1);
-  assert.equal(lyricsLineOpacityFactor(0, 250), 1);
-  assert.equal(lyricsLineOpacityFactor(0, 'x'), 0.5);
-  assert.equal(lyricsLineOpacityFactor(0, undefined), 0.5);
-  assert.equal(lyricsLineOpacityFactor(-3, 50), 0.5);
-  assert.equal(lyricsLineOpacityFactor(7, 50), 1);
-});
-
-test('the animation "none" applies no dimming', () => {
-  for (const position of [0, 3000, 4900, 5000, 20000]) {
-    for (const index of [0, 1, 2]) {
-      assert.equal(factorAt(index, position, 50, 'none'), 1);
-      assert.equal(factorAt(index, position, 50, 'bounce'), 1);
-    }
-  }
+  assert.equal(weightFactor(-3, 50), 0.5);
+  assert.equal(weightFactor(7, 50), 1);
 });
 
 test('before the first line nothing is dimmed (like Now Playing)', () => {
@@ -256,9 +248,9 @@ test('a first line that starts within 200 ms of the song start fades over the ti
   const focus = lyricsStripFocus(starts, 0);
   assert.equal(focus.fadeStartMs, 0);
   assert.equal(focus.fadeMs, 100);
-  assert.equal(lyricsLineOpacityFactor(lyricsLineWeight(focus, 1), 50), 1);
-  assert.equal(lyricsLineOpacityFactor(lyricsLineWeight(lyricsStripFocus(starts, 50), 1), 50), 0.75);
-  assert.equal(lyricsLineOpacityFactor(lyricsLineWeight(lyricsStripFocus(starts, 100), 1), 50), 0.5);
+  assert.equal(weightFactor(lyricsLineWeight(focus, 1), 50), 1);
+  assert.equal(weightFactor(lyricsLineWeight(lyricsStripFocus(starts, 50), 1), 50), 0.75);
+  assert.equal(weightFactor(lyricsLineWeight(lyricsStripFocus(starts, 100), 1), 50), 0.5);
 });
 
 test('seeking back before the first line restores full opacity for every line', () => {
@@ -302,19 +294,20 @@ test('a line shorter than 200 ms fades over its own length, so the previous fade
   assert.equal(lyricsStripFocus([], 500).incoming, -1);
 });
 
-test('continuous mode dims by the static mask only, fed by the shared setting', () => {
-  // Experimental (ADR 0041 D10): no per-line fades; the inactive opacity is part of the static mask.
+test('continuous mode dims by the static mask only, fed by each window own main and secondary opacity', () => {
+  // ADR 0041 D10: no per-line fades; the mask takes main (plateau) and secondary (where the edge ramp starts).
   const plan = readFileSync(new URL('../crates/player-lyrics-native/src/plan.rs', import.meta.url), 'utf8');
   const bridge = readFileSync(new URL('../src-tauri/src/native_lyrics.rs', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
   const win = readFileSync(new URL('../crates/player-lyrics-native/src/win.rs', import.meta.url), 'utf8');
   assert.doesNotMatch(plan, /rules::line_opacity_factor\(/);
-  assert.match(win, /rules::centre_mask_stops\(area\.width, em, f64::from\(inactive\) \/ 100\.0\)/);
-  // The shared setting reaches the renderer by event (the preview too), and again when the renderer asks.
-  assert.match(bridge, /listen_any\("lyrics-inactive-opacity"/);
-  assert.match(app, /emit\('lyrics-inactive-opacity', inactiveOpacityPercent\)/);
-  assert.match(app, /emit\('lyrics-inactive-opacity', lyricsPreferences\.inactiveOpacityPercent\)/);
-  assert.match(app, /payload: \{ inactiveOpacityPercent \}/);
+  assert.match(win, /rules::centre_mask_stops\(\s*area\.width,\s*em,\s*f64::from\(main\) \/ 100\.0,\s*f64::from\(secondary\) \/ 100\.0,?\s*\)/);
+  // No separate shared channel any more: each window's own settings carry both values.
+  assert.doesNotMatch(bridge, /lyrics-inactive-opacity/);
+  assert.doesNotMatch(app, /lyrics-inactive-opacity/);
+  assert.doesNotMatch(app, /inactiveOpacityPercent/);
+  assert.match(bridge, /main_opacity_percent: f64::from\(settings\.main_opacity_percent\)/);
+  assert.match(bridge, /secondary_opacity_percent: f64::from\(settings\.secondary_opacity_percent\)/);
 });
 
 test('the glide is monotone, C1 and exact at every line start', () => {

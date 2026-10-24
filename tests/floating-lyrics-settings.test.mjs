@@ -29,10 +29,16 @@ test('floating lyrics settings repair field by field with their own defaults', (
   assert.equal(repaired.enabled, true);
   assert.equal(repaired.fontSizePx, 28);
   assert.equal(repaired.translationScalePercent, 100);
-  assert.equal(repaired.opacityPercent, 100, 'missing opacity is fully opaque');
-  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 40 }).opacityPercent, 40);
-  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 1 }).opacityPercent, 1);
-  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 0 }).opacityPercent, 1);
+  assert.deepEqual([repaired.mainOpacityPercent, repaired.secondaryOpacityPercent], [100, 50], 'missing opacities take the defaults');
+  assert.equal('opacityPercent' in repaired, false);
+  assert.equal(normalizeFloatingLyricsSettings({ mainOpacityPercent: 40 }).mainOpacityPercent, 40);
+  assert.equal(normalizeFloatingLyricsSettings({ mainOpacityPercent: 1 }).mainOpacityPercent, 1);
+  assert.equal(normalizeFloatingLyricsSettings({ mainOpacityPercent: 0 }).mainOpacityPercent, 1);
+  assert.equal(normalizeFloatingLyricsSettings({ secondaryOpacityPercent: 0 }).secondaryOpacityPercent, 10);
+  // The former key is ignored, not converted; the secondary may exceed the main.
+  assert.equal(normalizeFloatingLyricsSettings({ opacityPercent: 40 }).mainOpacityPercent, 100);
+  const crossed = normalizeFloatingLyricsSettings({ mainOpacityPercent: 30, secondaryOpacityPercent: 90 });
+  assert.deepEqual([crossed.mainOpacityPercent, crossed.secondaryOpacityPercent], [30, 90]);
   assert.equal(normalizeFloatingLyricsSettings({}).widthPx, 800);
   assert.equal(normalizeFloatingLyricsSettings({ widthPx: 50 }).widthPx, 100);
   assert.equal(normalizeFloatingLyricsSettings({ widthPx: 99999 }).widthPx, 8192);

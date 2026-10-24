@@ -109,7 +109,10 @@ pub struct Look {
     pub color: [u8; 3],
     pub effect: TextEffect,
     pub show_translation: bool,
-    pub opacity_percent: f64,
+    /// Animation "none": the shown line's opacity; "continuous": the opacity at the strip's centre (1–100).
+    pub main_opacity_percent: f64,
+    /// "continuous": the opacity where the edge ramp starts (10–100); no effect in "none".
+    pub secondary_opacity_percent: f64,
     pub animation: Animation,
 }
 

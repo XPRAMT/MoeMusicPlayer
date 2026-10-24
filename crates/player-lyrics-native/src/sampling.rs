@@ -97,7 +97,6 @@ mod tests {
             final_line: None,
             at_ms: at,
             playing: true,
-            inactive_percent: 50,
             rate: slew.map_or(1.0, |s| s.0),
             slew_until_ms: slew.map(|s| at + s.1),
             word_glide: None,

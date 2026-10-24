@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   layoutLyricsStrip, lyricsStripOffset, lyricsStripWindow, lyricsStripFocus, lyricsLineWeight,
-  lyricsLineOpacityFactor, lyricsStripFinalArrivalMs, nextLyricsStripBreak, lyricsEdgeFadeWidth, lyricsEdgeFadeOpacity,
+  lyricsStripFinalArrivalMs, nextLyricsStripBreak, lyricsEdgeFadeWidth, lyricsEdgeFadeOpacity,
 } from '../src/lib/lyrics-strip.js';
 import { findActiveLyricIndex } from '../src/lib/lyrics-window.js';
 import { lyricsDisplayOffsetMs } from '../src/lib/lyrics-timing-offset.js';
@@ -34,7 +34,6 @@ test('shared lyric-rule vectors match the JS rules', () => {
     assert.equal(lyricsEdgeFadeWidth(c.areaWidth, c.areaHeight), c.width);
     assert.equal(lyricsEdgeFadeOpacity(c.x, c.areaWidth, c.areaHeight), c.expected);
   }
-  for (const c of v.opacity) assert.equal(lyricsLineOpacityFactor(c.weight, c.inactive, c.animation), c.expected);
 });
 
 const close = (/** @type {number} */ a, /** @type {number} */ b, /** @type {string} */ what) => assert.ok(Math.abs(a - b) < 1e-9, `${what}: ${a} != ${b}`);

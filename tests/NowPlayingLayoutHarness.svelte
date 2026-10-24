@@ -400,7 +400,7 @@
                 positionMs={50_000}
                 isPlaying={true}
                 playbackState="playing"
-                lyricsPreferences={{ showTranslation: true, showRomanization: true, inactiveOpacityPercent: 70, primaryFontSizePx: 14, auxiliaryScalePercent: 71, textEffect: 'shadow' }}
+                lyricsPreferences={{ showTranslation: true, showRomanization: true, mainOpacityPercent: 100, secondaryOpacityPercent: 70, primaryFontSizePx: 14, auxiliaryScalePercent: 71, textEffect: 'shadow' }}
                 api={lyricsApi}
                 onLyricsRemovedChange={(removed) => { lyricsRemoved = removed; }}
                 onStatusChange={(status) => { lyricsTopbarStatus = status; }}

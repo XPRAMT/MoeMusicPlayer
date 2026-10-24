@@ -1,8 +1,9 @@
 //! Bridge between the app and the native lyrics renderer (ADR 0034, Windows): one renderer thread for every taskbar
 //! window and the floating window. The main window stays the single source of the lyrics, the playback samples, the
-//! shared inactive opacity, the per-track delay and the translated padlock tooltips: it broadcasts them as events
-//! (`taskbar-lyrics-data`, `taskbar-lyrics-playback`, `lyrics-inactive-opacity`, `lyrics-native-delay`,
-//! `floating-lyrics-tips`) and this module listens on the Rust side. When the renderer starts it asks the main
+//! per-track delay, the accent colour and the translated padlock tooltips: it broadcasts them as events
+//! (`taskbar-lyrics-data`, `taskbar-lyrics-playback`, `lyrics-accent-color`, `lyrics-native-delay`,
+//! `floating-lyrics-tips`) and this module listens on the Rust side. The main and secondary opacity are not events:
+//! each window's own settings carry them into its `Look`. When the renderer starts it asks the main
 //! window to send everything once (`taskbar-lyrics-request`, `taskbar-lyrics-playback-request`).
 
 use std::sync::{Arc, OnceLock};
@@ -196,12 +197,6 @@ fn listen(app: &AppHandle, renderer: NativeLyrics) {
         }
     });
     let r = renderer.clone();
-    app.listen_any("lyrics-inactive-opacity", move |event| {
-        if let Ok(percent) = serde_json::from_str::<f64>(event.payload()) {
-            r.set_inactive_opacity(percent.round().clamp(0.0, 100.0) as u32);
-        }
-    });
-    let r = renderer.clone();
     app.listen_any("lyrics-accent-color", move |event| {
         if let Some(rgb) = serde_json::from_str::<String>(event.payload())
             .ok()
@@ -279,7 +274,8 @@ pub fn taskbar_look(settings: &TaskbarLyricsSettings, light: bool) -> Look {
         color: colour(settings.use_custom_color, &settings.custom_color, light),
         effect: effect(settings.text_effect),
         show_translation: settings.show_translation,
-        opacity_percent: f64::from(settings.opacity_percent),
+        main_opacity_percent: f64::from(settings.main_opacity_percent),
+        secondary_opacity_percent: f64::from(settings.secondary_opacity_percent),
         animation: animation(settings.animation),
     }
 }
@@ -293,7 +289,8 @@ pub fn floating_look(settings: &FloatingLyricsSettings) -> Look {
         color: colour(settings.use_custom_color, &settings.custom_color, false),
         effect: effect(settings.text_effect),
         show_translation: settings.show_translation,
-        opacity_percent: f64::from(settings.opacity_percent),
+        main_opacity_percent: f64::from(settings.main_opacity_percent),
+        secondary_opacity_percent: f64::from(settings.secondary_opacity_percent),
         animation: animation(settings.animation),
     }
 }

@@ -6,22 +6,26 @@ export const MASK_BAND_EM = 1;
 export const MASK_EDGE_EM = 1;
 
 /**
- * Gradient stops `[offset 0..1, opacity]` of the static continuous-mode mask (experimental): 0 → inactive over the
- * edge em, inactive → 1 up to an opaque em centred on the area, mirrored. Below four em the em shrinks to a quarter.
+ * Gradient stops `[offset 0..1, opacity]` of the static continuous-mode mask: 0 → `secondary` over the edge em,
+ * `secondary` → `main` up to a `main` plateau of one em centred on the area, mirrored. `main` and `secondary` are
+ * absolute opacities (0..1, each clamped on its own, NaN = 1; secondary may exceed main). Below four em the em
+ * shrinks to a quarter.
  */
-export function centreMaskStops(/** @type {number} */ areaWidth, /** @type {number} */ emPx, /** @type {number} */ inactive) {
+export function centreMaskStops(/** @type {number} */ areaWidth, /** @type {number} */ emPx, /** @type {number} */ main, /** @type {number} */ secondary) {
   if (!(areaWidth > 0) || !(emPx > 0)) return [];
-  const a = Number.isNaN(inactive) ? 1 : Math.min(1, Math.max(0, inactive));
+  const unit = (/** @type {number} */ v) => (Number.isNaN(v) ? 1 : Math.min(1, Math.max(0, v)));
+  const m = unit(main);
+  const a = unit(secondary);
   const e = Math.min(emPx, areaWidth / 4);
   const edge = MASK_EDGE_EM * e;
   const half = MASK_BAND_EM * e / 2;
   const c = areaWidth / 2;
-  return [[0, 0], [edge, a], [c - half, 1], [c + half, 1], [areaWidth - edge, a], [areaWidth, 0]]
+  return [[0, 0], [edge, a], [c - half, m], [c + half, m], [areaWidth - edge, a], [areaWidth, 0]]
     .map(([x, o]) => [x / areaWidth, o]);
 }
 
-export function centreMaskOpacity(/** @type {number} */ x, /** @type {number} */ areaWidth, /** @type {number} */ emPx, /** @type {number} */ inactive) {
-  const stops = centreMaskStops(areaWidth, emPx, inactive);
+export function centreMaskOpacity(/** @type {number} */ x, /** @type {number} */ areaWidth, /** @type {number} */ emPx, /** @type {number} */ main, /** @type {number} */ secondary) {
+  const stops = centreMaskStops(areaWidth, emPx, main, secondary);
   if (stops.length === 0) return 0;
   const p = Math.min(1, Math.max(0, x / areaWidth));
   let value = stops[0][1];

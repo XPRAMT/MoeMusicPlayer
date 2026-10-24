@@ -1823,22 +1823,12 @@
     if (!isTauri() || !data || !isWindowsPlatform || !taskbarLyricsEnabled) return;
     void emit('taskbar-lyrics-data', data).catch(() => {});
   });
-  // The shared "not current line" opacity (lyrics general settings) for the continuous animation of those windows: sent
-  // as the slider moves (the preview, before it is saved) and again when a window can have opened. The windows also read
-  // the saved value themselves when they start.
-  $effect(() => {
-    const inactiveOpacityPercent = lyricsPreferences.inactiveOpacityPercent;
-    if (!isTauri() || !isWindowsPlatform || !taskbarLyricsEnabled) return;
-    void emit('lyrics-inactive-opacity', inactiveOpacityPercent).catch(() => {});
-  });
-
   // Windows native lyrics (ADR 0034): the per-track delay lives in this window's localStorage, so it is sent with the
   // track (and again when it changes), together with the padlock tooltips in the interface language.
   function sendNativeLyricsExtras(): void {
     if (!isTauri() || !isWindowsPlatform) return;
     const trackId = taskbarLyricsData?.trackId ?? null;
     if (trackId) void emit('lyrics-native-delay', { trackId, delaySec: loadLyricsTimingOffsetSec(trackId) }).catch(() => {});
-    void emit('lyrics-inactive-opacity', lyricsPreferences.inactiveOpacityPercent).catch(() => {});
     void emit('lyrics-accent-color', themePreferences.accentHex).catch(() => {});
     void emit('floating-lyrics-tips', { lock: tr('鎖定位置（滑鼠穿透）'), unlock: tr('解除鎖定（可移動）') }).catch(() => {});
   }
@@ -1880,13 +1870,6 @@
     void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { settings } })
       .then(() => refreshFloatingLyricsAndroidStatus())
       .catch(() => {});
-  });
-  // The shared "not current line" opacity (10-100, the lyrics general setting) for the overlay's continuous animation,
-  // sent on its own so a slider tick does not resend the lyrics or the look settings.
-  $effect(() => {
-    const inactiveOpacityPercent = lyricsPreferences.inactiveOpacityPercent;
-    if (!isTauri() || !isAndroidPlatform) return;
-    void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { inactiveOpacityPercent } }).catch(() => {});
   });
   // The theme accent for the native lyrics windows' word highlight (ADR 0041; 「無」 mode lights the word being sung).
   $effect(() => {
@@ -4575,7 +4558,7 @@
                   </div>
                 </div>
                 <div class="settings-tabs lyrics-settings-tabs" role="tablist" aria-label={tr("歌詞設定分頁")}>
-                  {#each [['general', tr('一般')], ['taskbar', tr('工作列歌詞')], ['floating', tr('浮動歌詞')]] as [tab, label] (tab)}
+                  {#each [['general', tr('播放頁')], ['taskbar', tr('工作列歌詞')], ['floating', tr('浮動歌詞')]] as [tab, label] (tab)}
                     {#if tab !== 'taskbar' || capabilities?.platform === 'windows'}
                       <button
                         class="soft-button settings-tab"

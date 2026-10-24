@@ -142,7 +142,8 @@ fn main() {
         color: [255, 255, 255],
         effect,
         show_translation: true,
-        opacity_percent: 100.0,
+        main_opacity_percent: 100.0,
+        secondary_opacity_percent: 50.0,
         animation,
     };
     let place = |hwnd: isize, x: i32, y: i32, w: i32, h: i32| unsafe {

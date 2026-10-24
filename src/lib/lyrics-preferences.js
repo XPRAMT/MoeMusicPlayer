@@ -3,7 +3,8 @@
 export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   showTranslation: true,
   showRomanization: false,
-  inactiveOpacityPercent: 50,
+  mainOpacityPercent: 100,
+  secondaryOpacityPercent: 50,
   primaryFontSizePx: 20,
   auxiliaryScalePercent: 90,
   lineGapPx: 10,
@@ -14,7 +15,8 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
 export const LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
 
 export const LYRICS_PREFERENCE_LIMITS = Object.freeze({
-  inactiveOpacityPercent: Object.freeze({ min: 10, max: 100 }),
+  mainOpacityPercent: Object.freeze({ min: 1, max: 100 }),
+  secondaryOpacityPercent: Object.freeze({ min: 10, max: 100 }),
   primaryFontSizePx: Object.freeze({ min: 1, max: 50 }),
   auxiliaryScalePercent: Object.freeze({ min: 1, max: 100 }),
   lineGapPx: Object.freeze({ min: 0, max: 50 }),
@@ -33,11 +35,17 @@ export function normalizeLyricsPreferences(value) {
     showRomanization: typeof candidate.showRomanization === 'boolean'
       ? candidate.showRomanization
       : DEFAULT_LYRICS_PREFERENCES.showRomanization,
-    inactiveOpacityPercent: normalizeInteger(
-      candidate.inactiveOpacityPercent,
-      LYRICS_PREFERENCE_LIMITS.inactiveOpacityPercent.min,
-      LYRICS_PREFERENCE_LIMITS.inactiveOpacityPercent.max,
-      DEFAULT_LYRICS_PREFERENCES.inactiveOpacityPercent,
+    mainOpacityPercent: normalizeInteger(
+      candidate.mainOpacityPercent,
+      LYRICS_PREFERENCE_LIMITS.mainOpacityPercent.min,
+      LYRICS_PREFERENCE_LIMITS.mainOpacityPercent.max,
+      DEFAULT_LYRICS_PREFERENCES.mainOpacityPercent,
+    ),
+    secondaryOpacityPercent: normalizeInteger(
+      candidate.secondaryOpacityPercent,
+      LYRICS_PREFERENCE_LIMITS.secondaryOpacityPercent.min,
+      LYRICS_PREFERENCE_LIMITS.secondaryOpacityPercent.max,
+      DEFAULT_LYRICS_PREFERENCES.secondaryOpacityPercent,
     ),
     primaryFontSizePx: normalizeInteger(
       candidate.primaryFontSizePx,
@@ -64,7 +72,7 @@ export function normalizeLyricsPreferences(value) {
 /**
  * Paused playback keeps its cue. A stopped/ready track or a position before
  * its first cue has no focused row, so all timed lines remain fully readable.
- * Plain lyrics pass -1 and therefore never receive inactive opacity.
+ * Plain lyrics pass -1 and therefore never receive the secondary opacity.
  * @param {number} activeIndex
  * @param {string} playbackState
  */
@@ -77,16 +85,17 @@ export function getDisplayActiveLyricIndex(activeIndex, playbackState) {
   return activeIndex;
 }
 
-/** @param {number} lineIndex @param {number} activeIndex @param {number} opacityPercent */
-export function getLyricLineOpacity(lineIndex, activeIndex, opacityPercent) {
-  if (activeIndex < 0 || lineIndex === activeIndex) return 1;
-  const safeOpacity = normalizeInteger(
-    opacityPercent,
-    LYRICS_PREFERENCE_LIMITS.inactiveOpacityPercent.min,
-    LYRICS_PREFERENCE_LIMITS.inactiveOpacityPercent.max,
-    DEFAULT_LYRICS_PREFERENCES.inactiveOpacityPercent,
-  );
-  return safeOpacity / 100;
+/**
+ * The opacity (0..1) of a timed line on the playing page: the main opacity for the current line, the secondary for
+ * the others; no current line (`activeIndex` < 0: plain lyrics, before the first cue) shows every line at the main.
+ * Absolute values, not relative to each other.
+ * @param {number} lineIndex @param {number} activeIndex @param {number} mainOpacityPercent @param {number} secondaryOpacityPercent
+ */
+export function getLyricLineOpacity(lineIndex, activeIndex, mainOpacityPercent, secondaryOpacityPercent) {
+  const limits = LYRICS_PREFERENCE_LIMITS;
+  const main = normalizeInteger(mainOpacityPercent, limits.mainOpacityPercent.min, limits.mainOpacityPercent.max, DEFAULT_LYRICS_PREFERENCES.mainOpacityPercent);
+  if (activeIndex < 0 || lineIndex === activeIndex) return main / 100;
+  return normalizeInteger(secondaryOpacityPercent, limits.secondaryOpacityPercent.min, limits.secondaryOpacityPercent.max, DEFAULT_LYRICS_PREFERENCES.secondaryOpacityPercent) / 100;
 }
 
 /**

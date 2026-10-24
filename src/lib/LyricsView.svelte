@@ -891,7 +891,7 @@
             data-lyric-index={row.index}
             data-timeline-index={timelineIndex}
             use:observeLyricRow={timelineIndex}
-            style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.inactiveOpacityPercent)};--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
+            style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.mainOpacityPercent, preferences.secondaryOpacityPercent)};--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
             aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
             {#if row.line.text?.trim()}

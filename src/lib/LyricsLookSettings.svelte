@@ -1,14 +1,14 @@
 <script lang="ts">
-  // 三個歌詞設定分頁（一般／工作列歌詞／浮動歌詞，ADR 0032）共用的版面：
+  // 三個歌詞設定分頁（播放頁／工作列歌詞／浮動歌詞，ADR 0032）共用的版面：
   // 同樣的分組（顯示 → 字體與大小 → 外觀 → 位置與面板）、同樣的順序與標籤。
   // 各頁各自保存，這裡只畫控制項並把變更交回呼叫端；只有某頁才有的設定以 snippet 放進對應分組。
   import type { Snippet } from 'svelte';
   import { tr } from './i18n.js';
   import type { LyricsLookSettings } from './ipc';
-  import { LYRICS_OPACITY_PERCENT, TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
+  import { LYRICS_MAIN_OPACITY_PERCENT, LYRICS_SECONDARY_OPACITY_PERCENT, TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
 
-  type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect'>
-    & Partial<Pick<LyricsLookSettings, 'align' | 'useCustomColor' | 'customColor' | 'opacityPercent' | 'animation'>>;
+  type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent'>
+    & Partial<Pick<LyricsLookSettings, 'align' | 'useCustomColor' | 'customColor' | 'animation'>>;
 
   let {
     settings,
@@ -21,7 +21,6 @@
     translationAriaLabel,
     withAlign = true,
     withColor = true,
-    withOpacity = true,
     withAnimation = true,
     enable,
     displayExtra,
@@ -40,7 +39,6 @@
     translationAriaLabel?: string;
     withAlign?: boolean;
     withColor?: boolean;
-    withOpacity?: boolean;
     withAnimation?: boolean;
     /** 「啟用」 toggle, first in 顯示. */
     enable?: Snippet;
@@ -48,7 +46,7 @@
     displayExtra?: Snippet;
     /** Page-only size settings, after 譯文大小（相對原文）. */
     sizeExtra?: Snippet;
-    /** Page-only appearance settings, after 透明度 and before 對齊. */
+    /** Page-only appearance settings, after 次要透明度 and before 對齊. */
     lookExtra?: Snippet;
     /** 位置與面板 group content (page-specific). */
     position?: Snippet;
@@ -140,20 +138,30 @@
       />
     </label>
   {/if}
-  {#if withOpacity}
-    <label class="lyrics-preference-range">
-      <span><strong>{tr("透明度")}</strong><output>{settings.opacityPercent}%</output></span>
-      <input
-        type="range"
-        min={LYRICS_OPACITY_PERCENT.min}
-        max={LYRICS_OPACITY_PERCENT.max}
-        step="1"
-        value={settings.opacityPercent}
-        aria-label={tr("透明度")}
-        oninput={(event) => onChange({ opacityPercent: Number(event.currentTarget.value) })}
-      />
-    </label>
-  {/if}
+  <label class="lyrics-preference-range">
+    <span><strong>{tr("主要透明度")}</strong><output>{settings.mainOpacityPercent}%</output></span>
+    <input
+      type="range"
+      min={LYRICS_MAIN_OPACITY_PERCENT.min}
+      max={LYRICS_MAIN_OPACITY_PERCENT.max}
+      step="1"
+      value={settings.mainOpacityPercent}
+      aria-label={tr("主要透明度")}
+      oninput={(event) => onChange({ mainOpacityPercent: Number(event.currentTarget.value) })}
+    />
+  </label>
+  <label class="lyrics-preference-range">
+    <span><strong>{tr("次要透明度")}</strong><output>{settings.secondaryOpacityPercent}%</output></span>
+    <input
+      type="range"
+      min={LYRICS_SECONDARY_OPACITY_PERCENT.min}
+      max={LYRICS_SECONDARY_OPACITY_PERCENT.max}
+      step="1"
+      value={settings.secondaryOpacityPercent}
+      aria-label={tr("次要透明度")}
+      oninput={(event) => onChange({ secondaryOpacityPercent: Number(event.currentTarget.value) })}
+    />
+  </label>
   {@render lookExtra?.()}
   {#if withAlign}
     <div class="cover-corner-setting" role="group" aria-labelledby="{idPrefix}-align-label">

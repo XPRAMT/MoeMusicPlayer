@@ -231,8 +231,10 @@ export interface TaskbarLyricsSettings {
   displayMode: 'all' | 'playerMonitor' | 'custom';
   /** Stable monitor ids chosen in `custom` mode (kept while a monitor is unplugged). */
   customMonitors: string[];
-  /** Opacity of the main line and translation alike (10 to 100); saved apart for the floating lyrics. */
-  opacityPercent: number;
+  /** Animation none: the shown line's opacity; continuous: the strip's centre (1 to 100). Saved apart per tab. */
+  mainOpacityPercent: number;
+  /** Continuous: where the edge ramp starts (10 to 100, may exceed the main); no effect in none. */
+  secondaryOpacityPercent: number;
   /** none: one line at a time; continuous: all lines in one strip that scrolls with playback (ADR 0032). */
   animation: LyricsAnimation;
 }
@@ -241,7 +243,7 @@ export type LyricsAnimation = 'none' | 'continuous';
 
 /** The look options shared by the taskbar and floating lyrics. */
 export type LyricsLookSettings = Pick<TaskbarLyricsSettings,
-  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'opacityPercent' | 'animation'>;
+  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'animation'>;
 
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
 export interface FloatingLyricsSettings extends LyricsLookSettings {
@@ -744,7 +746,10 @@ export interface LyricsTrackResult {
 export interface LyricsPreferences {
   showTranslation: boolean;
   showRomanization: boolean;
-  inactiveOpacityPercent: number;
+  /** Opacity of the current line (1 to 100). */
+  mainOpacityPercent: number;
+  /** Opacity of the other lines (10 to 100, may exceed the main). */
+  secondaryOpacityPercent: number;
   primaryFontSizePx: number;
   /** Translation and romanization size, percent of primaryFontSizePx (1–100). */
   auxiliaryScalePercent: number;

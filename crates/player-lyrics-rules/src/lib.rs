@@ -20,8 +20,6 @@ pub const MS_PER_GRAPHEME: f64 = 500.0;
 pub const FADE_MS: f64 = 200.0;
 /// The "none" mode: how long the last line is shown when the track length is unknown.
 pub const LAST_LINE_FALLBACK_MS: f64 = 5000.0;
-/// Default of the shared "inactive lyrics opacity" setting.
-pub const DEFAULT_INACTIVE_OPACITY_PERCENT: u32 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Align {
@@ -368,26 +366,6 @@ pub fn line_weight(focus: &Focus, index: usize) -> f64 {
     } else {
         0.0
     }
-}
-
-pub fn normalize_inactive_opacity_percent(value: f64) -> u32 {
-    if !value.is_finite() {
-        return DEFAULT_INACTIVE_OPACITY_PERCENT;
-    }
-    js_round(value).clamp(10.0, 100.0) as u32
-}
-
-/// `lyricsLineOpacityFactor`: the line's opacity relative to the window opacity (continuous mode only).
-pub fn line_opacity_factor(
-    weight: f64,
-    inactive_opacity_percent: u32,
-    animation: Animation,
-) -> f64 {
-    if animation != Animation::Continuous {
-        return 1.0;
-    }
-    let inactive = inactive_opacity_percent.clamp(10, 100) as f64 / 100.0;
-    inactive + (1.0 - inactive) * weight.clamp(0.0, 1.0)
 }
 
 /// `lyricsEdgeFadeWidth`: the square edge-fade zone on each side of a lyric area (as wide as the area is high, at most

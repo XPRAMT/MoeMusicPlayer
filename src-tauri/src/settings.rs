@@ -183,7 +183,10 @@ impl Default for ThemeSettings {
 pub struct LyricsPreferences {
     pub show_translation: bool,
     pub show_romanization: bool,
-    pub inactive_opacity_percent: u8,
+    /// Playing page: opacity of the current line (1–100).
+    pub main_opacity_percent: u8,
+    /// Playing page: opacity of the other lines (10–100).
+    pub secondary_opacity_percent: u8,
     pub primary_font_size_px: u8,
     /// Translation and romanization size as a percent of `primary_font_size_px` (1–100).
     pub auxiliary_scale_percent: u8,
@@ -200,7 +203,8 @@ pub struct LyricsPreferences {
 struct RawLyricsPreferences {
     show_translation: Option<bool>,
     show_romanization: Option<bool>,
-    inactive_opacity_percent: Option<u8>,
+    main_opacity_percent: Option<u8>,
+    secondary_opacity_percent: Option<u8>,
     primary_font_size_px: Option<u8>,
     auxiliary_scale_percent: Option<u8>,
     auxiliary_font_size_px: Option<u8>,
@@ -235,9 +239,12 @@ impl From<RawLyricsPreferences> for LyricsPreferences {
         Self {
             show_translation: raw.show_translation.unwrap_or(defaults.show_translation),
             show_romanization: raw.show_romanization.unwrap_or(defaults.show_romanization),
-            inactive_opacity_percent: raw
-                .inactive_opacity_percent
-                .unwrap_or(defaults.inactive_opacity_percent),
+            main_opacity_percent: raw
+                .main_opacity_percent
+                .unwrap_or(defaults.main_opacity_percent),
+            secondary_opacity_percent: raw
+                .secondary_opacity_percent
+                .unwrap_or(defaults.secondary_opacity_percent),
             primary_font_size_px,
             auxiliary_scale_percent,
             line_gap_px: raw.line_gap_px.unwrap_or(defaults.line_gap_px),
@@ -262,7 +269,8 @@ impl Default for LyricsPreferences {
         Self {
             show_translation: true,
             show_romanization: false,
-            inactive_opacity_percent: 50,
+            main_opacity_percent: default_main_opacity_percent(),
+            secondary_opacity_percent: default_secondary_opacity_percent(),
             primary_font_size_px: 20,
             auxiliary_scale_percent: default_auxiliary_scale_percent(),
             line_gap_px: default_line_gap_px(),
@@ -274,9 +282,14 @@ impl Default for LyricsPreferences {
 
 impl LyricsPreferences {
     fn validate(&self) -> Result<(), SettingsError> {
-        if !(10..=100).contains(&self.inactive_opacity_percent) {
+        if !(1..=100).contains(&self.main_opacity_percent) {
             return Err(SettingsError::InvalidData(
-                "inactiveOpacityPercent must be between 10 and 100".into(),
+                "mainOpacityPercent must be between 1 and 100".into(),
+            ));
+        }
+        if !(10..=100).contains(&self.secondary_opacity_percent) {
+            return Err(SettingsError::InvalidData(
+                "secondaryOpacityPercent must be between 10 and 100".into(),
             ));
         }
         if !(1..=50).contains(&self.primary_font_size_px) {
@@ -990,16 +1003,24 @@ pub struct TaskbarLyricsSettings {
     /// Stable monitor ids (`DisplayMonitor::id`) chosen in `Custom` mode; kept while a monitor is unplugged.
     #[serde(default)]
     pub custom_monitors: Vec<String>,
-    /// Opacity of the lyrics (main line and translation alike), 1–100. Older files without it are fully opaque.
-    #[serde(default = "default_lyrics_opacity_percent")]
-    pub opacity_percent: u8,
+    /// Main opacity, 1–100: the shown line in animation "none", the centre of the strip in "continuous" (ADR 0041
+    /// D10). Files without it use the default; the former `opacityPercent` is ignored.
+    #[serde(default = "default_main_opacity_percent")]
+    pub main_opacity_percent: u8,
+    /// Secondary opacity, 10–100: where the strip's edge ramp starts in "continuous"; no effect in "none".
+    #[serde(default = "default_secondary_opacity_percent")]
+    pub secondary_opacity_percent: u8,
     /// Line animation; older files without it keep the one-line-at-a-time look.
     #[serde(default)]
     pub animation: LyricsAnimation,
 }
 
-fn default_lyrics_opacity_percent() -> u8 {
+fn default_main_opacity_percent() -> u8 {
     100
+}
+
+fn default_secondary_opacity_percent() -> u8 {
+    50
 }
 
 fn default_floating_lyrics_width_px() -> u16 {
@@ -1013,15 +1034,21 @@ impl TaskbarLyricsSettings {
     pub const TRANSLATION_SCALE_RANGE_PERCENT: (u8, u8) = (1, 100);
     pub const DEFAULT_TRANSLATION_SCALE_PERCENT: u8 = 100;
     pub const DEFAULT_CUSTOM_COLOR: &'static str = "#00e1ff";
-    pub const OPACITY_RANGE_PERCENT: (u8, u8) = (1, 100);
+    pub const MAIN_OPACITY_RANGE_PERCENT: (u8, u8) = (1, 100);
+    pub const SECONDARY_OPACITY_RANGE_PERCENT: (u8, u8) = (10, 100);
 
     pub fn normalized(mut self) -> Self {
         self.font_size_px = self
             .font_size_px
             .clamp(Self::FONT_SIZE_RANGE_PX.0, Self::FONT_SIZE_RANGE_PX.1);
-        self.opacity_percent = self
-            .opacity_percent
-            .clamp(Self::OPACITY_RANGE_PERCENT.0, Self::OPACITY_RANGE_PERCENT.1);
+        self.main_opacity_percent = self.main_opacity_percent.clamp(
+            Self::MAIN_OPACITY_RANGE_PERCENT.0,
+            Self::MAIN_OPACITY_RANGE_PERCENT.1,
+        );
+        self.secondary_opacity_percent = self.secondary_opacity_percent.clamp(
+            Self::SECONDARY_OPACITY_RANGE_PERCENT.0,
+            Self::SECONDARY_OPACITY_RANGE_PERCENT.1,
+        );
         self.translation_scale_percent = self.translation_scale_percent.clamp(
             Self::TRANSLATION_SCALE_RANGE_PERCENT.0,
             Self::TRANSLATION_SCALE_RANGE_PERCENT.1,
@@ -1056,7 +1083,8 @@ impl Default for TaskbarLyricsSettings {
             text_effect: default_taskbar_lyrics_text_effect(),
             display_mode: TaskbarLyricsDisplayMode::default(),
             custom_monitors: Vec::new(),
-            opacity_percent: default_lyrics_opacity_percent(),
+            main_opacity_percent: default_main_opacity_percent(),
+            secondary_opacity_percent: default_secondary_opacity_percent(),
             animation: LyricsAnimation::None,
         }
     }
@@ -1092,9 +1120,11 @@ pub struct FloatingLyricsSettings {
     pub custom_color: String,
     pub show_translation: bool,
     pub text_effect: LyricsTextEffect,
-    /// Opacity of the lyrics (main line and translation alike), 1–100; saved apart from the taskbar lyrics'.
-    #[serde(default = "default_lyrics_opacity_percent")]
-    pub opacity_percent: u8,
+    /// Main and secondary opacity (see `TaskbarLyricsSettings`), saved apart from the taskbar lyrics'.
+    #[serde(default = "default_main_opacity_percent")]
+    pub main_opacity_percent: u8,
+    #[serde(default = "default_secondary_opacity_percent")]
+    pub secondary_opacity_percent: u8,
     /// Panel width: CSS px on Windows, dp on Android; narrowed to the screen when wider.
     #[serde(default = "default_floating_lyrics_width_px")]
     pub width_px: u16,
@@ -1124,12 +1154,14 @@ impl FloatingLyricsSettings {
             font_size_px: self.font_size_px,
             translation_scale_percent: self.translation_scale_percent,
             custom_color: std::mem::take(&mut self.custom_color),
-            opacity_percent: self.opacity_percent,
+            main_opacity_percent: self.main_opacity_percent,
+            secondary_opacity_percent: self.secondary_opacity_percent,
             ..TaskbarLyricsSettings::default()
         }
         .normalized();
         self.font_size_px = look.font_size_px;
-        self.opacity_percent = look.opacity_percent;
+        self.main_opacity_percent = look.main_opacity_percent;
+        self.secondary_opacity_percent = look.secondary_opacity_percent;
         self.width_px = self
             .width_px
             .clamp(Self::WIDTH_RANGE_PX.0, Self::WIDTH_RANGE_PX.1);
@@ -1158,7 +1190,8 @@ impl Default for FloatingLyricsSettings {
             custom_color: TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR.to_owned(),
             show_translation: true,
             text_effect: LyricsTextEffect::Shadow,
-            opacity_percent: default_lyrics_opacity_percent(),
+            main_opacity_percent: default_main_opacity_percent(),
+            secondary_opacity_percent: default_secondary_opacity_percent(),
             width_px: Self::DEFAULT_WIDTH_PX,
             landscape_width_px: Self::DEFAULT_WIDTH_PX,
             animation: LyricsAnimation::None,
@@ -1203,7 +1236,11 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         text_effect: field("textEffect")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.text_effect),
-        opacity_percent: byte("opacityPercent", defaults.opacity_percent),
+        main_opacity_percent: byte("mainOpacityPercent", defaults.main_opacity_percent),
+        secondary_opacity_percent: byte(
+            "secondaryOpacityPercent",
+            defaults.secondary_opacity_percent,
+        ),
         width_px: field("widthPx")
             .and_then(|value| value.as_u64())
             .map_or(defaults.width_px, |value| {
@@ -1260,9 +1297,14 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         display_mode: field("displayMode")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.display_mode),
-        opacity_percent: field("opacityPercent")
+        main_opacity_percent: field("mainOpacityPercent")
             .and_then(|value| value.as_u64())
-            .map_or(defaults.opacity_percent, |value| value.min(255) as u8),
+            .map_or(defaults.main_opacity_percent, |value| value.min(255) as u8),
+        secondary_opacity_percent: field("secondaryOpacityPercent")
+            .and_then(|value| value.as_u64())
+            .map_or(defaults.secondary_opacity_percent, |value| {
+                value.min(255) as u8
+            }),
         animation: field("animation")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.animation),
@@ -3628,17 +3670,50 @@ mod tests {
         assert_eq!((tiny.font_size_px, tiny.translation_scale_percent), (1, 1));
         let big = lenient_taskbar_lyrics(Some(serde_json::json!({"translationScalePercent": 250})));
         assert_eq!(big.translation_scale_percent, 100);
-        assert_eq!(defaults.opacity_percent, 100, "fully opaque until changed");
-        let faint = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 0})));
-        assert_eq!(faint.opacity_percent, 1, "never fully invisible");
-        let over = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 300})));
-        assert_eq!(over.opacity_percent, 100);
-        let floating = lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 55})));
-        assert_eq!(floating.opacity_percent, 55);
-        assert_eq!(lenient_floating_lyrics(None).opacity_percent, 100);
         assert_eq!(
-            lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3}))).opacity_percent,
-            3
+            (
+                defaults.main_opacity_percent,
+                defaults.secondary_opacity_percent
+            ),
+            (100, 50),
+            "new files and files without the keys use the defaults"
+        );
+        let faint = lenient_taskbar_lyrics(Some(
+            serde_json::json!({"mainOpacityPercent": 0, "secondaryOpacityPercent": 0}),
+        ));
+        assert_eq!(
+            (faint.main_opacity_percent, faint.secondary_opacity_percent),
+            (1, 10),
+            "never fully invisible"
+        );
+        let over = lenient_taskbar_lyrics(Some(
+            serde_json::json!({"mainOpacityPercent": 300, "secondaryOpacityPercent": 300}),
+        ));
+        assert_eq!(
+            (over.main_opacity_percent, over.secondary_opacity_percent),
+            (100, 100)
+        );
+        // The former keys are ignored, not converted.
+        let old = lenient_taskbar_lyrics(Some(serde_json::json!({"opacityPercent": 30})));
+        assert_eq!(old, defaults);
+        let floating = lenient_floating_lyrics(Some(
+            serde_json::json!({"mainOpacityPercent": 55, "secondaryOpacityPercent": 80}),
+        ));
+        assert_eq!(
+            (
+                floating.main_opacity_percent,
+                floating.secondary_opacity_percent
+            ),
+            (55, 80),
+            "secondary may exceed main"
+        );
+        let floating_old = lenient_floating_lyrics(Some(serde_json::json!({"opacityPercent": 3})));
+        assert_eq!(
+            (
+                floating_old.main_opacity_percent,
+                floating_old.secondary_opacity_percent
+            ),
+            (100, 50)
         );
         assert_eq!(lenient_floating_lyrics(None).width_px, 800);
         assert_eq!(
@@ -3678,7 +3753,8 @@ mod tests {
             text_effect: LyricsTextEffect::Stroke,
             display_mode: TaskbarLyricsDisplayMode::Custom,
             custom_monitors: vec![r"\\?\DISPLAY#AUS28A0#1".into()],
-            opacity_percent: 70,
+            main_opacity_percent: 70,
+            secondary_opacity_percent: 85,
             animation: LyricsAnimation::Continuous,
         };
         store
@@ -4171,7 +4247,8 @@ mod tests {
             LyricsPreferences {
                 show_translation: true,
                 show_romanization: false,
-                inactive_opacity_percent: 50,
+                main_opacity_percent: 100,
+                secondary_opacity_percent: 50,
                 primary_font_size_px: 20,
                 auxiliary_scale_percent: 90,
                 line_gap_px: 10,
@@ -4183,7 +4260,9 @@ mod tests {
         let value = serde_json::to_value(preferences).expect("serialize lyric preferences");
         assert_eq!(value["showTranslation"], true);
         assert_eq!(value["showRomanization"], false);
-        assert_eq!(value["inactiveOpacityPercent"], 50);
+        assert_eq!(value["mainOpacityPercent"], 100);
+        assert_eq!(value["secondaryOpacityPercent"], 50);
+        assert!(value.get("inactiveOpacityPercent").is_none());
         assert_eq!(value["primaryFontSizePx"], 20);
         assert_eq!(value["auxiliaryScalePercent"], 90);
         assert!(value.get("auxiliaryFontSizePx").is_none());
@@ -4211,7 +4290,8 @@ mod tests {
     #[test]
     fn lyrics_preference_numeric_ranges_are_inclusive_and_reject_out_of_range_values() {
         let mut minimum = LyricsPreferences {
-            inactive_opacity_percent: 10,
+            main_opacity_percent: 1,
+            secondary_opacity_percent: 10,
             primary_font_size_px: 1,
             auxiliary_scale_percent: 1,
             ..LyricsPreferences::default()
@@ -4225,7 +4305,8 @@ mod tests {
         minimum.auxiliary_scale_percent = 1;
 
         let maximum = LyricsPreferences {
-            inactive_opacity_percent: 100,
+            main_opacity_percent: 100,
+            secondary_opacity_percent: 100,
             primary_font_size_px: 50,
             auxiliary_scale_percent: 100,
             ..LyricsPreferences::default()
@@ -4242,12 +4323,18 @@ mod tests {
         line_gap.line_gap_px = 51;
         assert!(line_gap.validate().is_err());
 
-        minimum.inactive_opacity_percent = 9;
+        minimum.secondary_opacity_percent = 9;
         assert!(minimum.validate().is_err());
-        minimum.inactive_opacity_percent = 101;
+        minimum.secondary_opacity_percent = 101;
         assert!(minimum.validate().is_err());
-
-        minimum.inactive_opacity_percent = 70;
+        minimum.secondary_opacity_percent = 70;
+        minimum.main_opacity_percent = 0;
+        assert!(minimum.validate().is_err());
+        minimum.main_opacity_percent = 101;
+        assert!(minimum.validate().is_err());
+        minimum.main_opacity_percent = 40;
+        minimum.validate().expect("secondary may exceed main");
+        minimum.secondary_opacity_percent = 90;
         minimum.primary_font_size_px = 51;
         assert!(minimum.validate().is_err());
 
@@ -4426,7 +4513,14 @@ mod tests {
         assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(persisted["lyricsPreferences"]["showTranslation"], true);
         assert_eq!(persisted["lyricsPreferences"]["showRomanization"], false);
-        assert_eq!(persisted["lyricsPreferences"]["inactiveOpacityPercent"], 50);
+        assert_eq!(persisted["lyricsPreferences"]["mainOpacityPercent"], 100);
+        assert_eq!(
+            persisted["lyricsPreferences"]["secondaryOpacityPercent"],
+            50
+        );
+        assert!(persisted["lyricsPreferences"]
+            .get("inactiveOpacityPercent")
+            .is_none());
         assert_eq!(persisted["lyricsPreferences"]["primaryFontSizePx"], 20);
         assert_eq!(persisted["lyricsPreferences"]["auxiliaryScalePercent"], 90);
         assert_eq!(persisted["sourceRegistryAuthoritative"], false);
@@ -4468,6 +4562,44 @@ mod tests {
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(persisted["schemaVersion"], SETTINGS_SCHEMA_VERSION);
         assert_eq!(persisted["sourceRegistryAuthoritative"], false);
+    }
+
+    #[test]
+    fn former_opacity_keys_are_ignored_and_the_new_ones_default() {
+        let directory = test_directory("former-opacity-keys");
+        let path = directory.join("settings.json");
+        let legacy = serde_json::json!({
+            "schemaVersion": SETTINGS_SCHEMA_VERSION,
+            "lyricsPreferences": { "inactiveOpacityPercent": 70, "primaryFontSizePx": 14 },
+            "taskbarLyrics": { "enabled": true, "opacityPercent": 30 },
+            "floatingLyrics": { "opacityPercent": 40 },
+            "sources": []
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).expect("write legacy");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("open legacy");
+        let loaded = store.snapshot().unwrap();
+        assert_eq!(loaded.lyrics_preferences.primary_font_size_px, 14);
+        assert_eq!(
+            (
+                loaded.lyrics_preferences.main_opacity_percent,
+                loaded.lyrics_preferences.secondary_opacity_percent
+            ),
+            (100, 50)
+        );
+        assert_eq!(
+            (
+                loaded.taskbar_lyrics.main_opacity_percent,
+                loaded.taskbar_lyrics.secondary_opacity_percent
+            ),
+            (100, 50)
+        );
+        assert_eq!(
+            (
+                loaded.floating_lyrics.main_opacity_percent,
+                loaded.floating_lyrics.secondary_opacity_percent
+            ),
+            (100, 50)
+        );
     }
 
     #[test]
@@ -4644,7 +4776,8 @@ mod tests {
         let lyrics_preferences = LyricsPreferences {
             show_translation: true,
             show_romanization: true,
-            inactive_opacity_percent: 43,
+            main_opacity_percent: 88,
+            secondary_opacity_percent: 43,
             primary_font_size_px: 26,
             auxiliary_scale_percent: 65,
             line_gap_px: 42,

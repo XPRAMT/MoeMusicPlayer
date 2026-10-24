@@ -67,7 +67,7 @@
   let storedLyricsPreferences = JSON.parse(localStorage.getItem('__lyricsPreferences') || 'null') ?? {
     showTranslation: false,
     showRomanization: false,
-    inactiveOpacityPercent: 70,
+    mainOpacityPercent: 100, secondaryOpacityPercent: 70,
     primaryFontSizePx: 14,
     auxiliaryScalePercent: 71,
     lineGapPx: 24,

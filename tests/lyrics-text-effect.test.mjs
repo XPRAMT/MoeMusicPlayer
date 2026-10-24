@@ -47,10 +47,23 @@ test('every lyrics settings page offers the same three text-effect choices', () 
 
 test('the three lyrics settings pages share one group order', () => {
   const source = readFileSync(path.join(root, 'src/lib/LyricsLookSettings.svelte'), 'utf8');
-  const order = ['tr("顯示")', 'enable?.()', 'tr("顯示譯文")', 'tr("動畫")', 'tr("字體與大小")', 'tr("字體大小")', 'tr("譯文大小（相對原文）")', 'tr("外觀")', 'tr("文字效果")', 'tr("自訂顏色")', 'tr("透明度")', 'tr("對齊")', 'tr("位置與面板")'];
+  const order = ['tr("顯示")', 'enable?.()', 'tr("顯示譯文")', 'tr("動畫")', 'tr("字體與大小")', 'tr("字體大小")', 'tr("譯文大小（相對原文）")', 'tr("外觀")', 'tr("文字效果")', 'tr("自訂顏色")', 'tr("主要透明度")', 'tr("次要透明度")', 'tr("對齊")', 'tr("位置與面板")'];
   const positions = order.map((needle) => source.indexOf(needle));
   for (const [i, at] of positions.entries()) assert.ok(at >= 0, order[i]);
   assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+});
+
+test('every page has the main and secondary opacity sliders, neither greyed out nor clamped against the other', () => {
+  const source = readFileSync(path.join(root, 'src/lib/LyricsLookSettings.svelte'), 'utf8');
+  const quick = readFileSync(path.join(root, 'src/lib/NowPlayingQuickSettingsControls.svelte'), 'utf8');
+  for (const field of ['mainOpacityPercent', 'secondaryOpacityPercent']) {
+    const slider = source.match(new RegExp(`<input[^>]*value=[{]settings[.]${field}[}].*?/>`, 's'))?.[0] ?? '';
+    assert.ok(slider.includes('type="range"'), field);
+    assert.doesNotMatch(slider, /disabled|inert/);
+    assert.ok(quick.includes(`${field}: lyrics.${field}`), 'the playing-page drawer feeds its own values');
+  }
+  assert.doesNotMatch(source, /withOpacity|opacityPercent: Number/);
+  assert.doesNotMatch(quick, /非目前歌詞透明度|inactiveOpacityPercent/);
 });
 
 test('the translation-size slider stays enabled when translations are hidden', () => {
