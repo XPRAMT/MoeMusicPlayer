@@ -192,4 +192,36 @@ fn word_rules_match_the_shared_vectors() {
             "{c}"
         );
     }
+    let pairs = |v: &Value| -> Vec<(f64, f64)> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|w| (f(&w[0]), f(&w[1])))
+            .collect()
+    };
+    for c in cases(&v, "karaoke") {
+        close(
+            karaoke_clip_x(&pairs(&c["spans"]), &pairs(&c["words"]), f(&c["t"])),
+            f(&c["expected"]),
+            &c.to_string(),
+        );
+    }
+}
+
+#[test]
+fn the_karaoke_edge_is_continuous_per_frame() {
+    let spans = [(0.0, 20.0), (20.0, 30.0), (34.0, 60.0)];
+    let words = [(1000.0, 1200.0), (1200.0, 1200.0), (1300.0, 1500.0)];
+    let step = 1000.0 / 240.0;
+    let mut last = f64::NEG_INFINITY;
+    let mut t = 900.0;
+    while t <= 1600.0 {
+        let x = karaoke_clip_x(&spans, &words, t);
+        assert!(x >= last - 1e-12, "{t}");
+        if t > 1000.0 + step && t < 1200.0 {
+            assert!(x - last <= 20.0 / 200.0 * step + 1e-9, "{t}");
+        }
+        last = x;
+        t += step;
+    }
 }

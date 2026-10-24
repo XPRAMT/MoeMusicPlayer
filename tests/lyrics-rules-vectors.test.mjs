@@ -36,3 +36,18 @@ test('shared lyric-rule vectors match the JS rules', () => {
   }
   for (const c of v.opacity) assert.equal(lyricsLineOpacityFactor(c.weight, c.inactive, c.animation), c.expected);
 });
+
+test('the karaoke clip edge matches the shared vectors and only moves forward', async () => {
+  const { karaokeClipX } = await import('../src/lib/lyrics-word-strip.js');
+  for (const c of v.karaoke) assert.ok(Math.abs(karaokeClipX(c.spans, c.words, c.t) - c.expected) < 1e-9, JSON.stringify(c));
+  const spans = [[0, 20], [20, 30], [34, 60]];
+  const words = [[1000, 1200], [1200, 1200], [1300, 1500]];
+  let last = -Infinity;
+  for (let t = 900; t <= 1600; t += 1000 / 240) {
+    const x = karaokeClipX(spans, words, t);
+    assert.ok(x >= last - 1e-12, `${t}`);
+    // Per-frame continuity: inside a word the edge moves at most the word's speed for one 240 Hz frame.
+    if (last > -Infinity && t > 1000 && t < 1200) assert.ok(x - last <= 20 / 200 * (1000 / 240) + 1e-9);
+    last = x;
+  }
+});

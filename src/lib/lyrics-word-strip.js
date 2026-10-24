@@ -135,3 +135,23 @@ export function sungWord(/** @type {[number, number][]} */ words, /** @type {num
   for (let j = i - 1; j >= 0; j -= 1) if (t < words[j][1] && words[j][1] > words[j][0]) return j;
   return -1;
 }
+
+/**
+ * Karaoke clip edge (ADR 0041, 「無」 mode): the x (in the row's own px) up to which the line is lit. Words already
+ * sung and the word being sung are lit; inside the sung word the edge wipes linearly with the time. Before the first
+ * word the edge is the first word's left; after a word ends it rests at that word's right. Monotone when the spans are.
+ */
+export function karaokeClipX(/** @type {[number, number][]} */ spans, /** @type {[number, number][]} */ words, /** @type {number} */ t) {
+  const n = Math.min(spans.length, words.length);
+  if (n === 0) return 0;
+  let x = spans[0][0];
+  for (let i = 0; i < n; i += 1) {
+    const [s, e] = words[i];
+    const [l, r] = spans[i];
+    if (t < s) break;
+    if (t >= e || !(e > s)) { x = Math.max(x, r); continue; }
+    x = Math.max(x, l + (r - l) * (t - s) / (e - s));
+    break;
+  }
+  return x;
+}

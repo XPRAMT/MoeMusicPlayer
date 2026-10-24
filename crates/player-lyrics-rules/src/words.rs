@@ -240,6 +240,31 @@ pub fn next_word_change(words: &[(f64, f64)], t: f64) -> Option<f64> {
         .min_by(f64::total_cmp)
 }
 
+/// Karaoke clip edge (the none mode, ADR 0041): the x in the row's own px up to which the line is lit. Words
+/// already sung and the word being sung are lit; inside the sung word the edge wipes linearly with `t`. Before the
+/// first word it is the first word's left; after a word ends it rests at that word's right (`karaokeClipX` in JS).
+pub fn karaoke_clip_x(spans: &[(f64, f64)], words: &[(f64, f64)], t: f64) -> f64 {
+    let n = spans.len().min(words.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let mut x = spans[0].0;
+    for i in 0..n {
+        let (s, e) = words[i];
+        let (l, r) = spans[i];
+        if t < s {
+            break;
+        }
+        if t >= e || e <= s {
+            x = x.max(r);
+            continue;
+        }
+        x = x.max(l + (r - l) * (t - s) / (e - s));
+        break;
+    }
+    x
+}
+
 /// Each word's UTF-16 range `(start, len)` in the line text after its leading whitespace is trimmed (the renderers
 /// draw the trimmed text); `None` when the words do not spell the line (then the line is drawn whole).
 pub fn word_utf16_ranges(line_text: &str, words: &[&str]) -> Option<Vec<(usize, usize)>> {
