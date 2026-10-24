@@ -2303,19 +2303,20 @@ fn start_failure_of(error: &AudioError) -> Option<player_core::StartFailure> {
     }
 }
 
-/// The server a remote track is on (the account of its source), or `None` for a local file. `uri` is the text form of
-/// the locator (`moeremote://<source id>/<path>`).
+/// The server a remote track is on (the account of its source) for a natural walk's "skip a dead server" rule, or `None`
+/// for a local file and for a remote track that is whole in the disk cache (it plays without its server). `uri` is the
+/// text form of the locator (`moeremote://<source id>/<path>`).
 #[cfg(any(target_os = "windows", target_os = "android"))]
 fn remote_server_key_of(uri: &str) -> Option<String> {
-    let player_core::MediaLocator::Remote { source_id, .. } =
+    let player_core::MediaLocator::Remote { source_id, path } =
         player_core::parse_remote_locator_uri(uri)?
     else {
         return None;
     };
-    Some(player_core::remote_content().map_or_else(
-        || source_id.to_string(),
-        |content| content.server_key(source_id),
-    ))
+    match player_core::remote_content() {
+        Some(content) => player_core::walk_server_key(content.as_ref(), source_id, &path),
+        None => Some(source_id.to_string()),
+    }
 }
 
 /// The failure of the newest start of a track that did not happen, with a number that grows with each one, so the
@@ -3901,9 +3902,13 @@ fn remote_cover_lookup_may_have_failed(locators: &[MediaLocator]) -> bool {
             .any(|locator| matches!(locator, MediaLocator::Remote { .. }));
     };
     locators.iter().any(|locator| match locator {
-        MediaLocator::Remote { source_id, path } => content
-            .open(*source_id, path)
-            .is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound),
+        MediaLocator::Remote { source_id, path } => {
+            content
+                .open(*source_id, path)
+                .is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound)
+                // Playable from the disk cache while the server does not answer: the sidecars could not be read either.
+                || player_core::served_from_cache_only(content.as_ref(), *source_id, path)
+        }
         _ => false,
     })
 }

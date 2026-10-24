@@ -166,11 +166,22 @@ struct SlotState {
     fs: Option<Arc<dyn RemoteFs>>,
 }
 
+#[cfg(test)]
+type TestMaker = Arc<
+    dyn Fn(&RemoteAccount) -> Result<Arc<dyn RemoteFs>, RemoteError>
+        + Send
+        + Sync
+        + std::panic::RefUnwindSafe,
+>;
+
 #[derive(Default)]
 pub(crate) struct RemoteConnections {
     open: Mutex<HashMap<String, Arc<AccountSlot>>>,
     /// Test hook: a backoff other than [`UNREACHABLE_BACKOFF`].
     backoff: Option<Duration>,
+    /// Test hook: how a connection is made instead of [`connect_account`].
+    #[cfg(test)]
+    maker: Option<TestMaker>,
 }
 
 impl RemoteConnections {
@@ -180,6 +191,10 @@ impl RemoteConnections {
         data_dir: &Path,
         account: &RemoteAccount,
     ) -> Result<Arc<dyn RemoteFs>, RemoteError> {
+        #[cfg(test)]
+        if let Some(maker) = &self.maker {
+            return self.connect_with(account, || maker(account));
+        }
         self.connect_with(account, || connect_account(data_dir, account))
     }
 
@@ -264,30 +279,7 @@ impl RemoteConnections {
                 .push(folder.path.clone());
         }
         for source in &settings.sources {
-            let (path, account_id, is_playlist) = match &source.kind {
-                SourceEntryKind::Folder {
-                    path,
-                    remote_account: Some(account_id),
-                    ..
-                } => (path, account_id, false),
-                SourceEntryKind::PlaylistFile {
-                    path,
-                    remote_account: Some(account_id),
-                    ..
-                } => (path, account_id, true),
-                _ => continue,
-            };
-            let base = match path.to_media_locator() {
-                // The songs of a playlist are named from the account's root, whatever folder the list is in.
-                Ok(MediaLocator::Remote { .. }) if is_playlist => String::new(),
-                Ok(MediaLocator::Remote { path, .. }) => path,
-                _ => continue,
-            };
-            if let Some(account) = settings
-                .remote_accounts
-                .iter()
-                .find(|account| &account.id == account_id)
-            {
+            if let Some((account, base)) = remote_source_account(settings, source) {
                 let excluded = excluded.get(&account.id).cloned().unwrap_or_default();
                 sources.insert(source.id, (account.clone(), base, excluded));
             }
@@ -298,6 +290,38 @@ impl RemoteConnections {
             sources,
         })
     }
+}
+
+/// The account a remote source is on and the folder it is rooted at (under the account's root); `None` for a source that
+/// is not a remote one or whose account is gone. Nothing is connected.
+fn remote_source_account<'a>(
+    settings: &'a AppSettings,
+    source: &crate::settings::SourceEntry,
+) -> Option<(&'a RemoteAccount, String)> {
+    let (path, account_id, is_playlist) = match &source.kind {
+        SourceEntryKind::Folder {
+            path,
+            remote_account: Some(account_id),
+            ..
+        } => (path, account_id, false),
+        SourceEntryKind::PlaylistFile {
+            path,
+            remote_account: Some(account_id),
+            ..
+        } => (path, account_id, true),
+        _ => return None,
+    };
+    let base = match path.to_media_locator() {
+        // The songs of a playlist are named from the account's root, whatever folder the list is in.
+        Ok(MediaLocator::Remote { .. }) if is_playlist => String::new(),
+        Ok(MediaLocator::Remote { path, .. }) => path,
+        _ => return None,
+    };
+    let account = settings
+        .remote_accounts
+        .iter()
+        .find(|account| &account.id == account_id)?;
+    Some((account, base))
 }
 
 struct SourceResolver {
@@ -396,13 +420,50 @@ impl RemoteFiles {
     }
 }
 
+/// Where a remote file is, without a connection: the account that holds it and its full path under the account's root.
+struct Located {
+    data_dir: PathBuf,
+    account: RemoteAccount,
+    full: String,
+}
+
+/// Files being checked against their server in the background (source id and full path), so a song opened again and
+/// again has one check under way, not a pile of them.
+static VALIDATING: std::sync::LazyLock<Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// A connection that is only made when something asks the server: the stand-in under a file that is whole in the disk
+/// cache. Reads that the cache answers never get here; when one does (a chunk was evicted meanwhile) it connects like
+/// any other use of the account, so it fails at once while the server is known down and never waits for it otherwise.
+struct DeferredFs {
+    connections: Arc<RemoteConnections>,
+    data_dir: PathBuf,
+    account: RemoteAccount,
+}
+
+impl DeferredFs {
+    fn fs(&self) -> Result<Arc<dyn RemoteFs>, RemoteError> {
+        self.connections.connect(&self.data_dir, &self.account)
+    }
+}
+
+impl RemoteFs for DeferredFs {
+    fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>, RemoteError> {
+        self.fs()?.list(dir)
+    }
+
+    fn stat(&self, path: &str) -> Result<RemoteEntry, RemoteError> {
+        self.fs()?.stat(path)
+    }
+
+    fn open(&self, path: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
+        self.fs()?.open(path)
+    }
+}
+
 impl RemoteFiles {
-    /// The file `path` of a source: its server connection and the full path under the account's root.
-    fn locate(
-        &self,
-        source_id: SourceId,
-        path: &str,
-    ) -> std::io::Result<(std::sync::Arc<dyn player_remote::fs::RemoteFs>, String)> {
+    /// The file `path` of a source: where it is, found from the settings alone (nothing is connected).
+    fn plan(&self, source_id: SourceId, path: &str) -> std::io::Result<Located> {
         use player_remote::index::join_path;
         use std::io::{Error, ErrorKind};
 
@@ -415,12 +476,118 @@ impl RemoteFiles {
             .settings
             .snapshot()
             .map_err(|error| Error::other(error.to_string()))?;
-        let resolved = self
-            .connections
-            .resolver(data_dir, &settings)
-            .resolve(source_id)?;
-        let full = join_path(&resolved.base_path, path);
-        Ok((resolved.fs, full))
+        let (account, base) = settings
+            .sources
+            .iter()
+            .find(|source| source.id == source_id)
+            .and_then(|source| remote_source_account(&settings, source))
+            .ok_or_else(|| Error::from(ErrorKind::NotFound))?;
+        Ok(Located {
+            data_dir,
+            account: account.clone(),
+            full: join_path(&base, path),
+        })
+    }
+
+    /// The file `path` of a source: its server connection and the full path under the account's root.
+    fn locate(
+        &self,
+        source_id: SourceId,
+        path: &str,
+    ) -> std::io::Result<(std::sync::Arc<dyn player_remote::fs::RemoteFs>, String)> {
+        let located = self.plan(source_id, path)?;
+        let fs = self.connections.connect(&located.data_dir, &located.account)?;
+        Ok((fs, located.full))
+    }
+
+    /// The song as the disk cache holds it when the whole file is there: read from the cache without a connection (the
+    /// server may be on, off or slow; none of it matters), with the server asked in the background whether the file is
+    /// still the same (`store`: playback only).
+    fn complete_cached_file(
+        &self,
+        source_id: SourceId,
+        located: &Located,
+        store: bool,
+    ) -> Option<Box<dyn player_remote::fs::RemoteFile>> {
+        let cache = self.cache.as_ref()?;
+        let account_key = source_id.to_string();
+        let meta = cache.complete_meta(&account_key, &located.full)?;
+        let key = player_remote::cache::cache_key(&account_key, &located.full, meta.len, meta.modified_ms);
+        let deferred: Arc<dyn RemoteFs> = Arc::new(DeferredFs {
+            connections: Arc::clone(&self.connections),
+            data_dir: located.data_dir.clone(),
+            account: located.account.clone(),
+        });
+        let (lazy, release) = player_remote::fs::releasable(Box::new(
+            player_remote::fs::ReopeningFile::lazy(deferred, located.full.clone(), meta.len),
+        ));
+        self.track_stream(source_id, &located.full, release);
+        if store {
+            self.validate_in_background(source_id, located, meta);
+            Some(Box::new(player_remote::cache::CachedFile::new(
+                Box::new(lazy),
+                Arc::clone(cache),
+                key,
+            )))
+        } else {
+            Some(Box::new(player_remote::cache::CachedFile::read_only(
+                Box::new(lazy),
+                Arc::clone(cache),
+                key,
+            )))
+        }
+    }
+
+    /// Ask the server, on a thread of its own and never on the playback path, whether the file is still the one the
+    /// cache remembers. When its size or time differ the remembered ones are replaced, so the next play uses (and
+    /// fetches) the new version; what plays now keeps reading its cached bytes. A server that cannot be reached is not
+    /// reported to anyone (the connection's own backoff notes it, as it does for any failed connect).
+    fn validate_in_background(&self, source_id: SourceId, located: &Located, known: player_remote::cache::FileMeta) {
+        let Some(cache) = self.cache.as_ref().map(Arc::clone) else {
+            return;
+        };
+        let id = format!("{source_id}\n{}", located.full);
+        if !VALIDATING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.clone())
+        {
+            return;
+        }
+        let connections = Arc::clone(&self.connections);
+        let (data_dir, account, full) = (located.data_dir.clone(), located.account.clone(), located.full.clone());
+        let account_key = source_id.to_string();
+        let started = std::thread::Builder::new()
+            .name("moe-remote-validate".to_owned())
+            .spawn({
+                let id = id.clone();
+                move || {
+                    if let Ok(entry) = connections
+                        .connect(&data_dir, &account)
+                        .and_then(|fs| fs.stat(&full))
+                    {
+                        let now = player_remote::cache::FileMeta {
+                            len: entry.size,
+                            modified_ms: entry.modified_ms,
+                        };
+                        // Only when the cache still remembers what it was asked about: another check or a save may have
+                        // replaced it meanwhile.
+                        if now != known && cache.meta(&account_key, &full) == Some(known) {
+                            cache.put_meta(&account_key, &full, now);
+                        }
+                    }
+                    VALIDATING
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(&id);
+                }
+            });
+        if started.is_err() {
+            VALIDATING
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&id);
+        }
     }
 }
 
@@ -432,9 +599,10 @@ impl player_core::RemoteContent for RemoteFiles {
     ) -> std::io::Result<player_core::RemoteFileHandle> {
         // A song whose size and time were learned when it was played: the disk cache answers what it holds, so a cover or a
         // tag of a played song needs no network. What it lacks is fetched but not stored (the cache is for playing).
+        // A song that is whole in the cache needs no connection at all.
         if let Some(cache) = self.cache.as_ref() {
-            let (_, known_full) = self.locate(source_id, path)?;
-            if cache.meta(&source_id.to_string(), &known_full).is_some() {
+            let located = self.plan(source_id, path)?;
+            if cache.meta(&source_id.to_string(), &located.full).is_some() {
                 let reader = player_remote::fs::RangeReader::new(self.cached_file(source_id, path, false)?);
                 let len = reader.len();
                 return Ok(player_core::RemoteFileHandle {
@@ -495,6 +663,14 @@ impl player_core::RemoteContent for RemoteFiles {
         self.release_streams(source_id, path);
     }
 
+    fn available_offline(&self, source_id: SourceId, path: &str) -> bool {
+        let Some(cache) = self.cache.as_ref() else {
+            return false;
+        };
+        self.plan(source_id, path)
+            .is_ok_and(|located| cache.complete_meta(&source_id.to_string(), &located.full).is_some())
+    }
+
     fn server_key(&self, source_id: SourceId) -> String {
         // The account is the server: every source of one account is down together (`RemoteConnections`).
         let data_dir = self.settings.data_directory().map(Path::to_path_buf);
@@ -517,12 +693,20 @@ impl RemoteFiles {
         path: &str,
         store: bool,
     ) -> std::io::Result<Box<dyn player_remote::fs::RemoteFile>> {
-        let (fs, full) = self.locate(source_id, path)?;
+        let located = self.plan(source_id, path)?;
+        // Cache first: a song that is whole on disk is read from there without connecting, server on or off.
+        if let Some(file) = self.complete_cached_file(source_id, &located, store) {
+            return Ok(file);
+        }
+        let fs = self
+            .connections
+            .connect(&located.data_dir, &located.account)?;
+        let full = located.full.clone();
         let account_key = source_id.to_string();
         // A file whose size and modified time were learned before (and whose chunks may be on disk) is opened without
-        // asking the server anything: reads that the disk cache can answer never touch the network, and the server is
-        // asked in the background whether the file is still the same. This is what makes a song played before start at
-        // once.
+        // asking the server about the file: reads that the disk cache can answer never touch the network, and the server
+        // is asked in the background whether the file is still the same. This is what makes a song played before start
+        // at once.
         let known = self
             .cache
             .as_ref()
@@ -535,22 +719,9 @@ impl RemoteFiles {
                     meta.len,
                     meta.modified_ms,
                 );
-                let (check_fs, check_cache, check_key, check_path) =
-                    (Arc::clone(&fs), Arc::clone(cache), account_key.clone(), full.clone());
-                let _ = std::thread::Builder::new()
-                    .name("moe-remote-validate".to_owned())
-                    .spawn(move || {
-                        if let Ok(entry) = check_fs.stat(&check_path) {
-                            let now = player_remote::cache::FileMeta {
-                                len: entry.size,
-                                modified_ms: entry.modified_ms,
-                            };
-                            if now != meta {
-                                // Edited on the server: the next play uses (and fetches) the new version.
-                                check_cache.put_meta(&check_key, &check_path, now);
-                            }
-                        }
-                    });
+                if store {
+                    self.validate_in_background(source_id, &located, meta);
+                }
                 let (lazy, release) = player_remote::fs::releasable(Box::new(
                     player_remote::fs::ReopeningFile::lazy(Arc::clone(&fs), full.clone(), meta.len),
                 ));
@@ -636,7 +807,8 @@ impl RemoteFiles {
     }
 
     fn release_streams(&self, source_id: SourceId, path: &str) {
-        let Ok((_, full)) = self.locate(source_id, path) else {
+        // Nothing is connected to find the name: a stream of a song in the cache is let go of while its server is away too.
+        let Ok(Located { full, .. }) = self.plan(source_id, path) else {
             return;
         };
         let streams = self.streams.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1156,5 +1328,324 @@ mod unreachable_server_tests {
             assert!(started.elapsed() < Duration::from_millis(50), "{protocol:?}: {:?}", started.elapsed());
         }
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+}
+
+/// Cache-first playback: a song that is whole in the disk cache plays without its server (ADR 0026).
+#[cfg(test)]
+mod offline_cache_tests {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use player_core::{MediaSourceKind, RemoteContent, SourceId};
+    use player_remote::account::{RemoteAccount, RemoteProtocol};
+    use player_remote::cache::{cache_key, DiskCache, FileMeta, CACHE_CHUNK};
+    use player_remote::fs::{RemoteEntry, RemoteError, RemoteFile, RemoteFs};
+
+    use super::{RemoteConnections, RemoteFiles};
+    use crate::settings::{AppSettings, SettingsStore, SourceEntry, SourceEntryKind, StoredPath};
+
+    const LEN: usize = 2 * CACHE_CHUNK + 1_234;
+
+    fn bytes() -> Vec<u8> {
+        (0..LEN).map(|index| (index % 251) as u8).collect()
+    }
+
+    /// What the fake server is doing, and how often it was really asked.
+    struct Server {
+        up: AtomicBool,
+        /// Operations that reached the server (connect attempts, stat, open, reads).
+        calls: AtomicUsize,
+        /// How long a stat takes.
+        stat_delay: Mutex<Duration>,
+        /// The file as the server has it now.
+        modified_ms: Mutex<i64>,
+    }
+
+    impl Server {
+        fn new(up: bool) -> Arc<Self> {
+            Arc::new(Self {
+                up: AtomicBool::new(up),
+                calls: AtomicUsize::new(0),
+                stat_delay: Mutex::new(Duration::ZERO),
+                modified_ms: Mutex::new(1_000),
+            })
+        }
+
+        fn ask(&self) -> Result<(), RemoteError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.up.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(RemoteError::Network("No route to host".to_owned()))
+            }
+        }
+    }
+
+    struct FakeFs(Arc<Server>);
+    struct FakeFile(Arc<Server>, Vec<u8>);
+
+    impl RemoteFile for FakeFile {
+        fn len(&self) -> u64 {
+            self.1.len() as u64
+        }
+
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
+            self.0.ask()?;
+            let start = (offset as usize).min(self.1.len());
+            let count = (self.1.len() - start).min(buf.len());
+            buf[..count].copy_from_slice(&self.1[start..start + count]);
+            Ok(count)
+        }
+    }
+
+    impl RemoteFs for FakeFs {
+        fn list(&self, _: &str) -> Result<Vec<RemoteEntry>, RemoteError> {
+            self.0.ask().map(|()| Vec::new())
+        }
+
+        fn stat(&self, _: &str) -> Result<RemoteEntry, RemoteError> {
+            self.0.ask()?;
+            std::thread::sleep(*self.0.stat_delay.lock().unwrap());
+            Ok(RemoteEntry {
+                name: "a.flac".to_owned(),
+                is_dir: false,
+                size: LEN as u64,
+                modified_ms: Some(*self.0.modified_ms.lock().unwrap()),
+                created_utc_100ns: None,
+            })
+        }
+
+        fn open(&self, _: &str) -> Result<Box<dyn RemoteFile>, RemoteError> {
+            self.0.ask()?;
+            Ok(Box::new(FakeFile(Arc::clone(&self.0), bytes())))
+        }
+    }
+
+    struct Fixture {
+        files: RemoteFiles,
+        source: SourceId,
+        cache: Arc<DiskCache>,
+        dir: std::path::PathBuf,
+    }
+
+    /// The account key and full path the cache knows the song by.
+    fn names(source: SourceId) -> (String, String) {
+        (source.to_string(), "Music/a.flac".to_owned())
+    }
+
+    /// A player over `dir` whose one remote source is served by `server`; `connect_delay` is how long making a connection
+    /// takes. `dir` keeps the disk cache and the settings between fixtures, as a restart of the player would.
+    fn fixture(dir: &std::path::Path, server: &Arc<Server>, connect_delay: Duration) -> Fixture {
+        std::fs::create_dir_all(dir).unwrap();
+        let settings =
+            Arc::new(SettingsStore::open(dir.join("settings.json"), AppSettings::default()).unwrap());
+        settings
+            .update(|settings| {
+                if settings.remote_accounts.is_empty() {
+                    settings.remote_accounts.push(RemoteAccount {
+                        id: "acct".to_owned(),
+                        name: "server".to_owned(),
+                        protocol: RemoteProtocol::Smb,
+                        host: "192.0.2.9".to_owned(),
+                        port: None,
+                        path: "share".to_owned(),
+                        username: String::new(),
+                        password: None,
+                        tls: Default::default(),
+                        only_on_wifi: false,
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        let existing = settings.snapshot().unwrap().sources.first().map(|source| source.id);
+        let source = existing.unwrap_or_else(|| {
+            let id = SourceId::new();
+            let locator = player_core::MediaLocator::Remote { source_id: id, path: "Music".to_owned() };
+            settings
+                .upsert_source(SourceEntry {
+                    id,
+                    display_name: "remote".to_owned(),
+                    enabled: true,
+                    kind: SourceEntryKind::Folder {
+                        media_kind: MediaSourceKind::Remote,
+                        path: StoredPath::from_locator(&locator).unwrap(),
+                        remote_account: Some("acct".to_owned()),
+                    },
+                })
+                .unwrap();
+            id
+        });
+        let for_maker = Arc::clone(server);
+        let connections = Arc::new(RemoteConnections {
+            maker: Some(Arc::new(move |_| {
+                std::thread::sleep(connect_delay);
+                for_maker.ask()?;
+                Ok(Arc::new(FakeFs(Arc::clone(&for_maker))) as Arc<dyn RemoteFs>)
+            })),
+            ..Default::default()
+        });
+        let cache = Arc::new(DiskCache::open(dir.join("remote-cache"), 500_000_000).unwrap());
+        Fixture {
+            files: RemoteFiles {
+                connections,
+                settings,
+                cache: Some(Arc::clone(&cache)),
+                streams: Default::default(),
+            },
+            source,
+            cache,
+            dir: dir.to_path_buf(),
+        }
+    }
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("moe-offline-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// Play the whole song once with the server on, so it is cached.
+    fn play_once(fixture: &Fixture) {
+        let mut handle = fixture.files.open_streaming(fixture.source, "a.flac").unwrap();
+        let mut all = Vec::new();
+        handle.reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all, bytes());
+    }
+
+    #[test]
+    fn a_song_that_is_whole_in_the_cache_plays_with_the_server_off_and_never_waits_for_a_connection() {
+        let dir = temp("whole");
+        let online = Server::new(true);
+        let first = fixture(&dir, &online, Duration::ZERO);
+        assert!(!first.files.available_offline(first.source, "a.flac"));
+        play_once(&first);
+        assert!(first.files.available_offline(first.source, "a.flac"));
+        let source = first.source;
+        drop(first);
+
+        // The player is started again with the server off, and connecting would take seconds if it were tried.
+        let off = Server::new(false);
+        let second = fixture(&dir, &off, Duration::from_secs(3));
+        assert_eq!(second.source, source);
+        assert!(second.files.available_offline(second.source, "a.flac"));
+        let started = Instant::now();
+        let mut handle = second.files.open_streaming(second.source, "a.flac").unwrap();
+        assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
+        assert_eq!(handle.len, LEN as u64);
+        let mut all = Vec::new();
+        handle.reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all, bytes(), "the cached bytes are what plays");
+        // A tag or cover read of the same song needs no server either.
+        let mut small = second.files.open(second.source, "a.flac").unwrap();
+        let mut head = [0_u8; 16];
+        small.reader.read_exact(&mut head).unwrap();
+        assert_eq!(&head[..], &bytes()[..16]);
+        // Nothing but the background check (one refused connection attempt) asked the off server.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(off.calls.load(Ordering::SeqCst) <= 1, "{}", off.calls.load(Ordering::SeqCst));
+        let _ = std::fs::remove_dir_all(&second.dir);
+    }
+
+    #[test]
+    fn a_song_missing_one_chunk_needs_the_server_and_fails_as_unreachable_when_it_is_off() {
+        let dir = temp("partial");
+        let online = Server::new(true);
+        let first = fixture(&dir, &online, Duration::ZERO);
+        play_once(&first);
+        let (account_key, full) = names(first.source);
+        let meta = first.cache.meta(&account_key, &full).unwrap();
+        assert_eq!(meta, FileMeta { len: LEN as u64, modified_ms: Some(1_000) });
+        let key = cache_key(&account_key, &full, meta.len, meta.modified_ms);
+        let source = first.source;
+        drop(first);
+
+        // One chunk is gone (pushed out by other songs, say): the cache keeps the rest.
+        let cache = DiskCache::open(dir.join("remote-cache"), 500_000_000).unwrap();
+        let (one, two) = (cache.get(&key, 1).unwrap(), cache.get(&key, 2).unwrap());
+        cache.clear();
+        cache.put_meta(&account_key, &full, meta);
+        cache.put(&key, 1, &one);
+        cache.put(&key, 2, &two);
+        drop(cache);
+
+        let off = Server::new(false);
+        let second = fixture(&dir, &off, Duration::ZERO);
+        assert_eq!(second.source, source);
+        assert!(!second.files.available_offline(second.source, "a.flac"));
+        let error = second
+            .files
+            .open_streaming(second.source, "a.flac")
+            .err()
+            .expect("a partial cache is not played offline");
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(player_core::is_remote_unreachable(&error.to_string()), "{error}");
+
+        // With the server on it streams again, fetching what is missing, and the song is whole afterwards.
+        off.up.store(true, Ordering::SeqCst);
+        second.files.connections.forget("acct");
+        let mut handle = second.files.open_streaming(second.source, "a.flac").unwrap();
+        let mut all = Vec::new();
+        handle.reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all, bytes());
+        assert!(second.files.available_offline(second.source, "a.flac"));
+        let _ = std::fs::remove_dir_all(&second.dir);
+    }
+
+    #[test]
+    fn a_change_on_the_server_is_noticed_in_the_background_and_used_by_the_next_play_only() {
+        let dir = temp("changed");
+        let online = Server::new(true);
+        let first = fixture(&dir, &online, Duration::ZERO);
+        play_once(&first);
+        let (account_key, full) = names(first.source);
+        // The song was edited on the server, and its answers are slow.
+        *online.modified_ms.lock().unwrap() = 2_000;
+        *online.stat_delay.lock().unwrap() = Duration::from_millis(600);
+        let started = Instant::now();
+        let mut handle = first.files.open_streaming(first.source, "a.flac").unwrap();
+        assert!(started.elapsed() < Duration::from_millis(400), "the check blocked the open: {:?}", started.elapsed());
+        // This play still reads the bytes it opened, while the check is running and after it has finished.
+        let mut head = vec![0_u8; 1000];
+        handle.reader.read_exact(&mut head).unwrap();
+        assert_eq!(head, bytes()[..1000]);
+        assert_eq!(first.cache.meta(&account_key, &full).unwrap().modified_ms, Some(1_000));
+        for _ in 0..100 {
+            if first.cache.meta(&account_key, &full).unwrap().modified_ms == Some(2_000) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(first.cache.meta(&account_key, &full).unwrap().modified_ms, Some(2_000));
+        let mut rest = Vec::new();
+        handle.reader.read_to_end(&mut rest).unwrap();
+        assert_eq!([head, rest].concat(), bytes(), "the playing session kept its cached bytes");
+        // The next play uses the new version: it is not cached yet, so it is not available offline.
+        assert!(!first.files.available_offline(first.source, "a.flac"));
+        let _ = std::fs::remove_dir_all(&first.dir);
+    }
+
+    #[test]
+    fn the_check_of_a_song_in_the_cache_is_silent_when_the_server_is_off_and_never_stacks() {
+        let dir = temp("silent");
+        let online = Server::new(true);
+        let first = fixture(&dir, &online, Duration::ZERO);
+        play_once(&first);
+        drop(first);
+        let off = Server::new(false);
+        let second = fixture(&dir, &off, Duration::from_millis(300));
+        // Many opens in a row: every one works, and the off server is asked about connecting only a few times.
+        for _ in 0..5 {
+            let mut handle = second.files.open_streaming(second.source, "a.flac").unwrap();
+            let mut head = [0_u8; 8];
+            handle.reader.read_exact(&mut head).unwrap();
+            assert_eq!(&head[..], &bytes()[..8]);
+        }
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(off.calls.load(Ordering::SeqCst) <= 2, "{}", off.calls.load(Ordering::SeqCst));
+        let _ = std::fs::remove_dir_all(&second.dir);
     }
 }

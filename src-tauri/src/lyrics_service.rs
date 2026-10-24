@@ -1696,7 +1696,11 @@ async fn remote_lookup_is_definitive(database: &Database, track_id: TrackId, raw
         return false;
     };
     tauri::async_runtime::spawn_blocking(move || {
-        player_core::remote_content().is_some_and(|content| content.open(source_id, &path).is_ok())
+        player_core::remote_content().is_some_and(|content| {
+            content.open(source_id, &path).is_ok()
+                // A song played from the disk cache while the server is away: its sidecars were not readable.
+                && !player_core::served_from_cache_only(content.as_ref(), source_id, &path)
+        })
     })
     .await
     .unwrap_or(false)
