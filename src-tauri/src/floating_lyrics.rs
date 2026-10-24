@@ -233,6 +233,26 @@ pub fn resize_around_centre(
     (centre2 - new_gutter.lyric_width(new_width)) / 2 - new_gutter.lead.max(0)
 }
 
+/// Where `apply` puts the window (before `place` keeps it on screen). `shown`: the rect of a window that was already
+/// open, None for one just created (it starts as a 1 x 1 px window at 0,0, so its rect says nothing). A new window goes
+/// to the saved position. An open window owns its position (the saved one may lag a drag by the save delay): it stays
+/// where it is, its lyric area's horizontal centre kept when its width changes (the 寬度 slider); with no saved
+/// position (重設位置) it goes to the default place.
+pub fn apply_target(
+    shown: Option<Rect>,
+    new_width: i32,
+    gutter: Gutters,
+    saved: Option<FloatingLyricsPosition>,
+) -> Option<FloatingLyricsPosition> {
+    let (Some(rect), Some(_)) = (shown, saved) else {
+        return saved;
+    };
+    Some(FloatingLyricsPosition {
+        x: resize_around_centre(rect.left, rect.width(), gutter, new_width, gutter),
+        y: rect.top,
+    })
+}
+
 /// Where the window goes: the saved position moved fully inside the work area it overlaps most, or, with no saved
 /// position or one on no monitor any more, at the centre of the first (primary) work area (the whole window kept
 /// inside; the renderer uses `place_on_monitors_with` and its text insets).
@@ -492,14 +512,14 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     }
     let renderer =
         crate::native_lyrics::renderer(app).ok_or_else(|| "無法開啟浮動歌詞視窗".to_owned())?;
-    let window = match window() {
-        Some(window) => window,
+    let (window, created) = match window() {
+        Some(window) => (window, false),
         None => {
             let hwnd = renderer
                 .create(WINDOW_LABEL, player_lyrics_native::Kind::Floating, None)
                 .ok_or_else(|| "無法開啟浮動歌詞視窗".to_owned())?;
             HWND_VALUE.store(hwnd, Ordering::SeqCst);
-            Native(HWND(hwnd as *mut _))
+            (Native(HWND(hwnd as *mut _)), true)
         }
     };
     renderer.set_look(
@@ -508,16 +528,15 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     );
     crate::native_lyrics::apply_floating_chrome(app, settings);
     let (width, height) = window_size(window, settings);
-    // A width change (the 寬度 slider) keeps the lyric area's horizontal centre; the move event saves the result.
-    let resized = window.rect().filter(|r| r.width() != width).map(|r| {
-        let gutter = gutter_px(settings, window.scale());
-        FloatingLyricsPosition {
-            x: resize_around_centre(r.left, r.width(), gutter, width, gutter),
-            y: r.top,
-        }
-    });
+    let shown = if created { None } else { window.rect() };
+    let wanted = apply_target(
+        shown,
+        width,
+        gutter_px(settings, window.scale()),
+        settings.position,
+    );
     window.set_size(width, height);
-    place(window, resized.or(settings.position));
+    place(window, wanted);
     renderer.set_click_through(WINDOW_LABEL, settings.locked);
     if !settings.locked {
         renderer.set_hover(WINDOW_LABEL, false);
@@ -935,6 +954,30 @@ mod tests {
                 &[area]
             ),
             FloatingLyricsPosition { x: 0, y: 0 }
+        );
+    }
+
+    #[test]
+    fn apply_uses_the_saved_position_for_a_new_window_and_keeps_an_open_one() {
+        let gutter = Gutters { lead: 7, trail: 77 };
+        let saved = Some(FloatingLyricsPosition { x: 1234, y: 567 });
+        // A new window (still 1 x 1 at 0,0 from CreateWindowEx) goes to the saved position, not a resize of 0,0.
+        assert_eq!(apply_target(None, 1000, gutter, saved), saved);
+        assert_eq!(apply_target(None, 1000, gutter, None), None);
+        // An open window stays where it is even when the stored position lags a drag.
+        assert_eq!(
+            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, saved),
+            Some(FloatingLyricsPosition { x: 300, y: 200 })
+        );
+        // ... and keeps its lyric area centre on a width change.
+        assert_eq!(
+            apply_target(Some(rect(500, 200, 1500, 350)), 1400, gutter, saved),
+            Some(FloatingLyricsPosition { x: 300, y: 200 })
+        );
+        // 重設位置 (no saved position): the default place.
+        assert_eq!(
+            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, None),
+            None
         );
     }
 
