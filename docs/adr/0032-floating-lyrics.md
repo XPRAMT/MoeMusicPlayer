@@ -8,6 +8,8 @@ Builds on [ADR 0018](0018-taskbar-lyrics.md) and [ADR 0031](0031-multi-monitor-t
 
 > **部分取代：** 本 ADR 中 Windows 以 WebView2 繪製的部分（`floating-lyrics` WebView 視窗、`TaskbarLyricsView.svelte`／`FloatingLyricsView.svelte`、CSS `text-shadow`、`startDragging` 拖曳、WebView2 GPU 行程的性能討論）已被 [ADR 0034](0034-native-lyrics-rendering-research.md) 的原生繪製取代；行為規則（版面、時間、透明度、動畫）仍有效。Android 的「狀態列」模式已改為一次性的「移動到狀態列」動作，見下方 “「移動到狀態列」 is a move only” 修訂。
 
+> **現況（以程式碼為準）：** 透明度已改為每個分頁各自的「主要」「次要」兩個值（`mainOpacityPercent`／`secondaryOpacityPercent`，見文末 “main and secondary opacity”）；下方 `opacityPercent`、`inactiveOpacityPercent`、`lyrics-inactive-opacity` 事件、200 ms 行淡化與連續模式的邊緣淡出已被取代，原文保留為歷史。連續模式現在用靜態置中遮罩（見該節末 “連續動畫與透明度” 目前設計）；逐字歌詞的滑動曲線見 ADR 0041 D10。
+
 ## Context
 
 Taskbar lyrics only exist on Windows and are tied to the taskbar. The maintainer wants a desktop-style floating line
@@ -52,7 +54,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   without a saved position is centred too. The mode buttons and "Reset position" share one row on both platforms.
 - The translation line is no longer faded: the 80% opacity of `.taskbar-lyrics-translation` (shared by the taskbar
   and Windows floating lyrics) and the `alpha = 0.8` of the Android translation view were removed.
-- `opacityPercent` (1–100, default 100) is saved separately in `taskbarLyrics` and `floatingLyrics` and applies to
+- `opacityPercent` (1–100, default 100; superseded by `mainOpacityPercent`/`secondaryOpacityPercent`) is saved separately in `taskbarLyrics` and `floatingLyrics` and applies to
   the main line and the translation alike (Windows: opacity of the lyric container; Android: window alpha). It
   replaces the fixed 80% of Android fixed mode. Android 12+ still blocks touches through an overlay above the
   system's maximum obscuring opacity (normally 0.8), so in fixed mode the window alpha is the setting capped at that
@@ -172,6 +174,8 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 
 ## Amendment (2026-10-23): continuous animation dims the lines that are not current
 
+（已被取代：`inactiveOpacityPercent`、`lyricsStripFocus`／`lyricsLineWeight`／`lyricsLineOpacityFactor` 的 200 ms 行淡化和 `lyrics-inactive-opacity` 廣播在原生視窗與 Android 連續模式都不再使用——連續模式的透明度只來自靜態遮罩的主要／次要兩個值；Android 的 `cellWeight` 僅殘留於舊程式路徑。以下為當時的決定，保留作歷史。）
+
 - In the continuous animation the current line keeps the window's own 「透明度」 (taskbar / floating `opacityPercent`,
   applied to the whole window as before). Every other line that can be seen (the previous and next one, and any
   further ones in view) is also multiplied by the shared lyrics setting 「非目前歌詞透明度」
@@ -266,12 +270,12 @@ monotone C1 cubic Hermite (`lyricsStripCubic` / `strip_cubic` / `FloatingLyricsR
 - Locality: a segment depends only on its four nearest knots, so the curve is one global function of the lyrics time.
   Seeks and pauses evaluate it at the new position as before, and the Windows plan (which covers the next three line
   starts) samples the same curve at every re-plan, so hand-overs have no kink.
-- The 200 ms opacity crossfades are unchanged. Non-left anchors (not used by the app) take
+- The 200 ms opacity crossfades are unchanged (superseded: no per-line fades remain, see the static mask in 目前設計細節). Word-timed lines no longer use this per-line knot set: they have two knots per line (line start and the last word's end), see ADR 0041 D10. Non-left anchors (not used by the app) take
   max(last anchor, last cell start + glyph centre) as the terminal value so the curve stays monotone.
 
 ## Edge fade (2026-10-23)
 
-The taskbar and floating lyric areas (Windows and Android, both animation modes) fade out at the left and right: a
+The taskbar and floating lyric areas (Windows and Android; since the static mask, only animation 「無」; continuous mode uses the static centre mask instead) fade out at the left and right: a
 square zone on each side, as wide as the area is high (half the width when the area is narrower than twice its height),
 where everything the lyrics draw (main line, translation, shadow, outline) falls linearly from opaque at the inner
 edge to transparent at the outer edge. The padlock column and the move-mode background are not faded. Since the outer
@@ -308,9 +312,9 @@ stops. Android's drag already clamps with the text insets on every move.
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
 
-浮動歌詞（ADR 0032，Windows 置頂透明視窗與 Android 系統懸浮窗）：`settings.floatingLyrics`（`FloatingLyricsSettings`，外觀欄位與夾值同 `taskbarLyrics`，另有 `enabled` 預設關、`locked`、`position`）；可與工作列歌詞同時開啟。Windows：`src-tauri/src/floating_lyrics.rs`；移動模式由我們自己捕捉滑鼠並以 `SetWindowPos` 移動（可越過螢幕邊），放開時套用擺位規則，移動停止 700 ms 後存位置；擺位規則：只有歌詞區必須留在工作區內，透明邊與陰影空間可超出、鎖頭仍可點；固定模式整窗穿透（`WS_EX_TRANSPARENT`），100 ms 監看游標，只有游標在解鎖按鈕上時才接收滑鼠。指令 `settings_get/set_floating_lyrics`、`floating_lyrics_set_locked`、`floating_lyrics_reset_position`（主螢幕正中央）、`floating_lyrics_fit`、`floating_lyrics_nudge { dx, dy }`、`floating_lyrics_centre_axis`（以面板中心所在螢幕為準）。版面：`widthPx`（200–4000，Windows CSS px、Android dp）是**歌詞區**寬；面板＝左右各 0.25 em 透明邊＋歌詞區＋右側透明鎖頭欄（邊長＝主行行高）；歌詞區高＝文字高×1.1（背景與對齊處），面板高＝文字高×1.5、歌詞區垂直置中；無內距、無最小高度；移動模式背景只在歌詞區；寬度改變保持歌詞區中心並如拖曳般存檔；水平置中、重設、首次使用都以歌詞區置中。鎖頭圖示表示目前狀態（可移動＝開鎖、鎖定＝閉鎖）。設定頁「面板」：Android 獨有一列「移動到狀態列」（只把面板移到歌詞區垂直中心對齊狀態列、水平避開鏡頭，`centredOnBar`，不改字級與規則，依方向儲存），下一列左為十字鍵（中心為鎖頭；單擊 1 px，按住 300 ms 後每 100 ms 1 px，放開才存檔）、右為直排「水平置中／垂直置中／重設位置」，其後寬度滑桿；「對齊」在浮動頁叫「文字排版」。Android：`FloatingLyricsOverlay.kt`（`TYPE_APPLICATION_OVERLAY`，`FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS`，可拖到狀態列上），頁面以 `floating_lyrics_android` 送 `floatingLyricsUpdate`（settings／data／setLocked／resetPosition／nudge／`inactiveOpacityPercent` 頂層鍵）、`floatingLyricsStatus`、`openOverlayPermissionSettings`；每 100 ms 以 `PlaybackService.floatingLyricsSample()` 選句，只在 trackId 等於目前 mediaId 時顯示，位置以 `FloatingLyricsRules.smoothPositionMs` 依經過時間外推；行由 `LyricLineView` 自繪（陰影連同行點陣化為 `LineRasterCache`），跨到另一個整數像素才重畫（`needsPixelRedraw`）；直向／橫向各存寬度（`widthPx`／`landscapeWidthPx`）與位置；鎖定與位置以外掛 SharedPreferences `moe_floating_lyrics` 為準；權限只能由使用者在系統設定頁開啟（禁止 adb 授權）；固定模式 `FLAG_NOT_TOUCHABLE`，Android 12+ 穿透視窗 alpha 取設定值與系統上限（通常 0.8）較小者。限制：只顯示有時間軸的歌詞；WebView 暫停時換歌，新歌詞要等頁面恢復才送到。待使用者實機驗收。
+浮動歌詞（ADR 0032，Windows 置頂透明視窗與 Android 系統懸浮窗）：`settings.floatingLyrics`（`FloatingLyricsSettings`，外觀欄位與夾值同 `taskbarLyrics`，另有 `enabled` 預設關、`locked`、`position`）；可與工作列歌詞同時開啟。Windows：`src-tauri/src/floating_lyrics.rs`；移動模式由我們自己捕捉滑鼠並以 `SetWindowPos` 移動（可越過螢幕邊），放開時套用擺位規則，移動停止 700 ms 後存位置；擺位規則：只有歌詞區必須留在工作區內，透明邊與陰影空間可超出、鎖頭仍可點；固定模式整窗穿透（`WS_EX_TRANSPARENT`），100 ms 監看游標，只有游標在解鎖按鈕上時才接收滑鼠。指令 `settings_get/set_floating_lyrics`、`floating_lyrics_set_locked`、`floating_lyrics_reset_position`（主螢幕正中央）、`floating_lyrics_fit`、`floating_lyrics_nudge { dx, dy }`、`floating_lyrics_centre_axis`（以面板中心所在螢幕為準）。版面：`widthPx`（儲存範圍 100–8192，Windows CSS px、Android dp，預設 800；畫面上歌詞區會縮到目前螢幕寬內，滑桿上限＝該螢幕寬；Android 另有 `landscapeWidthPx`）是**歌詞區**寬；面板＝左右各 0.25 em 透明邊＋歌詞區＋右側透明鎖頭欄（邊長＝主行行高）；歌詞區高＝文字高×1.1（背景與對齊處），面板高＝文字高×1.5、歌詞區垂直置中；無內距、無最小高度；移動模式背景只在歌詞區；寬度改變保持歌詞區中心並如拖曳般存檔；水平置中、重設、首次使用都以歌詞區置中。鎖頭圖示表示目前狀態（可移動＝開鎖、鎖定＝閉鎖）。設定頁「面板」：Android 獨有一列「移動到狀態列」（只把面板移到歌詞區垂直中心對齊狀態列、水平避開鏡頭，`centredOnBar`，不改字級與規則，依方向儲存），下一列左為十字鍵（中心為鎖頭；單擊 1 px，按住 300 ms 後每 1/30 秒（約 33.3 ms，`FLOATING_LYRICS_NUDGE_REPEAT`）1 px，放開才存檔）、右為直排「水平置中／垂直置中／重設位置」，其後寬度滑桿；「對齊」在浮動頁叫「文字排版」。Android：`FloatingLyricsOverlay.kt`（`TYPE_APPLICATION_OVERLAY`，`FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS`，可拖到狀態列上），頁面以 `floating_lyrics_android` 送 `floatingLyricsUpdate`（settings／data／setLocked／resetPosition／nudge／centreAxis 等頂層鍵）、`floatingLyricsStatus`、`openOverlayPermissionSettings`；每 100 ms 以 `PlaybackService.floatingLyricsSample()` 選句，只在 trackId 等於目前 mediaId 時顯示，位置以 `FloatingLyricsRules.smoothPositionMs` 依經過時間外推；行由 `LyricLineView` 自繪（陰影連同行點陣化為 `LineRasterCache`），跨到另一個整數像素才重畫（`needsPixelRedraw`）；直向／橫向各存寬度（`widthPx`／`landscapeWidthPx`）與位置；鎖定與位置以外掛 SharedPreferences `moe_floating_lyrics` 為準；權限只能由使用者在系統設定頁開啟（禁止 adb 授權）；固定模式 `FLAG_NOT_TOUCHABLE`，Android 12+ 穿透視窗 alpha 取設定值與系統上限（通常 0.8）較小者。限制：只顯示有時間軸的歌詞；WebView 暫停時換歌，新歌詞要等頁面恢復才送到。待使用者實機驗收。
 
-連續動畫與透明度（兩種歌詞視窗共用，`animation`：`none` 預設／`continuous`，工作列與浮動分開儲存）：連續＝所有歌詞以 U+3000 接成一條、譯文同寬格並排成第二條；目前行左緣在該行開始時對齊歌詞區水平中心（`LYRICS_STRIP_ALIGN`＝left、`LYRICS_STRIP_TARGET`＝center，只看歌詞區寬），滑動曲線是穿過各節點的單調 C1 三次 Hermite（`lyricsStripCubic`／Rust `strip_cubic`／Kotlin `stripOffset`；首末切線 0，中間為 Fritsch–Butland 加權調和平均），末句依字元叢集數估算滑動時間（每字元 500 ms，曲目結束更早時提前收住），抵達時最後一個字形中心對準歌詞區中心。只繪製會出現的行加左右各一個歌詞區寬（`lyricsStripWindow`／`FloatingLyricsRules.stripWindow`），不可把整首歌放進捲動條。透明度：目前行為視窗自己的透明度，其餘可見行再乘「非目前歌詞透明度」（`lyricsPreferences.inactiveOpacityPercent`，10–100、預設 50；動畫「無」不套用）；下一行開始前 200 ms 起目前行由 1 線性降到係數、下一行升到 1，剛好在下一行開始時完成；第一行開始前所有行為 1，第一行前 200 ms 起除第一行外降到係數（Windows 不早於位置 0；Android 權重是位置函式 `FloatingLyricsRules.cellWeight`）；純函式 `lyricsStripFocus`／`lyricsLineWeight`／`lyricsLineOpacityFactor`。Windows 啟動時以 `settings_get_lyrics_preferences` 讀一次係數，之後聽 `lyrics-inactive-opacity`。連續模式選陰影時 Windows 與 Android 都照畫陰影（Android 待平板實機驗收）。邊緣淡出：歌詞區左右各一個正方形淡出區（寬＝歌詞區高，歌詞區寬不足兩倍高時各取一半），由內緣 1 線性降到外緣 0，文字與陰影／描邊都套用，鎖頭欄與移動模式背景不淡出；規則 `edge_fade_width`／`edge_fade_opacity`（JS `lyricsEdgeFadeWidth`／`lyricsEdgeFadeOpacity`，Kotlin 同名）；Windows 以 `CompositionVisualSurface`＋`CompositionMaskBrush`＋靜態水平漸層（`sampling::edge_fade_stops`）遮罩，只在尺寸／DPI／歌詞區改變時重建；Android `EdgeFadeLayout` 以 saveLayer＋`DST_IN` 遮罩。工作列與浮動歌詞同時開連續動畫有性能負擔，建議一次只開一種。
+連續動畫與透明度（兩種歌詞視窗共用，`animation`：`none` 預設／`continuous`，工作列與浮動分開儲存）：連續＝所有歌詞以 U+3000 接成一條、譯文同寬格並排成第二條；目前行左緣在該行開始時對齊歌詞區水平中心（`LYRICS_STRIP_ALIGN`＝left、`LYRICS_STRIP_TARGET`＝center，只看歌詞區寬），滑動曲線是穿過各節點的單調 C1 三次 Hermite（`lyricsStripCubic`／Rust `strip_cubic`／Kotlin `stripOffset`；首末切線 0，中間為 Fritsch–Butland 加權調和平均），末句依字元叢集數估算滑動時間（每字元 500 ms，曲目結束更早時提前收住），抵達時最後一個字形中心對準歌詞區中心。只繪製會出現的行加左右各一個歌詞區寬（`lyricsStripWindow`／`FloatingLyricsRules.stripWindow`），不可把整首歌放進捲動條。透明度（現況）：每個分頁各自存「主要透明度」`mainOpacityPercent`（1–100、預設 100）與「次要透明度」`secondaryOpacityPercent`（1–100、預設 50，可大於主要）；動畫「無」時整條歌詞以主要透明度繪製；連續模式（行級與逐字）以固定在歌詞區的靜態置中遮罩承載兩個值（中心 1 em 為主要、向兩端線性降到次要、最外 1 em 降到 0；`player-lyrics-rules` 的 `centre_mask_stops`，Kotlin `WordLyricsRules.centreMaskStops`），沒有逐行淡化與邊緣淡出，原生視窗每個格子的透明度係數恆為 1，Android 的 `lineViewAlpha` 在連續模式為 1。舊的 `inactiveOpacityPercent`、200 ms 行淡化與 `lyrics-inactive-opacity` 廣播已不存在。連續模式選陰影時 Windows 與 Android 都照畫陰影（Android 待平板實機驗收）。邊緣淡出（動畫「無」；連續模式改用上述遮罩）：歌詞區左右各一個正方形淡出區（寬＝歌詞區高，歌詞區寬不足兩倍高時各取一半），由內緣 1 線性降到外緣 0，文字與陰影／描邊都套用，鎖頭欄與移動模式背景不淡出；規則 `edge_fade_width`／`edge_fade_opacity`（JS `lyricsEdgeFadeWidth`／`lyricsEdgeFadeOpacity`，Kotlin 同名）；Windows 以 `CompositionVisualSurface`＋`CompositionMaskBrush`＋靜態水平漸層（`sampling::edge_fade_stops`）遮罩，只在尺寸／DPI／歌詞區改變時重建；Android `EdgeFadeLayout` 以 saveLayer＋`DST_IN` 遮罩。工作列與浮動歌詞同時開連續動畫有性能負擔，建議一次只開一種。
 
 ## Amendment: main and secondary opacity
 
