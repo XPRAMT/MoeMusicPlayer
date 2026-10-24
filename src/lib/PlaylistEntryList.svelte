@@ -248,7 +248,7 @@ import { PagedListController } from './track-list-data.js';
   }
 
   function playEntry(entry: PlaylistEntrySummary): void {
-    if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand) return;
+    if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady) return;
     onPlay(entry, playlistId);
   }
 </script>

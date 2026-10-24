@@ -174,6 +174,7 @@
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
   import { seekPlayback } from './lib/ipc';
+  import { acceptsTrackChoice, createPlaybackCommandOrder } from './lib/playback-command-order.js';
   import type { AlbumTrackOrder } from './lib/ipc';
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
@@ -786,6 +787,8 @@
   /** A seek in flight. It locks the transport like any other command, but only in the click handlers: the buttons
    * keep their look (no disabled, no grey), so dragging the progress bar does not flash the controls. */
   let isSeeking = $state(false);
+  // Orders the non-seek playback commands: a newer choice of track supersedes an older one (playback-command-order.js).
+  const playbackCommandOrder = createPlaybackCommandOrder();
   let playbackSnapshotRequestVersion = 0;
   let playbackSnapshotFence = 0;
   let isVolumePointerActive = false;
@@ -3126,7 +3129,7 @@
   }
 
   async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string): Promise<void> {
-    if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
+    if (!entry.trackId || !entry.hasEnabledMapping || !acceptsTrackChoice({ playbackReady, isSeeking })) return;
     const queueSource: PlaybackQueueSource = {
       kind: 'playlist',
       playlistId,
@@ -3139,7 +3142,7 @@
   }
 
   async function playQueueEntry(entry: PlaybackQueuePageItem): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
+    if (!acceptsTrackChoice({ playbackReady, isSeeking })) return;
     const queueSource: PlaybackQueueSource = {
       kind: 'queue',
       traversalPosition: entry.traversalPosition,
@@ -3315,7 +3318,7 @@
   }
 
   async function playTrack(track: TrackSummary): Promise<void> {
-    if (!playbackReady || isSendingPlaybackCommand || isSeeking) return;
+    if (!acceptsTrackChoice({ playbackReady, isSeeking })) return;
     const searchQuery = query.trim();
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
@@ -3563,7 +3566,7 @@
   }
 
   async function playArtistTrack(track: TrackSummary): Promise<void> {
-    if (!selectedArtist || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
+    if (!selectedArtist || !acceptsTrackChoice({ playbackReady, isSeeking })) return;
     const queueSource: PlaybackQueueSource = {
       kind: 'library',
       query: null,
@@ -3577,7 +3580,7 @@
   }
 
   async function playAlbumTrack(track: TrackSummary, order: AlbumTrackOrder): Promise<void> {
-    if (!selectedAlbum || !playbackReady || isSendingPlaybackCommand || isSeeking) return;
+    if (!selectedAlbum || !acceptsTrackChoice({ playbackReady, isSeeking })) return;
     // The queue is built by the album page's own query and ordering (not the library list sort).
     const queueSource: PlaybackQueueSource = {
       kind: 'album',
@@ -4002,16 +4005,24 @@
     options: PlaybackCommandOptions = {},
   ): Promise<void> {
     playbackSnapshotFence = ++playbackSnapshotRequestVersion;
+    // A track chosen while an earlier command is still in flight supersedes it: only the newest command's result
+    // (or error) is shown, and only the newest clears the busy flag.
+    const token = options.seek ? null : playbackCommandOrder.begin();
+    const isLatest = () => token === null || playbackCommandOrder.isLatest(token);
     if (options.seek) isSeeking = true; else isSendingPlaybackCommand = true;
     playbackError = null;
     try {
-      applyPlaybackSnapshot(await request(), undefined, undefined, options.forceQueueCursorProbe);
-      if (options.refreshQueueList) playbackQueueResetKey += 1;
+      const snapshot = await request();
+      if (isLatest()) {
+        applyPlaybackSnapshot(snapshot, undefined, undefined, options.forceQueueCursorProbe);
+        if (options.refreshQueueList) playbackQueueResetKey += 1;
+      }
     } catch (error) {
-      playbackError = getErrorText(error);
+      if (isLatest()) playbackError = getErrorText(error);
     } finally {
-      if (options.seek) isSeeking = false; else isSendingPlaybackCommand = false;
+      if (options.seek) isSeeking = false; else if (isLatest()) isSendingPlaybackCommand = false;
     }
+    if (!isLatest()) return;
     // The command's own snapshot can precede the change taking effect (a seek settling); sample once more now.
     requestPlaybackSample();
   }

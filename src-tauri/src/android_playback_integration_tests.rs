@@ -869,3 +869,17 @@ fn a_pause_during_a_load_does_not_cancel_it() {
     assert!(result.is_ok(), "{:?}", result.err());
     assert_eq!(actor.held_requests.len(), 1, "the pause waits its turn");
 }
+
+#[test]
+fn a_failed_load_of_a_remote_track_says_the_server_is_unreachable() {
+    for error in [
+        "Android media source did not become ready within 8000ms",
+        "伺服器無法連線",
+        "Android 播放服務沒有在期限內確認命令。",
+        "無法連線到伺服器：No route to host",
+    ] {
+        assert!(remote_load_failure_is_unreachable(error), "{error}");
+    }
+    assert!(!remote_load_failure_is_unreachable(SUPERSEDED_MESSAGE));
+    assert!(!remote_load_failure_is_unreachable("Source error"));
+}

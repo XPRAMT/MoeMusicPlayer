@@ -987,6 +987,24 @@ impl AndroidActor {
     }
 
     fn transact(&mut self, command: NativeCommand) -> Result<NativePlaybackSnapshot, String> {
+        let remote_load = command.op == "load"
+            && command
+                .content_uri
+                .as_deref()
+                .is_some_and(|uri| uri.starts_with("moeremote:"));
+        self.transact_command(command).map_err(|error| {
+            if remote_load && remote_load_failure_is_unreachable(&error) {
+                player_core::REMOTE_LINK_LOST.to_owned()
+            } else {
+                error
+            }
+        })
+    }
+
+    fn transact_command(
+        &mut self,
+        command: NativeCommand,
+    ) -> Result<NativePlaybackSnapshot, String> {
         let command_id = command.command_id.clone();
         let request_id = command.request_id.clone();
         self.commands
@@ -2132,6 +2150,15 @@ mod tests {
 /// Whether the native state counts as playing for the controls and the resume flag. "buffering" is Media3 told to
 /// play but still filling (right after a seek): the play button stays on pause and `resumePlayback` does not flip.
 /// The listening meter still credits only "playing", so buffering time is not counted.
+/// Why a load of a track on a server failed: the server could not be reached, or never made the source ready in time
+/// (the same thing as far as the user can tell; a replaced load is not an error).
+fn remote_load_failure_is_unreachable(error: &str) -> bool {
+    error != SUPERSEDED_MESSAGE
+        && (player_core::is_remote_unreachable(error)
+            || error.contains("did not become ready")
+            || error.contains("沒有在期限內確認命令"))
+}
+
 fn counts_as_playing(state: &str) -> bool {
     matches!(state, "playing" | "buffering")
 }

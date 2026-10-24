@@ -252,7 +252,8 @@
   }
 
   function playRow(track: TrackSummary): void {
-    if (playbackReady && !isSendingPlaybackCommand) void onPlay(track);
+    // A command in flight does not block choosing a track: the latest choice wins (playback-command-order.js).
+    if (playbackReady) void onPlay(track);
   }
 
   function handleRange(range: { start: number; end: number }): void {
