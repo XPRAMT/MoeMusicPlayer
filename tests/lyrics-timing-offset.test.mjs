@@ -89,7 +89,7 @@ test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track del
   assert.match(page, /displayCuePositions\(timedStartTimes, timedOffsetMs, cueLeading\)/);
 });
 
-test('歌詞平移 panel shows −stored; controls act on the shown value; timing for a stored value is unchanged', async () => {
+test('歌詞同步 panel shows −stored; controls act on the shown value; timing for a stored value is unchanged', async () => {
   const { lyricsShiftShownSec, lyricsShiftStoredSec } = await import('../src/lib/lyrics-timing-offset.js');
   const { findActiveLyricIndex } = await import('../src/lib/lyrics-window.js');
   const { displayCuePositions } = await import('../src/lib/lyrics-cue-timing.ts');

@@ -1,5 +1,5 @@
 import { tr } from './i18n.js';
-/** Per-track lyrics shift (歌詞平移, seconds). +N s is added to every lyric timestamp (lines show N s later);
+/** Per-track lyrics shift (歌詞同步, seconds). +N s is added to every lyric timestamp (lines show N s later);
  * −N s shows them earlier. */
 
 export const LYRICS_TIMING_OFFSET_MIN_SEC = -10;
@@ -77,7 +77,7 @@ export function formatLyricsTimingOffsetSec(delaySec) {
   return tr('{0} 秒', [sign + value.toFixed(1)]);
 }
 
-/** The 歌詞平移 panel shows the stored delay negated (shown = −stored): lyrics 2 s early → the user sets −2 (stored +2,
+/** The 歌詞同步 panel shows the stored delay negated (shown = −stored): lyrics 2 s early → the user sets −2 (stored +2,
  * which shows each line 2 s later); lyrics 3 s late → +3. The stored value and all timing math are unchanged.
  * @param {number} storedSec @returns {number} */
 export function lyricsShiftShownSec(storedSec) {

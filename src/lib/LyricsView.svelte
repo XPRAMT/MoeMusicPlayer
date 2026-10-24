@@ -825,14 +825,14 @@
     <p class="lyrics-placeholder" role="status">{tr("正在讀取本機與已保存的歌詞…")}</p>
   {:else}
     {#if timingPanelOpen && isTimed}
-      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label={tr("歌詞平移")} data-testid="lyrics-timing-panel">
+      <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label={tr("歌詞同步")} data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
-          <strong>{tr("歌詞平移")}</strong>
+          <strong>{tr("歌詞同步")}</strong>
           <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingShownSec)}</span>
           <button type="button" class="soft-button" onclick={resetTimingOffset}>{tr("重設")}</button>
         </div>
         <div class="lyrics-timing-controls">
-          <button type="button" class="soft-button" aria-label={tr("歌詞平移減少 0.1 秒")} onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
+          <button type="button" class="soft-button" aria-label={tr("歌詞同步減少 0.1 秒")} onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
           <input
             class="lyrics-timing-slider"
             type="range"
@@ -840,13 +840,13 @@
             max={LYRICS_TIMING_OFFSET_MAX_SEC}
             step={LYRICS_TIMING_OFFSET_STEP_SEC}
             value={timingShownSec}
-            aria-label={tr("歌詞平移秒數")}
+            aria-label={tr("歌詞同步秒數")}
             aria-valuemin={LYRICS_TIMING_OFFSET_MIN_SEC}
             aria-valuemax={LYRICS_TIMING_OFFSET_MAX_SEC}
             aria-valuenow={timingShownSec}
             oninput={onTimingOffsetInput}
           />
-          <button type="button" class="soft-button" aria-label={tr("歌詞平移增加 0.1 秒")} onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
+          <button type="button" class="soft-button" aria-label={tr("歌詞同步增加 0.1 秒")} onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
         </div>
       </div>
     {/if}
