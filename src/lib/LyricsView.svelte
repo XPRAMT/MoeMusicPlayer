@@ -65,6 +65,8 @@
     loadLyricsTimingOffsetSec,
     LYRICS_TIMING_OFFSET_EVENT,
     lyricsDisplayOffsetMs,
+    lyricsShiftShownSec,
+    lyricsShiftStoredSec,
     saveLyricsTimingOffsetSec,
   } from './lyrics-timing-offset.js';
 
@@ -233,6 +235,7 @@
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
   let timingOffsetSec = $state(0);
   let timingPanelOpen = $state(false);
+  let timingShownSec = $derived(lyricsShiftShownSec(timingOffsetSec));
   let timingPanelElement = $state<HTMLDivElement | null>(null);
   let candidateQuery = $state('');
   /** The text of the search whose results are on screen (typed text equal to it is not filtered again). */
@@ -779,11 +782,12 @@
 
   function onTimingOffsetInput(event: Event): void {
     const target = event.currentTarget as HTMLInputElement;
-    setTimingOffsetSec(Number(target.value));
+    setTimingOffsetSec(lyricsShiftStoredSec(Number(target.value)));
   }
 
   function nudgeTimingOffset(deltaSec: number): void {
-    setTimingOffsetSec(timingOffsetSec + deltaSec);
+    // The panel works on the shown value (shown = −stored).
+    setTimingOffsetSec(lyricsShiftStoredSec(timingShownSec + deltaSec));
   }
 
   function resetTimingOffset(): void {
@@ -824,25 +828,25 @@
       <div bind:this={timingPanelElement} class="lyrics-timing-panel floating-surface" role="group" aria-label={tr("歌詞平移")} data-testid="lyrics-timing-panel">
         <div class="lyrics-timing-panel-header">
           <strong>{tr("歌詞平移")}</strong>
-          <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingOffsetSec)}</span>
+          <span class="lyrics-timing-value" data-testid="lyrics-timing-value">{formatLyricsTimingOffsetSec(timingShownSec)}</span>
           <button type="button" class="soft-button" onclick={resetTimingOffset}>{tr("重設")}</button>
         </div>
         <div class="lyrics-timing-controls">
-          <button type="button" class="soft-button" aria-label={tr("延遲減少 0.1 秒")} onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
+          <button type="button" class="soft-button" aria-label={tr("歌詞平移減少 0.1 秒")} onclick={() => nudgeTimingOffset(-LYRICS_TIMING_OFFSET_STEP_SEC)}>−0.1</button>
           <input
             class="lyrics-timing-slider"
             type="range"
             min={LYRICS_TIMING_OFFSET_MIN_SEC}
             max={LYRICS_TIMING_OFFSET_MAX_SEC}
             step={LYRICS_TIMING_OFFSET_STEP_SEC}
-            value={timingOffsetSec}
-            aria-label={tr("歌詞延遲秒數")}
+            value={timingShownSec}
+            aria-label={tr("歌詞平移秒數")}
             aria-valuemin={LYRICS_TIMING_OFFSET_MIN_SEC}
             aria-valuemax={LYRICS_TIMING_OFFSET_MAX_SEC}
-            aria-valuenow={timingOffsetSec}
+            aria-valuenow={timingShownSec}
             oninput={onTimingOffsetInput}
           />
-          <button type="button" class="soft-button" aria-label={tr("延遲增加 0.1 秒")} onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
+          <button type="button" class="soft-button" aria-label={tr("歌詞平移增加 0.1 秒")} onclick={() => nudgeTimingOffset(LYRICS_TIMING_OFFSET_STEP_SEC)}>+0.1</button>
         </div>
       </div>
     {/if}

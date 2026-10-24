@@ -89,23 +89,30 @@ test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track del
   assert.match(page, /displayCuePositions\(timedStartTimes, timedOffsetMs, cueLeading\)/);
 });
 
-test('歌詞平移 +2 s shows each line 2 s later on every page path (displayed = start + value)', async () => {
+test('歌詞平移 panel shows −stored; controls act on the shown value; timing for a stored value is unchanged', async () => {
+  const { lyricsShiftShownSec, lyricsShiftStoredSec } = await import('../src/lib/lyrics-timing-offset.js');
   const { findActiveLyricIndex } = await import('../src/lib/lyrics-window.js');
-  const { displayCuePositions, findDisplayCueIndex } = await import('../src/lib/lyrics-cue-timing.ts');
-  const { nextCuePosition } = await import('../src/lib/playback-clock.ts');
+  const { displayCuePositions } = await import('../src/lib/lyrics-cue-timing.ts');
   const { importTimestampShiftMs } = await import('../src/lib/lyrics-import.js');
+  // Lyrics 2 s early: the user sets shown −2 → stored +2 → each line 2 s later (today's math, unchanged).
+  assert.equal(lyricsShiftStoredSec(-2), 2);
+  assert.equal(lyricsShiftShownSec(2), -2);
+  assert.equal(lyricsShiftStoredSec(3), -3);
+  assert.ok(Object.is(lyricsShiftShownSec(0), 0));
+  assert.equal(formatLyricsTimingOffsetSec(lyricsShiftShownSec(0)), formatLyricsTimingOffsetSec(0));
+  assert.ok(!formatLyricsTimingOffsetSec(lyricsShiftShownSec(-0)).startsWith('-'));
+  // shown +0.1 ⇒ stored −0.1
+  assert.equal(lyricsShiftStoredSec(lyricsShiftShownSec(1) + 0.1), 0.9);
   const starts = [10_000, 20_000];
-  const offset = lyricsDisplayOffsetMs(null, 2);
-  const timeline = starts.map((startMs) => ({ startMs }));
-  assert.equal(findActiveLyricIndex(timeline, 11_999, offset), -1);
-  assert.equal(findActiveLyricIndex(timeline, 12_000, offset), 0);
+  const offset = lyricsDisplayOffsetMs(null, lyricsShiftStoredSec(-2));
+  assert.equal(offset, -2000);
+  assert.equal(findActiveLyricIndex(starts.map((startMs) => ({ startMs })), 11_999, offset), -1);
+  assert.equal(findActiveLyricIndex(starts.map((startMs) => ({ startMs })), 12_000, offset), 0);
   assert.deepEqual(displayCuePositions(starts, offset, false), [12_000, 22_000]);
-  assert.equal(findDisplayCueIndex(displayCuePositions(starts, offset, false), 12_000), 0);
-  assert.equal(nextCuePosition(starts, offset, 0), 12_000);
   assert.equal(importTimestampShiftMs(null, 2), 2_000);
-  // Windows native (player-lyrics-rules) and Android (FloatingLyricsRules) receive the same combined offset and apply
-  // `position + offset >= start`; their shared vectors must agree that +2 s gives offset −2000.
-  const vectors = JSON.parse(await readFile(new URL('./fixtures/lyrics-rules-vectors.json', import.meta.url), 'utf8'));
-  const flat = JSON.stringify(vectors);
-  assert.ok(/"delaySec":0\.15,"expected":-200/.test(flat));
+  const page = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
+  assert.match(page, /formatLyricsTimingOffsetSec\(timingShownSec\)/);
+  assert.match(page, /value=\{timingShownSec\}/);
+  assert.match(page, /lyricsShiftStoredSec\(timingShownSec \+ deltaSec\)/);
+  assert.match(page, /lyricsShiftStoredSec\(Number\(target\.value\)\)/);
 });

@@ -76,3 +76,16 @@ export function formatLyricsTimingOffsetSec(delaySec) {
   const sign = value > 0 ? '+' : '';
   return tr('{0} 秒', [sign + value.toFixed(1)]);
 }
+
+/** The 歌詞平移 panel shows the stored delay negated (shown = −stored): lyrics 2 s early → the user sets −2 (stored +2,
+ * which shows each line 2 s later); lyrics 3 s late → +3. The stored value and all timing math are unchanged.
+ * @param {number} storedSec @returns {number} */
+export function lyricsShiftShownSec(storedSec) {
+  return clampLyricsTimingOffsetSec(-clampLyricsTimingOffsetSec(storedSec));
+}
+
+/** Inverse of {@link lyricsShiftShownSec}: the stored delay for a value the panel shows.
+ * @param {number} shownSec @returns {number} */
+export function lyricsShiftStoredSec(shownSec) {
+  return clampLyricsTimingOffsetSec(-clampLyricsTimingOffsetSec(shownSec));
+}
