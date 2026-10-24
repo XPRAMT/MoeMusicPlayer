@@ -7,6 +7,9 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod words;
+pub use words::*;
+
 /// The separator between lines of the continuous strip (one em wide).
 pub const STRIP_SEPARATOR: char = '\u{3000}';
 /// The terminal line advances at an estimated 500 ms per grapheme.

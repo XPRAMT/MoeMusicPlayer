@@ -132,3 +132,64 @@ fn rules_match_the_shared_vectors() {
         close(actual, f(&c["expected"]), &c.to_string());
     }
 }
+
+#[test]
+fn word_rules_match_the_shared_vectors() {
+    let v = vectors();
+    let g = &v["wordGlide"];
+    let lines: Vec<KnotLine> = g["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| KnotLine {
+            start_ms: f(&l["startMs"]),
+            cell_start: f(&l["cellStart"]),
+            word_starts: fs(&l["wordStarts"]),
+            word_centres: fs(&l["wordCentres"]),
+        })
+        .collect();
+    let knots = word_glide_knots(&lines);
+    let expected: Vec<(f64, f64)> = g["knots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| (f(&k[0]), f(&k[1])))
+        .collect();
+    assert_eq!(knots.len(), expected.len());
+    for (a, e) in knots.iter().zip(&expected) {
+        close(a.0, e.0, "knot time");
+        close(a.1, e.1, "knot value");
+    }
+    for s in g["samples"].as_array().unwrap() {
+        close(
+            glide_cubic(&knots, f(&s["positionMs"]), f(&g["target"]))[0],
+            f(&s["expected"]),
+            &s.to_string(),
+        );
+    }
+    for c in cases(&v, "wordMask") {
+        close(
+            word_mask_opacity(
+                f(&c["x"]),
+                f(&c["areaWidth"]),
+                f(&c["emPx"]),
+                c["inactive"].as_u64().unwrap() as u32,
+            ),
+            f(&c["expected"]),
+            &c.to_string(),
+        );
+    }
+    for c in cases(&v, "sung") {
+        let words: Vec<(f64, f64)> = c["words"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| (f(&w[0]), f(&w[1])))
+            .collect();
+        assert_eq!(
+            sung_word(&words, f(&c["t"])).map_or(-1, |i| i as i64),
+            c["expected"].as_i64().unwrap(),
+            "{c}"
+        );
+    }
+}
