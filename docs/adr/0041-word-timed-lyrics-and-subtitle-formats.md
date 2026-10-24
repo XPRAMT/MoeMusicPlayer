@@ -97,13 +97,13 @@ App 實際送出的請求仍可用：`fcg_query_lyric_new.fcg?songmid=…&songid
 
 ### D8 播放頁逐字高亮
 
-- 目前行維持白色（`--text`）。正在唱的那一個字以主要顏色 `var(--accent)` 由左到右掃過（柔邊各 12%），主題變更即時生效。已唱過的字維持主色直到換行（卡拉 OK；曾經是字結束就回白色，使用者認為閃得太快而改掉），尚未唱的字維持白色。`prefers-reduced-motion` 時不掃，字一開始唱整個字就是主色並維持。換行後舊行回到一般非目前行樣式。
+- 目前行維持白色（`--text`）。一整行只有**一條**主色 `var(--accent)` 的邊界由左到右掃過（柔邊各 0.15 em），沿 D10 的卡拉 OK 平滑曲線移動，主題變更即時生效。已唱過的部分維持主色直到換行（卡拉 OK；曾經是字結束就回白色，使用者認為閃得太快而改掉），尚未唱的維持白色。`prefers-reduced-motion` 時不掃，字一開始唱整個字就是主色並維持（硬邊）。換行後舊行回到一般非目前行樣式。
 - 沒有逐字的行維持整行高亮；其他行的顏色與透明度規則不變。
-- 做法：目前行的每個字一個 `<span>`，各帶一個 CSS 動畫 `lyric-word-wipe`：
-  - span 的背景是 `linear-gradient(主色 → --text)`，以 `background-clip:text` 裁到字形；漸層位置是註冊過的 `@property --lyric-word-fill`（app.css），keyframes 從 −12% 推到 112%，同時把 color 設成透明；
-  - fill mode `forwards`：開始前文字是不透明的 `--text`、蓋住背景；結束後停在 112%（整字主色）。跳轉、暫停、偏移重建時，已過的字 delay ≤ −duration，一建好就是主色；
-  - delay＝字起點−目前位置（可為負），duration＝字長；
-  - 整段沒有逐幀寫樣式、span 上沒有 filter、沒有 `will-change`。陰影模式的 drop-shadow 仍在行上；描邊（`-webkit-text-stroke`）照常畫在填色上；`box-decoration-break: clone` 讓跨行的字每個片段各自掃。
+- 做法（`lyrics-word-highlight.js` 的 `karaokeLineAnimation`，`LyricsView.svelte` 的 `karaokeLine`）：目前行的文字放在一個行內 `<span class="lyric-karaoke">`，裡面每個字一個只用來量寬度的 `<span>`：
+  - 外層 span 的背景是 `linear-gradient(主色 → --text)`，以 `background-clip:text` 裁到字形；漸層位置是註冊過的 `@property --lyric-line-fill`（app.css），keyframes `lyric-line-wipe` 從 0% 推到 100%，同時把 color 設成透明；`box-decoration-break: slice` 讓換行的各片段共用一條背景，所以邊界依閱讀順序跨行移動，座標是「該處之前的字寬占整行字寬的比例」；
+  - 時間函數是 `linear(…)`：建行時量一次各字寬（`getClientRects` 加總），算出 D10 的 `karaoke_glide`，二次段每段取 4 點、直線段取端點，寫成 `linear()` 的點；減少動態時改成在每個字起點跳一階；
+  - delay＝第一個字起點−目前位置（可為負），duration＝到最後一個字結束；fill mode `forwards`：開始前文字是不透明的 `--text`、蓋住背景；結束後停在 100%（整行主色）。跳轉、暫停、偏移重建時直接從曲線上的位置接著走；
+  - 整段沒有逐幀寫樣式、沒有逐字動畫、span 上沒有 filter、沒有 `will-change`。陰影模式的 drop-shadow 仍在行上；描邊（`-webkit-text-stroke`）照常畫在填色上。
 - 譯文行永遠沒有逐字效果；羅馬音行只有在該行帶 `romanization_words`（DTO `romanizationWords`）時才有，規則與原文相同。
 - 播放頁顯示順序為 原文 → 羅馬音 → 譯文。
 - 只在換行、跳轉（時鐘 `jumpId`）、播放／暫停、偏移改變時重新計算並重建 span；暫停時 `animation-play-state: paused`。
@@ -198,7 +198,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 ### 5.3 定案與實作（D10）
 
 **連續模式：方案 C。**（Windows 原生工作列與浮動歌詞、Android 浮動歌詞）
-- 節點是字起點，正在唱的字停在歌詞區中心（`word_glide_knots`：單調 C1 曲線，加速度限制為行平均速度的 2 倍，最多提前 600 ms），並沿用音訊時鐘的漂移修正（`plan::StripInput.word_knots`，下次重排在下一個節點）。
+- 行起點是硬節點：該行第一個字形的中心在行起點時剛好落在歌詞區中心（行級歌詞也一樣，`StripLayout.anchors`／JS `layoutLyricsStrip` 第 4 參數／Kotlin `firstGlyphCenters`，取代原本的左緣）。逐字行之內的字起點（字中心）只是軟導引：兩個行起點之間的曲線跟著字走，但速度維持在該行平均速度（本行起點位置到下一行起點位置的距離 ÷ 兩者時間差）的 0.5–1.5 倍，不會突然衝刺也不會停住，正在唱的字可以稍微偏離中心（`word_strip_glide`，見下方「平滑曲線」；選項 B，取代原本的字起點節點＋2 倍速度上限＋最多提前 600 ms）。沿用音訊時鐘的漂移修正（`plan::StripInput.word_glide`，下次重排在下一個曲線段）。最後一行有字時停在最後一個字起點；行級歌詞仍用原本的 PCHIP 行曲線（只改錨點）。
 - 遮罩是靜態的置中遮罩（`centre_mask_stops`）：中心 1 em（主行字級）100%，其外直線降到面板兩端 0%，平台邊緣只有 0.1 em 的柔邊。「非目前歌詞透明度」不套用，也沒有寬度設定（使用者修訂，取代 5.2 的兩側 1 em 頻帶）。
 - 逐字歌詞用置中遮罩，取代邊緣淡出與行淡化（所有格的透明度係數維持 1）；行級歌詞照舊用邊緣淡出。
 - 譯文列沒有自己的節點：它是同一條捲動條的格，跟著主列的位移，並用同一張遮罩（以主列的 em 計算）。
@@ -207,7 +207,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 
 **「無」模式：卡拉 OK（方案 A）。**
 - 套用「文字排版」對齊。
-- 已唱的字與正在唱的字用主題主色，還沒唱的字用文字顏色；正在唱的字內，邊界依音訊時鐘線性掃過（`karaoke_clip_x`：第一個字之前停在第一個字的左緣，字之間停在上一個字的右緣，單調）。
+- 已唱的部分用主題主色，還沒唱的用文字顏色；一整行只有一條邊界，沿一條平滑曲線（`karaoke_glide`）移動：第一個字起點時在第一個字的左緣、最後一個字結束時在最後一個字的右緣（整行亮）是硬節點，中間以每個字的起點（左緣）與結束（右緣）為軟導引，速度維持在整行平均掃描速度的 0.5–1.5 倍；開始前停在第一個字左緣，結束後整行主色。與播放頁共用同一條曲線（播放頁以字寬比例為座標）。
 - Windows：每行快取白色與主色兩張表面（版面相同，陰影／描邊的顏色都取自文字顏色，所以兩張的陰影一樣），兩個同位置 sprite 加互補 `InsetClip`：主色那張從行首切到邊界，白色那張從邊界到行尾（`WordClip`）。陰影沒有接縫；不在每幀點陣化；邊界移動至少 1/8 裝置像素才提交。下一行的主色副本會預先點陣化。主色由主視窗以 `lyrics-accent-color` 廣播。
 - Android：主色副本另存一份 `LineRasterCache`，以 `clipRect` 分兩段畫；邊界移動至少 1 個裝置像素才重畫。主色經 `floatingLyricsUpdate { accentColor }` 送達；行資料帶 `words`（`{s, e, t}`）與 `lead`（前導空白的 UTF-16 長度）。
 - 譯文列不變色；沒有逐字的行整行顯示；長句橫向捲動照常（裁切掛在 sprite／畫布上，跟著捲動位移）。
@@ -224,6 +224,15 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 - 卡拉 OK 的點陣快取約加倍（每行兩張）；本程序 CPU 增加約 0.9 個百分點，來自唱字期間每幀的裁切提交。換字時沒有額外掉幀：唱字期間邊界連續移動，換字不會讓取樣間隔變長。
 - dwm 的 CPU 量不到：一般權限讀不到 dwm 的處理器時間。只在 120 Hz 主螢幕量過；60 Hz 虛擬螢幕沒有量。
 - 連續模式加卡拉 OK（方案 C＋A）的估計：看得到的每行都要主色副本，點陣快取約加倍（每視窗再加約 10 MiB）；位移本來就每幀提交，正在唱的那格多一個裁切值，CPU 估計再增加不到 1 個百分點。尚未實作，由使用者決定。
+
+**平滑曲線**（`crates/player-lyrics-rules/src/glide.rs` 的 `smooth_glide`；JS 參考實作 `src/lib/lyrics-glide.js`、Kotlin `WordLyricsRules.smoothGlide`，共用向量 `glide`／`karaokeGlide`／`stripGlide`）：
+- 輸入是硬節點 `(t, v)`（時間嚴格遞增，同時或更早的後者丟掉，值非遞減）、每段之間的軟導引，以及兩端是否緩起緩停（捲動條：兩端速度 0，條在曲線外靜止；卡拉 OK：兩端用該段平均速度）。
+- 每段平均速度 a，速度帶 [0.5a, 1.5a]（`GLIDE_MIN_SPEED`／`GLIDE_MAX_SPEED`）。每個硬節點有切線 m：兩鄰段的調和平均夾進兩段速度帶的交集；兩段相差超過 3 倍、交集為空時取較慢段的上限 1.5·min。硬節點兩側各有一段斜率 m 的直線，長度為較短鄰段的 1/8（`GLIDE_KNOT_WINDOW`）。
+- 折線：從硬節點窗口的端點出發，每個導引的值夾進「從前一點以速度帶能到達」與「還能以速度帶到達段尾窗口」兩個範圍的交集（必不為空），所以每一小段斜率都在速度帶內，且單調。
+- 除硬節點外每個轉角以對稱二次曲線圓角，半徑為兩鄰小段較短者的一半：速度在兩斜率間線性變化，不離開速度帶、連續（C1）；硬節點不圓角，值剛好命中。導引點會被圓角偏離最多 r·Δs/4。
+- 輸出為分段多項式 `GlidePiece { t, v, s, c }`（值 `v + s·u + c·u²`），`glide_at` 給值、速度與半加速度；Windows 計畫把每段轉成 `AddCubic` 鍵（c3＝0），重排在 `next_glide_break`；Android 每幀讀 `glideValue`。
+- 例外（測試明列）：緩起緩停的兩端窗口內速度從 0 升到帶內；相鄰兩段平均速度差超過 3 倍時，交界窗口（約 1.5 個窗口長）內較快那段低於 0.5 倍。
+- 測試：Rust `glide::tests`（120 Hz 取樣：單調、C0／C1、硬節點、速度帶；密集字、長間奏、同時節點）、`tests/lyrics-rules-vectors.test.mjs`、`LyricsRulesVectorsTest`。
 
 ### 待使用者決定
 
