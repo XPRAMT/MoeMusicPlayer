@@ -43,7 +43,8 @@ ASS、SRT、yrc 解析不出任何行時回 `Unusable`。
 ### D3 SRT
 
 - 每個 cue 是一行，保留起訖時間。
-- 多行 cue 以空白接成一行。
+- 多行 cue 以空白接成一行；但某一行的文字系統與第一行明顯不同時（見 D9 的 `contrast_role`），從那一行起是額外行，依 D9 分類。
+- 起點相同的不同 cue（成對 cue）合成一行，額外的 cue 依 D9 分類。
 - 去掉 `<i>` 一類標記與 `{\an8}` 一類覆寫區塊，解碼 `&amp;` 等實體。
 - 接受 BOM、CRLF、`.` 小數點、省略小時，也接受 cue 之間沒有空行。
 
@@ -53,7 +54,7 @@ ASS、SRT、yrc 解析不出任何行時回 `Unusable`。
 - `\k`、`\K`、`\kf`、`\ko` 的時長（百分秒）成為逐字時間，以事件起點累加；第一個 `\k` 前的文字成為零長字。
 - `\N`、`\n`、`\h` 變成空白（與 SRT 多行相同，以一行顯示）。
 - 繪圖模式（`\p1`…）的內容丟棄，其餘覆寫標籤一律去掉。
-- 起訖時間相差都在 ±50 ms 內、但 Style 不同的事件，依檔案順序成為第一個事件的譯文與羅馬音；羅馬音的逐字存在 `romanization_words`。
+- 起訖時間相差都在 ±50 ms 內、但 Style 不同的事件，是第一個事件的額外行，依 D9 分類（明確的 Style 名稱優先）；羅馬音的逐字存在 `romanization_words`。
 - 不還原樣式。
 
 函式庫查核：查 crates.io（只看中繼資料，未讀各 crate 的 LICENSE 檔，也未逐一確認 `\k` 支援）：
@@ -91,23 +92,39 @@ App 實際送出的請求仍可用：`fcg_query_lyric_new.fcg?songmid=…&songid
 - 新增 `LyricWord { start_ms, end_ms, text }`。
 - `LyricLine` 新增 `end_ms`、`words`、`romanization_words`，都是 `serde(default)`，空值不序列化。舊的 `track_lyrics` JSON 原樣可讀，不需 schema 遷移。
 - `has_word_synced_lyrics` 只看 `words`：QQ 候選不再被標為逐字。
-- DTO：`LyricLineDto` 新增 `endMs`、`words: [{s,e,t}]`（短鍵）、`wordsTraditional`。
+- DTO：`LyricLineDto` 新增 `endMs`、`words: [{s,e,t}]`（短鍵）、`wordsTraditional`、`romanizationWords`。
 - 簡繁轉換（`traditional_word_texts`）：整行轉一次再依 char 索引切回各字，保留詞組轉換（头发 → 頭髮）；字數改變時退回逐字轉換。有逐字時，`textTraditional` 等於轉換後各字串接。
 
 ### D8 播放頁逐字高亮
 
-- 目前行維持白色（`--text`）。正在唱的那一個字是主要顏色 `var(--accent)`，主題變更即時生效。字一結束就回白色，任何時刻最多一個字是主色，字與字之間的空隙沒有主色字。
+- 目前行維持白色（`--text`）。正在唱的那一個字以主要顏色 `var(--accent)` 由左到右掃過（柔邊各 12%），主題變更即時生效。字一結束就回白色，任何時刻最多一個字有主色，字與字之間的空隙沒有主色字。`prefers-reduced-motion` 時不掃，整個字在唱中區間直接是主色。
 - 沒有逐字的行維持整行高亮；其他行的顏色與透明度規則不變。
-- 做法：目前行的每個字一個 `<span>`，各帶一個 CSS 動畫 `lyric-word-sing`：
-  - keyframes 只把 color 定在 `var(--accent)`，不設 fill mode；
+- 做法：目前行的每個字一個 `<span>`，各帶一個 CSS 動畫 `lyric-word-wipe`：
+  - span 的背景是 `linear-gradient(主色 → --text)`，以 `background-clip:text` 裁到字形；漸層位置是註冊過的 `@property --lyric-word-fill`（app.css），keyframes 從 −12% 推到 112%，同時把 color 設成透明；
+  - 不設 fill mode：動畫外文字是不透明的 `--text`，蓋住背景；
   - delay＝字起點−目前位置（可為負），duration＝字長；
-  - 結果是只在字的唱中區間顯示主色，整段沒有逐幀寫樣式、沒有 filter、沒有 `will-change`。
+  - 整段沒有逐幀寫樣式、span 上沒有 filter、沒有 `will-change`。陰影模式的 drop-shadow 仍在行上；描邊（`-webkit-text-stroke`）照常畫在填色上；`box-decoration-break: clone` 讓跨行的字每個片段各自掃。
+- 譯文行永遠沒有逐字效果；羅馬音行只有在該行帶 `romanization_words`（DTO `romanizationWords`）時才有，規則與原文相同。
+- 播放頁顯示順序為 原文 → 羅馬音 → 譯文。
 - 只在換行、跳轉（時鐘 `jumpId`）、播放／暫停、偏移改變時重新計算並重建 span；暫停時 `animation-play-state: paused`。
 - 使用者偏移與行相同；逐字不套用 200 ms 換行提前（提前只作用於行，ADR 0029）。
 - 純函式在 `src/lib/lyrics-word-highlight.js`，測試在 `tests/lyrics-word-highlight.test.mjs`。
 - 工作列、浮動歌詞與 Android 仍以行級顯示 SRT、ASS、yrc（它們讀同一份行資料）。
 
-## 第 5 節　研究：漸層字與原生逐字（未實作）
+### D9 額外行的內容分類
+
+LRC 同時間戳的行、SRT 多行 cue 與成對 cue、ASS 同時間不同 Style 的事件，第一行（檔案順序）是原文，其餘是額外行，依內容分成譯文或羅馬音（`crates/player-core/src/lyric_roles.rs`）。網易、QQ 另外帶來的譯文與羅馬音有明確標籤，不經這裡。
+
+1. ASS 的 Style 名稱明確時優先（不分大小寫）：含 `roma`、`ローマ字`、`羅馬`、`罗马` 為羅馬音；含 `trans`、`中文`、`翻譯`、`翻译`、`譯文`、`译文` 為譯文。
+2. 原文含漢字、假名或諺文，且額外行幾乎全是拉丁字（字母含長音與聲調符號、組合附加符號、空白、撇號、連字號、數字、基本標點）：羅馬音（拼音也算）；但其中出現兩個以上不同的英文功能詞（the、you、and、my、is…，刻意排除 to、me、in、no 等羅馬字也會用的詞）時是英文譯文。
+3. 原文含漢字、假名或諺文，額外行也含：譯文。
+4. 原文是拉丁字：額外行是譯文。
+5. 內容無法判斷（只有標點、數字，或原文沒有文字）：沿用舊的位置規則（第一個額外行譯文、第二個羅馬音）；已被佔用時改放另一個空位。已有的角色保留，多出的行捨棄。
+6. SRT 單一 cue 的多行，同文字系統的行是換行而非譯文；只有文字系統明顯不同（拉丁對亞洲字、亞洲字對拉丁、日文下沒有假名的漢字、韓文下沒有諺文的漢字）時，才從那一行起當額外行（`contrast_role`）。
+
+增強型 LRC 寫入維持檔案順序（原文、譯文、羅馬音），讀回時依內容分類，結果相同。
+
+## 第 5 節　研究：漸層字與原生逐字
 
 ### 5.1 播放頁的漸層掃色（CSS）
 
@@ -117,7 +134,20 @@ App 實際送出的請求仍可用：`fcg_query_lyric_new.fcg?songmid=…&songid
 | 亮色疊層＋`mask-image` 漸層位移 | 可以（`mask-position` 動畫） | 疊層須與底層同排版：重複一份文字並絕對定位，換行時兩份須完全一致 | 疊層與底層各自帶效果，陰影會疊兩次 | mask 動畫在 Chromium 多半走 paint，不在合成器上 |
 | `clip-path: inset()` 動畫＋柔邊 | 可以，而且 `clip-path` 動畫可在合成器上執行 | 只能是矩形，跨行的字無法正確裁切 | `clip-path` 沒有柔邊，柔邊要再疊 mask，又回到 paint | 硬邊可在合成器上跑，近乎 0；柔邊則同 mask |
 
-建議：若要漸層，採 `background-clip:text` 套在單一字的 span 上，以 `@property` 動畫推進漸層位置（每個字自己的 delay 與 duration），離開時以同一動畫的最後一段淡回白色。成本是唱中的一個字每幀 paint，對主視窗是一小塊。陰影模式需另外處理（陰影改畫在底層 span，掃色 span 不帶陰影）。上線前應以 Release CDP 搭配連續歌詞視窗量測，本次未做原型與量測。待使用者決定。
+已採用第一列（見 D8）。陰影維持行上的 drop-shadow，span 不帶陰影。
+
+量測（Chromium 測試頁：Edge 156、120 Hz、一行 24 個 CJK 字、34 px、行上兩層 drop-shadow，每字 350 ms 連續播放，每種模式 8 秒、三輪取一致值）：
+
+| 指標 | 舊：逐字換色 | 漸層掃色 |
+|---|---|---|
+| 幀間隔 p50／p95 | 8.3／8.4 ms | 8.3／8.5 ms |
+| 每幀 Paint 次數 | 0.05 | 1.8 |
+| 每幀 Paint 時間 | 0.002 ms | 0.09 ms |
+| 每幀 Raster 時間 | 0.004 ms | 0.10 ms |
+| 每幀樣式重算 | 0.017 ms | 0.06 ms |
+| 渲染主執行緒佔用 | 1.8% | 3.9% |
+
+舊做法只在字的開始與結束各畫一次；掃色在唱中每幀重畫該字（含行上的 drop-shadow 區域），主執行緒多約 2 個百分點，沒有掉幀。Release 播放器（WebView2）未量測：量測當時播放器沒有開偵錯埠，依規則不重啟播放器；搭配連續歌詞視窗的實測仍待做。
 
 ### 5.2 Windows 原生與 Android 逐字
 
@@ -167,7 +197,6 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 
 ### 待使用者決定
 
-- 播放頁要不要漸層掃色（5.1）。
 - 原生要採方案 A 或 C；方案 C 另需決定：
   - 淡出寬度與兩側 1 em 頻帶是否做成設定；
   - 置中遮罩要取代還是疊加現有的邊緣淡出；
@@ -186,7 +215,8 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
   - 服務層的內嵌字幕與 Unusable 改用旁檔；
   - yrc 取代 LRC；
   - 逐字旗標。
-- 前端：`tests/lyrics-word-highlight.test.mjs` 檢查時間計算、簡繁、`var(--accent)` 與沒有 fill／filter。
+- 前端：`tests/lyrics-word-highlight.test.mjs` 檢查時間計算、簡繁、掃色 keyframes 與 `@property`、沒有 fill／filter、減少動態時改用換色、羅馬音逐字與顯示順序。
+- `player-core` 的 `lyric_roles` 測試：日文＋羅馬字＋中文兩種順序、長音、韓文＋羅馬字＋英文、英文原文＋中文、中文＋拼音（含組合聲調）、Style 提示、無法判斷時的位置規則；`lyric_formats` 與 `lyrics` 另測 SRT 多行與成對 cue、ASS Style、LRC 兩種順序與寫入格式讀回。
 
 ## 參考資料
 
