@@ -302,12 +302,14 @@ test('a line shorter than 200 ms fades over its own length, so the previous fade
   assert.equal(lyricsStripFocus([], 500).incoming, -1);
 });
 
-test('the views fade only the changing cells with an opacity-only animation, fed by the shared setting', () => {
-  // Windows: the native renderer (ADR 0034) fades each drawn cell by an opacity animation from the same rules.
+test('continuous mode dims by the static mask only, fed by the shared setting', () => {
+  // Experimental (ADR 0041 D10): no per-line fades; the inactive opacity is part of the static mask.
   const plan = readFileSync(new URL('../crates/player-lyrics-native/src/plan.rs', import.meta.url), 'utf8');
   const bridge = readFileSync(new URL('../src-tauri/src/native_lyrics.rs', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
-  assert.match(plan, /rules::line_opacity_factor\(/);
+  const win = readFileSync(new URL('../crates/player-lyrics-native/src/win.rs', import.meta.url), 'utf8');
+  assert.doesNotMatch(plan, /rules::line_opacity_factor\(/);
+  assert.match(win, /rules::centre_mask_stops\(area\.width, em, f64::from\(inactive\) \/ 100\.0\)/);
   // The shared setting reaches the renderer by event (the preview too), and again when the renderer asks.
   assert.match(bridge, /listen_any\("lyrics-inactive-opacity"/);
   assert.match(app, /emit\('lyrics-inactive-opacity', inactiveOpacityPercent\)/);

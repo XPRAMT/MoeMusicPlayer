@@ -19,6 +19,14 @@ internal class EdgeFadeLayout(context: Context) : LinearLayout(context) {
     private val maskPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
     private var maskSize = 0L
 
+    /** Off in continuous mode, where each line view applies the static continuous mask instead (experimental). */
+    var fadeEnabled = true
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
     private fun updateMask(w: Int, h: Int): Boolean {
         val zone = FloatingLyricsRules.edgeFadeWidth(w.toFloat(), h.toFloat())
         if (zone <= 0f) return false
@@ -37,7 +45,7 @@ internal class EdgeFadeLayout(context: Context) : LinearLayout(context) {
     }
 
     override fun dispatchDraw(canvas: Canvas) {
-        if (!updateMask(width, height)) {
+        if (!fadeEnabled || !updateMask(width, height)) {
             super.dispatchDraw(canvas)
             return
         }

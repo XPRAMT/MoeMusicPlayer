@@ -202,7 +202,12 @@ fn word_rules_match_the_shared_vectors() {
     same_pieces(&word_strip_glide(&lines), &g["pieces"], "strip glide");
     for c in cases(&v, "centreMask") {
         close(
-            centre_mask_opacity(f(&c["x"]), f(&c["areaWidth"]), f(&c["emPx"])),
+            centre_mask_opacity(
+                f(&c["x"]),
+                f(&c["areaWidth"]),
+                f(&c["emPx"]),
+                f(&c["inactive"]),
+            ),
             f(&c["expected"]),
             &c.to_string(),
         );

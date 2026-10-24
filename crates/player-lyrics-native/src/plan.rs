@@ -230,16 +230,10 @@ fn cubic_at(input: &StripInput, t: f64) -> [f64; 4] {
     )
 }
 
-fn factor_at(input: &StripInput, index: usize, t: f64) -> f64 {
-    if input.word_glide.is_some() {
-        return 1.0;
-    }
-    let focus = rules::strip_focus(input.starts, t, rules::FADE_MS);
-    rules::line_opacity_factor(
-        rules::line_weight(&focus, index),
-        input.inactive_percent,
-        rules::Animation::Continuous,
-    )
+/// Every cell's opacity factor: 1. In continuous mode the opacity comes only from the static mask fixed to the lyric
+/// area (experimental, ADR 0041 D10), so there are no per-line fades.
+fn factor_at(_input: &StripInput, _index: usize, _t: f64) -> f64 {
+    1.0
 }
 
 /// The continuous strip: glide keys up to `HORIZON_BREAKS` breaks ahead, the cells that can show meanwhile (plus one
@@ -286,7 +280,6 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
         from = b;
     }
     offset.push((secs(from), [offset_at(input, from), 0.0, 0.0, 0.0]));
-    let horizon = breaks.last().copied().unwrap_or(p);
     // Monotone between knots, so the extremes are at the keys.
     let (lo, hi) = offset
         .iter()
@@ -295,28 +288,7 @@ pub fn plan_strip(input: &StripInput) -> StripPlan {
         });
     let cells = rules::strip_window(input.layout, hi, lo, input.view_width, input.view_width);
 
-    // The weights are linear between these times: each line start and the start of the fade into it.
-    let mut times = vec![p];
-    for (j, &start) in input.starts.iter().enumerate() {
-        let length = if j == 0 {
-            start.max(1.0)
-        } else {
-            start - input.starts[j - 1]
-        };
-        let fade = rules::FADE_MS.min(length).max(1.0);
-        for t in [start - fade, start] {
-            if t > p && t <= horizon {
-                times.push(t);
-            }
-        }
-    }
-    if let Some((_, u)) = input.slew() {
-        if u <= horizon {
-            times.push(u);
-        }
-    }
-    times.sort_by(f64::total_cmp);
-    times.dedup();
+    let times = [p];
     let opacity = match cells {
         Some((first, last)) => (first..=last)
             .map(|i| {

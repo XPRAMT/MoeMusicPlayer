@@ -615,7 +615,8 @@ object FloatingLyricsOverlay {
             val strokeColor = if (effectiveEffect == "stroke") 0x80000000.toInt() or effect else 0
             view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor)
             if (view === mainText) view.setAccent(accentColor)
-            view.setInactiveFactor(FloatingLyricsRules.inactiveFactor(animation, inactiveOpacityPercent, 0f))
+            // Continuous mode (experimental): no per-line dimming; the inactive opacity is in the static mask.
+            view.setInactiveFactor(1f)
         }
     }
 
@@ -691,6 +692,7 @@ object FloatingLyricsOverlay {
         }
 
         var sliding = false
+        (mainText?.parent as? EdgeFadeLayout)?.fadeEnabled = true
         mainText?.let {
             it.setWordMask(0f)
             it.setLine(shown, progress)
@@ -784,10 +786,13 @@ object FloatingLyricsOverlay {
                 finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters, current.firstGlyphCenters,
             )
         }
-        // Word-timed: the static centre mask at the main row's em on both rows, instead of the line fades.
-        val em = if (knots != null) main.textSizePx() else 0f
-        main.setWordMask(em)
-        translationText?.setWordMask(em)
+        // Line- and word-timed (experimental): the static mask at the main row's em and the inactive opacity on both
+        // rows, instead of the edge fade and the line fades.
+        val em = main.textSizePx()
+        val inactive = FloatingLyricsRules.inactiveOpacityPercent(inactiveOpacityPercent) / 100f
+        (main.parent as? EdgeFadeLayout)?.fadeEnabled = false
+        main.setWordMask(em, inactive)
+        translationText?.setWordMask(em, inactive)
         view.visibility = View.VISIBLE
         main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)
         translationText?.let {

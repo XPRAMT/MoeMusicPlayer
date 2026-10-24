@@ -136,9 +136,9 @@ const stripGlideLines = [
 const stripGlidePieces = wordStripGlide(stripGlideLines);
 const stripGlide = { lines: stripGlideLines, pieces: stripGlidePieces, samples: glideSamples(stripGlidePieces, sampleTimes(800, 6300)) };
 const centreMask = [];
-for (const [areaWidth, emPx] of [[1000, 40], [80, 40], [300, 24], [0, 40]]) {
-  for (const x of [0, 10, 39, 40, 41, 120, 130, 150, 160, 170, 178, 180, 182, 200, 470, 480, 500, 520, 600, areaWidth]) {
-    centreMask.push({ areaWidth, emPx, x, expected: centreMaskOpacity(x, areaWidth, emPx) });
+for (const [areaWidth, emPx, inactive] of [[1000, 40, 0.5], [80, 40, 0.5], [300, 24, 0.05], [1000, 40, 1], [400, 30, 0], [0, 40, 0.5]]) {
+  for (const x of [0, 10, 20, 39, 40, 41, 120, 130, 150, 160, 170, 178, 180, 182, 200, 470, 480, 500, 520, 600, 960, areaWidth]) {
+    centreMask.push({ areaWidth, emPx, inactive, x, expected: centreMaskOpacity(x, areaWidth, emPx, inactive) });
   }
 }
 const sungWords = [[1000, 1200], [1200, 1200], [1300, 1500]];

@@ -129,7 +129,8 @@ class LyricsRulesVectorsTest {
         samePieces(WordLyricsRules.wordStripGlide(lines), g.getJSONArray("pieces"), "strip glide")
         for (c in vectors.cases("centreMask")) {
             assertEquals(c.toString(), c.getDouble("expected"),
-                WordLyricsRules.centreMaskOpacity(c.getDouble("x"), c.getDouble("areaWidth"), c.getDouble("emPx")), 1e-9)
+                WordLyricsRules.centreMaskOpacity(c.getDouble("x"), c.getDouble("areaWidth"), c.getDouble("emPx"),
+                    c.getDouble("inactive")), 1e-9)
         }
     }
 

@@ -11,7 +11,7 @@ internal object WordLyricsRules {
     const val GLIDE_MAX_SPEED = 1.5
     const val GLIDE_KNOT_WINDOW = 0.125
     const val MASK_BAND_EM = 1.0
-    const val MASK_SOFT_EM = 0.1
+    const val MASK_EDGE_EM = 1.0
 
     /** From lyrics time `t` up to the next piece the value is `v + s u + c u^2` (`u` = time - `t`). */
     data class GlidePiece(val t: Double, val v: Double, val s: Double, val c: Double)
@@ -184,19 +184,24 @@ internal object WordLyricsRules {
         return smoothGlide(hard, guides, true)
     }
 
-    /** The centre mask's gradient stops `(offset 0..1, opacity)` (`centre_mask_stops`): an opaque em, straight ramps. */
-    fun centreMaskStops(areaWidth: Double, emPx: Double): List<Pair<Double, Double>> {
+    /**
+     * The static continuous-mode mask's gradient stops `(offset 0..1, opacity)` (`centre_mask_stops`, experimental):
+     * 0 → inactive over the edge em, inactive → 1 up to an opaque em at the centre, mirrored; below four em the em
+     * shrinks to a quarter of the area.
+     */
+    fun centreMaskStops(areaWidth: Double, emPx: Double, inactive: Double): List<Pair<Double, Double>> {
         if (!(areaWidth > 0) || !(emPx > 0)) return emptyList()
+        val a = if (inactive.isNaN()) 1.0 else inactive.coerceIn(0.0, 1.0)
+        val e = minOf(emPx, areaWidth / 4)
+        val edge = MASK_EDGE_EM * e
+        val half = MASK_BAND_EM * e / 2
         val c = areaWidth / 2
-        val a = MASK_BAND_EM * emPx / 2
-        val s = MASK_SOFT_EM * emPx / 2
-        val q = if (c - a > 0) maxOf(0.0, (c - a - s) / (c - a)) else 1.0
-        return listOf(0.0 to 0.0, c - a - s to q, c - a + s to 1.0, c + a - s to 1.0, c + a + s to q, areaWidth to 0.0)
-            .map { (x, o) -> x.coerceIn(0.0, areaWidth) / areaWidth to o }
+        return listOf(0.0 to 0.0, edge to a, c - half to 1.0, c + half to 1.0, areaWidth - edge to a, areaWidth to 0.0)
+            .map { (x, o) -> x / areaWidth to o }
     }
 
-    fun centreMaskOpacity(x: Double, areaWidth: Double, emPx: Double): Double {
-        val stops = centreMaskStops(areaWidth, emPx)
+    fun centreMaskOpacity(x: Double, areaWidth: Double, emPx: Double, inactive: Double): Double {
+        val stops = centreMaskStops(areaWidth, emPx, inactive)
         if (stops.isEmpty()) return 0.0
         val p = (x / areaWidth).coerceIn(0.0, 1.0)
         var value = stops[0].second

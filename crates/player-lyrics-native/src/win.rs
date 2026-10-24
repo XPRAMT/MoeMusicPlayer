@@ -2298,8 +2298,8 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             .collect();
         let sources: Vec<&crate::LyricLine> = lines.iter().map(|l| l.1).collect();
         let lines: Vec<(f64, &str, &str)> = lines.into_iter().map(|l| l.0).collect();
-        // Word-timed lyrics (ADR 0041 option C): the glide's knots are the word starts and the static centre mask
-        // replaces the edge fade and the line fades. Translations have no word effects: they follow the main row.
+        // Word-timed lyrics (ADR 0041 option C): the glide's knots are the word starts. Line- and word-timed alike see
+        // the static continuous mask (experimental) instead of edge fades and line fades. Translations have no word effects: they follow the main row.
         let word_ranges: Vec<Option<Vec<(usize, usize)>>> =
             sources.iter().map(|l| l.word_ranges()).collect();
         let word_mode = word_ranges.iter().any(Option::is_some);
@@ -2496,13 +2496,12 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             h,
             opacity,
             font as f64 * clip_room,
-            if word_mode {
-                Mask::Centre { em: font as f64 }
-            } else {
-                Mask::Edge
+            Mask::Centre {
+                em: font as f64,
+                inactive: ctx.inactive,
             },
         )?;
-        // The strip glides and every cell fades: sampled per frame from the plan (`Live`), in 1/8 device px steps
+        // The strip glides (opacity is the static mask only): sampled per frame from the plan (`Live`), in 1/8 device px steps
         // and 1/255 opacity steps.
         let strip = gfx.compositor.CreateContainerVisual()?;
         let strip_visual: Visual = strip.cast()?;
@@ -2757,22 +2756,27 @@ struct FadeHost {
 enum Mask {
     /// Line-timed lyrics: the square edge fade (`sampling::edge_fade_stops`).
     Edge,
-    /// Word-timed continuous lyrics (ADR 0041 option C): the centre mask (`rules::centre_mask_stops`) at the main
-    /// row's em, the same for the translation row so both fade at the same places.
-    Centre { em: f64 },
+    /// Continuous mode, line- and word-timed (experimental, ADR 0041 D10): the static mask
+    /// (`rules::centre_mask_stops`) at the main row's em and the inactive-lyrics opacity, the same for the
+    /// translation row so both fade at the same places.
+    Centre { em: f64, inactive: u32 },
 }
 
 impl Mask {
     fn stops(self, area: Area) -> Vec<(f64, f64)> {
         match self {
             Mask::Edge => sampling::edge_fade_stops(area.width, area.height),
-            Mask::Centre { em } => rules::centre_mask_stops(area.width, em),
+            Mask::Centre { em, inactive } => {
+                rules::centre_mask_stops(area.width, em, f64::from(inactive) / 100.0)
+            }
         }
     }
     fn key(self) -> i64 {
         match self {
             Mask::Edge => 0,
-            Mask::Centre { em } => ((em * 64.0).round() as i64) | 1 << 40,
+            Mask::Centre { em, inactive } => {
+                ((em * 64.0).round() as i64) | i64::from(inactive) << 32 | 1 << 48
+            }
         }
     }
 }
