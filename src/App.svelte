@@ -1839,6 +1839,7 @@
     const trackId = taskbarLyricsData?.trackId ?? null;
     if (trackId) void emit('lyrics-native-delay', { trackId, delaySec: loadLyricsTimingOffsetSec(trackId) }).catch(() => {});
     void emit('lyrics-inactive-opacity', lyricsPreferences.inactiveOpacityPercent).catch(() => {});
+    void emit('lyrics-accent-color', themePreferences.accentHex).catch(() => {});
     void emit('floating-lyrics-tips', { lock: tr('鎖定位置（滑鼠穿透）'), unlock: tr('解除鎖定（可移動）') }).catch(() => {});
   }
   $effect(() => {
@@ -1886,6 +1887,13 @@
     const inactiveOpacityPercent = lyricsPreferences.inactiveOpacityPercent;
     if (!isTauri() || !isAndroidPlatform) return;
     void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { inactiveOpacityPercent } }).catch(() => {});
+  });
+  // The theme accent for the native lyrics windows' word highlight (ADR 0041; 「無」 mode lights the word being sung).
+  $effect(() => {
+    const accentColor = themePreferences.accentHex;
+    if (!isTauri()) return;
+    if (isWindowsPlatform) void emit('lyrics-accent-color', accentColor).catch(() => {});
+    if (isAndroidPlatform) void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload: { accentColor } }).catch(() => {});
   });
   // The main window follows changes made from the floating window itself (its lock button).
   $effect(() => {

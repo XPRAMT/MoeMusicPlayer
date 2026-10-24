@@ -180,11 +180,21 @@ export function buildFloatingLyricsNativeData(data, combinedOffsetMs, durationMs
     .map((line, index) => ({ line, index }))
     .filter(({ line }) => typeof line?.startMs === 'number' && Number.isFinite(line.startMs))
     .sort((left, right) => /** @type {number} */ (left.line.startMs) - /** @type {number} */ (right.line.startMs) || left.index - right.index)
-    .map(({ line }) => ({
-      startMs: Math.round(/** @type {number} */ (line.startMs)),
-      text: (line.text ?? '').trim(),
-      translation: (line.translation ?? '').trim(),
-    }));
+    .map(({ line }) => {
+      /** @type {{ startMs: number, text: string, translation: string, words?: { s: number, e: number, t: string }[], lead?: number }} */
+      const out = {
+        startMs: Math.round(/** @type {number} */ (line.startMs)),
+        text: (line.text ?? '').trim(),
+        translation: (line.translation ?? '').trim(),
+      };
+      // Word timing (ADR 0041), untrimmed like the line text it spells; `lead` = UTF-16 units trimmed off the front.
+      const words = /** @type {{ words?: { s: number, e: number, t: string }[] | null }} */ (line).words;
+      if (Array.isArray(words) && words.length > 0 && words.map((word) => word.t).join('') === (line.text ?? '')) {
+        out.words = words.map((word) => ({ s: Math.round(word.s), e: Math.round(word.e), t: word.t }));
+        out.lead = (line.text ?? '').length - (line.text ?? '').trimStart().length;
+      }
+      return out;
+    });
   return {
     trackId: data.trackId,
     offsetMs: Number.isFinite(combinedOffsetMs) ? Math.round(combinedOffsetMs) : 0,

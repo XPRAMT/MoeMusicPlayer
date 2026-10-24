@@ -90,4 +90,54 @@ class LyricsRulesVectorsTest {
                 FloatingLyricsRules.edgeFadeOpacity(c.getDouble("x").toFloat(), w, h), 0.0001f)
         }
     }
+
+    private fun JSONArray.doubles() = DoubleArray(length()) { getDouble(it) }
+    private fun JSONArray.pairs() = (0 until length()).map { getJSONArray(it).let { p -> p.getDouble(0) to p.getDouble(1) } }
+
+    @Test
+    fun wordGlideMaskAndKaraoke() {
+        val g = vectors.getJSONObject("wordGlide")
+        val linesJson = g.getJSONArray("lines")
+        val lines = (0 until linesJson.length()).map { linesJson.getJSONObject(it) }.map {
+            WordLyricsRules.KnotLine(it.getDouble("startMs"), it.getDouble("cellStart"),
+                it.getJSONArray("wordStarts").doubles(), it.getJSONArray("wordCentres").doubles())
+        }
+        val knots = WordLyricsRules.wordGlideKnots(lines)
+        val expected = g.getJSONArray("knots").pairs()
+        assertEquals(expected.size, knots.size)
+        for ((a, e) in knots.zip(expected)) {
+            assertEquals(e.first, a.first, 1e-9)
+            assertEquals(e.second, a.second, 1e-9)
+        }
+        val samples = g.getJSONArray("samples")
+        for (i in 0 until samples.length()) {
+            val s = samples.getJSONObject(i)
+            assertEquals(s.toString(), s.getDouble("expected"),
+                WordLyricsRules.glideOffset(knots, s.getDouble("positionMs"), g.getDouble("target")), 1e-9)
+        }
+        for (c in vectors.cases("centreMask")) {
+            assertEquals(c.toString(), c.getDouble("expected"),
+                WordLyricsRules.centreMaskOpacity(c.getDouble("x"), c.getDouble("areaWidth"), c.getDouble("emPx")), 1e-9)
+        }
+        for (c in vectors.cases("karaoke")) {
+            assertEquals(c.toString(), c.getDouble("expected"),
+                WordLyricsRules.karaokeClipX(c.getJSONArray("spans").pairs(), c.getJSONArray("words").pairs(), c.getDouble("t")), 1e-9)
+        }
+    }
+
+    @Test
+    fun theKaraokeEdgeIsContinuousPerFrame() {
+        val spans = listOf(0.0 to 20.0, 20.0 to 30.0, 34.0 to 60.0)
+        val words = listOf(1000.0 to 1200.0, 1200.0 to 1200.0, 1300.0 to 1500.0)
+        val step = 1000.0 / 240
+        var last = Double.NEGATIVE_INFINITY
+        var t = 900.0
+        while (t <= 1600.0) {
+            val x = WordLyricsRules.karaokeClipX(spans, words, t)
+            org.junit.Assert.assertTrue("$t", x >= last - 1e-12)
+            if (t > 1000 + step && t < 1200) org.junit.Assert.assertTrue("$t", x - last <= 20.0 / 200 * step + 1e-9)
+            last = x
+            t += step
+        }
+    }
 }

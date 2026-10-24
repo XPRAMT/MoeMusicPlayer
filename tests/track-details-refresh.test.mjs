@@ -5,7 +5,7 @@ import test from 'node:test';
 test('saving track details refreshes that one track instead of syncing the library', async () => {
   const app = await readFile(new URL('../src/App.svelte', import.meta.url), 'utf8');
   const start = app.indexOf('async function reloadAfterTrackDetailsSaved(');
-  const body = app.slice(start, app.indexOf('\n  }\n', start));
+  const body = app.slice(start, start + app.slice(start).search(/\r?\n {2}\}\r?\n/));
   assert.ok(start > 0);
   assert.doesNotMatch(body, /syncLibrary\(|library_sync/);
   assert.match(body, /libraryListRevision \+= 1/);

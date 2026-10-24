@@ -3,6 +3,10 @@ package com.moemusicplayer.mediaindex
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.LinearGradient
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Shader
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.view.View
@@ -44,9 +48,80 @@ internal class LyricLineView(context: Context) : View(context) {
     // Each line is rasterised once with its shadow / outline (ADR 0032) and only drawn at its offset while gliding.
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val rasterKeep = HashSet<String>()
-    private val rasters = LineRasterCache<Raster>(::rasterise) { /* dropped; the GC frees it after any frame using it */ }
+    private val rasters = LineRasterCache<Raster>({ value, look -> rasterise(value, look) }) { /* dropped; the GC frees it after any frame using it */ }
 
     private class Raster(val bitmap: Bitmap, val pad: Int)
+
+    // Karaoke (the none mode, ADR 0041): the line is also rasterised in the accent (same shadow / outline, so the cut
+    // between the two images has no seam); the accent image is drawn up to the karaoke edge, the white one after it.
+    private val accentPaint = Paint(paint)
+    private var accent = 0
+    private val accentKeep = HashSet<String>()
+    private val accentRasters = LineRasterCache<Raster>({ value, look -> rasterise(value, look, accentPaint) }) { }
+    private var karaokeSpans: List<Pair<Double, Double>>? = null
+    private var karaokeSpansText = ""
+    private var karaokeEdge = Float.NaN
+    private var karaokeRawEdge = Float.NaN
+
+    // Word-timed continuous lyrics (option C): the static centre mask at this em (0 = none, the line fades instead).
+    private var maskEm = 0f
+    private val maskPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    private var maskKey = Pair(0, 0f)
+
+    fun textSizePx(): Float = paint.textSize
+
+    /** Each word's x range `(left, right)` in `value` drawn in this line's font (`ranges` = UTF-16 `(start, end)`). */
+    fun wordSpans(value: String, ranges: List<Pair<Int, Int>>): List<Pair<Double, Double>> = ranges.map { (a, b) ->
+        val start = a.coerceIn(0, value.length)
+        val end = b.coerceIn(start, value.length)
+        paint.measureText(value, 0, start).toDouble() to paint.measureText(value, 0, end).toDouble()
+    }
+
+    fun setAccent(color: Int) {
+        if (color == accent) return
+        accent = color
+        styleAccent()
+        invalidate()
+    }
+
+    private fun styleAccent() {
+        accentPaint.set(paint)
+        accentPaint.color = accent
+        accentRasters.setLook(LineLook(paint.textSize, accent, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density))
+    }
+
+    /**
+     * The karaoke of the shown line: `ranges` its words' UTF-16 ranges, `times` their times and `lyricsMs` now (null:
+     * the whole line in the text colour). Redrawn only when the edge moves a whole device pixel.
+     */
+    fun setKaraoke(ranges: List<Pair<Int, Int>>?, times: List<Pair<Double, Double>>?, lyricsMs: Double) {
+        if (ranges == null || times == null || text.isEmpty() || stripTexts != null) {
+            if (karaokeSpans != null) {
+                karaokeSpans = null
+                invalidate()
+            }
+            return
+        }
+        if (karaokeSpans == null || karaokeSpansText != text) {
+            karaokeSpans = wordSpans(text, ranges)
+            karaokeSpansText = text
+            karaokeEdge = Float.NaN
+        }
+        val edge = WordLyricsRules.karaokeClipX(karaokeSpans!!, times, lyricsMs).toFloat()
+        if (karaokeEdge.isNaN() || FloatingLyricsRules.needsPixelRedraw(karaokeEdge, edge, karaokeRawEdge)) {
+            karaokeEdge = edge
+            invalidate()
+        }
+        karaokeRawEdge = edge
+    }
+
+    /** The centre mask of word-timed continuous lyrics at `em` px (0: none). */
+    fun setWordMask(em: Float) {
+        if (em == maskEm) return
+        maskEm = em
+        maskKey = Pair(0, 0f)
+        invalidate()
+    }
 
     fun setLook(sizePx: Float, color: Int, align: String, shadowRadius: Float, shadowColor: Int, strokeWidth: Float, strokeColor: Int) {
         val resize = paint.textSize != sizePx || this.shadowRadius != shadowRadius || this.strokeWidth != strokeWidth
@@ -65,6 +140,7 @@ internal class LyricLineView(context: Context) : View(context) {
         styleDim()
         fadeAlpha = -1
         rasters.setLook(LineLook(sizePx, color, shadowRadius, shadowColor, strokeWidth, strokeColor, resources.displayMetrics.density))
+        styleAccent()
         if (resize) requestLayout()
         invalidate()
     }
@@ -147,7 +223,7 @@ internal class LyricLineView(context: Context) : View(context) {
         val changed = texts !== stripTexts || !cells.contentEquals(stripCells) || !widths.contentEquals(stripWidths)
         var fading = false
         var nextStart = 0
-        if (inactiveFactor < 1f) {
+        if (inactiveFactor < 1f && maskEm <= 0f) {
             nextStart = FloatingLyricsRules.firstStartAfter(starts, lyricsMs)
             fading = nextStart != stripNextStart ||
                 (lyricsMs != stripLyricsMs && nextStart < starts.size && starts[nextStart] - lyricsMs < FloatingLyricsRules.STRIP_FADE_MS)
@@ -221,6 +297,19 @@ internal class LyricLineView(context: Context) : View(context) {
         rasterKeep.clear()
         rasterKeep.add(text)
         rasters.retain(rasterKeep)
+        val spans = karaokeSpans
+        if (spans != null && accent != 0 && !karaokeEdge.isNaN()) {
+            // Complementary clips at the karaoke edge: accent before it, the text colour after it.
+            val cut = x + karaokeEdge
+            accentKeep.clear()
+            accentKeep.add(text)
+            accentRasters.retain(accentKeep)
+            canvas.save()
+            canvas.clipRect(-width.toFloat(), -height.toFloat(), cut, 2f * height)
+            drawAccent(canvas, text, x, baseline)
+            canvas.restore()
+            canvas.clipRect(cut, -height.toFloat(), 2f * width, 2f * height)
+        }
         drawText(canvas, text, x, baseline, 1f)
         canvas.restore()
     }
@@ -228,7 +317,8 @@ internal class LyricLineView(context: Context) : View(context) {
     private fun drawStrip(canvas: Canvas, texts: List<String>) {
         val metrics = paint.fontMetrics
         val baseline = (height - (metrics.descent - metrics.ascent)) / 2f - metrics.ascent
-        canvas.save()
+        // With the centre mask the strip is drawn into a layer the mask is applied to (DST_IN).
+        if (maskEm > 0f) canvas.saveLayer(0f, -height.toFloat(), width.toFloat(), 2f * height, null) else canvas.save()
         // The strip is cut at the area's sides; above and below the shadow may reach into the panel's room.
         canvas.clipRect(0, -height, width, 2 * height)
         // Only the cells near the view (one view of margin on each side), not every line of the song.
@@ -243,8 +333,23 @@ internal class LyricLineView(context: Context) : View(context) {
             val cellWidth = stripWidths.getOrElse(index) { 0f }
             if (cell > width || cell + cellWidth < 0f) continue
             val textWidth = paint.measureText(value)
-            val weight = if (inactiveFactor < 1f) FloatingLyricsRules.cellWeight(stripStarts, index, stripLyricsMs) else 1f
+            // The centre mask dims instead of the line fades.
+            val weight = if (inactiveFactor < 1f && maskEm <= 0f) FloatingLyricsRules.cellWeight(stripStarts, index, stripLyricsMs) else 1f
             drawText(canvas, value, cell + FloatingLyricsRules.lineStartX(cellWidth, textWidth, FloatingLyricsRules.STRIP_ALIGN, 0f), baseline, weight)
+        }
+        if (maskEm > 0f) {
+            // DST_IN over the row's layer: one static gradient (rebuilt only when the width or the em changes).
+            if (maskKey != Pair(width, maskEm)) {
+                maskKey = Pair(width, maskEm)
+                val stops = WordLyricsRules.centreMaskStops(width.toDouble(), maskEm.toDouble())
+                maskPaint.shader = if (stops.isEmpty()) null else LinearGradient(
+                    0f, 0f, width.toFloat(), 0f,
+                    IntArray(stops.size) { (Math.round(stops[it].second * 255).toInt().coerceIn(0, 255) shl 24) or 0xffffff },
+                    FloatArray(stops.size) { stops[it].first.toFloat() },
+                    Shader.TileMode.CLAMP,
+                )
+            }
+            canvas.drawRect(0f, -height.toFloat(), width.toFloat(), 2f * height, maskPaint)
         }
         canvas.restore()
     }
@@ -271,8 +376,23 @@ internal class LyricLineView(context: Context) : View(context) {
         canvas.drawText(value, x, baseline, fill)
     }
 
+    private fun drawAccent(canvas: Canvas, value: String, x: Float, baseline: Float) {
+        val raster = accentRasters.get(value)
+        if (raster != null) {
+            bitmapPaint.alpha = 255
+            val top = baseline + paint.fontMetrics.ascent - raster.pad
+            canvas.drawBitmap(raster.bitmap, Math.round(x - raster.pad).toFloat(), Math.round(top).toFloat(), bitmapPaint)
+            return
+        }
+        if (strokeWidth > 0f) {
+            outlinePaint.alpha = android.graphics.Color.alpha(strokeColor)
+            canvas.drawText(value, x, baseline, outlinePaint)
+        }
+        canvas.drawText(value, x, baseline, accentPaint)
+    }
+
     /** `value` with its shadow / outline into an image with room for the blur; null if empty or too large for a texture. */
-    private fun rasterise(value: String, look: LineLook): Raster? {
+    private fun rasterise(value: String, look: LineLook, fill: Paint = paint): Raster? {
         if (value.isEmpty()) return null
         val blur = if (look.shadowRadius > 0f) kotlin.math.ceil(3f * (0.57735f * look.shadowRadius + 0.5f)).toInt() else 0
         val pad = maxOf(blur, kotlin.math.ceil(look.strokeWidth).toInt()) + 1
@@ -287,7 +407,7 @@ internal class LyricLineView(context: Context) : View(context) {
             outlinePaint.alpha = android.graphics.Color.alpha(look.strokeColor)
             target.drawText(value, pad.toFloat(), baseline, outlinePaint)
         }
-        target.drawText(value, pad.toFloat(), baseline, paint)
+        target.drawText(value, pad.toFloat(), baseline, fill)
         return Raster(bitmap, pad)
     }
 

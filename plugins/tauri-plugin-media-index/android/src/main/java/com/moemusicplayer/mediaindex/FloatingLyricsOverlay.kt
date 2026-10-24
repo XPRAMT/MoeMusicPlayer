@@ -44,7 +44,20 @@ object FloatingLyricsOverlay {
         val playing: Boolean = active,
     )
 
-    private class Line(val startMs: Long, val text: String, val translation: String)
+    /**
+     * A lyric line; for a word-timed one (ADR 0041) its words' times (lyrics ms) and UTF-16 ranges `(start, end)` in
+     * the trimmed `text`.
+     */
+    private class Line(
+        val startMs: Long,
+        val text: String,
+        val translation: String,
+        val wordTimes: List<Pair<Double, Double>>? = null,
+        val wordRanges: List<Pair<Int, Int>>? = null,
+    )
+
+    /** The theme accent (karaoke in the none mode, ADR 0041), pushed by the page as `accentColor`. */
+    private var accentColor = 0xffa9c3fe.toInt()
 
     private const val PREFS = "moe_floating_lyrics"
     private const val TICK_MS = 100L
@@ -73,6 +86,8 @@ object FloatingLyricsOverlay {
         val widths: FloatArray,
         val mainWidths: FloatArray,
         val lastGlyphCenters: FloatArray,
+        /** Word-timed lyrics (option C): the glide's knots; null for line-timed lyrics (the line glide). */
+        val wordKnots: List<Pair<Double, Double>>?,
     )
     private var strip: Strip? = null
     private var opacityPercent = 100
@@ -150,6 +165,12 @@ object FloatingLyricsOverlay {
         // lyricsPreferences.inactiveOpacityPercent (10-100), pushed by the page whenever that setting changes.
         if (args.has("inactiveOpacityPercent") && !args.isNull("inactiveOpacityPercent")) {
             applyInactiveOpacity(args.optInt("inactiveOpacityPercent", FloatingLyricsRules.DEFAULT_INACTIVE_OPACITY_PERCENT))
+        }
+        if (args.has("accentColor") && !args.isNull("accentColor")) {
+            FloatingLyricsRules.parseHexColor(args.optString("accentColor"))?.let {
+                accentColor = 0xff000000.toInt() or it
+                mainText?.setAccent(accentColor)
+            }
         }
         if (args.has("setLocked") && !args.isNull("setLocked")) {
             prefs(context).edit().putBoolean("locked", args.optBoolean("setLocked")).apply()
@@ -233,7 +254,28 @@ object FloatingLyricsOverlay {
         if (array != null) {
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
-                parsed.add(Line(item.optLong("startMs"), item.optString("text", ""), item.optString("translation", "")))
+                val text = item.optString("text", "")
+                var times: List<Pair<Double, Double>>? = null
+                var ranges: List<Pair<Int, Int>>? = null
+                item.optJSONArray("words")?.let { words ->
+                    // The words spell the untrimmed line; `lead` UTF-16 units were trimmed off its front.
+                    val lead = item.optInt("lead", 0)
+                    var at = 0
+                    val t = ArrayList<Pair<Double, Double>>()
+                    val r = ArrayList<Pair<Int, Int>>()
+                    for (w in 0 until words.length()) {
+                        val word = words.optJSONObject(w) ?: continue
+                        val len = word.optString("t", "").length
+                        t.add(word.optDouble("s") to word.optDouble("e"))
+                        r.add((at - lead).coerceIn(0, text.length) to (at + len - lead).coerceIn(0, text.length))
+                        at += len
+                    }
+                    if (t.isNotEmpty()) {
+                        times = t
+                        ranges = r
+                    }
+                }
+                parsed.add(Line(item.optLong("startMs"), text, item.optString("translation", ""), times, ranges))
             }
         }
         parsed.sortBy { it.startMs }
@@ -571,6 +613,7 @@ object FloatingLyricsOverlay {
             val strokeWidth = if (effectiveEffect == "stroke") maxOf(1f, px * 0.08f) else 0f
             val strokeColor = if (effectiveEffect == "stroke") 0x80000000.toInt() or effect else 0
             view.setLook(px, 0xff000000.toInt() or color, align, radius, shadow, strokeWidth, strokeColor)
+            if (view === mainText) view.setAccent(accentColor)
             view.setInactiveFactor(FloatingLyricsRules.inactiveFactor(animation, inactiveOpacityPercent, 0f))
         }
     }
@@ -648,9 +691,21 @@ object FloatingLyricsOverlay {
 
         var sliding = false
         mainText?.let {
+            it.setWordMask(0f)
             it.setLine(shown, progress)
             sliding = it.overflows()
+            // Word-timed line: karaoke (sung words and the sung part of the current word in the accent).
+            val times = line?.wordTimes
+            val ranges = line?.wordRanges
+            if (times != null && ranges != null && shown == text && sample != null) {
+                val lyricsMs = (sample.positionMs + offsetMs).toDouble()
+                it.setKaraoke(ranges, times, lyricsMs)
+                if (sample.playing && WordLyricsRules.wiping(times, lyricsMs)) sliding = true
+            } else {
+                it.setKaraoke(null, null, 0.0)
+            }
         }
+        translationText?.setWordMask(0f)
         translationText?.let {
             it.visibility = if (translation.isEmpty()) View.GONE else View.VISIBLE
             it.setLine(translation, progress)
@@ -665,11 +720,13 @@ object FloatingLyricsOverlay {
      */
     private fun stripFor(main: LyricLineView, second: LyricLineView?): Strip? {
         val key = listOf(lines, showTranslation, main.textWidth("\u3000"), second?.textWidth("\u3000"))
+        main.setKaraoke(null, null, 0.0)
         strip?.let { if (it.key == key) return it }
-        val kept = lines.mapNotNull { line ->
-            val text = line.text.trim()
-            val translation = if (showTranslation) line.translation.trim() else ""
-            if (text.isEmpty() && translation.isEmpty()) null else Triple(line.startMs, text, translation)
+        val keptLines = lines.filter { line ->
+            line.text.trim().isNotEmpty() || (showTranslation && line.translation.trim().isNotEmpty())
+        }
+        val kept = keptLines.map { line ->
+            Triple(line.startMs, line.text.trim(), if (showTranslation) line.translation.trim() else "")
         }
         if (kept.isEmpty()) return null
         val texts = kept.map { it.second }
@@ -681,7 +738,24 @@ object FloatingLyricsOverlay {
             FloatArray(kept.size) { second?.textWidth(translations[it]) ?: 0f },
             main.textWidth("\u3000"),
         )
-        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths, mainWidths, lastGlyphCenters).also { strip = it }
+        // Word-timed lyrics (ADR 0041 option C): knots at the word starts (each word's centre in its cell). The
+        // translation strip has none of its own: it shares the main strip's offset.
+        val wordKnots = if (keptLines.any { it.wordRanges != null }) {
+            WordLyricsRules.wordGlideKnots(keptLines.mapIndexed { i, line ->
+                val ranges = line.wordRanges
+                val times = line.wordTimes
+                if (ranges != null && times != null && ranges.size == times.size) {
+                    val centres = main.wordSpans(texts[i], ranges).map { (l, r) -> (l + r) / 2.0 }
+                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(),
+                        DoubleArray(times.size) { times[it].first }, centres.toDoubleArray())
+                } else {
+                    WordLyricsRules.KnotLine(line.startMs.toDouble(), cells[i].toDouble(), DoubleArray(0), DoubleArray(0))
+                }
+            })
+        } else {
+            null
+        }
+        return Strip(key, LongArray(kept.size) { kept[it].first }, texts, translations, cells, widths, mainWidths, lastGlyphCenters, wordKnots).also { strip = it }
     }
 
     /** Continuous animation: draw both strips at the current place; false when there is nothing to draw as a strip. */
@@ -698,11 +772,20 @@ object FloatingLyricsOverlay {
                 trackEndAtLyricsMs,
             )
         }
-        val offset = FloatingLyricsRules.stripOffset(
-            current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,
-            lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET,
-            finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters,
-        )
+        val knots = current.wordKnots
+        val offset = if (knots != null) {
+            WordLyricsRules.glideOffset(knots, lyricsMs.toDouble(), main.availableWidth() / 2.0).toFloat()
+        } else {
+            FloatingLyricsRules.stripOffset(
+                current.starts, current.cells, current.widths, FloatingLyricsRules.STRIP_ALIGN,
+                lyricsMs, main.availableWidth(), FloatingLyricsRules.STRIP_TARGET,
+                finalArrivalAtLyricsMs, current.mainWidths, current.lastGlyphCenters,
+            )
+        }
+        // Word-timed: the static centre mask at the main row's em on both rows, instead of the line fades.
+        val em = if (knots != null) main.textSizePx() else 0f
+        main.setWordMask(em)
+        translationText?.setWordMask(em)
         view.visibility = View.VISIBLE
         main.setStrip(current.texts, current.cells, current.widths, offset, current.starts, lyricsMs)
         translationText?.let {
