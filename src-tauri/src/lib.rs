@@ -9392,18 +9392,20 @@ async fn library_get_track_artwork(
                 .track_locators(id)
                 .map_err(|error| error.to_string())?
         };
-        let locators_for_check = locators.clone();
-        let artwork = tauri::async_runtime::spawn_blocking(move || find_artwork(&locators))
-            .await
-            .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
+        // The check of the server (a network call) runs on the blocking worker too: never on the async runtime, whose few
+        // threads every other command (playback, lists) needs.
+        let (artwork, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
+            let artwork = find_artwork(&locators);
+            let may_have_failed = matches!(artwork, ArtworkLookup::Missing)
+                && remote_cover_lookup_may_have_failed(&locators);
+            (artwork, may_have_failed)
+        })
+        .await
+        .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
         match artwork {
             ArtworkLookup::Found(image) => Ok(Response::new(image.into_bytes())),
-            ArtworkLookup::Missing => {
-                if remote_cover_lookup_may_have_failed(&locators_for_check) {
-                    return Err("REMOTE_UNAVAILABLE".to_owned());
-                }
-                Ok(Response::new(Vec::new()))
-            }
+            ArtworkLookup::Missing if may_have_failed => Err("REMOTE_UNAVAILABLE".to_owned()),
+            ArtworkLookup::Missing => Ok(Response::new(Vec::new())),
             ArtworkLookup::Oversized => Err("ARTWORK_TOO_LARGE".to_owned()),
         }
     }
@@ -9420,9 +9422,11 @@ async fn library_get_track_artwork(
             .track_locators(id)
             .map_err(|error| error.to_string())?;
         let tree_uris: Vec<String> = Vec::new();
-        let locators_for_check = locators.clone();
-        let artwork = tauri::async_runtime::spawn_blocking(move || {
-            find_android_artwork(&app, &locators, &tree_uris)
+        let (artwork, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
+            let artwork = find_android_artwork(&app, &locators, &tree_uris);
+            let may_have_failed = matches!(artwork, Err(android_artwork::ArtworkError::Missing))
+                && remote_cover_lookup_may_have_failed(&locators);
+            (artwork, may_have_failed)
         })
         .await
         .map_err(|error| format!("封面讀取工作失敗：{error}"))?;
@@ -9436,12 +9440,10 @@ async fn library_get_track_artwork(
         );
         match artwork {
             Ok(image) => Ok(Response::new(image.into_bytes())),
-            Err(android_artwork::ArtworkError::Missing) => {
-                if remote_cover_lookup_may_have_failed(&locators_for_check) {
-                    return Err("REMOTE_UNAVAILABLE".to_owned());
-                }
-                Ok(Response::new(Vec::new()))
+            Err(android_artwork::ArtworkError::Missing) if may_have_failed => {
+                Err("REMOTE_UNAVAILABLE".to_owned())
             }
+            Err(android_artwork::ArtworkError::Missing) => Ok(Response::new(Vec::new())),
             Err(android_artwork::ArtworkError::Oversized) => Err("ARTWORK_TOO_LARGE".to_owned()),
             Err(android_artwork::ArtworkError::Invalid) => Ok(Response::new(Vec::new())),
         }

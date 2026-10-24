@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use player_core::{MediaLocator, SourceId};
 use player_remote::account::{CredentialVault, RemoteAccount, RemoteProtocol};
@@ -28,9 +29,26 @@ fn fingerprint(account: &RemoteAccount) -> String {
     )
 }
 
+/// How long a server that could not be reached is left alone: every use in that time fails at once instead of waiting
+/// for another connection attempt to time out.
+pub(crate) const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(15);
+
+/// One account's connection: its own lock (so connecting to one server never waits on another, and nothing else in the
+/// app waits on it), the open connection, and when connecting last failed on the network.
+struct AccountSlot {
+    print: String,
+    state: Mutex<SlotState>,
+}
+
+#[derive(Default)]
+struct SlotState {
+    fs: Option<Arc<dyn RemoteFs>>,
+    unreachable: Option<(Instant, String)>,
+}
+
 #[derive(Default)]
 pub(crate) struct RemoteConnections {
-    open: Mutex<HashMap<String, (String, Arc<dyn RemoteFs>)>>,
+    open: Mutex<HashMap<String, Arc<AccountSlot>>>,
 }
 
 impl RemoteConnections {
@@ -40,18 +58,54 @@ impl RemoteConnections {
         data_dir: &Path,
         account: &RemoteAccount,
     ) -> Result<Arc<dyn RemoteFs>, RemoteError> {
+        self.connect_with(account, || connect_account(data_dir, account))
+    }
+
+    /// [`connect`](Self::connect) with the way to make a connection given (tests).
+    fn connect_with(
+        &self,
+        account: &RemoteAccount,
+        make: impl FnOnce() -> Result<Arc<dyn RemoteFs>, RemoteError>,
+    ) -> Result<Arc<dyn RemoteFs>, RemoteError> {
         let print = fingerprint(account);
-        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((existing, fs)) = open.get(&account.id) {
-            if *existing == print {
-                return Ok(Arc::clone(fs));
+        // The map is locked only to find the account's slot, never while connecting.
+        let slot = {
+            let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+            match open.get(&account.id) {
+                Some(slot) if slot.print == print => Arc::clone(slot),
+                _ => {
+                    let slot = Arc::new(AccountSlot {
+                        print,
+                        state: Mutex::new(SlotState::default()),
+                    });
+                    open.insert(account.id.clone(), Arc::clone(&slot));
+                    slot
+                }
+            }
+        };
+        // The account's own lock is held while connecting: a second caller for the same account waits for this
+        // connection instead of making another, which is what a scan's parallel readers need.
+        let mut state = slot.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(fs) = &state.fs {
+            return Ok(Arc::clone(fs));
+        }
+        if let Some((since, message)) = &state.unreachable {
+            if since.elapsed() < UNREACHABLE_BACKOFF {
+                return Err(RemoteError::Network(message.clone()));
             }
         }
-        // The lock is held while connecting: a second caller for the same account waits for this connection instead
-        // of making another, which is what a scan's parallel readers need.
-        let fs = connect_account(data_dir, account)?;
-        open.insert(account.id.clone(), (print, Arc::clone(&fs)));
-        Ok(fs)
+        match make() {
+            Ok(fs) => {
+                state.fs = Some(Arc::clone(&fs));
+                state.unreachable = None;
+                Ok(fs)
+            }
+            Err(RemoteError::Network(message)) => {
+                state.unreachable = Some((Instant::now(), message.clone()));
+                Err(RemoteError::Network(message))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Forget an account's connection (it was edited, deleted or failed).
@@ -752,5 +806,72 @@ mod real_server_tests {
         if let Err(panic) = result {
             std::panic::resume_unwind(panic);
         }
+    }
+}
+
+#[cfg(test)]
+mod unreachable_server_tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use player_remote::account::{RemoteAccount, RemoteProtocol};
+    use player_remote::fs::{RemoteError, RemoteFs};
+    use player_remote::local::DirFs;
+
+    use super::RemoteConnections;
+
+    fn account(id: &str, host: &str) -> RemoteAccount {
+        RemoteAccount {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            protocol: RemoteProtocol::Smb,
+            host: host.to_owned(),
+            port: None,
+            path: "share".to_owned(),
+            username: String::new(),
+            password: None,
+            tls: Default::default(),
+            only_on_wifi: false,
+        }
+    }
+
+    /// A server that does not answer: connecting to it hangs, then fails on the network.
+    fn hanging_connect() -> Result<Arc<dyn RemoteFs>, RemoteError> {
+        std::thread::sleep(Duration::from_millis(800));
+        Err(RemoteError::Network("timed out".to_owned()))
+    }
+
+    #[test]
+    fn an_unreachable_server_neither_blocks_another_account_nor_is_waited_for_twice() {
+        let connections = Arc::new(RemoteConnections::default());
+        let down = account("down", "10.255.255.1");
+        let up = account("up", "127.0.0.1");
+
+        let hanging = {
+            let connections = Arc::clone(&connections);
+            let down = down.clone();
+            std::thread::spawn(move || connections.connect_with(&down, hanging_connect))
+        };
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Another account connects while the first one hangs: it does not wait for it.
+        let started = Instant::now();
+        let dir = std::env::temp_dir();
+        let fs = connections.connect_with(&up, || Ok(Arc::new(DirFs::new(dir)) as Arc<dyn RemoteFs>));
+        assert!(fs.is_ok());
+        assert!(started.elapsed() < Duration::from_millis(200), "{:?}", started.elapsed());
+
+        assert!(matches!(hanging.join().unwrap(), Err(RemoteError::Network(_))));
+
+        // The server that just failed is not tried again for a while: callers are told at once.
+        let started = Instant::now();
+        let again = connections.connect_with(&down, || panic!("must not reconnect while the server is known down"));
+        assert!(matches!(again, Err(RemoteError::Network(_))));
+        assert!(started.elapsed() < Duration::from_millis(50), "{:?}", started.elapsed());
+
+        // Forgetting the account (it was edited) lets the next use try again.
+        connections.forget("down");
+        let retried = connections.connect_with(&down, || Err(RemoteError::Network("still down".to_owned())));
+        assert!(matches!(retried, Err(RemoteError::Network(message)) if message == "still down"));
     }
 }

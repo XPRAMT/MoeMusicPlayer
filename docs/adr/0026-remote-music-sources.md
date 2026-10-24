@@ -1,4 +1,4 @@
-# Remote music sources: SMB, WebDAV and FTP
+﻿# Remote music sources: SMB, WebDAV and FTP
 
 Status: Accepted on 2026-10-20 (the owner's answers are recorded under Decisions); SMB and WebDAV are implemented on Windows and Android and verified against a real SMB server, GUI and on-device acceptance are still to do (see Progress)
 
@@ -149,3 +149,5 @@ Real songs from the library are served by loopback servers (a WebDAV server, an 
 - **收藏到伺服器清單**：收藏浮出面板列出遠端清單，勾選＝改寫伺服器檔（`crates/player-remote/src/playlist_edit.rs` 的 `edit_playlist_file`：寫入前才 `stat`＋讀取，保留編碼〔UTF-8 有無 BOM、`.m3u` 的 UTF-16〕、換行與未動到的行，非 UTF-8 拒絕；多數條目為絕對路徑卻無對應規則時拒絕寫入）。插入位置與本機收藏共用 `player_core::playlist::favorite_insertion_index`（比較函式 `player_db::natural_title_cmp`：接在同資料夾最後一條之後，否則往上找最近群組，否則放最後）；只有檔案本來有 `#EXTINF`（或全新空檔）才寫 `#EXTINF`；移除刪該條目與緊鄰的 `#EXTINF`。應用層 `src-tauri/src/remote_favorites.rs`（`favorites_get_playlists`／`favorites_set_membership`）：曲目須屬同一帳號（`server_path_of_track`），否則清單停用並給 `FavoritePlaylistDto.reason`（`notOnServer`／`noAccount`）；寫入後一律重跑 `sync_remote_playlist_source`。遠端清單不算「我的最愛」。真實伺服器寫入、Android 裝置實測未驗證。
 
 - **單一備份（本機與遠端一致）**：每次改寫播放清單檔（遠端清單、本機收藏含 `MyLove.m3u8`）只保留一份改寫前版本「原檔名＋`.bak`」：新內容先寫 `.moetmp-<檔名>` 並核對 → 刪舊 `.bak` → 原檔改名 `.bak` → 暫存改名為原檔名，失敗就還原；讀取後被改動的檔案拒絕寫入且不產生備份。遠端 `RemoteFs::replace_file_keeping_backup`（`rename_file`：SMB `FileRenameInformation`、WebDAV `MOVE` 加 `Overwrite: F`、`DirFs` `std::fs::rename`），本機 `favorites.rs` 的 `write_keeping_backup`。`.bak` 不被當成播放清單（`is_playlist_name`）。`playlist_export` 不產生備份。SMB／WebDAV 上的備份順序未在真實伺服器驗證。
+
+- **連不上的伺服器不得拖累其他工作**：`RemoteConnections` 每個帳號一把鎖，只在找帳號時鎖整張表，連線（最多 `CONNECT_TIMEOUT`）期間不擋其他帳號與本機工作；連線因網路失敗就記下時間，`UNREACHABLE_BACKOFF` 內該帳號的所有使用（封面、歌詞、播放、掃描）立即回 `Network` 錯誤，不各自再等一次逾時（原本全域鎖下每個呼叫依序各等約 10 秒）；編輯或刪除帳號（`forget`）清除記錄。會連伺服器的判斷（例如 `remote_cover_lookup_may_have_failed`）只在 `spawn_blocking` 執行，不在 Tauri 非同步執行緒，也不在持有資料庫連線時執行。既有規則不變：伺服器連不上時不把遠端封面記成「沒有封面」。
