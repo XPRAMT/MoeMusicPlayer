@@ -46,6 +46,16 @@ class PlaybackService : MediaSessionService() {
         ArrayBlockingQueue(1),
         { runnable -> Thread(runnable, "moe-playback-artwork").apply { isDaemon = true } },
     )
+    // The covers of remote tracks wait on a server, so they have a worker of their own: a local track chosen next must
+    // not queue its artwork behind a server that does not answer.
+    private val remoteCoverExecutor = ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(1),
+        { runnable -> Thread(runnable, "moe-playback-remote-cover").apply { isDaemon = true } },
+    )
     private lateinit var pollThread: HandlerThread
     private lateinit var pollHandler: Handler
     private var exoPlayer: ExoPlayer? = null
@@ -55,14 +65,14 @@ class PlaybackService : MediaSessionService() {
     private var queueCapabilities = QueueCapabilities(canNext = false, canPrevious = false)
     private var stopped = false
     private var endedEventLoadInstance: Long? = null
-    private var pendingLoadAck: JSONObject? = null
+    @Volatile private var pendingLoadAck: JSONObject? = null
     private var expectedLoadCommandId: String? = null
     private var loadInstance = 0L
     private var lastSnapshotSentAt = 0L
     @Volatile private var serviceDestroyed = false
     private var serviceGeneration = 0L
     private val loadFence = PlaybackLoadFence()
-    private var artworkPreparationCommandId: String? = null
+    @Volatile private var artworkPreparationCommandId: String? = null
     private var artworkPreparationFuture: java.util.concurrent.Future<*>? = null
     @Volatile private var playbackActive = false
     private val loadAckTimeout = Runnable {
@@ -158,7 +168,7 @@ class PlaybackService : MediaSessionService() {
                     loadFence.finish(expectedLoadCommandId)
                     expectedLoadCommandId = null
                     mainHandler.removeCallbacks(loadAckTimeout)
-                    ack.put("error", error.message ?: "Android audio decoder failed")
+                    ack.put("error", remoteLinkLostMessage(error) ?: error.message ?: "Android audio decoder failed")
                     sendAck(ack)
                 }
                 reportSnapshot()
@@ -224,6 +234,7 @@ class PlaybackService : MediaSessionService() {
         mainHandler.removeCallbacks(artworkPreparationTimeout)
         artworkPreparationFuture?.cancel(true)
         artworkExecutor.shutdownNow()
+        remoteCoverExecutor.shutdownNow()
         artworkPreparationCommandId?.let { commandId ->
             reportEvent(JSONObject().apply {
                 put("kind", "ack")
@@ -256,7 +267,10 @@ class PlaybackService : MediaSessionService() {
     private fun scheduleCommandPoll(delayMs: Long) {
         pollHandler.postDelayed({
             if (serviceDestroyed) return@postDelayed
-        if (commandInFlight.compareAndSet(false, true)) {
+            val acquired = commandInFlight.compareAndSet(false, true)
+            // A load that is still being awaited (a slow server) does not hold the next command back: a newer choice of
+            // track takes over from it (Rust gave up waiting for the old one).
+            if (acquired || PlaybackCommandGate.mayPreempt(pendingLoadAck != null, artworkPreparationCommandId != null)) {
                 val command = try {
                     nativePollPlaybackCommand()
                 } catch (_: UnsatisfiedLinkError) {
@@ -268,7 +282,7 @@ class PlaybackService : MediaSessionService() {
                     mainHandler.post {
                         if (serviceDestroyed) commandInFlight.set(false) else dispatchCommand(command)
                     }
-                } else {
+                } else if (acquired) {
                     commandInFlight.set(false)
                 }
             }
@@ -437,6 +451,8 @@ class PlaybackService : MediaSessionService() {
             fetchRemoteArtwork(contentUri, command.optString("trackId"))
             return
         }
+        // A load whose artwork is still being prepared is replaced by this one.
+        artworkPreparationFuture?.cancel(true)
         artworkPreparationCommandId = commandId
         artworkPreparationRequestId = requestId
         mainHandler.removeCallbacks(artworkPreparationTimeout)
@@ -473,7 +489,7 @@ class PlaybackService : MediaSessionService() {
     /** Put the cover of the remote track [trackId] on the playing item once Rust has read it (see [dispatchCommand]). */
     private fun fetchRemoteArtwork(contentUri: String, trackId: String) {
         try {
-            artworkExecutor.submit {
+            remoteCoverExecutor.submit {
                 val bytes = try {
                     DsdBridge.nativeRemoteCover(contentUri)?.takeIf { it.size <= MAX_NOTIFICATION_SOURCE_BYTES }
                         ?.let { createNotificationArtwork(it) }

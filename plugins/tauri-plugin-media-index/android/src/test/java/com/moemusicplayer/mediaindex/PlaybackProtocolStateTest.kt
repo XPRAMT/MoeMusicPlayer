@@ -99,4 +99,14 @@ class PlaybackProtocolStateTest {
             playbackStateName(true, false, false, true, true, false, false, true),
         )
         assertEquals("empty", playbackStateName(false, false, false, true, true, false, false, false))
-    }}
+    }
+
+    @Test
+    fun aLoadThatIsOnlyWaitingDoesNotHoldBackTheNextCommand() {
+        // A track on a slow server: its load waits for the source; the next choice of track must still be fetched.
+        assertTrue(PlaybackCommandGate.mayPreempt(loadAwaitingReady = true, artworkPreparing = false))
+        assertTrue(PlaybackCommandGate.mayPreempt(loadAwaitingReady = false, artworkPreparing = true))
+        // Any other command in flight (a seek, a pause) still holds the next one back.
+        assertFalse(PlaybackCommandGate.mayPreempt(loadAwaitingReady = false, artworkPreparing = false))
+    }
+}

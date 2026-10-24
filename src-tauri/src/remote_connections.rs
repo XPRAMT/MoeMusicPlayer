@@ -461,7 +461,9 @@ impl player_core::RemoteContent for RemoteFiles {
         path: &str,
     ) -> std::io::Result<player_core::RemoteFileHandle> {
         let file = self.cached_file(source_id, path, true)?;
-        let reader = player_remote::prefetch::PrefetchReader::new(file);
+        // Opened by a load that a newer choice of track replaces: its reads end at once (a stream that is playing is not cut).
+        let reader = player_remote::prefetch::PrefetchReader::new(file)
+            .with_cancel(player_core::load_cancel());
         let len = reader.len();
         Ok(player_core::RemoteFileHandle {
             reader: Box::new(reader),

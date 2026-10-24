@@ -592,6 +592,14 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_network_error_reads_as_unreachable_to_the_players() {
+        let error = io::Error::from(RemoteError::Network("No route to host".to_owned()));
+        assert!(player_core::is_remote_network_error(&error));
+        assert!(player_core::is_remote_unreachable(&error.to_string()));
+        assert!(!player_core::is_remote_unreachable(&RemoteError::NotFound.to_string()));
+    }
+
     use super::testing::*;
     use super::*;
 

@@ -586,6 +586,8 @@ struct PlayerInner {
     worker_exited: Mutex<Receiver<()>>,
     /// Shared with the native backend factory; `None` for injected backends.
     resampling: Option<Arc<ResamplingConfig>>,
+    /// Numbers the loads asked for, so the worker can drop one that a newer choice replaced.
+    loads: player_core::LoadCounter,
 }
 
 /// Opaque identity assigned by the application to one TrackId for this
@@ -763,6 +765,8 @@ impl PlayerHandle {
         let (event_tx, event_rx) = mpsc::sync_channel(EVENT_CAPACITY);
         let accounting = Arc::new(PlaybackAccountingShared::default());
         let worker_accounting = Arc::clone(&accounting);
+        let loads = player_core::LoadCounter::new();
+        let worker_loads = loads.clone();
         let (exit_tx, exit_rx) = mpsc::sync_channel::<()>(0);
         let worker = thread::Builder::new()
             .name("moe-audio-player".to_owned())
@@ -775,6 +779,7 @@ impl PlayerHandle {
                     worker_snapshot,
                     event_tx,
                     worker_accounting,
+                    worker_loads,
                 )
             })
             .map_err(|error| AudioError::WorkerStart(error.to_string()))?;
@@ -788,6 +793,7 @@ impl PlayerHandle {
                 worker: Mutex::new(Some(worker)),
                 worker_exited: Mutex::new(exit_rx),
                 resampling,
+                loads,
             }),
         })
     }
@@ -1060,9 +1066,18 @@ impl PlayerHandle {
         command: Command,
         acknowledgement: Option<SyncSender<Result<PlaybackSnapshot, AudioError>>>,
     ) -> Result<(), AudioError> {
+        let load_number = if matches!(
+            command,
+            Command::Load(..) | Command::LoadAndPlay(..) | Command::LoadPreservingPlayback(..)
+        ) {
+            self.inner.loads.note_requested()
+        } else {
+            0
+        };
         match self.inner.commands.try_send(QueuedCommand {
             command,
             acknowledgement,
+            load_number,
         }) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(AudioError::CommandQueueFull),
@@ -1074,6 +1089,8 @@ impl PlayerHandle {
 struct QueuedCommand {
     command: Command,
     acknowledgement: Option<SyncSender<Result<PlaybackSnapshot, AudioError>>>,
+    /// The number of a load command (`LoadCounter::note_requested`), 0 for any other.
+    load_number: u64,
 }
 
 impl Drop for PlayerInner {
@@ -1084,6 +1101,7 @@ impl Drop for PlayerInner {
         let mut shutdown = QueuedCommand {
             command: Command::Shutdown,
             acknowledgement: None,
+            load_number: 0,
         };
         loop {
             match self.commands.try_send(shutdown) {
@@ -1213,6 +1231,7 @@ fn worker_loop(
     snapshot: Arc<RwLock<PlaybackSnapshot>>,
     events: SyncSender<AudioEvent>,
     accounting: Arc<PlaybackAccountingShared>,
+    loads: player_core::LoadCounter,
 ) {
     let mut backend = match source.create() {
         Ok(mut backend) => {
@@ -1259,7 +1278,16 @@ fn worker_loop(
                 if let Command::SetResampling(mode) = &queued.command {
                     supervisor.resampling_mode = Some(*mode);
                 }
-                let result = if backend.is_none() && supervisor.recovery.is_some() {
+                // A load that a newer one has already replaced is not started; one that is replaced while it opens a
+                // remote file gives up at its next read (`player_core::begin_load`).
+                let superseded_before_start =
+                    queued.load_number != 0 && !player_core::begin_load(&loads, queued.load_number);
+                let result = if superseded_before_start {
+                    Err(AudioError::FileOpen {
+                        path: PathBuf::new(),
+                        message: player_core::LOAD_SUPERSEDED.to_owned(),
+                    })
+                } else if backend.is_none() && supervisor.recovery.is_some() {
                     handle_command_during_recovery(
                         queued.command,
                         &mut supervisor,
@@ -1279,6 +1307,9 @@ fn worker_loop(
                         &events,
                     )
                 };
+                if queued.load_number != 0 {
+                    player_core::end_load();
+                }
                 update_position(&mut backend, &snapshot, &events, &mut meter);
                 if let Some(acknowledgement) = queued.acknowledgement {
                     let response = result.map(|()| read_snapshot(&snapshot));
@@ -1623,7 +1654,7 @@ fn handle_command(
                     let _ = backend.stop();
                     *current_path = None;
                     meter.activate(None, None);
-                    set_error(snapshot, events, error.clone());
+                    report_load_failure(snapshot, events, &error);
                     return Err(error);
                 }
             }
@@ -1650,7 +1681,7 @@ fn handle_command(
                     let _ = backend.stop();
                     *current_path = None;
                     meter.activate(None, None);
-                    set_error(snapshot, events, error.clone());
+                    report_load_failure(snapshot, events, &error);
                     return Err(error);
                 }
             }
@@ -1686,7 +1717,7 @@ fn handle_command(
                     let _ = backend.stop();
                     *current_path = None;
                     meter.activate(None, None);
-                    set_error(snapshot, events, error.clone());
+                    report_load_failure(snapshot, events, &error);
                     return Err(error);
                 }
             }
@@ -2183,6 +2214,19 @@ fn set_state(
     state: PlaybackState,
 ) {
     update_snapshot(snapshot, events, |snapshot| snapshot.state = state);
+}
+
+/// A load failed. When a newer one has replaced it nothing is reported (the user already chose another track).
+fn report_load_failure(
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+    error: &AudioError,
+) {
+    if player_core::running_load_superseded() {
+        set_state(snapshot, events, PlaybackState::Empty);
+    } else {
+        set_error(snapshot, events, error.clone());
+    }
 }
 
 fn set_error(
@@ -3450,6 +3494,101 @@ mod tests {
         fn is_empty(&self) -> bool {
             true
         }
+    }
+
+    /// A backend that loads `slow.*` like a remote file on a server that does not answer: it waits for the network until
+    /// the load is replaced (as a `PrefetchReader` with the load's cancel does), then fails.
+    struct SlowRemoteBackend {
+        loaded: bool,
+    }
+
+    impl AudioBackend for SlowRemoteBackend {
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.loaded = false;
+            if path.to_string_lossy().starts_with("slow") {
+                let cancel = player_core::load_cancel().expect("a numbered load is running");
+                let started = Instant::now();
+                while !cancel() {
+                    assert!(started.elapsed() < Duration::from_secs(5), "never replaced");
+                    thread::sleep(Duration::from_millis(5));
+                }
+                return Err(AudioError::FileOpen {
+                    path: path.to_path_buf(),
+                    message: player_core::LOAD_SUPERSEDED.to_owned(),
+                });
+            }
+            self.loaded = true;
+            Ok(Some(Duration::from_secs(1)))
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.loaded = false;
+            Ok(())
+        }
+        fn seek(&mut self, position: Duration) -> Result<Duration, AudioError> {
+            Ok(position)
+        }
+        fn set_volume(&mut self, _volume: f32) -> Result<(), AudioError> {
+            Ok(())
+        }
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn is_empty(&self) -> bool {
+            !self.loaded
+        }
+    }
+
+    #[test]
+    fn a_newer_load_replaces_one_that_waits_for_a_server_and_reports_nothing_for_it() {
+        let player = PlayerHandle::with_backend_factory(|| {
+            Ok(Box::new(SlowRemoteBackend { loaded: false }))
+        })
+        .unwrap();
+        wait_for(&player, PlaybackState::Empty);
+
+        let slow = player.request_load_and_play("slow-remote").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        let local = player.request_load_and_play("local").unwrap();
+
+        // The replaced load answers at once, with an error nobody shows; the newer one plays.
+        assert!(slow.wait(Duration::from_secs(2)).is_err());
+        assert!(local.wait(Duration::from_secs(2)).is_ok());
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.state, PlaybackState::Playing);
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    }
+
+    #[test]
+    fn a_load_replaced_before_it_starts_is_skipped() {
+        let (started, release) = (mpsc::channel(), mpsc::channel());
+        let player = PlayerHandle::with_backend_factory(move || {
+            Ok(Box::new(BlockingLoadBackend {
+                started: started.0,
+                release: release.1,
+            }))
+        })
+        .unwrap();
+        wait_for(&player, PlaybackState::Empty);
+        let first = player.request_load_and_play("first").unwrap();
+        started.1.recv_timeout(Duration::from_secs(2)).unwrap();
+        // Two more are asked for while the first one is being opened: only the newest is started.
+        let skipped = player.request_load_and_play("second").unwrap();
+        let newest = player.request_load_and_play("third").unwrap();
+        release.0.send(()).unwrap();
+        assert!(first.wait(Duration::from_secs(2)).is_ok());
+        assert!(skipped.wait(Duration::from_secs(2)).is_err());
+        started.1.recv_timeout(Duration::from_secs(2)).unwrap();
+        release.0.send(()).unwrap();
+        assert!(newest.wait(Duration::from_secs(2)).is_ok());
+        assert!(started.1.try_recv().is_err(), "the skipped load never reached the backend");
     }
 
     #[test]

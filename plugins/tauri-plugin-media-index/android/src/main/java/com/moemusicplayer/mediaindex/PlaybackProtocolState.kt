@@ -29,6 +29,13 @@ internal class PlaybackLoadFence {
     fun cancel(commandId: String?): Boolean = finish(commandId)
 }
 
+/** Which commands the service may fetch while another one has not been answered yet. */
+internal object PlaybackCommandGate {
+    /** A load that is only waiting (for the media source to become ready, or for its artwork) can be replaced by the next command. */
+    fun mayPreempt(loadAwaitingReady: Boolean, artworkPreparing: Boolean): Boolean =
+        loadAwaitingReady || artworkPreparing
+}
+
 internal data class QueueCapabilities(val canNext: Boolean, val canPrevious: Boolean) {
     fun allowsNext(): Boolean = canNext
     fun allowsPrevious(): Boolean = canPrevious

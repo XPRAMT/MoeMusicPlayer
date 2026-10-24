@@ -2240,6 +2240,10 @@ fn playback_audio_error_message(error: &AudioError) -> String {
         AudioError::CommandQueueFull => "音訊服務忙碌，請稍後再試。".to_owned(),
         AudioError::CommandTimeout => "音訊命令逾時，請查看播放器狀態後重試。".to_owned(),
         AudioError::UnsupportedPlatform => "此平台尚未提供本機音訊播放服務。".to_owned(),
+        // A track on a server that cannot be reached says so (instead of blaming the file).
+        AudioError::FileOpen { message, .. } if player_core::is_remote_unreachable(message) => {
+            player_core::REMOTE_LINK_LOST.to_owned()
+        }
         AudioError::FileOpen { .. } => "無法開啟曲目檔案，請確認檔案仍可讀取。".to_owned(),
         AudioError::UnsupportedFormat { .. } => "此音訊格式目前尚未支援。".to_owned(),
         AudioError::Decode { .. } => "曲目解碼失敗。".to_owned(),
@@ -9633,7 +9637,9 @@ async fn playback_play(
             replacement_queue,
             target_cursor,
         } = change;
-        await_playback_ack(ticket).await?;
+        // A track on a server opens its file there first, which can take a few seconds; a newer choice of track ends
+        // this wait early (the audio worker answers the replaced load at once).
+        await_playback_ack_within(ticket, Duration::from_secs(10)).await?;
         commit_track_change(database, service, track, replacement_queue, target_cursor)?;
         Ok(service.snapshot())
     }

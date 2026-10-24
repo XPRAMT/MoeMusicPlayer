@@ -112,6 +112,8 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 pub struct PrefetchReader {
     shared: Arc<Shared>,
     position: u64,
+    /// Asked while a read waits: `true` ends the read (the load this stream belongs to was replaced).
+    cancel: Option<player_core::LoadCancel>,
 }
 
 impl PrefetchReader {
@@ -157,7 +159,15 @@ impl PrefetchReader {
         Self {
             shared,
             position: 0,
+            cancel: None,
         }
+    }
+
+    /// Reads that wait for the network end with an error once `cancel` says so (checked a few times a second).
+    #[must_use]
+    pub fn with_cancel(mut self, cancel: Option<player_core::LoadCancel>) -> Self {
+        self.cancel = cancel;
+        self
     }
 
     pub fn len(&self) -> u64 {
@@ -385,6 +395,10 @@ impl Read for PrefetchReader {
             if let Some(message) = state.gave_up.clone() {
                 return Err(io::Error::new(io::ErrorKind::ConnectionAborted, message));
             }
+            // Not `Interrupted`: `read_exact` would retry that for ever.
+            if self.cancel.as_ref().is_some_and(|cancel| cancel()) {
+                return Err(io::Error::other(player_core::LOAD_SUPERSEDED));
+            }
             let waited = waiting_since.elapsed();
             if waited >= next_report {
                 let in_flight = self.shared.in_flight_since_ms.load(std::sync::atomic::Ordering::Relaxed);
@@ -539,6 +553,34 @@ mod tests {
 
     fn network() -> Option<RemoteError> {
         Some(RemoteError::Network("link dropped".to_owned()))
+    }
+
+    #[test]
+    fn a_cancelled_read_ends_at_once_instead_of_waiting_for_the_link() {
+        // The server never answers; without the cancel the read waits for minutes.
+        let (reader, _) = failing_reader(
+            1_000_000,
+            0,
+            |_| network(),
+            quick_policy(&[50], 60_000),
+        );
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&cancelled);
+        let mut reader = reader.with_cancel(Some(Arc::new(move || flag.load(Ordering::SeqCst))));
+        let waker = {
+            let cancelled = Arc::clone(&cancelled);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                cancelled.store(true, Ordering::SeqCst);
+            })
+        };
+        let started = Instant::now();
+        let mut buf = [0u8; 16];
+        let error = reader.read(&mut buf).unwrap_err();
+        waker.join().unwrap();
+        assert!(error.to_string().contains(player_core::LOAD_SUPERSEDED), "{error}");
+        assert_ne!(error.kind(), io::ErrorKind::Interrupted, "read_exact would retry that for ever");
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
     }
 
     #[test]

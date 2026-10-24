@@ -342,6 +342,10 @@ mod jni_exports {
             Ok(handle) => handle,
             Err(error) => {
                 eprintln!("[dsd] open failed: {error}");
+                // The server of a remote track cannot be reached: -2 tells Kotlin to stop at once, not retry.
+                if player_core::is_remote_unreachable(&error) {
+                    return -2;
+                }
                 0
             }
         }

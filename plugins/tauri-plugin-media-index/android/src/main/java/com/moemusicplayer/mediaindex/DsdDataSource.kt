@@ -95,6 +95,11 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
             dataSpec.uri.path ?: throw IOException("Converted-media URI has no path")
         }
         handle = DsdBridge.nativeOpen(path)
+        if (handle == -2L) {
+            // The server of a remote track cannot be reached: stop at once (this is not retried, see RemoteLinkLostException).
+            handle = 0L
+            throw RemoteLinkLostException(REMOTE_LINK_LOST_MESSAGE)
+        }
         if (handle == 0L) throw IOException("Cannot open DSD file: $path")
         val total = DsdBridge.nativeLength(handle)
         if (total < 0L) throw IOException("DSD stream is gone")
