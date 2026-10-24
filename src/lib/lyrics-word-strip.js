@@ -100,20 +100,19 @@ export function glideOffset(/** @type {[number, number][]} */ knots, /** @type {
   return target - (v0 + u * (m0 + u * (c2 + u * c3)));
 }
 
-/** Gradient stops `[offset 0..1, opacity]` of a row's static centre mask. */
-export function wordMaskStops(/** @type {number} */ areaWidth, /** @type {number} */ emPx, /** @type {number} */ inactivePercent) {
+/** Gradient stops `[offset 0..1, opacity]` of a row's static centre mask: an opaque em, straight ramps to 0 at the edges. */
+export function centreMaskStops(/** @type {number} */ areaWidth, /** @type {number} */ emPx) {
   if (!(areaWidth > 0) || !(emPx > 0)) return [];
-  const inactive = Math.min(100, Math.max(10, inactivePercent)) / 100;
   const c = areaWidth / 2;
   const a = MASK_BAND_EM * emPx / 2;
-  const b = a + MASK_BAND_EM * emPx;
   const s = MASK_SOFT_EM * emPx / 2;
-  return [[0, 0], [c - b, inactive], [c - a - s, inactive], [c - a + s, 1], [c + a - s, 1], [c + a + s, inactive], [c + b, inactive], [areaWidth, 0]]
+  const q = c - a > 0 ? Math.max(0, (c - a - s) / (c - a)) : 1;
+  return [[0, 0], [c - a - s, q], [c - a + s, 1], [c + a - s, 1], [c + a + s, q], [areaWidth, 0]]
     .map(([x, o]) => [Math.min(areaWidth, Math.max(0, x)) / areaWidth, o]);
 }
 
-export function wordMaskOpacity(/** @type {number} */ x, /** @type {number} */ areaWidth, /** @type {number} */ emPx, /** @type {number} */ inactivePercent) {
-  const stops = wordMaskStops(areaWidth, emPx, inactivePercent);
+export function centreMaskOpacity(/** @type {number} */ x, /** @type {number} */ areaWidth, /** @type {number} */ emPx) {
+  const stops = centreMaskStops(areaWidth, emPx);
   if (stops.length === 0) return 0;
   const p = Math.min(1, Math.max(0, x / areaWidth));
   let value = stops[0][1];

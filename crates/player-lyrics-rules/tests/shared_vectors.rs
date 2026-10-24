@@ -167,14 +167,9 @@ fn word_rules_match_the_shared_vectors() {
             &s.to_string(),
         );
     }
-    for c in cases(&v, "wordMask") {
+    for c in cases(&v, "centreMask") {
         close(
-            word_mask_opacity(
-                f(&c["x"]),
-                f(&c["areaWidth"]),
-                f(&c["emPx"]),
-                c["inactive"].as_u64().unwrap() as u32,
-            ),
+            centre_mask_opacity(f(&c["x"]), f(&c["areaWidth"]), f(&c["emPx"])),
             f(&c["expected"]),
             &c.to_string(),
         );

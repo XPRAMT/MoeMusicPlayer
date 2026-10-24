@@ -1514,21 +1514,22 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
 }
 
 /// Diagnostics: with `MOE_LYRICS_FRAME_LOG=<file>` every sampled frame appends
-/// `<ms> frame <id> <wake_ms> <sample_ms> <clock_ms> <offset>` (the renderer's playback clock at the sample time and
+/// `<ms> frame <id> <wake_ms> <sample_ms> <clock_ms> <offset> <committed 0|1>` (the renderer's playback clock at the sample time and
 /// the first per-frame property, the strip or the first row, as written) and every new audio-clock reading
 /// `<ms> audio <dt_ms> <audio_ms> <predicted_ms> <error_ms>`; ms since the first logged line.
-fn frame_log(id: &str, woke: Instant, frame: Instant, clock_ms: f64, win: &Win) {
+fn frame_log(id: &str, woke: Instant, frame: Instant, clock_ms: f64, win: &Win, changed: bool) {
     let Some(first) = win.live.first() else {
         return;
     };
     let written = first.written;
     frame_log_write(|ms| {
         format!(
-            "{:.3} frame {id} {:.3} {:.3} {clock_ms:.3} {written}
+            "{:.3} frame {id} {:.3} {:.3} {clock_ms:.3} {written} {}
 ",
             ms(woke),
             ms(woke),
-            ms(frame)
+            ms(frame),
+            changed as u8
         )
     });
 }
@@ -1612,7 +1613,8 @@ impl Renderer {
                 continue;
             }
             let result = sample_window(win, frame);
-            frame_log(id, woke, frame, self.clock.position(frame), win);
+            let changed = matches!(result, Ok(true));
+            frame_log(id, woke, frame, self.clock.position(frame), win, changed);
             match result {
                 Ok(_) => {}
                 Err(e) if is_device_loss(&e) => lost = true,
@@ -2452,10 +2454,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             opacity,
             font as f64 * clip_room,
             if word_mode {
-                Mask::Centre {
-                    em: font as f64,
-                    inactive: ctx.inactive,
-                }
+                Mask::Centre { em: font as f64 }
             } else {
                 Mask::Edge
             },
@@ -2714,24 +2713,22 @@ struct FadeHost {
 enum Mask {
     /// Line-timed lyrics: the square edge fade (`sampling::edge_fade_stops`).
     Edge,
-    /// Word-timed continuous lyrics (ADR 0041 option C): the centre mask (`rules::word_mask_stops`) at the main
+    /// Word-timed continuous lyrics (ADR 0041 option C): the centre mask (`rules::centre_mask_stops`) at the main
     /// row's em, the same for the translation row so both fade at the same places.
-    Centre { em: f64, inactive: u32 },
+    Centre { em: f64 },
 }
 
 impl Mask {
     fn stops(self, area: Area) -> Vec<(f64, f64)> {
         match self {
             Mask::Edge => sampling::edge_fade_stops(area.width, area.height),
-            Mask::Centre { em, inactive } => rules::word_mask_stops(area.width, em, inactive),
+            Mask::Centre { em } => rules::centre_mask_stops(area.width, em),
         }
     }
     fn key(self) -> i64 {
         match self {
             Mask::Edge => 0,
-            Mask::Centre { em, inactive } => {
-                ((em * 64.0).round() as i64) << 8 | inactive as i64 | 1 << 40
-            }
+            Mask::Centre { em } => ((em * 64.0).round() as i64) | 1 << 40,
         }
     }
 }

@@ -3,13 +3,13 @@
 //! Continuous mode: the glide's knots are the word starts, so the word being sung sits at the lyric area's centre
 //! (`word_knots`), with a speed cap that lets a too-fast word arrive a little early (`limit_knot_speed`); the same
 //! monotone C1 curve as the line glide (`glide_cubic`). The line opacity fades are replaced by a static centre mask
-//! (`word_mask_stops`). 「無」 mode: the word being sung is drawn in the accent colour (`sung_word`).
+//! (`centre_mask_stops`). 「無」 mode: the word being sung is drawn in the accent colour (`sung_word`).
 
 /// The cap on the glide speed into a knot: this many times the average speed of the knot's line.
 pub const WORD_SPEED_FACTOR: f64 = 2.0;
 /// A knot moved earlier by the speed cap never arrives more than this early.
 pub const WORD_MAX_LEAD_MS: f64 = 600.0;
-/// Width of the centre mask's fully opaque band, and of each neighbouring band, in em of the row.
+/// Width of the centre mask's fully opaque band, in em of the row.
 pub const MASK_BAND_EM: f64 = 1.0;
 /// The soft step between the opaque band and its neighbours (em).
 pub const MASK_SOFT_EM: f64 = 0.1;
@@ -170,40 +170,39 @@ pub fn next_knot_after(knots: &[(f64, f64)], position_ms: f64) -> Option<f64> {
 }
 
 /// The static centre mask of a row as gradient stops `(offset 0..1 of the area width, opacity)`, linear between them:
-/// opaque over `MASK_BAND_EM` em centred on the area, `inactive` over the next `MASK_BAND_EM` em on each side (a
-/// `MASK_SOFT_EM` step between), then a linear fade to 0 at the area's edges. Stops are clamped into the area, so a
-/// narrow area loses its fade first and then its neighbour bands. Empty when the area or the em is empty.
-pub fn word_mask_stops(area_width: f64, em_px: f64, inactive_percent: u32) -> Vec<(f64, f64)> {
+/// opaque over `MASK_BAND_EM` em centred on the area, then a straight fall to 0 at the area's edges, with a
+/// `MASK_SOFT_EM` soft step at the plateau's edges. The inactive-lyrics opacity is not used. Stops are clamped into the
+/// area. Empty when the area or the em is empty.
+pub fn centre_mask_stops(area_width: f64, em_px: f64) -> Vec<(f64, f64)> {
     if area_width.is_nan() || em_px.is_nan() || area_width <= 0.0 || em_px <= 0.0 {
         return Vec::new();
     }
-    let inactive = inactive_percent.clamp(10, 100) as f64 / 100.0;
     let c = area_width / 2.0;
     let a = MASK_BAND_EM * em_px / 2.0;
-    let b = a + MASK_BAND_EM * em_px;
     let s = MASK_SOFT_EM * em_px / 2.0;
+    // Where the soft step starts, on the straight ramp from the edge (0) to the plateau's edge (1).
+    let q = if c - a > 0.0 {
+        ((c - a - s) / (c - a)).max(0.0)
+    } else {
+        1.0
+    };
     let raw = [
         (0.0, 0.0),
-        (c - b, inactive),
-        (c - a - s, inactive),
+        (c - a - s, q),
         (c - a + s, 1.0),
         (c + a - s, 1.0),
-        (c + a + s, inactive),
-        (c + b, inactive),
+        (c + a + s, q),
         (area_width, 0.0),
     ];
-    let mut out: Vec<(f64, f64)> = Vec::new();
-    for (x, o) in raw {
-        let x = x.clamp(0.0, area_width);
-        out.push((x / area_width, o));
-    }
-    out
+    raw.iter()
+        .map(|&(x, o)| (x.clamp(0.0, area_width) / area_width, o))
+        .collect()
 }
 
-/// The mask's opacity at `x` px from the area's left edge (what the gradient of `word_mask_stops` draws; where two
+/// The mask's opacity at `x` px from the area's left edge (what the gradient of `centre_mask_stops` draws; where two
 /// stops share an offset the later one wins).
-pub fn word_mask_opacity(x: f64, area_width: f64, em_px: f64, inactive_percent: u32) -> f64 {
-    let stops = word_mask_stops(area_width, em_px, inactive_percent);
+pub fn centre_mask_opacity(x: f64, area_width: f64, em_px: f64) -> f64 {
+    let stops = centre_mask_stops(area_width, em_px);
     if stops.is_empty() {
         return 0.0;
     }
@@ -228,7 +227,9 @@ pub fn word_mask_opacity(x: f64, area_width: f64, em_px: f64, inactive_percent: 
 /// The word being sung at lyrics time `t` (`start <= t < end`; a zero-length word is never sung), as in Now Playing.
 pub fn sung_word(words: &[(f64, f64)], t: f64) -> Option<usize> {
     let i = words.partition_point(|w| w.0 <= t);
-    (0..i).rev().find(|&j| t < words[j].1 && words[j].1 > words[j].0)
+    (0..i)
+        .rev()
+        .find(|&j| t < words[j].1 && words[j].1 > words[j].0)
 }
 
 /// The next lyrics time after `t` at which the sung word changes (a word start or end), `None` after the last.
@@ -301,13 +302,22 @@ mod tests {
     #[test]
     fn word_knots_put_each_word_start_on_its_centre() {
         let lines = [
-            line(1000.0, 0.0, &[(1000.0, 10.0), (1300.0, 30.0), (1600.0, 50.0)]),
+            line(
+                1000.0,
+                0.0,
+                &[(1000.0, 10.0), (1300.0, 30.0), (1600.0, 50.0)],
+            ),
             line(3000.0, 100.0, &[]),
         ];
         let k = word_knots(&lines);
         assert_eq!(
             k.iter().map(|k| (k.t, k.v)).collect::<Vec<_>>(),
-            vec![(1000.0, 10.0), (1300.0, 30.0), (1600.0, 50.0), (3000.0, 100.0)]
+            vec![
+                (1000.0, 10.0),
+                (1300.0, 30.0),
+                (1600.0, 50.0),
+                (3000.0, 100.0)
+            ]
         );
         // Even timing, even spacing: nothing to limit, and the curve hits every knot.
         let knots = word_glide_knots(&lines);
@@ -339,7 +349,12 @@ mod tests {
         let lines = [line(
             0.0,
             0.0,
-            &[(0.0, 0.0), (5000.0, 10.0), (5001.0, 900.0), (10000.0, 1000.0)],
+            &[
+                (0.0, 0.0),
+                (5000.0, 10.0),
+                (5001.0, 900.0),
+                (10000.0, 1000.0),
+            ],
         )];
         let k = limit_knot_speed(&word_knots(&lines), 1);
         assert_eq!(k[1].t, 5000.0 - WORD_MAX_LEAD_MS);
@@ -381,7 +396,11 @@ mod tests {
                 words.push((t, x + w / 2.0));
                 x += w;
                 // Dense and uneven: 15..400 ms between words, sometimes the same time.
-                t += if rand() < 0.1 { 0.0 } else { 15.0 + rand() * 385.0 };
+                t += if rand() < 0.1 {
+                    0.0
+                } else {
+                    15.0 + rand() * 385.0
+                };
             }
             lines.push(line(words[0].0, cell, &words));
             cell += x + 24.0;
@@ -418,36 +437,32 @@ mod tests {
             .windows(2)
             .filter(|w| (w[1].1 - w[0].1) / (w[1].0 - w[0].0) > max_cap + 1e-9)
             .count();
-        assert!(fastest <= 3.0 * max_cap + 1e-9 || over > 0, "{fastest} vs cap {max_cap}");
+        assert!(
+            fastest <= 3.0 * max_cap + 1e-9 || over > 0,
+            "{fastest} vs cap {max_cap}"
+        );
     }
 
     #[test]
-    fn the_mask_has_an_opaque_em_neighbour_bands_and_an_edge_fade() {
+    fn the_mask_is_an_opaque_em_with_straight_ramps_to_the_edges() {
         let (w, em) = (1000.0, 40.0);
-        let at = |x: f64| word_mask_opacity(x, w, em, 50);
+        let at = |x: f64| centre_mask_opacity(x, w, em);
         assert_eq!(at(500.0), 1.0);
-        assert_eq!(at(500.0 - 17.0), 1.0);
-        assert_eq!(at(500.0 + 17.0), 1.0);
-        assert!((at(480.0) - 0.75).abs() < 1e-9); // the middle of the 0.1 em soft step
-        assert_eq!(at(500.0 - 25.0), 0.5);
-        assert_eq!(at(500.0 + 59.0), 0.5);
-        assert_eq!(at(440.0), 0.5); // 1.5 em from the centre: the fade starts
-        assert!((at(220.0) - 0.25).abs() < 1e-9); // half way to the edge
+        assert_eq!(at(500.0 - 18.0), 1.0);
+        assert_eq!(at(500.0 + 18.0), 1.0);
         assert_eq!(at(0.0), 0.0);
         assert_eq!(at(1000.0), 0.0);
-        // Symmetric.
+        // The ramp is straight: half way from the edge to the plateau is half.
+        assert!((at(240.0) - 0.5).abs() < 1e-9);
+        assert!((at(760.0) - 0.5).abs() < 1e-9);
         let mut x = 0.0;
         while x <= w {
             assert!((at(x) - at(w - x)).abs() < 1e-9);
             x += 7.0;
         }
-        let stops = word_mask_stops(w, em, 50);
-        assert_eq!(stops.len(), 8);
-        // A narrow area: everything clamped inside, still symmetric and opaque at the centre.
-        let narrow = |x: f64| word_mask_opacity(x, 80.0, 40.0, 30);
-        assert_eq!(narrow(40.0), 1.0);
-        assert_eq!(narrow(0.0), 0.3);
-        assert!(word_mask_stops(0.0, 40.0, 50).is_empty());
+        assert_eq!(centre_mask_stops(w, em).len(), 6);
+        assert_eq!(centre_mask_opacity(40.0, 80.0, 40.0), 1.0);
+        assert!(centre_mask_stops(0.0, 40.0).is_empty());
     }
 
     #[test]
