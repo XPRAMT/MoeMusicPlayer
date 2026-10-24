@@ -98,6 +98,8 @@ internal class GlLyricsPanel(context: Context, private val onFatal: (String) -> 
         if (LyricsClock.onWake === wakeHook) LyricsClock.onWake = null
         LyricsClock.demand.decrementAndGet()
         pending.set(null)
+        // Let go of the surface before the window (and with it the surface) is removed.
+        renderThread.detach()
         renderThread.release()
         executor.shutdown()
     }

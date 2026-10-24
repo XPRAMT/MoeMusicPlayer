@@ -307,11 +307,17 @@ internal class GlLyricsRenderer(
         if (context == EGL14.EGL_NO_CONTEXT) createContext()
         destroySurface()
         eglSurface = EGL14.eglCreateWindowSurface(display, config, surface, intArrayOf(EGL14.EGL_NONE), 0)
-        if (eglSurface == EGL14.EGL_NO_SURFACE) throw GlInitException("eglCreateWindowSurface failed 0x${Integer.toHexString(EGL14.eglGetError())}")
+        if (eglSurface == EGL14.EGL_NO_SURFACE) {
+            val error = EGL14.eglGetError()
+            // The window was destroyed between surfaceCreated and now: not a GL problem, the next surface will do.
+            if (error == EGL14.EGL_BAD_NATIVE_WINDOW || error == EGL14.EGL_BAD_SURFACE) throw GlSurfaceLostException()
+            throw GlInitException("eglCreateWindowSurface failed 0x${Integer.toHexString(error)}")
+        }
         if (!EGL14.eglMakeCurrent(display, eglSurface, eglSurface, context)) {
             val error = EGL14.eglGetError()
             destroySurface()
             if (error == EGL14.EGL_CONTEXT_LOST) throw GlContextLostException()
+            if (error == EGL14.EGL_BAD_NATIVE_WINDOW || error == EGL14.EGL_BAD_SURFACE) throw GlSurfaceLostException()
             throw GlInitException("eglMakeCurrent failed 0x${Integer.toHexString(error)}")
         }
         if (!resourcesReady) buildResources()

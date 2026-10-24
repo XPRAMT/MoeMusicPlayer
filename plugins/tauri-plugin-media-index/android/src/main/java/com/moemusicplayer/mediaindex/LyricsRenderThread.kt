@@ -135,6 +135,9 @@ internal class LyricsRenderThread(private val onFatal: (String) -> Unit) {
                 fatal("context lost and not recoverable", error)
                 return
             }
+        } catch (gone: GlSurfaceLostException) {
+            Log.w(TAG, "lyrics gl: the surface was gone before it could be attached")
+            return
         } catch (error: Throwable) {
             fatal("EGL / GL set-up failed", error)
             return

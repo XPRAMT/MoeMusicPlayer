@@ -576,11 +576,7 @@ object FloatingLyricsOverlay {
     /** The window: the GL renderer unless the switch, an earlier failure or a failure to set it up says Views. */
     private fun create(context: Context) {
         val property = LyricsTrace.systemProperty(RENDERER_PROPERTY)
-        val gl = !viewsNext && when (property) {
-            "views" -> false
-            "gl" -> true
-            else -> !glFailed
-        }
+        val gl = RendererChoice.useGl(property, glFailed, viewsNext)
         viewsNext = false
         if (gl) {
             try {
