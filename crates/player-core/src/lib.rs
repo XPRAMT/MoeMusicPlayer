@@ -2,6 +2,7 @@ pub mod artwork;
 mod filesystem_key;
 pub mod library;
 pub mod lyric_formats;
+pub mod lyric_roles;
 pub mod lyrics;
 pub mod playback_queue;
 pub mod playback_statistics;

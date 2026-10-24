@@ -287,32 +287,31 @@ pub fn with_raw_karaoke(mut lyrics: ParsedLyrics, raw_karaoke: Option<String>) -
 }
 
 /// Fold adjacent timed rows that share one start timestamp into one line. Within a group the
-/// first row keeps its text, the second row's text becomes the translation and the third row's
-/// text becomes the romanization; a role that is already populated is kept. Rows beyond the third
-/// are ignored. Untimed rows are never merged. Callers must pass rows already ordered by start
-/// time with file order preserved inside each timestamp (as `parse_lrc` does).
+/// first row (file order) is the primary text; the other rows become its translation or
+/// romanization by content ([`crate::lyric_roles`], ADR 0041), with the old positional rule
+/// (second row translation, third romanization) only for rows the content does not decide. A
+/// role that is already populated is kept; rows beyond the two roles are ignored. Untimed rows
+/// are never merged. Callers must pass rows already ordered by start time with file order
+/// preserved inside each timestamp (as `parse_lrc` does).
 pub fn merge_same_timestamp_lines(lines: Vec<LyricLine>) -> Vec<LyricLine> {
-    let mut merged: Vec<LyricLine> = Vec::with_capacity(lines.len());
-    let mut role = 0_usize;
+    let mut groups: Vec<(LyricLine, Vec<crate::lyric_roles::ExtraRow>)> =
+        Vec::with_capacity(lines.len());
     for line in lines {
-        if let (Some(start_ms), Some(previous)) = (line.start_ms, merged.last_mut()) {
-            if previous.start_ms == Some(start_ms) {
-                role += 1;
-                match role {
-                    1 if previous.translation.is_none() => previous.translation = Some(line.text),
-                    2 if previous.romanization.is_none() => {
-                        previous.romanization = Some(line.text);
-                        previous.romanization_words = line.words;
-                    }
-                    _ => {}
-                }
+        if let (Some(start_ms), Some((primary, extras))) = (line.start_ms, groups.last_mut()) {
+            if primary.start_ms == Some(start_ms) {
+                extras.push(crate::lyric_roles::ExtraRow { line, hint: None });
                 continue;
             }
         }
-        role = 0;
-        merged.push(line);
+        groups.push((line, Vec::new()));
     }
-    merged
+    groups
+        .into_iter()
+        .map(|(mut primary, extras)| {
+            crate::lyric_roles::fold_extra_rows(&mut primary, extras);
+            primary
+        })
+        .collect()
 }
 
 /// Attach translation or romanization only when its parsed LRC start timestamp matches a primary
@@ -1183,6 +1182,31 @@ mod tests {
 
         assert_eq!(primary.lines[0].translation.as_deref(), Some("內嵌譯"));
         assert_eq!(primary.lines[1].translation.as_deref(), Some("外部譯二"));
+    }
+
+    #[test]
+    fn same_timestamp_lrc_rows_are_classified_by_content_in_any_order() {
+        for body in [
+            "[00:01.00]君の声\n[00:01.00]你的聲音\n[00:01.00]kimi no koe",
+            "[00:01.00]君の声\n[00:01.00]kimi no koe\n[00:01.00]你的聲音",
+        ] {
+            let line = &parse_lrc(body).unwrap().lines[0];
+            assert_eq!(line.text, "君の声");
+            assert_eq!(line.translation.as_deref(), Some("你的聲音"));
+            assert_eq!(line.romanization.as_deref(), Some("kimi no koe"));
+        }
+        let english = parse_lrc("[00:01.00]Hello my friend\n[00:01.00]你好我的朋友").unwrap();
+        assert_eq!(
+            english.lines[0].translation.as_deref(),
+            Some("你好我的朋友")
+        );
+        // The enhanced-LRC writer's order (text, translation, romanization) reads back the same,
+        // and romanization keeps its word stamps.
+        let written = "[00:01.00]<00:01.00>君<00:01.50>の<00:02.00>\n[00:01.00]你的\n[00:01.00]<00:01.00>kimi <00:01.50>no<00:02.00>";
+        let line = &parse_lrc(written).unwrap().lines[0];
+        assert_eq!(line.translation.as_deref(), Some("你的"));
+        assert_eq!(line.romanization.as_deref(), Some("kimi no"));
+        assert_eq!(line.romanization_words.len(), 2);
     }
 
     #[test]

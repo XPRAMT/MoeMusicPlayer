@@ -2,6 +2,7 @@
 //! detection shared by every lyric text entry point (embedded tags, sidecars, paste/import).
 //! The parsers are written for this project; no subtitle library is used.
 
+use crate::lyric_roles::{contrast_role, fold_extra_rows, role_from_style, ExtraRow};
 use crate::lyrics::{
     merge_same_timestamp_lines, parse_lrc, parse_yrc, LyricFormat, LyricLine, LyricWord,
     LyricsParseError, ParsedLyrics, MAX_LYRIC_PAYLOAD_BYTES,
@@ -255,17 +256,44 @@ pub fn parse_srt(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
             cue_rows.push(strip_subtitle_markup(rows[index]));
             index += 1;
         }
-        let joined = join_text_lines(cue_rows.iter().map(String::as_str));
+        // Rows of one cue are a wrapped line unless a row is in a clearly different script from
+        // the first (romaji under Japanese, Chinese under English...): then the rows from it on
+        // are extra rows, each judged by content.
+        let rows = cue_rows
+            .iter()
+            .map(|row| row.trim())
+            .filter(|row| !row.is_empty())
+            .collect::<Vec<_>>();
+        let split = rows
+            .iter()
+            .skip(1)
+            .position(|row| contrast_role(rows[0], row).is_some())
+            .map(|index| index + 1);
+        let (main_rows, extra_rows) = rows.split_at(split.unwrap_or(rows.len()));
+        let joined = join_text_lines(main_rows.iter().copied());
         if !joined.is_empty() {
-            lines.push(LyricLine {
+            let mut line = LyricLine {
                 start_ms: Some(start_ms),
                 end_ms: Some(end_ms),
                 text: joined,
                 ..LyricLine::default()
-            });
+            };
+            fold_extra_rows(
+                &mut line,
+                extra_rows
+                    .iter()
+                    .map(|row| ExtraRow {
+                        line: LyricLine::timed(start_ms, *row),
+                        hint: None,
+                    })
+                    .collect(),
+            );
+            lines.push(line);
         }
     }
     lines.sort_by_key(|line| line.start_ms.unwrap_or_default());
+    // Separate cues with the same start are one line with extra rows (paired cues).
+    let lines = merge_same_timestamp_lines(lines);
     Ok(ParsedLyrics {
         format: LyricFormat::Srt,
         synced: !lines.is_empty(),
@@ -494,39 +522,39 @@ pub fn parse_ass(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
     }
     events.sort_by_key(|event| event.start_ms);
 
-    let mut lines: Vec<LyricLine> = Vec::new();
-    let mut styles: Vec<String> = Vec::new();
-    let mut roles: Vec<usize> = Vec::new();
+    // Events at the same time (±50 ms start and end) in another style are the line's extra rows;
+    // an explicit style name (roma…, trans…, 中文…) gives the role, otherwise the content does.
+    let mut groups: Vec<(LyricLine, String, Vec<ExtraRow>)> = Vec::new();
     for event in events {
-        let paired = lines.iter().enumerate().rev().find(|(index, line)| {
+        let paired = groups.iter_mut().rev().find(|(line, style, _)| {
             line.start_ms
                 .is_some_and(|s| s.abs_diff(event.start_ms) <= 50)
                 && line.end_ms.is_some_and(|e| e.abs_diff(event.end_ms) <= 50)
-                && styles[*index] != event.style
+                && *style != event.style
         });
-        if let Some((index, _)) = paired {
-            roles[index] += 1;
-            let line = &mut lines[index];
-            match roles[index] {
-                1 if line.translation.is_none() => line.translation = Some(event.text),
-                2 if line.romanization.is_none() => {
-                    line.romanization = Some(event.text);
-                    line.romanization_words = event.words;
-                }
-                _ => {}
-            }
-            continue;
-        }
-        styles.push(event.style);
-        roles.push(0);
-        lines.push(LyricLine {
+        let line = LyricLine {
             start_ms: Some(event.start_ms),
             end_ms: Some(event.end_ms),
             text: event.text,
             words: event.words,
             ..LyricLine::default()
-        });
+        };
+        if let Some((_, _, extras)) = paired {
+            extras.push(ExtraRow {
+                hint: role_from_style(&event.style),
+                line,
+            });
+            continue;
+        }
+        groups.push((line, event.style, Vec::new()));
     }
+    let lines = groups
+        .into_iter()
+        .map(|(mut primary, _, extras)| {
+            fold_extra_rows(&mut primary, extras);
+            primary
+        })
+        .collect::<Vec<_>>();
     let lines = merge_same_timestamp_lines(lines);
     Ok(ParsedLyrics {
         format: LyricFormat::Ass,
@@ -587,6 +615,50 @@ mod tests {
         assert_eq!(line.text, "Hello, world again");
         assert_eq!(line.translation.as_deref(), Some("你好"));
         assert!(line.words.is_empty());
+    }
+
+    #[test]
+    fn srt_rows_in_another_script_are_extra_rows_and_same_script_rows_wrap() {
+        let srt = "1\n00:00:01,000 --> 00:00:03,000\n君の声が\n聞こえる\nkimi no koe ga kikoeru\n聽見你的聲音\n\n2\n00:00:04,000 --> 00:00:05,000\nI walk alone\non the road\n";
+        let parsed = parse_srt(srt).unwrap();
+        let first = &parsed.lines[0];
+        assert_eq!(first.text, "君の声が 聞こえる");
+        assert_eq!(
+            first.romanization.as_deref(),
+            Some("kimi no koe ga kikoeru")
+        );
+        assert_eq!(first.translation.as_deref(), Some("聽見你的聲音"));
+        assert_eq!(parsed.lines[1].text, "I walk alone on the road");
+        assert!(parsed.lines[1].translation.is_none());
+    }
+
+    #[test]
+    fn srt_paired_cues_are_classified_by_content() {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\n사랑해\n\n2\n00:00:01,000 --> 00:00:02,000\n我愛你\n\n3\n00:00:01,000 --> 00:00:02,000\nsaranghae\n";
+        let line = &parse_srt(srt).unwrap().lines[0];
+        assert_eq!(line.text, "사랑해");
+        assert_eq!(line.romanization.as_deref(), Some("saranghae"));
+        assert_eq!(line.translation.as_deref(), Some("我愛你"));
+    }
+
+    #[test]
+    fn ass_style_names_give_roles_and_content_decides_otherwise() {
+        let head = "[Events]\nFormat: Start, End, Style, Text\n";
+        // Content: the romaji event comes before the Chinese one.
+        let ass = format!("{head}Dialogue: 0:00:01.00,0:00:02.00,JP,君の声\nDialogue: 0:00:01.00,0:00:02.00,A,{{\\k50}}kimi {{\\k50}}no koe\nDialogue: 0:00:01.00,0:00:02.00,B,你的聲音\n");
+        let line = &parse_ass(&ass).unwrap().lines[0];
+        assert_eq!(line.romanization.as_deref(), Some("kimi no koe"));
+        assert_eq!(line.romanization_words.len(), 2);
+        assert_eq!(line.translation.as_deref(), Some("你的聲音"));
+        // Explicit style names win.
+        let ass = format!("{head}Dialogue: 0:00:01.00,0:00:02.00,JP,君の声\nDialogue: 0:00:01.00,0:00:02.00,Romaji,x y\nDialogue: 0:00:01.00,0:00:02.00,中文,你的聲音\n");
+        let line = &parse_ass(&ass).unwrap().lines[0];
+        assert_eq!(line.romanization.as_deref(), Some("x y"));
+        assert_eq!(line.translation.as_deref(), Some("你的聲音"));
+        let ass = format!("{head}Dialogue: 0:00:01.00,0:00:02.00,JP,君の声\nDialogue: 0:00:01.00,0:00:02.00,Translation,kimi no koe\n");
+        let line = &parse_ass(&ass).unwrap().lines[0];
+        assert_eq!(line.translation.as_deref(), Some("kimi no koe"));
+        assert!(line.romanization.is_none());
     }
 
     #[test]
