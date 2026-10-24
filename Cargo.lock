@@ -4069,6 +4069,7 @@ version = "0.1.0"
 dependencies = [
  "player-zh",
  "serde",
+ "serde_json",
  "unicode-normalization",
  "uuid",
 ]

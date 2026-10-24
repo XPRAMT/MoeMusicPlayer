@@ -1,6 +1,7 @@
 pub mod artwork;
 mod filesystem_key;
 pub mod library;
+pub mod lyric_formats;
 pub mod lyrics;
 pub mod playback_queue;
 pub mod playback_statistics;
@@ -16,19 +17,25 @@ pub use filesystem_key::unix_path_from_key;
 pub use filesystem_key::{file_uri_for_path, unix_path_key};
 pub mod remote;
 pub use library::{
-    read_lyric_sidecar, LyricSidecar, LyricSidecarRead, LyricSidecarState, LyricSidecarWrite,
     display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
-    recording_date_year, remote_locator_uri, FileFingerprint, LibraryRoot, ListTracksQuery,
-    MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit, MediaSourceError, MediaSourceErrorKind,
-    MediaSourceKind, MediaTrackRecord, MetadataReader, Page, SourceId, SourceScan, SourceScanState,
-    SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
-    TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
-    UserMetadataField, TRACK_METADATA_VERSION, volume_root,
+    read_lyric_sidecar, recording_date_year, remote_locator_uri, volume_root, FileFingerprint,
+    LibraryRoot, ListTracksQuery, LyricSidecar, LyricSidecarRead, LyricSidecarState,
+    LyricSidecarWrite, MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit,
+    MediaSourceError, MediaSourceErrorKind, MediaSourceKind, MediaTrackRecord, MetadataReader,
+    Page, SourceId, SourceScan, SourceScanState, SyncCancellation, TrackField, TrackFieldFilter,
+    TrackId, TrackIdentity, TrackListSort, TrackMetadata, TrackMetadataError, TrackSortDirection,
+    TrackSortField, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
+};
+pub use lyric_formats::{
+    detect_lyric_format, lyric_sidecar_rank, parse_any_lyrics, parse_ass, parse_srt,
+    DetectedLyricFormat, LyricsContent, LYRIC_SIDECAR_EXTENSIONS,
 };
 pub use lyrics::{
-    auto_lyric_candidate, merge_lrc_auxiliary, merge_same_timestamp_lines, parse_lrc, parse_yrc, preserve_qrc, rank_lyric_candidates,
-    with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricMatchScore,
-    LyricProvider, LyricsTrackMetadata, ParsedLyrics, TrackLyrics, AUTO_MATCH_MAX_DURATION_DIFF_MS,
+    auto_lyric_candidate, merge_lrc_auxiliary, merge_lrc_auxiliary_nearest,
+    merge_same_timestamp_lines, parse_lrc, parse_yrc, preserve_qrc, rank_lyric_candidates,
+    restore_words_from_raw_karaoke, traditional_word_texts, with_raw_karaoke, yrc_matches_lrc,
+    LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricMatchScore, LyricProvider,
+    LyricWord, LyricsTrackMetadata, ParsedLyrics, TrackLyrics, AUTO_MATCH_MAX_DURATION_DIFF_MS,
     AUTO_MATCH_TITLE_MIN_SIMILARITY, MAX_LYRIC_PAYLOAD_BYTES,
 };
 pub use playback_queue::{
@@ -50,6 +57,7 @@ pub use sync::{
 pub use windows_locator::windows_locator_key;
 
 pub use remote::{
-    is_remote_link_lost, read_remote_file_capped, remote_content, remote_sibling, remote_with_extension,
-    set_remote_content, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream, REMOTE_LINK_LOST,
+    is_remote_link_lost, read_remote_file_capped, remote_content, remote_sibling,
+    remote_with_extension, set_remote_content, RemoteContent, RemoteFileHandle, RemoteStamp,
+    RemoteStream, REMOTE_LINK_LOST,
 };

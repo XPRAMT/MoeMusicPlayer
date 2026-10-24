@@ -29,17 +29,54 @@ pub enum LyricFormat {
     Yrc,
     Qrc,
     Plain,
+    Srt,
+    Ass,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// One timed word (or syllable) of a line. `text` keeps the spaces that follow the word, so the
+/// line text is the concatenation of its words.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricWord {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricLine {
     pub start_ms: Option<u64>,
+    /// The end of the line when the source says it (SRT, ASS, yrc); LRC lines end at the next one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
     pub text: String,
     #[serde(default)]
     pub translation: Option<String>,
     #[serde(default)]
     pub romanization: Option<String>,
+    /// Word timing; empty for line-level lyrics. When present, `text` equals the words joined.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<LyricWord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub romanization_words: Vec<LyricWord>,
+}
+
+impl LyricLine {
+    pub fn timed(start_ms: u64, text: impl Into<String>) -> Self {
+        Self {
+            start_ms: Some(start_ms),
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn untimed(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,20 +199,14 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
         timestamps.dedup();
         if !timestamps.is_empty() {
             if !text.is_empty() {
-                lines.extend(timestamps.into_iter().map(|start_ms| LyricLine {
-                    start_ms: Some(start_ms),
-                    text: text.clone(),
-                    translation: None,
-                    romanization: None,
-                }));
+                lines.extend(
+                    timestamps
+                        .into_iter()
+                        .map(|start_ms| LyricLine::timed(start_ms, text.clone())),
+                );
             }
         } else if !text.is_empty() && !is_lrc_metadata_tag(text.as_str()) {
-            plain_lines.push(LyricLine {
-                start_ms: None,
-                text,
-                translation: None,
-                romanization: None,
-            });
+            plain_lines.push(LyricLine::untimed(text));
         }
     }
 
@@ -200,26 +231,25 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
     })
 }
 
-/// Reduce NetEase's timed YRC words to line-level timestamps and text. The full YRC payload is
-/// retained so a future renderer can add word highlighting without fetching it again.
+/// Parse NetEase's word-timed YRC: `[line start,line length](word start,word length,0)word…`, all
+/// in absolute milliseconds. The JSON credit rows (`{"t":…}`) are skipped; spaces after a word stay
+/// with it, so the line text is its words joined. The payload is kept in `raw_karaoke` so stored
+/// results can be parsed again by a later parser.
 pub fn parse_yrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
     check_payload_size(input)?;
 
     let mut lines = Vec::new();
     for physical in input.lines() {
-        let line = physical.trim_start_matches('\u{feff}').trim();
-        if line.is_empty() || line.starts_with('{') {
+        let line = physical
+            .trim_start_matches('\u{feff}')
+            .trim_end_matches('\r');
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('{') {
             continue;
         }
-        if let Some((start_ms, content)) = parse_yrc_line(line) {
-            let text = content.trim().to_owned();
-            if !text.is_empty() {
-                lines.push(LyricLine {
-                    start_ms: Some(start_ms),
-                    text,
-                    translation: None,
-                    romanization: None,
-                });
+        if let Some(parsed) = parse_yrc_line(trimmed) {
+            if !parsed.text.trim().is_empty() {
+                lines.push(parsed);
             }
         }
     }
@@ -471,34 +501,269 @@ fn apply_offset(timestamp_ms: u64, offset_ms: i64) -> u64 {
     }
 }
 
-fn parse_yrc_line(line: &str) -> Option<(u64, String)> {
+/// A `(start,length[,flag])` word timing at the start of `text`: the start, the end and the rest.
+fn yrc_word_timing(text: &str) -> Option<(u64, u64, &str)> {
+    let after_open = text.strip_prefix('(')?;
+    let close = after_open.find(')')?;
+    let values = after_open[..close].split(',').collect::<Vec<_>>();
+    if values.len() < 2 || values.len() > 3 {
+        return None;
+    }
+    let numbers = values
+        .iter()
+        .map(|value| value.trim().parse::<u64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    Some((
+        numbers[0],
+        numbers[0].saturating_add(numbers[1]),
+        &after_open[close + 1..],
+    ))
+}
+
+fn parse_yrc_line(line: &str) -> Option<LyricLine> {
     let tagged = line.strip_prefix('[')?;
     let end = tagged.find(']')?;
     let mut parts = tagged[..end].split(',');
-    let start_ms = parts.next()?.parse::<u64>().ok()?;
-    let duration_ms = parts.next()?.parse::<u64>().ok()?;
-    if parts.next().is_some() || duration_ms == 0 {
+    let start_ms = parts.next()?.trim().parse::<u64>().ok()?;
+    let duration_ms = parts.next()?.trim().parse::<u64>().ok()?;
+    if parts.next().is_some() {
         return None;
     }
 
     let mut remaining = &tagged[end + 1..];
-    let mut text = String::with_capacity(remaining.len());
+    let mut words: Vec<LyricWord> = Vec::new();
     while !remaining.is_empty() {
-        if let Some(after_open) = remaining.strip_prefix('(') {
-            if let Some(close) = after_open.find(')') {
-                let timing = &after_open[..close];
-                let values = timing.split(',').collect::<Vec<_>>();
-                if values.len() >= 2 && values.iter().all(|value| value.parse::<u64>().is_ok()) {
-                    remaining = &after_open[close + 1..];
-                    continue;
-                }
-            }
+        if let Some((word_start, word_end, rest)) = yrc_word_timing(remaining) {
+            words.push(LyricWord {
+                start_ms: word_start,
+                end_ms: word_end,
+                text: String::new(),
+            });
+            remaining = rest;
+            continue;
         }
         let character = remaining.chars().next()?;
-        text.push(character);
+        match words.last_mut() {
+            Some(word) => word.text.push(character),
+            // Text before the first timing belongs to the line start.
+            None => words.push(LyricWord {
+                start_ms,
+                end_ms: start_ms,
+                text: character.to_string(),
+            }),
+        }
         remaining = &remaining[character.len_utf8()..];
     }
-    Some((start_ms, text))
+    let line_end = words
+        .iter()
+        .map(|word| word.end_ms)
+        .fold(start_ms.saturating_add(duration_ms), u64::max);
+    if line_end == start_ms && words.is_empty() {
+        return None;
+    }
+    Some(LyricLine {
+        start_ms: Some(start_ms),
+        end_ms: Some(line_end),
+        text: words.iter().map(|word| word.text.as_str()).collect(),
+        words,
+        ..LyricLine::default()
+    })
+}
+
+/// Attach auxiliary LRC rows to the nearest primary line within `tolerance_ms` (NetEase's
+/// `tlyric`/`romalrc` follow the LRC times, which differ from yrc line starts by a few ms). Each
+/// auxiliary row is used once; a role that is already filled is kept.
+pub fn merge_lrc_auxiliary_nearest(
+    primary: &mut ParsedLyrics,
+    auxiliary_text: &str,
+    kind: LyricAuxiliaryKind,
+    tolerance_ms: u64,
+) -> Result<(), LyricsParseError> {
+    if !primary.synced {
+        return Ok(());
+    }
+    let auxiliary = parse_lrc(auxiliary_text)?;
+    if !auxiliary.synced {
+        return Ok(());
+    }
+    let mut used = vec![false; auxiliary.lines.len()];
+    for line in &mut primary.lines {
+        let Some(start_ms) = line.start_ms else {
+            continue;
+        };
+        let slot = match kind {
+            LyricAuxiliaryKind::Translation => &mut line.translation,
+            LyricAuxiliaryKind::Romanization => &mut line.romanization,
+        };
+        if slot.is_some() {
+            continue;
+        }
+        let best = auxiliary
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !used[*index])
+            .filter_map(|(index, aux)| {
+                let distance = aux.start_ms?.abs_diff(start_ms);
+                (distance <= tolerance_ms).then_some((distance, index))
+            })
+            .min();
+        if let Some((_, index)) = best {
+            used[index] = true;
+            if !auxiliary.lines[index].text.trim().is_empty() {
+                *slot = Some(auxiliary.lines[index].text.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether yrc lines can stand in for the provider's LRC: at least 80% as many lines and the
+/// last starts within 2 s of each other.
+pub fn yrc_matches_lrc(yrc: &ParsedLyrics, lrc: &ParsedLyrics) -> bool {
+    if !yrc.synced || yrc.lines.iter().all(|line| line.words.is_empty()) {
+        return false;
+    }
+    if !lrc.synced || lrc.lines.is_empty() {
+        return true;
+    }
+    // LRC often starts with credit rows that yrc keeps as JSON; only rows from the first yrc
+    // line on are counted.
+    let first_yrc_start = yrc
+        .lines
+        .first()
+        .and_then(|line| line.start_ms)
+        .unwrap_or(0);
+    let lrc_count = lrc
+        .lines
+        .iter()
+        .filter(|line| line.start_ms.unwrap_or(0) + 500 >= first_yrc_start)
+        .count();
+    if yrc.lines.len() * 5 < lrc_count * 4 {
+        return false;
+    }
+    let close = |a: Option<&LyricLine>, b: Option<&LyricLine>| match (
+        a.and_then(|l| l.start_ms),
+        b.and_then(|l| l.start_ms),
+    ) {
+        (Some(a), Some(b)) => a.abs_diff(b) < 2_000,
+        _ => false,
+    };
+    // The first rows are credits whose times differ between the two; the last lyric line is
+    // the reliable anchor.
+    close(yrc.lines.last(), lrc.lines.last())
+}
+
+/// Stored results from before word timing kept the yrc only in `raw_karaoke` (the raw text, or
+/// the `{"yrc": …}` JSON the service writes). Fill in the words of lines that match a yrc line by
+/// start time, without touching anything else.
+pub fn restore_words_from_raw_karaoke(lyrics: &mut ParsedLyrics) {
+    if lyrics.lines.iter().any(|line| !line.words.is_empty()) {
+        return;
+    }
+    let Some(raw) = lyrics.raw_karaoke.as_deref() else {
+        return;
+    };
+    let yrc_text = if raw.trim_start().starts_with('{') && raw.contains("\"yrc\"") {
+        match json_string_field(raw, "yrc") {
+            Some(text) => text,
+            None => return,
+        }
+    } else {
+        raw.to_owned()
+    };
+    let Ok(yrc) = parse_yrc(&yrc_text) else {
+        return;
+    };
+    let by_start = yrc
+        .lines
+        .into_iter()
+        .filter_map(|line| Some((line.start_ms?, line)))
+        .collect::<BTreeMap<_, _>>();
+    for line in &mut lyrics.lines {
+        if let Some(found) = line.start_ms.and_then(|start| by_start.get(&start)) {
+            if found.text.trim() == line.text.trim() {
+                line.text = found.text.clone();
+                line.end_ms = found.end_ms;
+                line.words = found.words.clone();
+            }
+        }
+    }
+}
+
+/// The Traditional spelling of each word of a line, or `None` when nothing changes. The line is
+/// converted as a whole (OpenCC matches phrases, so word-by-word conversion would lose 头发 →
+/// 頭髮) and the result is cut at the same character positions as the words; when the conversion
+/// changed the number of characters, each word is converted on its own instead.
+pub fn traditional_word_texts(words: &[LyricWord]) -> Option<Vec<String>> {
+    if words.is_empty() {
+        return None;
+    }
+    let line: String = words.iter().map(|word| word.text.as_str()).collect();
+    let converted = match player_zh::to_traditional(&line) {
+        std::borrow::Cow::Borrowed(_) => return None,
+        std::borrow::Cow::Owned(converted) => converted,
+    };
+    let converted_chars = converted.chars().collect::<Vec<_>>();
+    if converted_chars.len() == line.chars().count() {
+        let mut at = 0;
+        return Some(
+            words
+                .iter()
+                .map(|word| {
+                    let count = word.text.chars().count();
+                    let piece = converted_chars[at..at + count].iter().collect();
+                    at += count;
+                    piece
+                })
+                .collect(),
+        );
+    }
+    Some(
+        words
+            .iter()
+            .map(|word| player_zh::to_traditional(&word.text).into_owned())
+            .collect(),
+    )
+}
+
+/// A minimal reader for one top-level JSON string field (the service's own `PreservedKaraoke`).
+fn json_string_field(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let after = &json[json.find(&needle)? + needle.len()..];
+    let after = after.trim_start().strip_prefix(':')?.trim_start();
+    let mut chars = after.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    let code = u32::from_str_radix(&hex, 16).ok()?;
+                    if (0xD800..0xDC00).contains(&code) {
+                        // Surrogate pair.
+                        if chars.next()? != '\\' || chars.next()? != 'u' {
+                            return None;
+                        }
+                        let low: String = chars.by_ref().take(4).collect();
+                        let low = u32::from_str_radix(&low, 16).ok()?;
+                        out.push(char::from_u32(
+                            0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00),
+                        )?);
+                    } else {
+                        out.push(char::from_u32(code)?);
+                    }
+                }
+                other => out.push(other),
+            },
+            c => out.push(c),
+        }
+    }
+    None
 }
 
 fn duration_similarity(local: u64, remote: u64) -> f32 {
@@ -626,18 +891,21 @@ mod tests {
                     text: "line".into(),
                     translation: None,
                     romanization: None,
+                    ..LyricLine::default()
                 },
                 LyricLine {
                     start_ms: Some(3_150),
                     text: "line".into(),
                     translation: None,
                     romanization: None,
+                    ..LyricLine::default()
                 },
                 LyricLine {
                     start_ms: Some(4_750),
                     text: "next".into(),
                     translation: None,
                     romanization: None,
+                    ..LyricLine::default()
                 },
             ]
         );
@@ -688,6 +956,7 @@ mod tests {
                 text: "二番なんて望んでない".into(),
                 translation: Some("才不稀罕當第二呢".into()),
                 romanization: None,
+                ..LyricLine::default()
             }]
         );
     }
@@ -707,12 +976,14 @@ mod tests {
                     text: "原文".into(),
                     translation: Some("譯文".into()),
                     romanization: Some("genbun".into()),
+                    ..LyricLine::default()
                 },
                 LyricLine {
                     start_ms: Some(2_000),
                     text: "next".into(),
                     translation: None,
                     romanization: None,
+                    ..LyricLine::default()
                 },
             ]
         );
@@ -745,6 +1016,7 @@ mod tests {
                 text: "once".into(),
                 translation: Some("一次".into()),
                 romanization: None,
+                ..LyricLine::default()
             }]
         );
     }
@@ -780,6 +1052,7 @@ mod tests {
             text: text.into(),
             translation: None,
             romanization: None,
+            ..LyricLine::default()
         };
         let merged = merge_same_timestamp_lines(vec![
             row(Some(500), "a"),
@@ -797,8 +1070,9 @@ mod tests {
     }
 
     #[test]
-    fn yrc_collapses_word_timing_to_line_rows_and_retains_raw_payload() {
-        let raw = "{\"t\":0,\"c\":[]}\n[1200,1800](1200,300,0)早安(1500,250,0)世界";
+    fn yrc_keeps_word_timing_and_retains_raw_payload() {
+        let raw =
+            "{\"t\":0,\"c\":[{\"tx\":\"作词: \"}]}\n[1200,1800](1200,300,0)早安(1500,250,0)世界";
         let parsed = parse_yrc(raw).expect("valid YRC");
 
         assert_eq!(parsed.format, LyricFormat::Yrc);
@@ -808,11 +1082,122 @@ mod tests {
             parsed.lines,
             vec![LyricLine {
                 start_ms: Some(1_200),
+                end_ms: Some(3_000),
                 text: "早安世界".into(),
-                translation: None,
-                romanization: None,
+                words: vec![
+                    LyricWord {
+                        start_ms: 1_200,
+                        end_ms: 1_500,
+                        text: "早安".into()
+                    },
+                    LyricWord {
+                        start_ms: 1_500,
+                        end_ms: 1_750,
+                        text: "世界".into()
+                    },
+                ],
+                ..LyricLine::default()
             }]
         );
+    }
+
+    #[test]
+    fn yrc_keeps_trailing_spaces_zero_length_and_empty_words() {
+        let raw = "[7260,2000](7260,390,0)Will (7650,0,0)(7650,0,0)you (8000,500,0)go";
+        let parsed = parse_yrc(raw).expect("valid YRC");
+        let line = &parsed.lines[0];
+        assert_eq!(line.text, "Will you go");
+        assert_eq!(line.words.len(), 4);
+        assert_eq!(line.words[0].text, "Will ");
+        assert_eq!(line.words[1].text, "");
+        assert_eq!(
+            line.words[2],
+            LyricWord {
+                start_ms: 7_650,
+                end_ms: 7_650,
+                text: "you ".into()
+            }
+        );
+        let joined: String = line.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(joined, line.text);
+        assert_eq!(line.end_ms, Some(9_260));
+    }
+
+    #[test]
+    fn yrc_translation_prefers_exact_ytlrc_and_falls_back_to_nearest_tlyric() {
+        let mut exact =
+            parse_yrc("[6840,1000](6840,500,0)a(7340,500,0)b\n[9000,1000](9000,1000,0)c").unwrap();
+        merge_lrc_auxiliary(
+            &mut exact,
+            "[00:06.840]甲\n[00:09.000]乙",
+            LyricAuxiliaryKind::Translation,
+        )
+        .unwrap();
+        assert_eq!(exact.lines[0].translation.as_deref(), Some("甲"));
+        assert_eq!(exact.lines[1].translation.as_deref(), Some("乙"));
+
+        let mut nearest = parse_yrc("[6840,1000](6840,500,0)a\n[9000,1000](9000,1000,0)c").unwrap();
+        merge_lrc_auxiliary_nearest(
+            &mut nearest,
+            "[00:06.838]甲\n[00:09.250]乙\n[00:20.000]遠",
+            LyricAuxiliaryKind::Translation,
+            300,
+        )
+        .unwrap();
+        assert_eq!(nearest.lines[0].translation.as_deref(), Some("甲"));
+        assert_eq!(nearest.lines[1].translation.as_deref(), Some("乙"));
+    }
+
+    #[test]
+    fn old_stored_line_level_json_still_reads_and_words_come_back_from_raw_karaoke() {
+        // A row stored before word timing existed: no endMs, words or romanizationWords.
+        let old = r#"{"format":"lrc","lines":[{"startMs":1200,"text":"早安世界","translation":"早","romanization":null}],"rawText":"[00:01.20]早安世界","rawKaraoke":"{\"yrc\":\"[1200,1800](1200,300,0)早安(1500,250,0)世界\",\"qrc_base64\":null}","synced":true}"#;
+        let mut parsed: ParsedLyrics = serde_json::from_str(old).expect("old JSON");
+        assert!(parsed.lines[0].words.is_empty());
+        restore_words_from_raw_karaoke(&mut parsed);
+        assert_eq!(parsed.lines[0].words.len(), 2);
+        assert_eq!(parsed.lines[0].translation.as_deref(), Some("早"));
+        // A line-level line serializes without the new keys.
+        let line = serde_json::to_value(LyricLine::timed(5, "x")).unwrap();
+        assert!(line.get("words").is_none() && line.get("endMs").is_none());
+    }
+
+    #[test]
+    fn traditional_words_keep_phrase_conversion_and_word_boundaries() {
+        let words = vec![
+            LyricWord {
+                start_ms: 0,
+                end_ms: 1,
+                text: "头".into(),
+            },
+            LyricWord {
+                start_ms: 1,
+                end_ms: 2,
+                text: "发 ".into(),
+            },
+            LyricWord {
+                start_ms: 2,
+                end_ms: 3,
+                text: "这只".into(),
+            },
+        ];
+        let converted = traditional_word_texts(&words).expect("changed");
+        assert_eq!(converted, ["頭", "髮 ", "這只"]);
+        let unchanged = vec![LyricWord {
+            start_ms: 0,
+            end_ms: 1,
+            text: "abc".into(),
+        }];
+        assert!(traditional_word_texts(&unchanged).is_none());
+    }
+
+    #[test]
+    fn yrc_stands_in_for_lrc_only_when_lines_and_ends_agree() {
+        let yrc = parse_yrc("[1000,500](1000,500,0)a\n[5000,500](5000,500,0)b").unwrap();
+        let lrc = parse_lrc("[00:00.00]credits\n[00:01.00]a\n[00:05.00]b").unwrap();
+        assert!(yrc_matches_lrc(&yrc, &lrc));
+        let longer = parse_lrc("[00:01.00]a\n[00:02.00]x\n[00:03.00]y\n[00:05.00]b").unwrap();
+        assert!(!yrc_matches_lrc(&yrc, &longer));
     }
 
     #[test]
@@ -978,10 +1363,12 @@ mod tests {
     #[test]
     fn automatic_selection_requires_title_and_duration_gates_not_score() {
         let local = gate_local();
-        let mut low_score_but_close = candidate("close", "Song", "Other Artist", None, Some(181_500));
+        let mut low_score_but_close =
+            candidate("close", "Song", "Other Artist", None, Some(181_500));
         low_score_but_close.score = 0.1;
         assert_eq!(
-            auto_lyric_candidate(&local, &[low_score_but_close]).map(|item| item.candidate_id.as_str()),
+            auto_lyric_candidate(&local, &[low_score_but_close])
+                .map(|item| item.candidate_id.as_str()),
             Some("close")
         );
 
@@ -1027,7 +1414,10 @@ mod tests {
     #[test]
     fn title_and_artist_similarity_ignore_simplified_traditional_differences() {
         assert_eq!(text_similarity("愛的戀歌", "爱的恋歌"), 1.0);
-        assert_eq!(text_similarity("戀愛サーキュレーション", "恋爱サーキュレーション"), 1.0);
+        assert_eq!(
+            text_similarity("戀愛サーキュレーション", "恋爱サーキュレーション"),
+            1.0
+        );
         assert_eq!(text_similarity("張學友", "张学友"), 1.0);
         let local = LyricsTrackMetadata {
             title: Some("愛".into()),
