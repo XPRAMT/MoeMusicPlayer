@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { currentWordIndex, wordHighlightTimings } from '../src/lib/lyrics-word-highlight.js';
+import { currentWordIndex, karaokeLineAnimation } from '../src/lib/lyrics-word-highlight.js';
 import { lyricsForDisplay } from '../src/lib/lyrics-traditional.js';
 
 const words = [
@@ -10,19 +10,52 @@ const words = [
   { s: 1500, e: 2000, t: '安 ' },
 ];
 
-test('each word animates from its own start for its own length, never led', () => {
-  const timings = wordHighlightTimings(words, null, 1100, 0);
-  assert.deepEqual(timings.map((t) => [t.text, t.delayMs, t.durationMs]), [
-    ['早', -100, 300],
-    ['', 200, 0],
-    ['安 ', 400, 500],
-  ]);
+const widths = [30, 0, 50];
+
+/** The edge share (0..1) the easing gives at input share `p` (piecewise linear between its points). */
+function easingAt(/** @type {string} */ easing, /** @type {number} */ p) {
+  const points = easing.slice(7, -1).split(', ').map((x) => x.split(' ').map(parseFloat)).map(([v, at]) => [v, at / 100]);
+  let value = points[0][0];
+  for (let i = 0; i + 1 < points.length; i += 1) {
+    const [v0, p0] = points[i];
+    const [v1, p1] = points[i + 1];
+    if (p >= p0 && p <= p1) return p1 > p0 ? v0 + ((v1 - v0) * (p - p0)) / (p1 - p0) : v1;
+    value = v1;
+  }
+  return value;
+}
+
+test('one edge per line: from the first word start to the last word end, along the karaoke glide', () => {
+  const a = karaokeLineAnimation(words, widths, 1100, 0);
+  assert.ok(a);
+  assert.equal(a.delayMs, -100);
+  assert.equal(a.durationMs, 1000);
+  assert.match(a.easing, /^linear\(0 0%, .*, 1 100%\)$/);
+  // Monotone, never leaves 0..1, and the whole line is lit at the end.
+  let last = -1;
+  for (let p = 0; p <= 1; p += 0.01) {
+    const v = easingAt(a.easing, p);
+    assert.ok(v >= last - 1e-9 && v >= 0 && v <= 1, `${p}`);
+    last = v;
+  }
+  assert.equal(easingAt(a.easing, 1), 1);
+  assert.equal(karaokeLineAnimation([], [], 0, 0), null);
+  assert.equal(karaokeLineAnimation(words, [0, 0, 0], 0, 0), null);
 });
 
-test('the lyric offset moves the words like it moves the lines', () => {
-  // A line shows at `start - offset`; a +200 ms offset lights each word 200 ms earlier.
-  assert.equal(wordHighlightTimings(words, null, 1000, 200)[0].delayMs, -200);
+test('the lyric offset moves the edge like it moves the lines', () => {
+  // A line shows at `start - offset`; a +200 ms offset starts the edge 200 ms earlier.
+  assert.equal(karaokeLineAnimation(words, widths, 1000, 200)?.delayMs, -200);
   assert.equal(currentWordIndex(words, 900, 200), 0);
+});
+
+test('reduced motion: no sweep, each word lights wholly at its start', () => {
+  const a = karaokeLineAnimation(words, widths, 0, 0, true);
+  assert.ok(a);
+  // Word 0 (30 of 80) lights at once at its start; word 2 at 1500 ms (input 50%).
+  assert.equal(easingAt(a.easing, 0.001), 0.375);
+  assert.equal(easingAt(a.easing, 0.49), 0.375);
+  assert.equal(easingAt(a.easing, 0.5001), 1);
 });
 
 test('only the word being sung is current; gaps, zero-length words and the line ends have none', () => {
@@ -45,25 +78,25 @@ test('the Traditional choice swaps the word texts and keeps their timing', () =>
   assert.equal(lyricsForDisplay(lyrics, false).lines[0].words[0].t, '头');
 });
 
-test('karaoke: the sung word wipes in the accent, sung words stay lit (forwards), no filter, instant under reduced motion', () => {
+test('karaoke: one accent edge per line, sung text stays lit (forwards), no filter, hard edge under reduced motion', () => {
   const source = readFileSync(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
-  const wipe = source.match(/@keyframes lyric-word-wipe\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
-  assert.match(wipe, /--lyric-word-fill:\s*-12%/);
-  assert.match(wipe, /--lyric-word-fill:\s*112%/);
+  const wipe = source.match(/@keyframes lyric-line-wipe\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+  assert.match(wipe, /--lyric-line-fill:\s*0%/);
+  assert.match(wipe, /--lyric-line-fill:\s*100%/);
   assert.match(wipe, /color:\s*transparent/);
-  const rule = source.match(/\.lyric-word\s*\{[^}]*\}/)?.[0] ?? '';
+  const rule = source.match(/\.lyric-karaoke\s*\{[^}]*\}/)?.[0] ?? '';
   assert.match(rule, /background-clip:\s*text/);
+  assert.match(rule, /box-decoration-break:\s*slice/, 'one background strip over wrapped rows');
   assert.match(rule, /var\(--accent\)/);
-  assert.match(rule, /animation-name:\s*lyric-word-wipe/);
-  assert.match(rule, /animation-fill-mode:\s*forwards/, 'sung words keep the full fill until the line ends');
-  assert.doesNotMatch(rule, /animation-fill-mode:\s*(both|backwards)/, 'words not yet sung stay the line colour');
+  assert.match(rule, /animation-fill-mode:\s*forwards/, 'sung text keeps the fill until the line ends');
+  assert.doesNotMatch(rule, /animation-fill-mode:\s*(both|backwards)/, 'text not yet sung stays the line colour');
   assert.doesNotMatch(rule, /filter|will-change/);
-  const reduced = source.match(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.lyric-word\s*\{[^}]*\}/)?.[0] ?? '';
-  assert.match(reduced, /animation-name:\s*lyric-word-sing/);
-  const sing = source.match(/@keyframes lyric-word-sing\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
-  assert.match(sing, /color:\s*var\(--accent\)/);
+  assert.match(source, /<span class="lyric-karaoke" use:karaokeLine=/);
+  assert.doesNotMatch(source, /class="lyric-word" style=/, 'words are not animated one by one');
+  const reduced = source.match(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.lyric-karaoke\s*\{[^}]*\}/)?.[0] ?? '';
+  assert.match(reduced, /--lyric-line-edge:\s*0em/);
   const css = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
-  assert.match(css, /@property --lyric-word-fill\s*\{[^}]*syntax:\s*'<percentage>'/);
+  assert.match(css, /@property --lyric-line-fill\s*\{[^}]*syntax:\s*'<percentage>'/);
 });
 
 test('romanization rows get word spans only with romanizationWords; translations never; romanization shows before translation', () => {
@@ -79,12 +112,11 @@ test('romanization rows get word spans only with romanizationWords; translations
   }
 });
 
-test('a rebuild after a seek lights the words already sung from the start and leaves later ones waiting', () => {
-  // Rebuilt at 1800 ms: word 0 ended (delay <= -duration, held by forwards), word 2 is mid-wipe.
-  const [first, empty, third] = wordHighlightTimings(words, null, 1800, 0);
-  assert.ok(first.delayMs + first.durationMs <= 0, 'the first word is past and shows the held accent');
-  assert.ok(empty.delayMs + empty.durationMs <= 0);
-  assert.ok(third.delayMs < 0 && third.delayMs + third.durationMs > 0, 'the third word is being sung');
-  const early = wordHighlightTimings(words, null, 900, 0);
-  assert.ok(early.every((t) => t.delayMs > 0), 'before the line no word is lit');
+test('a rebuild after a seek resumes the edge mid-line and waits before the line', () => {
+  const late = karaokeLineAnimation(words, widths, 1800, 0);
+  assert.ok(late && late.delayMs < 0 && late.delayMs + late.durationMs > 0, 'mid-line: the edge continues from where it is');
+  const done = karaokeLineAnimation(words, widths, 2500, 0);
+  assert.ok(done && done.delayMs + done.durationMs <= 0, 'after the line the held fill shows it whole');
+  const early = karaokeLineAnimation(words, widths, 900, 0);
+  assert.ok(early && early.delayMs > 0, 'before the line nothing is lit');
 });

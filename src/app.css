@@ -4179,11 +4179,11 @@ input:focus-visible {
   initial-value: 0;
 }
 
-/* The Now Playing word wipe (ADR 0041): the gradient position inside the word being sung, animated by CSS. */
-@property --lyric-word-fill {
+/* The Now Playing karaoke edge (ADR 0041 D10): the gradient position along the current line, animated by CSS. */
+@property --lyric-line-fill {
   syntax: '<percentage>';
   inherits: false;
-  initial-value: -12%;
+  initial-value: 0%;
 }
 
 @keyframes playback-progress-run-a { to { --progress-ratio: 1; } }

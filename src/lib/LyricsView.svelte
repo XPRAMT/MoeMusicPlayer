@@ -13,7 +13,7 @@
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
   import { lyricsForDisplay } from './lyrics-traditional.js';
-  import { wordHighlightTimings } from './lyrics-word-highlight.js';
+  import { karaokeLineAnimation, LYRIC_LINE_ANIMATION, wordTexts } from './lyrics-word-highlight.js';
   import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
   import {
     LYRIC_CUE_LEAD_MS,
@@ -315,9 +315,9 @@
       : -1,
   );
   let plainLayout = $derived(buildLyricsLayout(lines, layoutPreferences, preferences.lineGapPx, layoutWidth));
-  // Word highlight (ADR 0041): only the current line with word timing is split into words, each with one CSS
-  // animation (delay = time until the word starts). Recomputed only on a line change, seek, play/pause or offset
-  // change; the clock's regular samples do not touch it, so no style is written while a line plays.
+  // Word highlight (ADR 0041 D10): only the current line with word timing is split into words, and one CSS
+  // animation moves a single accent edge over it (`karaokeLine`). Recomputed only on a line change, seek, play/pause
+  // or offset change; the clock's regular samples do not touch it, so no style is written while a line plays.
   let wordsPlaying = $derived(effectivePlaybackState === 'playing' && (playbackClock ? playbackClock.playing : isPlaying));
   let currentLineWords = $derived.by(() => {
     const index = visibleActiveTimedIndex;
@@ -335,8 +335,10 @@
     return {
       index,
       key: `${index}:${jump}:${playing}:${offset}:${timedLayout.generation}`,
-      words: words.length > 0 ? wordHighlightTimings(words, null, position, offset) : null,
-      romanizationWords: romanizationWords.length > 0 ? wordHighlightTimings(romanizationWords, null, position, offset) : null,
+      position,
+      offset,
+      words: words.length > 0 ? words : null,
+      romanizationWords: romanizationWords.length > 0 ? romanizationWords : null,
     };
   });
   let timedTotalHeight = $derived.by(() => { layoutRevision; return timedLayout.totalHeight; });
@@ -449,6 +451,21 @@
     restoreScrollAnchor(layout, viewport, anchor);
     if (!isTimed && anchor) plainScrollTop = viewport.scrollTop;
   });
+
+  // The karaoke edge of the current line (ADR 0041 D10): measures the word spans once (their total drawn width on
+  // every wrapped row) and sets one animation on the line span; nothing runs per frame in script.
+  function karaokeLine(node: HTMLElement, params: { words: { s: number; e: number }[]; position: number; offset: number }) {
+    const widths = Array.from(node.children, (child) =>
+      Array.from(child.getClientRects()).reduce((sum, rect) => sum + rect.width, 0),
+    );
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const animation = karaokeLineAnimation(params.words, widths, params.position, params.offset, reduced);
+    if (!animation) return;
+    node.style.animationName = LYRIC_LINE_ANIMATION;
+    node.style.animationDelay = `${animation.delayMs}ms`;
+    node.style.animationDuration = `${animation.durationMs}ms`;
+    node.style.animationTimingFunction = animation.easing;
+  }
 
   function observeLyricRow(node: HTMLElement, index: number) {
     const update = (nextIndex: number) => {
@@ -880,14 +897,14 @@
             {#if row.line.text?.trim()}
               {#if currentLineWords?.words && currentLineWords.index === timelineIndex}
                 {#key currentLineWords.key}
-                  <p class="lyric-primary has-words" class:words-paused={!wordsPlaying} data-word-count={currentLineWords.words.length}>{#each currentLineWords.words as word, wordIndex (wordIndex)}<span class="lyric-word" style={`animation-delay:${word.delayMs}ms;animation-duration:${word.durationMs}ms`}>{word.text}</span>{/each}</p>
+                  <p class="lyric-primary has-words" class:words-paused={!wordsPlaying} data-word-count={currentLineWords.words.length}><span class="lyric-karaoke" use:karaokeLine={{ words: currentLineWords.words, position: currentLineWords.position, offset: currentLineWords.offset }}>{#each wordTexts(currentLineWords.words, null) as text, wordIndex (wordIndex)}<span class="lyric-word">{text}</span>{/each}</span></p>
                 {/key}
               {:else}<p class="lyric-primary">{row.line.text}</p>{/if}
             {/if}
             {#if preferences.showRomanization && row.line.romanization?.trim()}
               {#if currentLineWords?.romanizationWords && currentLineWords.index === timelineIndex}
                 {#key currentLineWords.key}
-                  <p class="lyric-romanization has-words" class:words-paused={!wordsPlaying}>{#each currentLineWords.romanizationWords as word, wordIndex (wordIndex)}<span class="lyric-word" style={`animation-delay:${word.delayMs}ms;animation-duration:${word.durationMs}ms`}>{word.text}</span>{/each}</p>
+                  <p class="lyric-romanization has-words" class:words-paused={!wordsPlaying}><span class="lyric-karaoke" use:karaokeLine={{ words: currentLineWords.romanizationWords, position: currentLineWords.position, offset: currentLineWords.offset }}>{#each wordTexts(currentLineWords.romanizationWords, null) as text, wordIndex (wordIndex)}<span class="lyric-word">{text}</span>{/each}</span></p>
                 {/key}
               {:else}<p class="lyric-romanization">{row.line.romanization}</p>{/if}
             {/if}
@@ -1167,59 +1184,52 @@
     transition: opacity var(--lyric-cue-ms) ease;
   }
 
-  /* Word highlight (ADR 0041), karaoke style: the word being sung fills with the theme accent from left to right
-     with a soft edge, words already sung stay accent until the line ends, words not yet sung keep the line's own
-     colour. One CSS animation per word (delay = time until the word starts, negative once started; duration = its
-     length; fill mode forwards), so no style is written per frame and a word holds the full fill after it ends,
-     including words already past when the line is rebuilt after a seek, pause or offset change. The fill is the span's background clipped to its
-     glyphs (`background-clip: text`) with the text fill transparent while the animation runs; the gradient position
-     is the registered `--lyric-word-fill` (app.css), animated from before the word's left edge to past its right
-     edge. Before the animation starts the opaque text fill covers the background. No filter on the span: the shadow mode's
-     drop-shadow stays on the line, and the outline (`-webkit-text-stroke`) is drawn over the fill as before.
-     `box-decoration-break: clone` gives each fragment of a word that wraps its own wipe. */
-  .lyric-word {
+  /* Word highlight (ADR 0041 D10), karaoke style: ONE accent edge per line. The line's words sit in one inline span
+     whose background (accent up to `--lyric-line-fill`, the line's own colour after it, a soft edge of
+     `--lyric-line-edge` on each side) is clipped to the glyphs, with the text fill transparent while the animation
+     runs. `box-decoration-break: slice` lays the fragments of a wrapped line side by side in one background strip,
+     so the edge runs over the rows in reading order. The registered `--lyric-line-fill` (app.css) goes 0% -> 100% in
+     one animation whose `linear()` timing function is the karaoke glide (lyrics-word-highlight.js, set by
+     `karaokeLine`), fill mode forwards: sung text stays accent until the line changes, text not yet sung keeps the
+     line colour (before the animation starts the opaque text fill covers the background). No filter on the span: the
+     shadow mode's drop-shadow stays on the line, and the outline (`-webkit-text-stroke`) is drawn over the fill.
+     The word spans inside only serve to measure the words. */
+  .lyric-karaoke {
     background-image: linear-gradient(
       90deg,
-      var(--accent) calc(var(--lyric-word-fill) - var(--lyric-word-edge)),
-      var(--text) calc(var(--lyric-word-fill) + var(--lyric-word-edge))
+      var(--accent) calc(var(--lyric-line-fill) - var(--lyric-line-edge)),
+      var(--text) calc(var(--lyric-line-fill) + var(--lyric-line-edge))
     );
     -webkit-background-clip: text;
     background-clip: text;
-    -webkit-box-decoration-break: clone;
-    box-decoration-break: clone;
-    --lyric-word-edge: 12%;
-    animation-name: lyric-word-wipe;
+    -webkit-box-decoration-break: slice;
+    box-decoration-break: slice;
+    --lyric-line-edge: 0.15em;
     animation-timing-function: linear;
     animation-iteration-count: 1;
     animation-fill-mode: forwards;
   }
 
-  .words-paused .lyric-word {
+  .words-paused .lyric-karaoke {
     animation-play-state: paused;
   }
 
-  @keyframes lyric-word-wipe {
+  @keyframes lyric-line-wipe {
     from {
-      --lyric-word-fill: -12%;
+      --lyric-line-fill: 0%;
       color: transparent;
     }
     to {
-      --lyric-word-fill: 112%;
+      --lyric-line-fill: 100%;
       color: transparent;
     }
   }
 
-  /* Reduced motion: no wipe, the whole word turns accent when it starts and stays accent (forwards). */
+  /* Reduced motion: no sweep (the timing function steps at each word start, `karaokeLineAnimation`) and a hard edge,
+     so each word turns wholly accent when it starts and stays accent. */
   @media (prefers-reduced-motion: reduce) {
-    .lyric-word {
-      animation-name: lyric-word-sing;
-    }
-  }
-
-  @keyframes lyric-word-sing {
-    from,
-    to {
-      color: var(--accent);
+    .lyric-karaoke {
+      --lyric-line-edge: 0em;
     }
   }
 
