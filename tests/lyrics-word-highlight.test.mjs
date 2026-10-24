@@ -80,7 +80,7 @@ test('the Traditional choice swaps the word texts and keeps their timing', () =>
 
 test('karaoke: one accent edge per line, sung text stays lit (forwards), no filter, hard edge under reduced motion', () => {
   const source = readFileSync(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
-  const wipe = source.match(/@keyframes lyric-line-wipe\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
+  const wipe = source.match(/@keyframes -global-lyric-line-wipe\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? '';
   assert.match(wipe, /--lyric-line-fill:\s*0%/);
   assert.match(wipe, /--lyric-line-fill:\s*100%/);
   assert.match(wipe, /color:\s*transparent/);

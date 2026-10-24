@@ -1214,7 +1214,8 @@
     animation-play-state: paused;
   }
 
-  @keyframes lyric-line-wipe {
+  /* Global: the name is written inline by `karaokeLineAnimation`, so it must not be Svelte-scoped. */
+  @keyframes -global-lyric-line-wipe {
     from {
       --lyric-line-fill: 0%;
       color: transparent;
