@@ -8,6 +8,8 @@ Builds on [ADR 0018](0018-taskbar-lyrics.md) and [ADR 0031](0031-multi-monitor-t
 
 > **部分取代：** 本 ADR 中 Windows 以 WebView2 繪製的部分（`floating-lyrics` WebView 視窗、`TaskbarLyricsView.svelte`／`FloatingLyricsView.svelte`、CSS `text-shadow`、`startDragging` 拖曳、WebView2 GPU 行程的性能討論）已被 [ADR 0034](0034-native-lyrics-rendering-research.md) 的原生繪製取代；行為規則（版面、時間、透明度、動畫）仍有效。Android 的「狀態列」模式已改為一次性的「移動到狀態列」動作，見下方 “「移動到狀態列」 is a move only” 修訂。
 
+> **Android 渲染現況：** 預設改為專用執行緒上的 OpenGL ES 繪製（見文末 “Android overlay rendering notes”）；下文以 `LyricLineView`／`EdgeFadeLayout`／整像素為前提的描述指的是備援的 Views 路徑。
+
 > **現況（以程式碼為準）：** 透明度已改為每個分頁各自的「主要」「次要」兩個值（`mainOpacityPercent`／`secondaryOpacityPercent`，見文末 “main and secondary opacity”）；下方 `opacityPercent`、`inactiveOpacityPercent`、`lyrics-inactive-opacity` 事件、200 ms 行淡化與連續模式的邊緣淡出已被取代，原文保留為歷史。連續模式現在用靜態置中遮罩（見該節末 “連續動畫與透明度” 目前設計）；逐字歌詞的滑動曲線見 ADR 0041 D10。
 
 ## Context
@@ -312,7 +314,7 @@ stops. Android's drag already clamps with the text insets on every move.
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
 
-浮動歌詞（ADR 0032，Windows 置頂透明視窗與 Android 系統懸浮窗）：`settings.floatingLyrics`（`FloatingLyricsSettings`，外觀欄位與夾值同 `taskbarLyrics`，另有 `enabled` 預設關、`locked`、`position`）；可與工作列歌詞同時開啟。Windows：`src-tauri/src/floating_lyrics.rs`；移動模式由我們自己捕捉滑鼠並以 `SetWindowPos` 移動（可越過螢幕邊），放開時套用擺位規則，移動停止 700 ms 後存位置；擺位規則：只有歌詞區必須留在工作區內，透明邊與陰影空間可超出、鎖頭仍可點；固定模式整窗穿透（`WS_EX_TRANSPARENT`），100 ms 監看游標，只有游標在解鎖按鈕上時才接收滑鼠。指令 `settings_get/set_floating_lyrics`、`floating_lyrics_set_locked`、`floating_lyrics_reset_position`（主螢幕正中央）、`floating_lyrics_fit`、`floating_lyrics_nudge { dx, dy }`、`floating_lyrics_centre_axis`（以面板中心所在螢幕為準）。版面：`widthPx`（儲存範圍 100–8192，Windows CSS px、Android dp，預設 800；畫面上歌詞區會縮到目前螢幕寬內，滑桿上限＝該螢幕寬；Android 另有 `landscapeWidthPx`）是**歌詞區**寬；面板＝左右各 0.25 em 透明邊＋歌詞區＋右側透明鎖頭欄（邊長＝主行行高）；歌詞區高＝文字高×1.1（背景與對齊處），面板高＝文字高×1.5、歌詞區垂直置中；無內距、無最小高度；移動模式背景只在歌詞區；寬度改變保持歌詞區中心並如拖曳般存檔；水平置中、重設、首次使用都以歌詞區置中。鎖頭圖示表示目前狀態（可移動＝開鎖、鎖定＝閉鎖）。設定頁「面板」：Android 獨有一列「移動到狀態列」（只把面板移到歌詞區垂直中心對齊狀態列、水平避開鏡頭，`centredOnBar`，不改字級與規則，依方向儲存），下一列左為十字鍵（中心為鎖頭；單擊 1 px，按住 300 ms 後每 1/30 秒（約 33.3 ms，`FLOATING_LYRICS_NUDGE_REPEAT`）1 px，放開才存檔）、右為直排「水平置中／垂直置中／重設位置」，其後寬度滑桿；「對齊」在浮動頁叫「文字排版」。Android：`FloatingLyricsOverlay.kt`（`TYPE_APPLICATION_OVERLAY`，`FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS`，可拖到狀態列上），頁面以 `floating_lyrics_android` 送 `floatingLyricsUpdate`（settings／data／setLocked／resetPosition／nudge／centreAxis 等頂層鍵）、`floatingLyricsStatus`、`openOverlayPermissionSettings`；每 100 ms 以 `PlaybackService.floatingLyricsSample()` 選句，只在 trackId 等於目前 mediaId 時顯示，位置以 `FloatingLyricsRules.smoothPositionMs` 依經過時間外推；行由 `LyricLineView` 自繪（陰影連同行點陣化為 `LineRasterCache`），跨到另一個整數像素才重畫（`needsPixelRedraw`）；直向／橫向各存寬度（`widthPx`／`landscapeWidthPx`）與位置；鎖定與位置以外掛 SharedPreferences `moe_floating_lyrics` 為準；權限只能由使用者在系統設定頁開啟（禁止 adb 授權）；固定模式 `FLAG_NOT_TOUCHABLE`，Android 12+ 穿透視窗 alpha 取設定值與系統上限（通常 0.8）較小者。限制：只顯示有時間軸的歌詞；WebView 暫停時換歌，新歌詞要等頁面恢復才送到。待使用者實機驗收。
+浮動歌詞（ADR 0032，Windows 置頂透明視窗與 Android 系統懸浮窗）：`settings.floatingLyrics`（`FloatingLyricsSettings`，外觀欄位與夾值同 `taskbarLyrics`，另有 `enabled` 預設關、`locked`、`position`）；可與工作列歌詞同時開啟。Windows：`src-tauri/src/floating_lyrics.rs`；移動模式由我們自己捕捉滑鼠並以 `SetWindowPos` 移動（可越過螢幕邊），放開時套用擺位規則，移動停止 700 ms 後存位置；擺位規則：只有歌詞區必須留在工作區內，透明邊與陰影空間可超出、鎖頭仍可點；固定模式整窗穿透（`WS_EX_TRANSPARENT`），100 ms 監看游標，只有游標在解鎖按鈕上時才接收滑鼠。指令 `settings_get/set_floating_lyrics`、`floating_lyrics_set_locked`、`floating_lyrics_reset_position`（主螢幕正中央）、`floating_lyrics_fit`、`floating_lyrics_nudge { dx, dy }`、`floating_lyrics_centre_axis`（以面板中心所在螢幕為準）。版面：`widthPx`（儲存範圍 100–8192，Windows CSS px、Android dp，預設 800；畫面上歌詞區會縮到目前螢幕寬內，滑桿上限＝該螢幕寬；Android 另有 `landscapeWidthPx`）是**歌詞區**寬；面板＝左右各 0.25 em 透明邊＋歌詞區＋右側透明鎖頭欄（邊長＝主行行高）；歌詞區高＝文字高×1.1（背景與對齊處），面板高＝文字高×1.5、歌詞區垂直置中；無內距、無最小高度；移動模式背景只在歌詞區；寬度改變保持歌詞區中心並如拖曳般存檔；水平置中、重設、首次使用都以歌詞區置中。鎖頭圖示表示目前狀態（可移動＝開鎖、鎖定＝閉鎖）。設定頁「面板」：Android 獨有一列「移動到狀態列」（只把面板移到歌詞區垂直中心對齊狀態列、水平避開鏡頭，`centredOnBar`，不改字級與規則，依方向儲存），下一列左為十字鍵（中心為鎖頭；單擊 1 px，按住 300 ms 後每 1/30 秒（約 33.3 ms，`FLOATING_LYRICS_NUDGE_REPEAT`）1 px，放開才存檔）、右為直排「水平置中／垂直置中／重設位置」，其後寬度滑桿；「對齊」在浮動頁叫「文字排版」。Android：`FloatingLyricsOverlay.kt`（`TYPE_APPLICATION_OVERLAY`，`FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS`，可拖到狀態列上），頁面以 `floating_lyrics_android` 送 `floatingLyricsUpdate`（settings／data／setLocked／resetPosition／nudge／centreAxis 等頂層鍵）、`floatingLyricsStatus`、`openOverlayPermissionSettings`；每 100 ms 以 `PlaybackService.floatingLyricsSample()` 選句，只在 trackId 等於目前 mediaId 時顯示，位置以 `FloatingLyricsRules.smoothPositionMs` 依經過時間外推；行預設由 OpenGL ES 渲染執行緒繪製（`GlLyricsRenderer`，陰影連同行點陣化成紋理，1/8 px 次像素位移；翻譯列整首固定預留，視窗高度固定）；備援的 Views 路徑由 `LyricLineView` 自繪，跨到另一個整數像素才重畫（`needsPixelRedraw`）；直向／橫向各存寬度（`widthPx`／`landscapeWidthPx`）與位置；鎖定與位置以外掛 SharedPreferences `moe_floating_lyrics` 為準；權限只能由使用者在系統設定頁開啟（禁止 adb 授權）；固定模式 `FLAG_NOT_TOUCHABLE`，Android 12+ 穿透視窗 alpha 取設定值與系統上限（通常 0.8）較小者。限制：只顯示有時間軸的歌詞；WebView 暫停時換歌，新歌詞要等頁面恢復才送到。待使用者實機驗收。
 
 連續動畫與透明度（兩種歌詞視窗共用，`animation`：`none` 預設／`continuous`，工作列與浮動分開儲存）：連續＝所有歌詞以 U+3000 接成一條、譯文同寬格並排成第二條；目前行左緣在該行開始時對齊歌詞區水平中心（`LYRICS_STRIP_ALIGN`＝left、`LYRICS_STRIP_TARGET`＝center，只看歌詞區寬），滑動曲線是穿過各節點的單調 C1 三次 Hermite（`lyricsStripCubic`／Rust `strip_cubic`／Kotlin `stripOffset`；首末切線 0，中間為 Fritsch–Butland 加權調和平均），末句依字元叢集數估算滑動時間（每字元 500 ms，曲目結束更早時提前收住），抵達時最後一個字形中心對準歌詞區中心。只繪製會出現的行加左右各一個歌詞區寬（`lyricsStripWindow`／`FloatingLyricsRules.stripWindow`），不可把整首歌放進捲動條。透明度（現況）：每個分頁各自存「主要透明度」`mainOpacityPercent`（1–100、預設 100）與「次要透明度」`secondaryOpacityPercent`（1–100、預設 50，可大於主要）；動畫「無」時整條歌詞以主要透明度繪製；連續模式（行級與逐字）以固定在歌詞區的靜態置中遮罩承載兩個值（中心 1 em 為主要、向兩端線性降到次要、最外 1 em 降到 0；`player-lyrics-rules` 的 `centre_mask_stops`，Kotlin `WordLyricsRules.centreMaskStops`），沒有逐行淡化與邊緣淡出，原生視窗每個格子的透明度係數恆為 1，Android 的 `lineViewAlpha` 在連續模式為 1。舊的 `inactiveOpacityPercent`、200 ms 行淡化與 `lyrics-inactive-opacity` 廣播已不存在。連續模式選陰影時 Windows 與 Android 都照畫陰影（Android 待平板實機驗收）。邊緣淡出（動畫「無」；連續模式改用上述遮罩）：歌詞區左右各一個正方形淡出區（寬＝歌詞區高，歌詞區寬不足兩倍高時各取一半），由內緣 1 線性降到外緣 0，文字與陰影／描邊都套用，鎖頭欄與移動模式背景不淡出；規則 `edge_fade_width`／`edge_fade_opacity`（JS `lyricsEdgeFadeWidth`／`lyricsEdgeFadeOpacity`，Kotlin 同名）；Windows 以 `CompositionVisualSurface`＋`CompositionMaskBrush`＋靜態水平漸層（`sampling::edge_fade_stops`）遮罩，只在尺寸／DPI／歌詞區改變時重建；Android `EdgeFadeLayout` 以 saveLayer＋`DST_IN` 遮罩。工作列與浮動歌詞同時開連續動畫有性能負擔，建議一次只開一種。
 
@@ -335,41 +337,74 @@ row is 50 lighter. Windows draws it through DirectWrite (ADR 0034 amendment). An
 
 ## Android overlay rendering notes (frame cost)
 
-The overlay shares the main thread and RenderThread with the WebView, so its per-frame and per-line-change cost counts
-against both. Current design (`FloatingLyricsOverlay.kt`, `LyricLineView.kt`, `LineRasterCache.kt`,
-`LineRasteriser.kt`):
+### Current renderer: OpenGL ES on a render thread (default)
 
-- **Images are made off the main thread.** `LineRasteriser.render` (CPU `drawText` with the shadow blur or outline, plus
-  the karaoke accent copy and the translation row) runs on one worker thread (`RasterWorker`, `moe-lyrics-raster`,
-  `THREAD_PRIORITY_LESS_FAVORABLE`, exits when idle) and calls `Bitmap.prepareToDraw()` so the GPU upload is not on the
-  first draw frame. `LineRasterCache` hands the finished, immutable `Raster` to the main thread; `onDraw` only reads
-  (`peek`) and never rasterises. A look change (size, colour, shadow, outline, weight, face, density) bumps
-  `generation`: the cache is cleared, queued work is skipped and any result still in flight is discarded on arrival.
-- **Prefetch, not first-draw.** Continuous mode: `LyricLineView.setStrip` asks, only when the window, strip, width or
-  look changed, for every cell within the view plus `PREFETCH_VIEWS` (2) view widths on each side, nearest the view
-  centre first, and `retain`s only that window (so memory is bounded by the window, evicted by distance). None mode:
-  `FloatingLyricsOverlay.prefetchNeighbours` prepares the shown line, the next, the previous and the one after the next
-  (plus karaoke copies and translations) whenever the line, the lyrics or a look epoch changes. The cache is keyed by
-  text, so repeated lines share an image.
-- **Not ready is not drawn.** A cell whose image is still on its way is skipped for that frame (the request is repeated
-  and the view invalidates when it lands); a karaoke line whose accent copy is not ready is drawn whole in the text
-  colour. Only a line that cannot be an image at all (wider/taller than 4096 px) is drawn directly. After a seek far
-  from the prepared window, or on the first display of new lyrics, the line therefore appears a few milliseconds late
-  instead of costing the main thread a blur.
-- The default typeface rule is kept: a view whose weight never changed from 500 keeps `Typeface.DEFAULT`, and its images
-  use the same face (`LineLook.defaultFace`).
-- **Per frame**: the strip and its knots (including the grapheme count of the last line) are built once per
-  strip/look change and compared by primitive keys (lines version, translation switch, `measureVersion` of both rows);
-  the line glide and the word glide binary-search precomputed knot arrays (`FloatingLyricsRules.stripKnots` /
-  `stripKnotsOffset`, `WordLyricsRules.WordKnots`) and allocate nothing; the playback `Sample` is one reused object,
-  the lock state is cached, and the position is carried on in the Choreographer frame time (fractional ms,
-  `smoothPosition`). The window is computed without an `IntRange`. `applyMode` skips `updateViewLayout` when the lock
-  state, flags and alpha are unchanged; the `applyData` JSON is parsed on the plugin command's thread
-  (`parseData`) and only applied on the UI thread. Redraws still follow the 1-device-pixel rule.
-- Not changed: `hasOverlappingRendering` stays true (with alpha < 1 in the none mode the karaoke seam and the direct
-  fallback's outline-over-fill would change); the refresh-rate request (`preferredRefreshRate`) is untouched.
+The overlay window keeps Views only for the lock button and touch handling. The lyrics are drawn by `GlLyricsRenderer`
+into a `SurfaceView` (translucent, default z-order, so the real lock `ImageButton` sits above it) on a thread of its
+own: the app's main thread, which the WebView shares, pays nothing per frame.
+
+- **Threads.** Main: window add/remove/`updateViewLayout` (drag, nudge, resize, rotation), the lock button, JSON parse,
+  `SurfaceHolder.Callback`. `moe-lyrics-render` (`LyricsRenderThread`, display priority): EGL context and window
+  surface, its own `Choreographer`, the planner, GL. `moe-lyrics-build` (`GlLyricsPanel`, low priority): `RenderBuilder`
+  turns the overlay's `RenderInputs` into the immutable `RenderState` (`RenderModel`: lines, widths, strip cells, glyph
+  centres, knots, karaoke glides; `RenderLook`: raster looks with a generation, the layout, the mask stops).
+  `moe-lyrics-raster` (`RasterWorker`): line images. The render thread follows whatever refresh rate the display is
+  set to; nothing asks for one.
+- **Clock.** `PlaybackService` publishes an immutable `ClockSnapshot` (track, generation, position, anchor, playing,
+  speed, active, duration) into `LyricsClock.snapshot` on the player's (main) thread on every player event
+  (`onIsPlayingChanged`, `onPositionDiscontinuity`, `onMediaItemTransition`, `onPlaybackStateChanged`,
+  `onPlaybackParametersChanged`) and, while the GL overlay exists and the player plays, re-anchors at every step of
+  ExoPlayer's coarse position (40 ms poll; the anchor sits in the middle of the poll interval). The anchor is
+  `System.nanoTime()`, the same base as `Choreographer`'s frame time (CLOCK_MONOTONIC; `elapsedRealtimeNanos` is
+  CLOCK_BOOTTIME and would differ after a suspend). The render thread extrapolates `position + (frame time - anchor) *
+  speed` and smooths it with `smoothPosition` (a drift under 250 ms is slewed and never steps back, a larger jump is
+  taken as is).
+- **Planning** is a pure function, `LyricsFramePlanner`: clock + model + look -> `FrameParams` (strip offset and cell
+  window, line indices and x, karaoke edge x, whether anything moves, the lyrics time of the next change). Same rules
+  and shared vectors as the Views path, on a fractional clock. Positions are rounded to 1/8 px while moving and to whole
+  pixels at rest (a still line stays crisp). A frame equal to the last one is not drawn; when nothing moves no frame is
+  requested and the thread sleeps until the next line's time, a clock event, a new state or a finished texture.
+- **Drawing** is GLES 2.0 (EGL14, RGBA8888 with alpha), one clear and one draw per frame. A line image is a
+  premultiplied texture made by `LineRasteriser.renderTiles` (text with its shadow or outline baked in); a line wider
+  than a texture is cut into tiles of at most 2046 columns, each with a one-pixel apron so linear filtering at a
+  sub-pixel position shows no seam (`TilePlan`). The fragment shader samples the line at the sub-pixel position and
+  multiplies by a mask computed from six gradient stops (the edge fade times the main opacity for animation none, the
+  centre mask for continuous); a karaoke line mixes the text-colour and the accent image at the edge. The move-mode
+  background is a rounded-rectangle shader drawn first: the SurfaceView sits behind the window, so anything the window
+  itself drew would cover the text. Uploads are limited to about 1.5 MB per frame; textures are kept for the prefetch
+  window (strip: two area widths each side of the view, nearest the centre first; none: the shown line, the next, the
+  previous, the one after the next) under a 48 MB least-recently-used cap (`TextureStore`, `LruBytes`). A look change
+  (generation) drops everything and discards results in flight. A lost context is rebuilt, a lost surface waits for the
+  next one, three failures in a row (or a set-up that cannot work) end in `onFatal` and the Views fallback.
+- **Window.** The height is fixed by `LyricsLayout`: the main row, plus the translation row when it is reserved, plus the
+  panel room (2/11 of the area above and below). The translation row is reserved for the whole track when the track has
+  any translation and the switch is on, so the window never resizes when lines change. Locked: `FLAG_NOT_TOUCHABLE`
+  and, on Android 12+, `LayoutParams.alpha` = min(1, `maximumObscuringOpacityForTouch`). That is the window's alpha, so
+  it covers the SurfaceView's layer too (children inherit the parent layer's alpha in SurfaceFlinger; to be confirmed on
+  the device); the drawn values are not compensated.
+- **Selection.** System property `debug.moe.lyrics.renderer` = `views` | `gl`, read when the window is created; the
+  default is GL, and after a GL failure the Views renderer for the rest of the process. A later phase deletes the Views
+  path (`LyricLineView`, `EdgeFadeLayout`, `LineRasterCache`, the 100 ms tick) once GL is validated on the device.
+- Not decided here: a user-visible renderer option (there is none).
+
+### Views fallback (kept until the GL path is validated)
+
+The overlay shares the main thread and RenderThread with the WebView, so its per-frame and per-line-change cost counts
+against both. Design (`FloatingLyricsOverlay.kt`, `LyricLineView.kt`, `LineRasterCache.kt`, `LineRasteriser.kt`):
+
+- **Images are made off the main thread.** `LineRasteriser.render` runs on `RasterWorker` (`moe-lyrics-raster`, one
+  thread, exits when idle) and calls `Bitmap.prepareToDraw()`; `LineRasterCache` hands the finished, immutable `Raster`
+  to the main thread, and `onDraw` only reads. A look change bumps `generation`: the cache is cleared and results in
+  flight are discarded.
+- **Prefetch, not first-draw.** Continuous mode asks for every cell within the view plus `PREFETCH_VIEWS` (2) widths each
+  side, nearest first, and retains only that window; the none mode prepares the shown line, the next, the previous and
+  the one after the next. A cell whose image is not ready is skipped for that frame.
+- **Per frame**: strips and knots are built once per strip/look change; the glides binary-search precomputed knot arrays
+  and allocate nothing; the position is carried on in the Choreographer frame time; redraws follow the 1-device-pixel
+  rule (`needsPixelRedraw`). `hasOverlappingRendering` stays true and the refresh-rate request is untouched.
 - **Diagnostics** (`LyricsTrace.kt`, free when off): system property `debug.moe.lyrics.trace` = 1 or the
   `moe_floating_lyrics` boolean `trace`, read when the overlay window is created. Trace sections `moeLyrics.render`,
   `moeLyrics.draw`, `moeLyrics.applyData`, `moeLyrics.raster`; every 5 s one logcat line (tag `MoeMediaIndex`) with the
   main-thread render + onDraw time per frame (p50/p99), invalidates per second, rasterise calls and ms, and cell draws
-  that found no finished image.
+  that found no finished image. The GL thread adds (`lyrics gl 5s`): frames drawn and skipped as unchanged, planner + draw
+  time per drawn frame (p50 / p99, the swap is not included), texture uploads and bytes, and the texture cache size.
