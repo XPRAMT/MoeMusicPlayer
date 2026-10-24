@@ -10,7 +10,7 @@
 
 本檔檔名來自最初的研究；研究結論已被採納並完成實作，現行行為以「決策與最終設計」之後的各修訂、「目前設計細節」與文末兩段 Amendment 為準。要點：
 
-- **已實作**：Windows 的工作列歌詞（每條工作列一個）與浮動歌詞全部由 `crates/player-lyrics-native` 原生繪製，WebView2 歌詞視窗已刪除；Android 不受影響（`FloatingLyricsOverlay.kt`）。規則在 `crates/player-lyrics-rules`，與 JS 參考實作、Kotlin 以共用向量對照。
+- **已實作**：Windows 的工作列歌詞（每條工作列一個）與浮動歌詞全部由 `crates/player-lyrics-native` 原生繪製，WebView2 歌詞視窗已刪除；Android 不受影響（`FloatingLyricsOverlay.kt`，影像在背景執行緒預先點陣化，見 ADR 0032）。規則在 `crates/player-lyrics-rules`，與 JS 參考實作、Kotlin 以共用向量對照。
 - **合成層與動畫的最終答案不是最初比較表的結論**：最終使用 Windows.UI.Composition（不是 DirectComposition），而且不使用任何由合成器執行的動畫（DComp `IDCompositionAnimation`、WUC 關鍵格動畫都已移除）；每個合成幀依音訊時鐘在 `plan.rs` 的曲線上取樣，只提交有變的值（位移 1/8 裝置像素、不透明度 1/255），閒置時睡眠。原型 `crates/lyrics-native-proto/`（獨立 crate）仍留在 repo，僅作歷史量測用。
 - **之後又被取代的設計**：連續模式的 200 ms 行淡化與 `lyrics-inactive-opacity` 事件已不存在，透明度改為每個分頁各自的主要／次要兩個值＋靜態置中遮罩（見文末 “opacity inputs”）；逐字歌詞連續模式每行用兩個節點（行起點、最後一個字的結束）以單一單調 C1 曲線連接，`smooth_glide` 只用於卡拉 OK 邊界（ADR 0041 D10）；字重可設定（見文末 “font weight”）；浮動歌詞的移動模式改為自行捕捉滑鼠（ADR 0032），不再用 `HTCAPTION`。
 - **仍待辦**：使用者實機驗收（外觀、鎖頭 tooltip、固定模式穿透、拖曳存檔、自動隱藏／全螢幕／Explorer 重啟、熱插拔、DPI、裝置遺失重建）；歌詞開啟時其他執行緒額外 CPU 的來源待查。
@@ -97,7 +97,7 @@ powershell -File measure.ps1 -ProtoArgs "--windows 3 --mode anim --seconds 12 --
 3. **效果對齊**：陰影（D2D Shadow，σ 0.3 em）、描邊（字形輪廓 0.08 em、α 0.5、反色、先描邊後填色）、整窗透明度（root effect group）、非目前透明度（每行 effect group）、連續模式選陰影時改描邊的既有規則照搬；emoji 彩色字型；字型備援表與 app.css 一致。
 4. **視窗管理**：沿用 `taskbar_lyrics.rs`／`floating_lyrics.rs` 的位置、擁有者、遮蓋判斷與熱插拔邏輯，只把「建立 Tauri WebviewWindow」換成「請原生執行緒建立／移動／銷毀 HWND」。浮動歌詞的鎖頭按鈕與移動模式拖曳要以原生方式實作（`WM_NCHITTEST` 回 `HTCAPTION`、自畫鎖頭圖示）。
 5. **多螢幕／DPI**：每個視窗以自己螢幕的 DPI 繪製，`WM_DPICHANGED` 時重畫；動畫天然以各螢幕更新率執行。
-6. **Android**：不受影響（浮動歌詞已是原生 `FloatingLyricsOverlay`）。
+6. **Android**：不受影響（浮動歌詞已是原生 `FloatingLyricsOverlay`；其影像在背景執行緒預先點陣化，見 ADR 0032 “Android overlay rendering notes”）。
 7. **過渡**：保留 WebView 版作為設定或建置旗標的後備，直到原生版驗收完成。
 
 粗估工作量：原生繪製與動畫模組 4–6 天、浮動歌詞互動（拖曳、鎖頭、面板設定對應）2–3 天、規則移植與對照測試 1–2 天、多螢幕／DPI／裝置遺失與實機驗收 2–3 天，合計約 2 週。

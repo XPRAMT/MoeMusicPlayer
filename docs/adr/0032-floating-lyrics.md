@@ -332,3 +332,44 @@ Android 12+, with no compensation (locked brightness is capped by the system lim
 row is 50 lighter. Windows draws it through DirectWrite (ADR 0034 amendment). Android sets it with
 `Typeface.create(DEFAULT, weight, false)` on API 28+ and bold from 600 below that (minSdk is 24); it is part of
 `LineLook`, so a change re-rasterises every line. See ADR 0041 5.5.
+
+## Android overlay rendering notes (frame cost)
+
+The overlay shares the main thread and RenderThread with the WebView, so its per-frame and per-line-change cost counts
+against both. Current design (`FloatingLyricsOverlay.kt`, `LyricLineView.kt`, `LineRasterCache.kt`,
+`LineRasteriser.kt`):
+
+- **Images are made off the main thread.** `LineRasteriser.render` (CPU `drawText` with the shadow blur or outline, plus
+  the karaoke accent copy and the translation row) runs on one worker thread (`RasterWorker`, `moe-lyrics-raster`,
+  `THREAD_PRIORITY_LESS_FAVORABLE`, exits when idle) and calls `Bitmap.prepareToDraw()` so the GPU upload is not on the
+  first draw frame. `LineRasterCache` hands the finished, immutable `Raster` to the main thread; `onDraw` only reads
+  (`peek`) and never rasterises. A look change (size, colour, shadow, outline, weight, face, density) bumps
+  `generation`: the cache is cleared, queued work is skipped and any result still in flight is discarded on arrival.
+- **Prefetch, not first-draw.** Continuous mode: `LyricLineView.setStrip` asks, only when the window, strip, width or
+  look changed, for every cell within the view plus `PREFETCH_VIEWS` (2) view widths on each side, nearest the view
+  centre first, and `retain`s only that window (so memory is bounded by the window, evicted by distance). None mode:
+  `FloatingLyricsOverlay.prefetchNeighbours` prepares the shown line, the next, the previous and the one after the next
+  (plus karaoke copies and translations) whenever the line, the lyrics or a look epoch changes. The cache is keyed by
+  text, so repeated lines share an image.
+- **Not ready is not drawn.** A cell whose image is still on its way is skipped for that frame (the request is repeated
+  and the view invalidates when it lands); a karaoke line whose accent copy is not ready is drawn whole in the text
+  colour. Only a line that cannot be an image at all (wider/taller than 4096 px) is drawn directly. After a seek far
+  from the prepared window, or on the first display of new lyrics, the line therefore appears a few milliseconds late
+  instead of costing the main thread a blur.
+- The default typeface rule is kept: a view whose weight never changed from 500 keeps `Typeface.DEFAULT`, and its images
+  use the same face (`LineLook.defaultFace`).
+- **Per frame**: the strip and its knots (including the grapheme count of the last line) are built once per
+  strip/look change and compared by primitive keys (lines version, translation switch, `measureVersion` of both rows);
+  the line glide and the word glide binary-search precomputed knot arrays (`FloatingLyricsRules.stripKnots` /
+  `stripKnotsOffset`, `WordLyricsRules.WordKnots`) and allocate nothing; the playback `Sample` is one reused object,
+  the lock state is cached, and the position is carried on in the Choreographer frame time (fractional ms,
+  `smoothPosition`). The window is computed without an `IntRange`. `applyMode` skips `updateViewLayout` when the lock
+  state, flags and alpha are unchanged; the `applyData` JSON is parsed on the plugin command's thread
+  (`parseData`) and only applied on the UI thread. Redraws still follow the 1-device-pixel rule.
+- Not changed: `hasOverlappingRendering` stays true (with alpha < 1 in the none mode the karaoke seam and the direct
+  fallback's outline-over-fill would change); the refresh-rate request (`preferredRefreshRate`) is untouched.
+- **Diagnostics** (`LyricsTrace.kt`, free when off): system property `debug.moe.lyrics.trace` = 1 or the
+  `moe_floating_lyrics` boolean `trace`, read when the overlay window is created. Trace sections `moeLyrics.render`,
+  `moeLyrics.draw`, `moeLyrics.applyData`, `moeLyrics.raster`; every 5 s one logcat line (tag `MoeMediaIndex`) with the
+  main-thread render + onDraw time per frame (p50/p99), invalidates per second, rasterise calls and ms, and cell draws
+  that found no finished image.
