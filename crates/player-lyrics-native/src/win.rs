@@ -1232,6 +1232,9 @@ const DEFAULT_ACCENT: [u8; 3] = [0xA9, 0xC3, 0xFE];
 type MeasureKey = (u32, u32, usize, u16);
 type MeasuredLines = (MeasureKey, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
+/// Owned raster rows: `(text, font px, weight)`.
+type OwnedRows = Vec<(String, f32, u16)>;
+
 struct Win {
     hwnd: HWND,
     kind: Kind,
@@ -1259,7 +1262,7 @@ struct Win {
     /// the last glyph's centre. Cleared with the raster cache (new lyrics or look).
     measured: Option<MeasuredLines>,
     /// Lines to rasterise ahead of their entry (rows, style).
-    prewarm: Vec<(Vec<(String, f32, u16)>, TextStyle)>,
+    prewarm: Vec<(OwnedRows, TextStyle)>,
     /// Until when any of them still moves (`None` = nothing moves).
     moving_until: Option<Instant>,
 }
