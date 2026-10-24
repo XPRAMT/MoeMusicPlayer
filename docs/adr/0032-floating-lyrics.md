@@ -321,3 +321,10 @@ Animation none draws the line at the main opacity; continuous passes both into t
 `lyrics-inactive-opacity` broadcast and Android's separate `inactiveOpacityPercent` payload are gone: the pair rides
 with the window's own settings. Android's window alpha is 1, or min(1, system maximum obscuring opacity) while locked on
 Android 12+, with no compensation (locked brightness is capped by the system limit).
+
+## Amendment: font weight
+
+`fontWeight` (100-1000, default 550) is saved apart for the floating lyrics like the other look fields; the translation
+row is 50 lighter. Windows draws it through DirectWrite (ADR 0034 amendment). Android sets it with
+`Typeface.create(DEFAULT, weight, false)` on API 28+ and bold from 600 below that (minSdk is 24); it is part of
+`LineLook`, so a change re-rasterises every line. See ADR 0041 5.5.

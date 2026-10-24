@@ -276,3 +276,12 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 - 視窗，動畫「無」：顯示中的那一行以主要透明度繪製，次要透明度無作用（滑桿照常可用）。動畫「連續」：遮罩 `centre_mask_stops(W, em, main, secondary)`：0 → 次要（兩端 1 em）→ 主要（到中心 1 em 的平台），Rust／JS／Kotlin 共用向量 `centreMask`（含次要大於主要、主要很小、窄寬度）；所有格與容器的不透明度為 1。
 - 資料流：移除 `lyrics-inactive-opacity` 廣播與 Android `floatingLyricsUpdate` 的獨立 `inactiveOpacityPercent`；兩個值跟著各視窗自己的設定進入 Windows 的 `Look`（`main_opacity_percent`／`secondary_opacity_percent`）與 Android 的 settings。`lyricsLineOpacityFactor`／`line_opacity_factor` 與 Kotlin 的 `inactiveFactor`／`cellOpacity` 已無用途而移除。
 - Android：浮動視窗的視窗 alpha 恆為 1；鎖定（`FLAG_NOT_TOUCHABLE`）且 Android 12+ 時為 min(1, `maximumObscuringOpacityForTouch`)，繪製值不補償，所以鎖定時整體亮度被系統上限（通常 0.8）壓住，這是刻意的取捨。動畫「無」時兩個列視圖以主要透明度作為自己的 alpha（背景與鎖頭不受影響）。
+
+### 5.5 修訂：每個歌詞分頁各自的字體粗細（使用者核准）
+
+- 設定：播放頁（`lyricsPreferences`）、工作列（`taskbarLyrics`）、浮動（`floatingLyrics`）各自儲存 `fontWeight`（整數，100–1000，滑桿步進 50，預設 550）。缺欄位取 550，載入時夾在範圍內（Rust `LYRICS_FONT_WEIGHT_RANGE`／`default_lyrics_font_weight`，JS `LYRICS_FONT_WEIGHT`／`normalizeLyricsFontWeight`，Kotlin `FloatingLyricsRules.fontWeight`），不遷移。滑桿「字體粗細」在「字體與大小」群組、緊接「譯文大小（相對原文）」之後，三個分頁與播放頁快速設定共用 `LyricsLookSettings.svelte`。
+- 意義：`fontWeight` 是原文的字重；譯文與羅馬拼音恆為 `fontWeight − 50`（`lyricsAuxiliaryWeight`／`translation_weight`／`auxiliaryFontWeight`，至少 1，所以字重 100 時為 50）。
+- 播放頁：`LyricsView.svelte` 以 CSS 變數 `--lyric-primary-weight`／`--lyric-auxiliary-weight` 取代寫死的字重（原文 550；譯文與羅馬拼音原本沿用預設字重）；行內墨水行高以同一字重量測（canvas 字型字串帶字重），字重改變時重測；列高仍由 DOM 觀察器量測，所以版面會跟著重排。
+- Windows 原生：`Look.font_weight`；DirectWrite 的 `DWRITE_FONT_WEIGHT` 只收 1..=999，設定值 1000 以 999 繪製（`dwrite_weight`）。點陣列改為 `(文字, 字級 px, 字重)`，主列用 `fontWeight`、譯文列用 −50，所以點陣鍵（`plan::raster_key`）含每一列的字重：字重不同的視窗不共用點陣。字重會改變文字寬度、第一與最後字形中心，所以連續模式的行寬量測鍵（`Win.measured`）含字重；設定改變時整份快取與量測清除並重新規劃（`Cmd::Look`），不是每幀。卡拉 OK 的白色與主色兩張表面用同一字重。行框以 Segoe UI Medium 的 ascent／descent 計算，沒有隨字重改變（同一字型家族各字重的垂直度量相同）。
+- Android：`LyricLineView.setLook` 帶字重，API 28 以上 `Typeface.create(Typeface.DEFAULT, weight, false)`；minSdk 24，更舊的系統只有一般與粗體，字重 ≥ 600 用粗體、否則一般（`FloatingLyricsRules.typefaceChoice`）。`LineLook`（`LineRasterCache` 的鍵）含字重，改變時所有行重新點陣化並重新量測；`stripFor` 的鍵含字重。字重隨 `floatingLyricsUpdate` 的 settings 傳入，不需新通道。
+- 非可變字型（Segoe UI、Roboto 等系統字型視版本）無法呈現所有字重，系統會對應到最近的可用字重，不特別處理。

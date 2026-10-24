@@ -346,3 +346,10 @@ The window opacity and the `lyrics-inactive-opacity` broadcast named above no lo
 carries `main_opacity_percent` and `secondary_opacity_percent` (ADR 0041 5.4): animation none draws the line through the
 mask host at the main opacity (`plan::container_opacity`); continuous keeps the container at 1 and builds
 `Mask::Centre { em, main, secondary }`, whose key includes both values.
+
+## Amendment: font weight
+
+`Look` carries `font_weight` (ADR 0041 5.5). Raster rows are `(text, font px, weight)` (the translation row is 50
+lighter) and `plan::raster_key` includes every row's weight, so windows with different weights never share a bitmap.
+`DWRITE_FONT_WEIGHT` accepts 1..=999: the setting's 1000 is drawn as 999. A look change clears the window's cache and
+its measurements, which include the weight, and re-plans the strip.
