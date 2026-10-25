@@ -206,8 +206,8 @@ export function karaokeGlide(spans, words) {
  * `cellStart + lastCentre`), skipped for a one-glyph line, an end not after the start, or when the gap from the end to
  * the next line's start would move faster than the line itself (the strip then glides from this line's start straight
  * to the next start; the last line keeps its end). When the last line has no word times, `finalArrivalMs`
- * (`lyricsStripFinalArrivalMs`: 500 ms per grapheme, capped at the track end) adds the terminal knot with its last
- * glyph's centre, as the line glide does; a word-timed last line uses its own end instead. Times strictly increase (a
+ * (`lyricsStripFinalArrivalMs`: 500 ms per wide grapheme, 250 ms per other one, capped at the track end) adds the
+ * terminal knot with its last glyph's centre, as the line glide does; a word-timed last line uses its own end instead. Times strictly increase (a
  * later knot at or before an earlier one's time replaces it, so the later line's start wins an overlap) and values
  * never decrease.
  * @param {{ startMs: number, cellStart: number, anchor?: number, endMs?: number | null, lastCentre?: number }[]} lines

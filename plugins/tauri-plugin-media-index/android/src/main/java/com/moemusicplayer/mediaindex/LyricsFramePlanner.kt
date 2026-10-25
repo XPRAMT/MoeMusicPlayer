@@ -142,7 +142,7 @@ internal class LyricsFramePlanner {
         val lastT: Double
         val duration = duration(clock, model)
         val trackEnd = if (duration != FloatingLyricsRules.NO_TIME) duration + model.offsetMs else FloatingLyricsRules.NO_TIME
-        val arrival = FloatingLyricsRules.finalLineArrivalFromGraphemes(strip.starts[strip.starts.size - 1], strip.lastGraphemes, trackEnd)
+        val arrival = FloatingLyricsRules.finalLineArrivalFromEstimate(strip.starts[strip.starts.size - 1], strip.lastEstimateMs, trackEnd)
         val wordLines = strip.wordLines
         if (wordLines != null && (wordKnotsModel !== strip || wordKnotsEnd != arrival)) {
             // Built once per strip and arrival (the terminal knot follows the track length), never per frame.

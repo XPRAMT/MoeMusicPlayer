@@ -216,7 +216,7 @@ class LyricsFramePlannerTest {
         val strip = s.model.strip!!
         for (position in listOf(0.0, 999.5, 1000.0, 2500.25, 4999.9, 7000.0, 9000.0, 9100.5, 11_000.0, 20_000.0)) {
             val p = plan(s, clock(), position)
-            val arrival = FloatingLyricsRules.finalLineArrivalFromGraphemes(9000, strip.lastGraphemes, 100_000)
+            val arrival = FloatingLyricsRules.finalLineArrivalFromEstimate(9000, strip.lastEstimateMs, 100_000)
             val knots = FloatingLyricsRules.stripKnots(
                 strip.starts, strip.cells, strip.widths, FloatingLyricsRules.STRIP_ALIGN, arrival,
                 strip.mainWidths, strip.lastGlyphCenters, strip.firstGlyphCenters,
@@ -273,13 +273,13 @@ class LyricsFramePlannerTest {
                 )
             }
             val n = knotLines.size
-            // The planner adds the terminal knot itself from the track length: a huge grapheme count makes the arrival
+            // The planner adds the terminal knot itself from the track length: a huge estimate makes the arrival
             // the track end, set to the vector's `finalArrivalMs` (none: the last start, which adds no knot).
             val arrival = if (c.isNull("finalArrivalMs")) knotLines[n - 1].startMs.toLong() else c.getLong("finalArrivalMs")
             val strip = StripModel(
                 LongArray(n) { knotLines[it].startMs.toLong() }, Array(n) { "x" }, Array(n) { "" },
                 FloatArray(n) { knotLines[it].cellStart.toFloat() }, FloatArray(n) { 10f }, FloatArray(n) { 10f }, FloatArray(n),
-                FloatArray(n), FloatArray(n), knotLines, 1_000_000,
+                FloatArray(n), FloatArray(n), knotLines, 500_000_000L,
             )
             val base = state(inputs(listOf(line(0, "x")), animation = cont))
             val model = RenderModel(

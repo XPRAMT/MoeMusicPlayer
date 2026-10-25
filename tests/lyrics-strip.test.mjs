@@ -10,6 +10,7 @@ import {
   effectiveLyricsTextEffect,
   lyricsGraphemeCount,
   lyricsStripFinalArrivalMs,
+  lyricsTerminalLineEstimateMs,
   layoutLyricsStrip,
   lyricsLineWeight,
   lyricsStripFocus,
@@ -148,11 +149,15 @@ test('the final line keeps gliding until its last grapheme centre reaches the ly
   assert.equal(nextLyricsStripBreak(starts, 9000, null), null);
 });
 
-test('the final glide estimates 500 ms per grapheme and stops no later than track end', () => {
+test('the final glide estimates 500 ms per wide grapheme, 250 ms per other one, and stops no later than track end', () => {
   assert.equal(lyricsGraphemeCount('Aか\u3099🙂'), 3);
   assert.equal(lyricsStripFinalArrivalMs(5000, '最後一句'), 7000);
   assert.equal(lyricsStripFinalArrivalMs(5000, '最後一句', 6200), 6200);
-  assert.equal(lyricsStripFinalArrivalMs(5000, 'Aか\u3099🙂'), 6500);
+  assert.equal(lyricsStripFinalArrivalMs(5000, 'Aか\u3099🙂'), 6250);
+  assert.equal(lyricsStripFinalArrivalMs(5000, ''), 5250);
+  assert.equal(lyricsTerminalLineEstimateMs('啦啦啦啦啦啦啦啦'), 4000);
+  assert.equal(lyricsTerminalLineEstimateMs('Hello world'), 2750);
+  assert.equal(lyricsTerminalLineEstimateMs('愛してる love you'), 4250);
 });
 
 // Line fades (ADR 0032): lines start at 1000, 5000 and 9000 ms.

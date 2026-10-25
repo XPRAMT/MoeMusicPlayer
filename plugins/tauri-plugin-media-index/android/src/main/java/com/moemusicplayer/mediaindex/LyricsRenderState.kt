@@ -78,8 +78,8 @@ internal class StripModel(
      * same motion).
      */
     val wordLines: List<WordLyricsRules.KnotLine>?,
-    /** Grapheme count of the last line (the terminal glide's duration estimate), counted once. */
-    val lastGraphemes: Int,
+    /** The last line's terminal glide duration estimate (`FloatingLyricsRules.terminalLineEstimateMs`), made once. */
+    val lastEstimateMs: Long,
 ) {
     /** The texture keys of the cells, made once so a frame allocates none. */
     val mainKeys: Array<TexKey> = Array(texts.size) { TexKey(0, texts[it], false) }

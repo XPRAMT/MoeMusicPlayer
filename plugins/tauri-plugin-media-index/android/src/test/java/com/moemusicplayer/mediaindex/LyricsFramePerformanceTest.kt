@@ -230,11 +230,11 @@ class LyricsFramePerformanceTest {
     }
 
     @Test
-    fun finalArrivalFromCountedGraphemes() {
+    fun finalArrivalFromTheEstimateMadeOnce() {
         for (text in listOf("", "a", "最後一句", "Aが🙂")) {
             for (end in listOf(null, 6_200L, 100_000L)) {
                 val expected = FloatingLyricsRules.finalLineArrivalMs(5_000L, text, end)
-                val actual = FloatingLyricsRules.finalLineArrivalFromGraphemes(5_000L, FloatingLyricsRules.graphemeCount(text), end ?: FloatingLyricsRules.NO_TIME)
+                val actual = FloatingLyricsRules.finalLineArrivalFromEstimate(5_000L, FloatingLyricsRules.terminalLineEstimateMs(text), end ?: FloatingLyricsRules.NO_TIME)
                 assertEquals(expected, actual)
             }
         }

@@ -236,11 +236,14 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
-    fun finalContinuousLineArrivalUsesFiveHundredMillisecondsPerGraphemeAndTrackEndCap() {
+    fun finalContinuousLineArrivalWeighsWideGraphemesDoubleAndCapsAtTrackEnd() {
         assertEquals(7_000L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "最後一句", null))
         assertEquals(6_200L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "最後一句", 6_200L))
-        assertEquals(6_500L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "Aか\u3099🙂", null))
-        assertEquals(5_500L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "", null))
+        assertEquals(6_250L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "Aか\u3099🙂", null))
+        assertEquals(5_250L, FloatingLyricsRules.finalLineArrivalMs(5_000L, "", null))
+        assertEquals(4_000L, FloatingLyricsRules.terminalLineEstimateMs("啦啦啦啦啦啦啦啦"))
+        assertEquals(2_750L, FloatingLyricsRules.terminalLineEstimateMs("Hello world"))
+        assertEquals(4_250L, FloatingLyricsRules.terminalLineEstimateMs("愛してる love you"))
     }
 
     @Test

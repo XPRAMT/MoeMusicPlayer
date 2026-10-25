@@ -165,13 +165,13 @@
    "lineStartMs": 1000,
    "text": "abc",
    "trackEndMs": null,
-   "expected": 2500
+   "expected": 1750
   },
   {
    "lineStartMs": 1000,
    "text": "",
    "trackEndMs": null,
-   "expected": 1500
+   "expected": 1250
   },
   {
    "lineStartMs": 1000,
@@ -184,6 +184,90 @@
    "text": "あ👨‍👩‍👧",
    "trackEndMs": null,
    "expected": 1000
+  },
+  {
+   "lineStartMs": 0,
+   "text": "啦啦啦啦啦啦啦啦",
+   "trackEndMs": null,
+   "expected": 4000
+  },
+  {
+   "lineStartMs": 0,
+   "text": "Hello world",
+   "trackEndMs": null,
+   "expected": 2750
+  },
+  {
+   "lineStartMs": 0,
+   "text": "愛してる love you",
+   "trackEndMs": null,
+   "expected": 4250
+  },
+  {
+   "lineStartMs": 0,
+   "text": "사랑해",
+   "trackEndMs": null,
+   "expected": 1500
+  },
+  {
+   "lineStartMs": 0,
+   "text": "ＡＢＣ！",
+   "trackEndMs": null,
+   "expected": 2000
+  },
+  {
+   "lineStartMs": 0,
+   "text": "ｱｲｳｴｵ",
+   "trackEndMs": null,
+   "expected": 1250
+  },
+  {
+   "lineStartMs": 0,
+   "text": "café",
+   "trackEndMs": null,
+   "expected": 1000
+  },
+  {
+   "lineStartMs": 0,
+   "text": "が",
+   "trackEndMs": null,
+   "expected": 500
+  },
+  {
+   "lineStartMs": 0,
+   "text": "🙂",
+   "trackEndMs": null,
+   "expected": 500
+  },
+  {
+   "lineStartMs": 0,
+   "text": "a b",
+   "trackEndMs": null,
+   "expected": 750
+  },
+  {
+   "lineStartMs": 0,
+   "text": "　",
+   "trackEndMs": null,
+   "expected": 500
+  },
+  {
+   "lineStartMs": 0,
+   "text": "“…”",
+   "trackEndMs": null,
+   "expected": 750
+  },
+  {
+   "lineStartMs": 0,
+   "text": "❤️",
+   "trackEndMs": null,
+   "expected": 250
+  },
+  {
+   "lineStartMs": 0,
+   "text": "🇯🇵",
+   "trackEndMs": null,
+   "expected": 250
   }
  ],
  "strip": [

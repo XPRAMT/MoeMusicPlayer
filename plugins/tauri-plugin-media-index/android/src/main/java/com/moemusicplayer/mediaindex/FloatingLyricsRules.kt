@@ -8,8 +8,13 @@ package com.moemusicplayer.mediaindex
 object FloatingLyricsRules {
     /** How long the last line of a track is assumed to stay when the track length is unknown. */
     const val LAST_LINE_FALLBACK_MS = 5_000L
-    /** Terminal continuous-lyrics glide estimate per user-perceived character. */
-    const val LYRICS_MS_PER_GRAPHEME = 500L
+    /**
+     * Terminal continuous-lyrics glide estimate per grapheme cluster whose base (first) code point is East Asian Wide
+     * or Fullwidth ([EastAsianWidth.isWide]: CJK ideographs, kana, Hangul, full-width forms, wide emoji) ...
+     */
+    const val LYRICS_WIDE_GRAPHEME_MS = 500L
+    /** ... and per any other grapheme cluster (Latin, half-width katakana, ambiguous / neutral symbols, spaces). */
+    const val LYRICS_NARROW_GRAPHEME_MS = 250L
 
     /** "No time" for the primitive (allocation-free) overloads that otherwise take a `Long?`. */
     const val NO_TIME = Long.MIN_VALUE
@@ -24,13 +29,32 @@ object FloatingLyricsRules {
         return graphemes
     }
 
+    /**
+     * How long the terminal line is estimated to take: [LYRICS_WIDE_GRAPHEME_MS] per wide grapheme cluster plus
+     * [LYRICS_NARROW_GRAPHEME_MS] per other one; an empty line counts as one narrow grapheme. Same segmentation as
+     * [graphemeCount].
+     */
+    fun terminalLineEstimateMs(text: String): Long {
+        val iterator = java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
+        iterator.setText(text)
+        var total = 0L
+        var start = iterator.first()
+        var end = iterator.next()
+        while (end != java.text.BreakIterator.DONE) {
+            total += if (EastAsianWidth.isWide(text.codePointAt(start))) LYRICS_WIDE_GRAPHEME_MS else LYRICS_NARROW_GRAPHEME_MS
+            start = end
+            end = iterator.next()
+        }
+        return maxOf(LYRICS_NARROW_GRAPHEME_MS, total)
+    }
+
     /** Estimate the terminal glide end from the last line's graphemes, capped at track end when known. */
     fun finalLineArrivalMs(lineStartMs: Long, text: String, trackEndMs: Long?): Long =
-        finalLineArrivalFromGraphemes(lineStartMs, graphemeCount(text), trackEndMs ?: NO_TIME)
+        finalLineArrivalFromEstimate(lineStartMs, terminalLineEstimateMs(text), trackEndMs ?: NO_TIME)
 
-    /** [finalLineArrivalMs] with the grapheme count known already (counted once per strip); `trackEndMs` [NO_TIME] when unknown. */
-    fun finalLineArrivalFromGraphemes(lineStartMs: Long, graphemes: Int, trackEndMs: Long): Long {
-        val estimated = lineStartMs + maxOf(1, graphemes) * LYRICS_MS_PER_GRAPHEME
+    /** [finalLineArrivalMs] with [terminalLineEstimateMs] known already (once per strip); `trackEndMs` [NO_TIME] when unknown. */
+    fun finalLineArrivalFromEstimate(lineStartMs: Long, estimateMs: Long, trackEndMs: Long): Long {
+        val estimated = lineStartMs + estimateMs
         return if (trackEndMs != NO_TIME) minOf(estimated, trackEndMs) else estimated
     }
 

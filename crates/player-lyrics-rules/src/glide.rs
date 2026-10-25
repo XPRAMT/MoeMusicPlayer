@@ -245,7 +245,7 @@ pub struct KnotLine {
 /// is skipped for a one-glyph line, an end not after the start, or when the gap from the end to the next line's start
 /// would move faster than the line itself (the strip then glides from this line's start straight to the next start;
 /// the last line keeps its end). When the last line has no word times, `final_arrival_ms` (`final_arrival_ms`: 500 ms
-/// per grapheme, capped at the track end) adds the terminal knot with its last glyph's centre, as the line glide
+/// per wide grapheme, 250 ms per other one, capped at the track end) adds the terminal knot with its last glyph's centre, as the line glide
 /// (`strip_cubic`) does; a word-timed last line uses its own end instead. Times strictly increase (a later knot at or
 /// before an earlier one's time replaces it, so the later line's start wins an overlap) and values never decrease.
 pub fn word_strip_knots(lines: &[KnotLine], final_arrival_ms: Option<f64>) -> Vec<(f64, f64)> {
@@ -560,7 +560,7 @@ mod tests {
     }
 
     /// Each line is judged on its own: in 十年有多长 the last line 啦啦啦啦啦啦啦啦 has no word times, so it keeps the
-    /// terminal knot (500 ms per grapheme from its start, its last glyph's centre) even though an earlier line is
+    /// terminal knot (500 ms per wide grapheme from its start, its last glyph's centre) even though an earlier line is
     /// word-timed; it no longer rests on its first glyph.
     #[test]
     fn a_last_line_without_word_times_glides_to_its_last_glyph() {

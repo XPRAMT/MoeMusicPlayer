@@ -28,7 +28,17 @@ const scroll = [[0, 4000], [1800, 4000], [3600, 4000], [5000, 4000], [-10, 4000]
   elapsedMs, durationMs, expected: getLyricScrollProgress(elapsedMs, durationMs),
 }));
 
-const finalArrival = [[1000, 'abc', null], [1000, '', null], [1000, '夜に駆ける', 2500], [0, 'あ👨‍👩‍👧', null]].map(([lineStartMs, text, trackEndMs]) => ({
+// The terminal line estimate (ADR 0041 D10): 500 ms per grapheme whose base code point is East Asian W/F, 250 ms per
+// other one (spaces included), at least 250 ms. Cases: Latin, empty, a track-end cap, a ZWJ emoji family (one wide
+// grapheme), CJK, Latin with spaces, mixed kana + Latin, Hangul, full-width ASCII, half-width katakana, e + U+0301
+// (one narrow grapheme), か + U+3099 (one wide), a wide emoji, U+3000 (F), ambiguous punctuation, ❤️ (U+2764 is N
+// even with VS16) and a flag (regional indicators are N).
+const finalArrival = [
+  [1000, 'abc', null], [1000, '', null], [1000, '夜に駆ける', 2500], [0, 'あ👨\u200d👩\u200d👧', null],
+  [0, '啦啦啦啦啦啦啦啦', null], [0, 'Hello world', null], [0, '愛してる love you', null], [0, '사랑해', null],
+  [0, 'ＡＢＣ！', null], [0, 'ｱｲｳｴｵ', null], [0, 'cafe\u0301', null], [0, 'か\u3099', null], [0, '🙂', null],
+  [0, 'a b', null], [0, '\u3000', null], [0, '“…”', null], [0, '❤\ufe0f', null], [0, '🇯🇵', null],
+].map(([lineStartMs, text, trackEndMs]) => ({
   lineStartMs, text, trackEndMs, expected: lyricsStripFinalArrivalMs(lineStartMs, text, trackEndMs),
 }));
 

@@ -2,6 +2,8 @@
 // ideographic space (U+3000), that scrolls with playback so the current line sits at the chosen alignment. The
 // translation strip is laid out with the same cell widths, so each translation stays under its own line.
 
+import { isEastAsianWide } from './east-asian-width.js';
+
 /** The separator between lines (one em wide). */
 export const LYRICS_STRIP_SEPARATOR = '\u3000';
 export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
@@ -9,20 +11,40 @@ export const LYRICS_ANIMATIONS = Object.freeze(['none', 'continuous']);
 export const LYRICS_STRIP_ALIGN = 'left';
 /** ... on the lyric area's horizontal CENTRE, whatever the text alignment setting and the panel width. */
 export const LYRICS_STRIP_TARGET = 'center';
-/** The terminal line advances at an estimated 500 ms for each grapheme. */
-export const LYRICS_MS_PER_GRAPHEME = 500;
+/** The terminal line's estimate per grapheme cluster whose base (first) code point is East Asian Wide or Fullwidth ... */
+export const LYRICS_WIDE_GRAPHEME_MS = 500;
+/** ... and per any other grapheme cluster (Latin, half-width katakana, ambiguous / neutral symbols, spaces). */
+export const LYRICS_NARROW_GRAPHEME_MS = 250;
+
+/** @param {string} value @returns {string[]} */
+function lyricsGraphemes(value) {
+  if (typeof Intl.Segmenter === 'function') {
+    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value), (s) => s.segment);
+  }
+  return Array.from(value);
+}
 
 /** @param {string} value */
 export function lyricsGraphemeCount(value) {
-  if (typeof Intl.Segmenter === 'function') {
-    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)).length;
+  return lyricsGraphemes(value).length;
+}
+
+/**
+ * How long the terminal line is estimated to take: 500 ms per wide grapheme cluster (base code point East Asian W or
+ * F, `east-asian-width.js`) plus 250 ms per other one; an empty line counts as one narrow grapheme.
+ * @param {string} text
+ */
+export function lyricsTerminalLineEstimateMs(text) {
+  let total = 0;
+  for (const g of lyricsGraphemes(text)) {
+    total += isEastAsianWide(g.codePointAt(0) ?? 0) ? LYRICS_WIDE_GRAPHEME_MS : LYRICS_NARROW_GRAPHEME_MS;
   }
-  return Array.from(value).length;
+  return Math.max(LYRICS_NARROW_GRAPHEME_MS, total);
 }
 
 /** @param {number} lineStartMs @param {string} text @param {number|null} [trackEndMs] */
 export function lyricsStripFinalArrivalMs(lineStartMs, text, trackEndMs = null) {
-  const estimated = lineStartMs + Math.max(1, lyricsGraphemeCount(text)) * LYRICS_MS_PER_GRAPHEME;
+  const estimated = lineStartMs + lyricsTerminalLineEstimateMs(text);
   return typeof trackEndMs === 'number' && Number.isFinite(trackEndMs) ? Math.min(estimated, trackEndMs) : estimated;
 }
 

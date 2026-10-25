@@ -198,7 +198,7 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
         }
         return StripModel(
             LongArray(kept.size) { kept[it].startMs }, texts, translations, cells, widths, mainWidths, translationWidths,
-            lastCenters, firstCenters, wordLines, FloatingLyricsRules.graphemeCount(texts.last()),
+            lastCenters, firstCenters, wordLines, FloatingLyricsRules.terminalLineEstimateMs(texts.last()),
         )
     }
 

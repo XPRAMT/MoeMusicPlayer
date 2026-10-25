@@ -7,6 +7,7 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod east_asian_width;
 pub mod glide;
 pub mod words;
 pub use glide::*;
@@ -14,8 +15,11 @@ pub use words::*;
 
 /// The separator between lines of the continuous strip (one em wide).
 pub const STRIP_SEPARATOR: char = '\u{3000}';
-/// The terminal line advances at an estimated 500 ms per grapheme.
-pub const MS_PER_GRAPHEME: f64 = 500.0;
+/// The terminal line's estimated duration per grapheme cluster whose base (first) code point is East Asian Wide or
+/// Fullwidth (CJK ideographs, kana, Hangul, full-width forms, wide emoji: `east_asian_width::is_east_asian_wide`) ...
+pub const WIDE_GRAPHEME_MS: f64 = 500.0;
+/// ... and per any other grapheme cluster (Latin, half-width katakana, ambiguous / neutral symbols, spaces).
+pub const NARROW_GRAPHEME_MS: f64 = 250.0;
 /// A line fades between "current" and "not current" over this long, ending when the next line starts.
 pub const FADE_MS: f64 = 200.0;
 /// The "none" mode: how long the last line is shown when the track length is unknown.
@@ -77,9 +81,23 @@ pub fn grapheme_count(text: &str) -> usize {
     text.graphemes(true).count()
 }
 
-/// The lyrics time at which the terminal line's glide ends: 500 ms per grapheme, capped at the track end.
+/// How long the terminal line is estimated to take: [`WIDE_GRAPHEME_MS`] per wide grapheme cluster plus
+/// [`NARROW_GRAPHEME_MS`] per other one; an empty line counts as one narrow grapheme.
+pub fn terminal_line_estimate_ms(text: &str) -> f64 {
+    let total: f64 = text
+        .graphemes(true)
+        .map(|g| match g.chars().next() {
+            Some(c) if east_asian_width::is_east_asian_wide(c) => WIDE_GRAPHEME_MS,
+            _ => NARROW_GRAPHEME_MS,
+        })
+        .sum();
+    total.max(NARROW_GRAPHEME_MS)
+}
+
+/// The lyrics time at which the terminal line's glide ends: the line start plus [`terminal_line_estimate_ms`],
+/// capped at the track end.
 pub fn final_arrival_ms(line_start_ms: f64, text: &str, track_end_ms: Option<f64>) -> f64 {
-    let estimated = line_start_ms + grapheme_count(text).max(1) as f64 * MS_PER_GRAPHEME;
+    let estimated = line_start_ms + terminal_line_estimate_ms(text);
     match track_end_ms {
         Some(end) if end.is_finite() => estimated.min(end),
         _ => estimated,
@@ -460,7 +478,24 @@ mod tests {
     #[test]
     fn graphemes_count_emoji_clusters_once() {
         assert_eq!(grapheme_count("あ👨‍👩‍👧"), 2);
-        assert_eq!(final_arrival_ms(1000.0, "", None), 1500.0);
+        assert_eq!(final_arrival_ms(1000.0, "", None), 1250.0);
+    }
+
+    #[test]
+    fn the_terminal_estimate_weighs_wide_graphemes_double() {
+        assert_eq!(terminal_line_estimate_ms("啦啦啦啦啦啦啦啦"), 4000.0);
+        assert_eq!(terminal_line_estimate_ms("Hello world"), 2750.0);
+        assert_eq!(terminal_line_estimate_ms("愛してる love you"), 4250.0);
+        // e + U+0301 is one narrow grapheme, か + U+3099 one wide; half-width ｱ is narrow, ＡＢＣ wide.
+        assert_eq!(terminal_line_estimate_ms("e\u{301}"), 250.0);
+        assert_eq!(terminal_line_estimate_ms("か\u{3099}"), 500.0);
+        assert_eq!(terminal_line_estimate_ms("ｱｲｳ"), 750.0);
+        assert_eq!(terminal_line_estimate_ms("ＡＢＣ"), 1500.0);
+        assert_eq!(terminal_line_estimate_ms("🙂"), 500.0);
+        assert_eq!(
+            final_arrival_ms(0.0, "啦啦啦啦啦啦啦啦", Some(3000.0)),
+            3000.0
+        );
     }
 
     #[test]
