@@ -38,7 +38,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 ### 寫入安全
 
 1. 複製原檔到同目錄暫存檔 `.<name>.moetmp`，在暫存檔上由 lofty 寫入，`fsync` 後以 `ReplaceFileW`（Windows）／rename 原子取代；失敗則刪暫存檔、原檔不動。
-2. 寫入後檔案 mtime **照常更新**為寫入時間，不保留舊 mtime、也不提供保留選項（已確認）。
+2. 寫入後檔案 mtime **照常更新**為寫入時間，不保留舊 mtime、也不提供保留選項（已確認）。**建立時間保留**（Windows 曲庫的「新增時間」取自它）：`write_edit` 在動檔前讀原檔建立時間，rename 前以 `File::set_times`＋`FileTimesExt::set_created` 設到 `.moetmp-*` 暫存檔，rename 後讀回核對（相差 10 ms 內算保留，FAT／exFAT 的精度）；lofty、APE 家族與 DSF 三條寫入路徑共用 `replace_original`。盡力而為：讀不到、設不了或檔案系統沒保留時不阻擋儲存，只以 `eprintln!("[details] …")` 記錄原因（與本 crate 其他非致命狀況一致；不改 `write_edit` 回傳型別與 IPC）。非 Windows 不處理（Android 無法設定 btime）。曲庫的「新增時間」是 `source_mappings.created_at_utc_ms`：儲存後的 `refresh_track_metadata` 不動 mapping，畫面維持原值；下次同步重讀檔案時讀到的也是保留下來的同一個值。SMB 另見「平台」。測試 `crates/player-tags/tests/creation_time.rs`（Windows，FLAC／MP3／WavPack／DSF 複本）。
 3. 正在播放的檔案：Windows 播放端若以共用讀取開檔，ReplaceFileW 可能因無 `FILE_SHARE_DELETE` 失敗。建議播放端改以 `FILE_SHARE_READ|FILE_SHARE_DELETE` 開檔（已開的 handle 繼續讀舊資料）；若仍失敗，記住位置→釋放 handle→寫入→從原位置續播，不中斷使用者操作。
 4. 備份：寫入前把原檔的**標籤區段**（非整檔）存到 UserData `tag-backups/<hash>.json`（含封面），保留最近 N 筆，供「還原上次儲存」。
 5. 寫完：重讀標籤 → 只更新該曲 SQLite 投影與相關專輯／演出者聚合 → 發事件讓列表、正在播放、Windows SMTC／Android Media3 metadata 刷新；不全庫重掃。
@@ -134,7 +134,8 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 
 - 按鈕改名「導入使用中歌詞」，取代先前只限線上來源的「導入」：播放器目前為此曲使用的歌詞，不論來源（網易雲／QQ 線上、同名 .lrc、手動選擇的歌詞檔、內嵌）都可匯入。
 - 同步歌詞輸出為 LRC 時間戳；翻譯與羅馬音以相同時間戳的額外行跟在原文後。
-- 沒有使用中歌詞，或使用中歌詞與欄位內容相同時停用；只暫存，按儲存才寫檔。
+- 按鈕一律可按；只暫存，按儲存才寫檔。匯入時把該曲目前的歌詞延遲（與歌詞自身的 offset）烘進每個時間戳。
+- 延遲歸零（使用者定案）：本次面板內以非 0 延遲按過「導入使用中歌詞」後，下一次寫入歌詞欄的儲存（歌詞欄有改）把該曲延遲設回 0 並送 `LYRICS_TIMING_OFFSET_EVENT`，避免延遲套用兩次；匯入後再編輯歌詞也一樣歸零（不再要求存檔內容等於匯入文字）。匯入後按「清空」，或以延遲 0 再匯入一次，就取消歸零；每次儲存都清除這個待處理狀態，所以歸零只發生一次。判斷在 `lyrics-import.js` 的 `nextBakedDelayState`（`tests/lyrics-import.test.mjs`）。
 
 ## Android 後端（2026-10-16）
 
@@ -157,7 +158,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
 
-播放頁頂欄資訊按鈕開啟 `TrackDetailsDialog`（portal 掛到 `.app-shell`，`.floating-surface`，z-index 1000+；單一捲動區）。欄位暫存，「儲存」（或 Ctrl+S）經確認面板後才 `track_details_save` 寫檔（`crates/player-tags`：同目錄 `.moetmp-<檔名>` 暫存→寫入→重讀驗證→rename；MP3 一律 ID3v2.4；演出者原樣；歌詞一律寫內嵌、不建 `.lrc`）。「清空」清歌詞欄（儲存後才移除，可 ↺ 還原）；「導入使用中歌詞」匯入目前使用的任何來源歌詞（LRC 時間戳，譯文／羅馬音以同時間戳額外行）；歌詞欄有改（`lyricsChanged`）時同一次儲存把手動列設為內嵌參照（`link_embedded_lyrics`）。版面：路徑列（頻譜圖、複製路徑、在資料夾中開啟）、屬性兩欄（格式｜標籤、時長｜位元率、取樣率｜位元深度、聲道｜修改時間、檔案大小｜建立時間，時間 `YYYY-MM-DD HH:mm (UTC+8)`）、封面區（選擇／匯出／複製／貼上／移除一列）、標題…類型各一列、錄音日期｜音軌號｜碟號三等寬；不顯示音軌／碟片總數（存檔沿用原值）。數值格式（`track-details-format.js`）：位元率全 App 一套 `formatBitrateKbps(kbps, mbpsDigits)`（< 1000 整數 kbps；≥ 1000 改 Mbps，詳情最多三位、頂欄與列表最多一位）；取樣率 kHz（DSD 為 MHz 四位）；時長到小數一位（`formatDetailsDuration`）。
+播放頁頂欄資訊按鈕開啟 `TrackDetailsDialog`（portal 掛到 `.app-shell`，`.floating-surface`，z-index 1000+；單一捲動區）。欄位暫存，「儲存」（或 Ctrl+S）經確認面板後才 `track_details_save` 寫檔（`crates/player-tags`：同目錄 `.moetmp-<檔名>` 暫存→寫入→重讀驗證→rename，Windows 保留原建立時間（見「寫入安全」2）；MP3 一律 ID3v2.4；演出者原樣；歌詞一律寫內嵌、不建 `.lrc`）。「清空」清歌詞欄（儲存後才移除，可 ↺ 還原）；「導入使用中歌詞」匯入目前使用的任何來源歌詞（LRC 時間戳，譯文／羅馬音以同時間戳額外行）；歌詞欄有改（`lyricsChanged`）時同一次儲存把手動列設為內嵌參照（`link_embedded_lyrics`）。版面：路徑列（頻譜圖、複製路徑、在資料夾中開啟）、屬性兩欄（格式｜標籤、時長｜位元率、取樣率｜位元深度、聲道｜修改時間、檔案大小｜建立時間，時間 `YYYY-MM-DD HH:mm (UTC+8)`）、封面區（選擇／匯出／複製／貼上／移除一列）、標題…類型各一列、錄音日期｜音軌號｜碟號三等寬；不顯示音軌／碟片總數（存檔沿用原值）。數值格式（`track-details-format.js`）：位元率全 App 一套 `formatBitrateKbps(kbps, mbpsDigits)`（< 1000 整數 kbps；≥ 1000 改 Mbps，詳情最多三位、頂欄與列表最多一位）；取樣率 kHz（DSD 為 MHz 四位）；時長到小數一位（`formatDetailsDuration`）。
 
 封面：`player_tags::cover` 的 `plan_cover`／`prepare_cover`（各容器相同）：一律 JPG，來源至少一個像素 alpha < 255 時改寫 PNG 保留透明（`has_transparency`）；不需縮放的 JPG 與有透明的 PNG 寫原始位元組，其餘重新編碼（先套 EXIF 方向並把方向改為 1，保留 ICC 與其餘 EXIF）。「儲存時：…」由 `track_details_cover_plan` 顯示同一份計畫。JPG 品質（預設 100）與縮放短邊（預設 2160）存 localStorage `moe.coverEditOptions.v2`。複製→貼上保留原檔（`src/lib/cover-clipboard.js`：記住原檔與解碼像素指紋，指紋相同就改用原檔）。剪貼簿：Windows 用 navigator.clipboard；Android 讀寫都走原生 ClipboardManager——`track_details_clipboard_has_image` 只讀 clip description（Android 的貼上按鈕一律可按）、`track_details_read_clipboard_image` 讀 content:// 或 file:// URI 並以檔頭判斷格式、`track_details_copy_cover` 經 FileProvider（`${applicationId}.moe.updates`）放 content URI。測試：`player-tags` 的 `cover` 單元測試與 `tests/cover_write.rs`。
 
