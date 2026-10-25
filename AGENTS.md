@@ -164,7 +164,7 @@ Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 proce
 
 ### 更新、接續播放與備份
 
-自動更新（ADR 0022 版本辨識、ADR 0021 Windows 安裝、ADR 0015 Android）：只用版本號辨識（版本＝建置日期 `src-tauri/build-version.txt`，Release tag `v<版本>`）；Release 只放 `moemusicplayer-windows-x86_64.zip` 與 `moemusicplayer-android-arm64.apk`，沒有 JSON 清單、沒有單獨的更新器 exe，完整性靠 GitHub 資產 SHA-256 digest（沒有 digest 就不自動更新）。`UpdateCenter`：「忽略」（`ignoredUpdateVersion`）、「自動安裝」、「自動安裝並重啟」。Windows `install_in_place` 改名替換，只留一份 `.moemusicplayer.previous.<id>.bak`。發布：`npm run release:windows`、`npm run release:android`，加 `-Upload -ReleaseTag v<版本>` 才上傳。端到端更新要等有更新的 Release 才能驗證。
+自動更新（ADR 0022 版本辨識、ADR 0021 Windows 安裝、ADR 0015 Android）：只用版本號辨識（版本＝建置日期 `src-tauri/build-version.txt`，Release tag `v<版本>`）；Release 只放 `moemusicplayer-windows-x86_64.zip` 與 `moemusicplayer-android-arm64.apk`，沒有 JSON 清單、沒有單獨的更新器 exe，完整性靠 GitHub 資產 SHA-256 digest（沒有 digest 就不自動更新）。`UpdateCenter`：「忽略」（`ignoredUpdateVersion`）、「自動安裝」、「自動安裝並重啟」。Windows `install_in_place` 改名替換，只留一份 `.moemusicplayer.previous.<id>.bak`。發布流程見 `docs/RELEASE.md`。端到端更新要等有更新的 Release 才能驗證。
 
 接續播放：`settings.json` 的 `resumePlayback`（預設 false）。正常關閉或更新重啟時若正在播放，`set_resume_playback(true)`（更新流程在暫停前記錄，中止時改回 false）；下次啟動還原 session 成功（`ready`）後 `take_resume_playback` 重設並 `request_play`；強制結束或當機不寫入。Android 播放 actor 在狀態改變時經 `ResumeHook.sink` 即時寫入，啟動時 `restore_session` 依欄位以 `play_when_ready` 續播（`AppState.settings` 為 `Arc<SettingsStore>`）。Release 與裝置實測待確認。
 
@@ -194,7 +194,7 @@ Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 proce
 - 工作結束時必須提供完整結案報告：實際修改內容、執行的建置命令與版本、安裝／啟動在哪些裝置、無法安裝或未實測項目及原因；不得把建置成功說成已安裝，也不得把單元測試說成實機驗收。
 - 不以 Python sqlite3 讀寫使用中的正式 SQLite；先確認播放器關閉，或使用已驗證的唯讀／備份流程。
 - 依變更範圍執行 `npm run check`、`node --test`、相關 Rust tests、workspace Clippy 與 rustfmt；完成工作後依「本文件維護規則」就地更新「目前工作狀態」。
-- 發布前整理 AGENTS.md：使用者說「上傳 github」或執行 `npm run release:windows`／`npm run release:android` 上傳前，先依「本文件維護規則」整理本文件（刪除已完成或被取代的內容、把設計細節移到 ADR），並確認 `node --test tests/agents-md-size.test.mjs` 通過。
+- 發布（使用者說「上傳 github」）：依 [`docs/RELEASE.md`](docs/RELEASE.md) 執行（版本與命名、發布說明 `docs/release-notes/v<版本>.md` 的撰寫規則與先給使用者看過、發布前整理本文件並通過 `node --test tests/agents-md-size.test.mjs`、建置、上傳與 digest 確認、回報）。
 
 ## 按需閱讀的領域規則
 
