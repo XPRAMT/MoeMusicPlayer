@@ -28,6 +28,26 @@ export function formatDetailsSampleRate(hz) {
   return hz >= 1_000_000 ? `${trimmed(hz / 1_000_000, 4)} MHz` : `${trimmed(hz / 1000, 3)} kHz`;
 }
 
+/** @param {number} value */
+const pad2 = (value) => String(value).padStart(2, '0');
+
+/**
+ * Local date and time to the second with the UTC offset, e.g. `2026-04-29 20:59:41 (UTC+8)`, `(UTC+5:30)`, `(UTC-3:30)`.
+ * Nothing known shows a dash.
+ * @param {number | null | undefined} ms Unix time in milliseconds.
+ * @param {number} [offsetMinutes] Minutes east of UTC; defaults to this system's offset at that instant.
+ */
+export function formatDetailsDate(ms, offsetMinutes) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return '—';
+  const offset = offsetMinutes ?? -new Date(ms).getTimezoneOffset();
+  const local = new Date(ms + offset * 60_000);
+  const abs = Math.abs(offset);
+  const zone = `UTC${offset >= 0 ? '+' : '-'}${Math.floor(abs / 60)}${abs % 60 ? `:${pad2(abs % 60)}` : ''}`;
+  const day = `${local.getUTCFullYear()}-${pad2(local.getUTCMonth() + 1)}-${pad2(local.getUTCDate())}`;
+  const time = `${pad2(local.getUTCHours())}:${pad2(local.getUTCMinutes())}:${pad2(local.getUTCSeconds())}`;
+  return `${day} ${time} (${zone})`;
+}
+
 /** Length as m:ss.s (h:mm:ss.s from one hour), rounded to a tenth of a second. @param {number | null | undefined} ms */
 export function formatDetailsDuration(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '—';

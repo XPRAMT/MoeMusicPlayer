@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatDetailsBitrate, formatDetailsDuration, formatDetailsSampleRate } from './track-details-format.js';
+  import { formatDetailsBitrate, formatDetailsDate, formatDetailsDuration, formatDetailsSampleRate } from './track-details-format.js';
   import { tr } from './i18n.js';
   import { originalForPastedCover, pixelFingerprint, rememberCopiedCover } from './cover-clipboard.js';
   import { formatAudioFormat } from './track-columns.js';
@@ -427,15 +427,6 @@
   }
 
   const formatBytes = (bytes: number) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${Math.round(bytes / 1024)} KB`;
-  const pad = (value: number) => String(value).padStart(2, '0');
-  /** Local time with zone, e.g. 2026-10-16 23:54 (UTC+8). */
-  const formatDate = (ms: number | null) => {
-    if (ms == null) return '—';
-    const date = new Date(ms);
-    const offset = -date.getTimezoneOffset();
-    const zone = `UTC${offset >= 0 ? '+' : '-'}${Math.floor(Math.abs(offset) / 60)}${Math.abs(offset) % 60 ? `:${pad(Math.abs(offset) % 60)}` : ''}`;
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())} (${zone})`;
-  };
 
   let lastTrackId = '';
   $effect(() => { if (trackId !== lastTrackId) { lastTrackId = trackId; void load(); } });
@@ -476,9 +467,9 @@
         <dt>{tr("取樣率")}</dt><dd>{formatDetailsSampleRate(details.properties.sampleRate)}</dd>
         <dt>{tr("位元深度")}</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
         <dt>{tr("聲道")}</dt><dd>{details.properties.channels ?? '—'}</dd>
-        <dt>{tr("修改時間")}</dt><dd>{formatDate(details.modifiedUnixMs)}</dd>
+        <dt>{tr("修改時間")}</dt><dd>{formatDetailsDate(details.modifiedUnixMs)}</dd>
         <dt>{tr("檔案大小")}</dt><dd>{formatBytes(details.fileSize)}</dd>
-        <dt>{tr("建立時間")}</dt><dd>{formatDate(details.createdUnixMs)}</dd>
+        <dt>{tr("建立時間")}</dt><dd>{formatDetailsDate(details.createdUnixMs)}</dd>
       </dl>
 
       <section class="track-details-cover">
