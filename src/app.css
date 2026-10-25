@@ -115,10 +115,22 @@ html {
   outline: none;
 }
 
+/* Default keyboard focus ring for anything without its own: 1px accent at 70% opacity. Zero
+   specificity, so every component focus style (buttons, inputs, rows below) still wins. */
+:where(:focus-visible) {
+  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
 button:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 3px;
+}
+
+/* List rows clip their overflow and fill the viewport width: draw the ring inside the row. */
+.paged-virtual-row:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -1px;
 }
 
 .app-shell {
