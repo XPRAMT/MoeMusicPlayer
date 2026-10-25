@@ -99,7 +99,7 @@ internal class FrameParams {
 
 /**
  * The pure core of the GL overlay (ADR 0032): the playback clock, the model and the look in, what to draw out. It is
- * the render-thread twin of the Views path's `render()` / `renderStrip()`, built on the same rules
+ * built on the shared rules
  * ([FloatingLyricsRules], [WordLyricsRules], checked against the shared vectors), but on a fractional clock and with
  * sub-pixel positions: a moving position is rounded to 1/8 px, a resting one to a whole pixel (so a still line is
  * crisp). One instance per render thread; it keeps only a cache of the line glide's knots.

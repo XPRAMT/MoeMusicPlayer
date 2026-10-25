@@ -9,8 +9,20 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** A rasterised line: the image (text, shadow and outline at full opacity) and the room `pad` it keeps around the text. */
-internal class Raster(val bitmap: Bitmap, val pad: Int)
+/** Everything that changes how a rasterised line looks (ADR 0032): a change re-rasterises every line. */
+internal data class LineLook(
+    val sizePx: Float,
+    val color: Int,
+    val shadowRadius: Float,
+    val shadowColor: Int,
+    val strokeWidth: Float,
+    val strokeColor: Int,
+    val density: Float,
+    /** Font weight of this line's typeface: lines drawn at another weight are other bitmaps. */
+    val weight: Int = FloatingLyricsRules.DEFAULT_FONT_WEIGHT,
+    /** The view never left the platform's default face (its weight was never changed from the default): that face, not `weight`'s. */
+    val defaultFace: Boolean = false,
+)
 
 /**
  * A rasterised line for the GL renderer, cut into texture tiles (see [TilePlan]): `bitmaps[k]` holds the image columns
@@ -50,23 +62,8 @@ internal object RasterWorker {
 }
 
 internal object LineRasteriser {
-    // Bitmaps wider than the GPU's texture limit are not drawn; such a line falls back to direct drawing.
+    // Line images taller than this are not drawn.
     private const val MAX_RASTER_PX = 4096
-
-    /**
-     * `value` with its shadow / outline into an image with room for the blur; null if empty or too large for a texture.
-     * A pure function of `value` and `look`, so it runs on any thread; the finished bitmap is uploaded for drawing
-     * here (`prepareToDraw`) so the first frame that draws it does not.
-     */
-    fun render(value: String, look: LineLook): Raster? {
-        if (!LyricsTrace.on) return build(value, look)
-        val section = LyricsTrace.begin("moeLyrics.raster")
-        try {
-            return build(value, look)
-        } finally {
-            LyricsTrace.end(section, false)
-        }
-    }
 
     /** Widest line image the GL renderer takes (a longer one is not drawn); tiles keep every bitmap small. */
     private const val MAX_TILED_PX = 32_768
@@ -133,41 +130,5 @@ internal object LineRasteriser {
         }
         if (LyricsTrace.on) LyricsTrace.rasterised(w, h, System.nanoTime() - started)
         return TileSet(bitmaps.toTypedArray(), tiles, w, h, pad)
-    }
-
-    private fun build(value: String, look: LineLook): Raster? {
-        if (value.isEmpty()) return null
-        val started = if (LyricsTrace.on) System.nanoTime() else 0L
-        val face = if (look.defaultFace) Typeface.DEFAULT else lyricTypeface(look.weight)
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-            typeface = face
-            textSize = look.sizePx
-            color = look.color
-            if (look.shadowRadius > 0f) setShadowLayer(look.shadowRadius, 0f, 0f, look.shadowColor)
-        }
-        val blur = if (look.shadowRadius > 0f) kotlin.math.ceil(3f * (0.57735f * look.shadowRadius + 0.5f)).toInt() else 0
-        val pad = maxOf(blur, kotlin.math.ceil(look.strokeWidth).toInt()) + 1
-        val metrics = fill.fontMetrics
-        val w = kotlin.math.ceil(fill.measureText(value)).toInt() + 2 * pad
-        val h = kotlin.math.ceil(metrics.descent - metrics.ascent).toInt() + 2 * pad
-        if (w <= 0 || h <= 0 || w > MAX_RASTER_PX || h > MAX_RASTER_PX) return null
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val target = Canvas(bitmap)
-        val baseline = pad - metrics.ascent
-        if (look.strokeWidth > 0f) {
-            val outline = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-                typeface = face
-                textSize = look.sizePx
-                style = Paint.Style.STROKE
-                strokeJoin = Paint.Join.ROUND
-                color = look.strokeColor
-                strokeWidth = look.strokeWidth
-            }
-            target.drawText(value, pad.toFloat(), baseline, outline)
-        }
-        target.drawText(value, pad.toFloat(), baseline, fill)
-        bitmap.prepareToDraw()
-        if (LyricsTrace.on) LyricsTrace.rasterised(w, h, System.nanoTime() - started)
-        return Raster(bitmap, pad)
     }
 }

@@ -244,19 +244,6 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** Main thread (the player's looper): what the floating lyrics overlay needs (ADR 0032). */
-    internal fun overlaySample(into: FloatingLyricsOverlay.Sample): Boolean {
-        val player = exoPlayer ?: return false
-        val item = player.currentMediaItem ?: return false
-        val state = player.playbackState
-        val active = state == androidx.media3.common.Player.STATE_READY ||
-            state == androidx.media3.common.Player.STATE_BUFFERING
-        val duration = player.duration.takeIf { it > 0 } ?: FloatingLyricsRules.NO_TIME
-        // `playing` lets the overlay carry the coarse position on per frame (FloatingLyricsRules.smoothPositionMs).
-        into.set(item.mediaId, player.currentPosition, duration, active, player.isPlaying)
-        return true
-    }
-
     /**
      * The playback clock for the GL lyrics overlay (ADR 0032): every event that changes the position's course publishes a
      * [ClockSnapshot] (and wakes the render thread); while the overlay wants it, a poll re-anchors on every step of the
@@ -980,9 +967,6 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         @Volatile private var activeInstance: PlaybackService? = null
-
-        /** Main thread only. Fills `into` and returns true; false while no playback service is running or nothing is loaded. */
-        fun floatingLyricsSample(into: FloatingLyricsOverlay.Sample): Boolean = activeInstance?.overlaySample(into) ?: false
 
         /** Main thread. The GL overlay was created: publish the clock now and keep it fresh while playing. */
         internal fun startClockFeed() {

@@ -172,7 +172,7 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
         return built
     }
 
-    /** The strip of the lines with some text (main or translation); port of the Views path's `stripFor`. */
+    /** The strip of the lines with some text (main or translation). */
     private fun buildStrip(i: RenderInputs, main: TextMetrics, second: TextMetrics): StripModel? {
         val kept = i.lines.filter { it.trimmedText.isNotEmpty() || (i.showTranslation && it.trimmedTranslation.isNotEmpty()) }
         if (kept.isEmpty()) return null
@@ -203,7 +203,7 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
     }
 
     companion object {
-        /** The move-mode background behind the lyric area (the Views path's 0x47000000). */
+        /** The move-mode background behind the lyric area. */
         const val MOVE_BACKGROUND_ARGB = 0x47000000
     }
 }

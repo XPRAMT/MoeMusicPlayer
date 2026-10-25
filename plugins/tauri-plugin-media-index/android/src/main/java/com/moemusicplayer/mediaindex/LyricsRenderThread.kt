@@ -21,8 +21,8 @@ private const val TAG = "MoeMediaIndex"
  * WebView) never draws.
  *
  * Failures never crash the app: a lost context is rebuilt; a surface that went away waits for the next one; repeated
- * failures, or a GL set-up that cannot work, call [onFatal] (on the render thread) once so the overlay can fall back to
- * the Views renderer.
+ * failures, or a GL set-up that cannot work, call [onFatal] (on the render thread) once; the overlay then shows nothing
+ * (there is no other renderer).
  */
 internal class LyricsRenderThread(private val onFatal: (String) -> Unit) {
     private val thread = HandlerThread("moe-lyrics-render", Process.THREAD_PRIORITY_DISPLAY).also { it.start() }

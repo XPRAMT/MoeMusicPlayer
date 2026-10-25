@@ -353,21 +353,6 @@ class LyricsFramePlannerTest {
         assertTrue(copy.sameAs(c))
     }
 
-    // ---- renderer choice
-
-    @Test
-    fun glIsTheDefaultAndViewsTheFallbackAfterAFailure() {
-        assertTrue(RendererChoice.useGl("", glFailed = false, viewsNext = false))
-        assertFalse(RendererChoice.useGl("", glFailed = true, viewsNext = false))
-        assertFalse(RendererChoice.useGl("views", glFailed = false, viewsNext = false))
-        assertTrue(RendererChoice.useGl("gl", glFailed = false, viewsNext = false))
-        // The switch can bring GL back for a later window, but never right after it failed.
-        assertTrue(RendererChoice.useGl("gl", glFailed = true, viewsNext = false))
-        assertFalse(RendererChoice.useGl("gl", glFailed = true, viewsNext = true))
-        assertFalse(RendererChoice.useGl("", glFailed = false, viewsNext = true))
-        assertTrue(RendererChoice.useGl(" GL ", glFailed = false, viewsNext = false))
-    }
-
     // ---- builder
 
     @Test

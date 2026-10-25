@@ -280,7 +280,7 @@ object FloatingLyricsRules {
 
     /**
      * The effect drawn: the selected one in every mode, as on Windows. (Continuous mode used to swap the shadow for the
-     * outline; lines are now rasterised once with their shadow, LineRasterCache, so the glide never blurs per frame.)
+     * outline; lines are rasterised once with their shadow, so the glide never blurs per frame.)
      */
     @Suppress("UNUSED_PARAMETER")
     fun effectiveTextEffect(animation: String, preference: String): String = preference

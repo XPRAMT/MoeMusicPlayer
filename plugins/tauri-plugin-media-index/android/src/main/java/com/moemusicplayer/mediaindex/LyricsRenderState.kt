@@ -163,20 +163,3 @@ internal class RenderInputs(
     val layout: LyricsLayout,
     val backgroundRadiusPx: Float,
 )
-
-/** Which renderer a new overlay window uses (ADR 0032). Pure, so the fallback rules are unit-tested. */
-internal object RendererChoice {
-    /**
-     * `property` is `debug.moe.lyrics.renderer` (`views`, `gl` or anything else for "no preference"); `glFailed`: GL failed
-     * earlier in this process; `viewsNext`: the window being created replaces a GL one that just failed (never GL again
-     * right away, whatever the property says).
-     */
-    fun useGl(property: String, glFailed: Boolean, viewsNext: Boolean): Boolean {
-        if (viewsNext) return false
-        return when (property.trim().lowercase()) {
-            "views" -> false
-            "gl" -> true
-            else -> !glFailed
-        }
-    }
-}

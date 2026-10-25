@@ -214,33 +214,6 @@ class FloatingLyricsRulesTest {
     }
 
     @Test
-    fun lineRasterCacheKeysOnLookAndKeepsOnlyTheWindow() {
-        var created = 0
-        val released = mutableListOf<String>()
-        // Synchronous hand-over: the background behaviour is covered by LyricsFramePerformanceTest.
-        val cache = LineRasterCache<String>({ text, _ -> created++; text }, { released += it }, { it.run() }, { it.run() }, {})
-        val look = LineLook(40f, -1, 10f, 0, 0f, 0, 2f)
-        cache.request("a")
-        assertEquals(null, cache.peek("a"))
-        cache.setLook(look)
-        cache.request("a"); cache.request("a"); cache.request("b")
-        assertEquals(2, created)
-        cache.setLook(look.copy())
-        assertEquals(2, cache.size)
-        for (changed in listOf(look.copy(sizePx = 41f), look.copy(color = 0), look.copy(shadowRadius = 0f),
-            look.copy(shadowColor = 1), look.copy(strokeWidth = 1f), look.copy(strokeColor = 1), look.copy(density = 3f), look.copy(weight = 700))) {
-            cache.request("a")
-            cache.setLook(changed)
-            assertEquals(0, cache.size)
-        }
-        cache.request("a"); cache.request("b"); cache.request("c")
-        released.clear()
-        cache.retain(setOf("b"))
-        assertEquals(listOf("a", "c"), released.sorted())
-        assertEquals(1, cache.size)
-    }
-
-    @Test
     fun fontWeightRangesAndTheTranslationOffsetMatchTheSettings() {
         assertEquals(500, FloatingLyricsRules.DEFAULT_FONT_WEIGHT)
         assertEquals(100, FloatingLyricsRules.fontWeight(0))
