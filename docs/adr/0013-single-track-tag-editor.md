@@ -158,7 +158,22 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
 
-播放頁頂欄資訊按鈕開啟 `TrackDetailsDialog`（portal 掛到 `.app-shell`，`.floating-surface`，z-index 1000+；單一捲動區）。欄位暫存，「儲存」（或 Ctrl+S）經確認面板後才 `track_details_save` 寫檔（`crates/player-tags`：同目錄 `.moetmp-<檔名>` 暫存→寫入→重讀驗證→rename，Windows 保留原建立時間（見「寫入安全」2）；MP3 一律 ID3v2.4；演出者原樣；歌詞一律寫內嵌、不建 `.lrc`）。「清空」清歌詞欄（儲存後才移除，可 ↺ 還原）；「導入使用中歌詞」匯入目前使用的任何來源歌詞（LRC 時間戳，譯文／羅馬音以同時間戳額外行）；歌詞欄有改（`lyricsChanged`）時同一次儲存把手動列設為內嵌參照（`link_embedded_lyrics`）。版面：路徑列（頻譜圖、複製路徑、在資料夾中開啟）、屬性兩欄（格式｜標籤、時長｜位元率、取樣率｜位元深度、聲道｜修改時間、檔案大小｜建立時間，時間 `YYYY-MM-DD HH:mm:ss (UTC+8)`）、封面區（選擇／匯出／複製／貼上／移除一列）、標題…類型各一列、錄音日期｜音軌號｜碟號三等寬；不顯示音軌／碟片總數（存檔沿用原值）。數值格式（`track-details-format.js`）：位元率全 App 一套 `formatBitrateKbps(kbps, mbpsDigits)`（< 1000 整數 kbps；≥ 1000 改 Mbps，詳情最多三位、頂欄與列表最多一位）；取樣率 kHz（DSD 為 MHz 四位）；時長到小數一位（`formatDetailsDuration`）。
+播放頁頂欄資訊按鈕開啟 `TrackDetailsDialog`（portal 掛到 `.app-shell`，`.floating-surface`，z-index 1000+；單一捲動區）。欄位暫存，「儲存」（或 Ctrl+S）經確認面板後才 `track_details_save` 寫檔（`crates/player-tags`：同目錄 `.moetmp-<檔名>` 暫存→寫入→重讀驗證→rename，Windows 保留原建立時間（見「寫入安全」2）；MP3 一律 ID3v2.4；演出者原樣；歌詞一律寫內嵌、不建 `.lrc`）。「清空」清歌詞欄（儲存後才移除，可 ↺ 還原）；「導入使用中歌詞」匯入目前使用的任何來源歌詞（LRC 時間戳，譯文／羅馬音以同時間戳額外行）；歌詞欄有改（`lyricsChanged`）時同一次儲存把手動列設為內嵌參照（`link_embedded_lyrics`）。版面：路徑列（頻譜圖、複製路徑、在資料夾中開啟）、屬性兩欄（格式｜標籤、時長｜位元率、取樣率｜位元深度、聲道｜修改時間、檔案大小｜建立時間，時間見下方「時間顯示」）、封面區（選擇／匯出／複製／貼上／移除一列）、標題…類型各一列、錄音日期｜音軌號｜碟號三等寬；不顯示音軌／碟片總數（存檔沿用原值）。數值格式（`track-details-format.js`）：位元率全 App 一套 `formatBitrateKbps(kbps, mbpsDigits)`（< 1000 整數 kbps；≥ 1000 改 Mbps，詳情最多三位、頂欄與列表最多一位）；取樣率 kHz（DSD 為 MHz 四位）；時長到小數一位（`formatDetailsDuration`）。
+
+時間顯示：修改與建立時間都以本機時區顯示到秒（`formatDetailsDate(ms, { zone })`，`track-details-format.js`）。後端在 `TrackDetails.timesAbsolute`（IPC `timesAbsolute`）告訴前端儲存的時間是否確定是絕對時刻：是 → `2026-10-23 02:16:58`；否 → 加上時區 `2026-10-23 02:16:58 (UTC+8)`（可能是沒有時區的當地時間，例如 FAT 存的就是寫入當時的牆上時間）。兩個時間共用同一個旗標。判斷在 `crates/player-tags/src/file_times.rs`：純函式 `file_system_keeps_absolute_times`（檔案系統名稱，NTFS／ReFS／ext*／f2fs／btrfs／xfs／APFS 等為是，其餘與未知為否）與 `mount_times_absolute`（掛載表），OS 呼叫只負責取得名稱或掛載表。
+
+| 位置 | 判斷方式 | 顯示 |
+|---|---|---|
+| Windows NTFS／ReFS | `GetVolumePathNameW` → `GetVolumeInformationW` 的檔案系統名稱 | 無時區 |
+| Windows FAT／FAT32 | 同上 | 加時區（當地時間、不含時區） |
+| Windows exFAT | 同上 | 加時區（UTC 偏移欄位為選用，Windows API 看不到） |
+| Windows 網路磁碟／UNC 路徑 | 同上，採用伺服器回報的名稱（通常是 "NTFS"） | 依名稱 |
+| Android 內部儲存空間（`/storage/emulated`、`/sdcard`） | `/proc/self/mountinfo`（備援 `/proc/mounts`）最長前綴的掛載；FUSE／sdcardfs 看不到底層類型，改看 `/data/media` 所在掛載（f2fs／ext4 為是），表裡看不到時也算是 | 無時區 |
+| Android SD 卡／USB（`/storage/<卷>`） | 層疊掛載時只有表裡剛好有 `/mnt/media_rw/<卷>` 且為絕對型檔案系統才算是（多半是 vfat／exfat → 否），看不到就算否 | 加時區 |
+| Android 殘留的 content:// 曲目 | 不知道檔案實際在哪（工作副本的位置不算） | 加時區 |
+| SMB 遠端 | 協定是 UTC FILETIME | 無時區 |
+| WebDAV 遠端 | GMT 日期 | 無時區 |
+| 未知或偵測失敗 | — | 加時區 |
 
 封面：`player_tags::cover` 的 `plan_cover`／`prepare_cover`（各容器相同）：一律 JPG，來源至少一個像素 alpha < 255 時改寫 PNG 保留透明（`has_transparency`）；不需縮放的 JPG 與有透明的 PNG 寫原始位元組，其餘重新編碼（先套 EXIF 方向並把方向改為 1，保留 ICC 與其餘 EXIF）。「儲存時：…」由 `track_details_cover_plan` 顯示同一份計畫。JPG 品質（預設 100）與縮放短邊（預設 2160）存 localStorage `moe.coverEditOptions.v2`。複製→貼上保留原檔（`src/lib/cover-clipboard.js`：記住原檔與解碼像素指紋，指紋相同就改用原檔）。剪貼簿：Windows 用 navigator.clipboard；Android 讀寫都走原生 ClipboardManager——`track_details_clipboard_has_image` 只讀 clip description（Android 的貼上按鈕一律可按）、`track_details_read_clipboard_image` 讀 content:// 或 file:// URI 並以檔頭判斷格式、`track_details_copy_cover` 經 FileProvider（`${applicationId}.moe.updates`）放 content URI。測試：`player-tags` 的 `cover` 單元測試與 `tests/cover_write.rs`。
 
