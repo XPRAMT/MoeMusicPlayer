@@ -46,10 +46,10 @@ use windows_numerics::{Matrix3x2, Vector2, Vector3};
 use crate::plan;
 use crate::sampling::{self, Curve};
 use crate::{
-    dwrite_weight, effect_rgb, fit_font_size, floating_lock_css, floating_margin_css,
+    dwrite_weight, effect_rgb, fit_font_size, floating_area_height_px, floating_lock_css,
+    floating_lock_top_px, floating_main_slot_css, floating_margin_css, floating_top_room_px,
     translation_weight, Chrome, Events, Kind, Look, LyricsData, PlayState, PlaybackSample,
-    FLOATING_LINE_HEIGHT, FLOATING_PANEL_LINE_HEIGHT, TASKBAR_LINE_HEIGHT,
-    TASKBAR_SIDE_PADDING_CSS,
+    FLOATING_LINE_HEIGHT, TASKBAR_LINE_HEIGHT, TASKBAR_SIDE_PADDING_CSS,
 };
 
 const WM_WAKE: u32 = WM_APP + 41;
@@ -2130,6 +2130,23 @@ struct Context<'a> {
     frame: Instant,
 }
 
+/// Top of the first row. Floating: the main row's slot (from the chosen font alone) so the first row never moves when
+/// a translation row comes or goes; the translation hangs below it. Taskbar: the rows centred in the area.
+fn rows_top(
+    area: Area,
+    floating: bool,
+    look: &Look,
+    scale: f64,
+    rows_h: f64,
+    main_row_h: f64,
+) -> f64 {
+    if floating {
+        area.top + (floating_main_slot_css(look.font_size_px) * scale - main_row_h) / 2.0
+    } else {
+        area.top + (area.height - rows_h) / 2.0
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Area {
     left: f64,
@@ -2219,12 +2236,13 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
     let area = if floating {
         let margin = floating_margin_css(look.font_size_px) * scale;
         let lock = floating_lock_css(look.font_size_px) * scale;
-        let share = FLOATING_LINE_HEIGHT / FLOATING_PANEL_LINE_HEIGHT;
+        // The room above is from the main row only (the translation row hangs below it): ADR 0032.
+        let top = f64::from(floating_top_room_px(look.font_size_px, scale));
         Area {
             left: margin,
-            top: h * (1.0 - share) / 2.0,
+            top,
             width: (w - margin * 2.0 - lock).max(1.0),
-            height: h * share,
+            height: floating_area_height_px(h, top),
         }
     } else {
         let pad = TASKBAR_SIDE_PADDING_CSS * scale;
@@ -2247,7 +2265,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         plan::mask_percents(look.main_opacity_percent, look.secondary_opacity_percent);
 
     if floating {
-        chrome(gfx, win, &root, area, w, h, scale, &look)?;
+        chrome(gfx, win, &root, area, w, scale, &look)?;
     }
 
     let lyrics = ctx
@@ -2416,7 +2434,14 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             } else {
                 0.0
             };
-        let top = area.top + (area.height - rows_h) / 2.0;
+        let top = rows_top(
+            area,
+            floating,
+            &look,
+            scale,
+            rows_h,
+            font as f64 * line_height,
+        );
         let mut cells = Vec::new();
         for (index, keys) in &planned.opacity {
             let (_, text, tr) = lines[*index];
@@ -2579,7 +2604,14 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             rows.push((tr, trans_font, trans_weight));
         }
         let rows_h: f64 = rows.iter().map(|r| r.1 as f64 * line_height).sum();
-        let mut y = area.top + (area.height - rows_h) / 2.0;
+        let mut y = rows_top(
+            area,
+            floating,
+            &look,
+            scale,
+            rows_h,
+            font as f64 * line_height,
+        );
         let mut placed = Vec::new();
         for row in rows {
             let raster = cached(gfx, win, &[row], style)?;
@@ -2977,7 +3009,6 @@ fn chrome(
     root: &ContainerVisual,
     area: Area,
     w: f64,
-    h: f64,
     scale: f64,
     look: &Look,
 ) -> Result<()> {
@@ -2995,7 +3026,7 @@ fn chrome(
         .round()
         .max(1.0) as i32;
     let right = w as i32 - (floating_margin_css(look.font_size_px) * scale).round() as i32;
-    let top = (h as i32 - size) / 2;
+    let top = floating_lock_top_px(area.top as i32, area.height as i32, size);
     let rect = RECT {
         left: right - size,
         top,

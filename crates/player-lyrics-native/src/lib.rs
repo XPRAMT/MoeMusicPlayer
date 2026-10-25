@@ -185,6 +185,47 @@ pub fn floating_margin_css(font_px: f64) -> f64 {
     (font_px.max(1.0) * FLOATING_SIDE_MARGIN_EM).ceil().max(1.0)
 }
 
+/// Transparent room above (and below) a lyric area, as a share of that area's height: the window is text height x 1.5
+/// and the area text height x 1.1, centred, so `(1 - 1.375 / 1.875) / 2` each side.
+pub fn floating_room_share() -> f64 {
+    (1.0 - FLOATING_LINE_HEIGHT / FLOATING_PANEL_LINE_HEIGHT) / 2.0
+}
+
+/// Height (CSS px) of the main row's slot in the lyric area: one line of the chosen font at text height x 1.1. The
+/// first row sits in this slot whatever is drawn below it (ADR 0032).
+pub fn floating_main_slot_css(font_px: f64) -> f64 {
+    (font_px.max(1.0) * FLOATING_LINE_HEIGHT).ceil().max(1.0)
+}
+
+/// Transparent room above the lyric area (physical px): from the main row alone, so a translation row never moves the
+/// first row. Only the room below follows the whole area (`floating_bottom_room_px`).
+pub fn floating_top_room_px(font_px: f64, scale: f64) -> i32 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (floating_main_slot_css(font_px) * scale * floating_room_share()).round() as i32
+}
+
+/// Transparent room below a lyric area `area_px` tall (physical px).
+pub fn floating_bottom_room_px(area_px: i32) -> i32 {
+    (f64::from(area_px.max(0)) * floating_room_share()).round() as i32
+}
+
+/// The lyric area's height in a window `window_h` tall whose room above is `top` (the inverse of the window height
+/// `top + area + bottom_room(area)`); exact for a whole-pixel area.
+pub fn floating_area_height_px(window_h: f64, top: f64) -> f64 {
+    ((window_h - top) / (1.0 + floating_room_share()))
+        .round()
+        .max(1.0)
+}
+
+/// Top of the lock button (px from the window's top): centred on the lyric area.
+pub fn floating_lock_top_px(top: i32, area_h: i32, size: i32) -> i32 {
+    top + (area_h - size) / 2
+}
+
 /// `fitTaskbarLyricsFontSize`: the chosen size, shrunk so the line(s) fit the height.
 pub fn fit_font_size(
     font_px: f64,
@@ -212,6 +253,32 @@ mod tests {
         assert_eq!(effect_rgb([20, 20, 20]), [255, 255, 255]);
         assert_eq!(floating_lock_css(28.0), 39.0);
         assert_eq!(floating_margin_css(28.0), 7.0);
+    }
+
+    #[test]
+    fn the_room_above_the_area_ignores_the_translation_row() {
+        // Main row 20 px: slot 28, room 28 * 2/15 = 3.7 -> 4; the area with a translation row is taller.
+        let top = floating_top_room_px(20.0, 1.0);
+        assert_eq!(top, 4);
+        let (plain, translated) = (28, 28 + 25);
+        assert_eq!(
+            top + plain + floating_bottom_room_px(plain),
+            32 + floating_bottom_room_px(28)
+        );
+        assert!(
+            top + translated + floating_bottom_room_px(translated)
+                > top + plain + floating_bottom_room_px(plain)
+        );
+        // The inverse recovers the area from the window height (to the pixel).
+        for area in [28, 53, 61, 99, 140] {
+            let window = top + area + floating_bottom_room_px(area);
+            assert_eq!(
+                floating_area_height_px(f64::from(window), f64::from(top)),
+                f64::from(area)
+            );
+        }
+        assert_eq!(floating_lock_top_px(4, 28, 28), 4);
+        assert_eq!(floating_lock_top_px(4, 53, 28), 16);
     }
 
     #[test]

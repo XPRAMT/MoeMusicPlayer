@@ -16,7 +16,7 @@ import {
 export const FLOATING_LYRICS_LAYOUT = Object.freeze({
   lineHeight: 1.375,
   // The window is text height x 1.5 (= the lyric area x 1.5 / 1.1); the area is centred and the room around it is
-  // transparent, for the shadow / glow. floating_lyrics.rs PANEL_LINE_HEIGHT / SIDE_MARGIN_EM.
+  // transparent, for the shadow / glow. player-lyrics-native FLOATING_PANEL_LINE_HEIGHT / SIDE_MARGIN_EM.
   panelLineHeight: 1.875,
   sideMarginEm: 0.25,
 });

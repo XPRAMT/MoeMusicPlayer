@@ -31,9 +31,6 @@ pub const SETTINGS_EVENT: &str = "floating-lyrics-settings";
 /// Height of one drawn line in em: the text's own height (1.25 em) with a 10% buffer. The lyric area (the part with the
 /// move-mode background, where the text is drawn and aligned) is the lines at this height: text height x 1.1.
 pub const LINE_HEIGHT: f64 = 1.375;
-/// The whole window is text height x 1.5 (= lyric area x 1.5 / 1.1), the lyric area vertically centred: the transparent
-/// room above and below is for the text shadow / glow.
-pub const PANEL_LINE_HEIGHT: f64 = 1.875;
 /// Transparent room left of the lyric area and right of the lock, in em of the main font (for the shadow / glow).
 pub const SIDE_MARGIN_EM: f64 = 0.25;
 
@@ -47,6 +44,22 @@ static STOP: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Whether the line on screen has a translation; the window is only as tall as the lines it draws.
 static HAS_TRANSLATION: AtomicBool = AtomicBool::new(false);
+/// The margins and rooms the open window was last placed with: the saved position is the lyric area's top-left, the
+/// window's plus these.
+static PLACED_WITH: Mutex<Gutters> = Mutex::new(Gutters::NONE);
+
+fn placed_with() -> Gutters {
+    PLACED_WITH.lock().map_or(Gutters::NONE, |guard| *guard)
+}
+
+/// The window's gutters now: the current settings at the window's DPI and the line on screen.
+fn window_gutter(window: Native, settings: &FloatingLyricsSettings) -> Gutters {
+    gutter_px(
+        settings,
+        window.scale(),
+        HAS_TRANSLATION.load(Ordering::SeqCst),
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct Rect {
@@ -122,19 +135,15 @@ fn lines_em_px(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 
 }
 
 /// Lyric area height in CSS px: the lines drawn at text height x 1.1.
-/// (The page draws the area as the middle 1.1 / 1.5 of the window; this states the rule for the tests.)
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn lyric_height_css(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 {
     (lines_em_px(settings, has_translation) * LINE_HEIGHT)
         .ceil()
         .max(1.0)
 }
 
-/// Window height in CSS px: text height x 1.5, so the shadow / glow has transparent room above and below the area.
-pub fn window_height_css(settings: &FloatingLyricsSettings, has_translation: bool) -> f64 {
-    (lines_em_px(settings, has_translation) * PANEL_LINE_HEIGHT)
-        .ceil()
-        .max(1.0)
+/// Lyric area height in physical px: the lines drawn at text height x 1.1, rounded up so they always fit.
+pub fn area_height_px(settings: &FloatingLyricsSettings, scale: f64, has_translation: bool) -> i32 {
+    (lyric_height_css(settings, has_translation) * valid_scale(scale)).ceil() as i32
 }
 
 fn valid_scale(scale: f64) -> f64 {
@@ -145,38 +154,85 @@ fn valid_scale(scale: f64) -> f64 {
     }
 }
 
-/// What the window holds beside the lyric area, physical px: `lead` left of it (the side margin), `trail` right of it
-/// (the lock gutter plus the side margin).
+/// What the window holds around the lyric area, physical px: `lead` left of it (the side margin), `trail` right of it
+/// (the lock gutter plus the side margin), `top` above it (from the main row alone, so a translation row never moves
+/// the first row) and `bottom` below it (follows the whole area). The saved position is the lyric area's top-left, i.e.
+/// the window's plus (`lead`, `top`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Gutters {
     pub lead: i32,
     pub trail: i32,
+    pub top: i32,
+    pub bottom: i32,
 }
 
 impl Gutters {
-    pub const NONE: Gutters = Gutters { lead: 0, trail: 0 };
+    pub const NONE: Gutters = Gutters {
+        lead: 0,
+        trail: 0,
+        top: 0,
+        bottom: 0,
+    };
+
+    /// The window position of a lyric area whose top-left is `area`.
+    pub fn window_from_area(self, area: FloatingLyricsPosition) -> FloatingLyricsPosition {
+        FloatingLyricsPosition {
+            x: area.x - self.lead.max(0),
+            y: area.y - self.top.max(0),
+        }
+    }
+
+    /// The lyric area's top-left of a window at `window` (what is saved).
+    pub fn area_from_window(self, window: FloatingLyricsPosition) -> FloatingLyricsPosition {
+        FloatingLyricsPosition {
+            x: window.x + self.lead.max(0),
+            y: window.y + self.top.max(0),
+        }
+    }
+
+    /// The lyric area's height in a window `window_height` tall.
+    fn area_height(self, window_height: i32) -> i32 {
+        (window_height - self.top.max(0) - self.bottom.max(0)).max(0)
+    }
 
     fn lyric_width(self, window_width: i32) -> i32 {
         (window_width - self.lead.max(0) - self.trail.max(0)).max(0)
     }
 }
 
-/// The margins and the lock gutter in physical px.
-pub fn gutter_px(settings: &FloatingLyricsSettings, scale: f64) -> Gutters {
+/// The margins, the lock gutter and the rooms above and below the lyric area in physical px.
+pub fn gutter_px(settings: &FloatingLyricsSettings, scale: f64, has_translation: bool) -> Gutters {
     let scale = valid_scale(scale);
     let margin = side_margin_css(settings);
     Gutters {
         lead: (margin * scale).round() as i32,
         trail: ((lock_css(settings) + margin) * scale).round() as i32,
+        top: player_lyrics_native::floating_top_room_px(f64::from(settings.font_size_px), scale),
+        bottom: player_lyrics_native::floating_bottom_room_px(area_height_px(
+            settings,
+            scale,
+            has_translation,
+        )),
     }
 }
 
 /// The lock/unlock button in physical pixels: `lock_css` square right of the lyric area, `margin_css` in from the right
-/// edge, vertically centred (the page draws it at the same place).
-pub fn unlock_button_rect(window: Rect, scale: f64, lock_css: f64, margin_css: f64) -> Rect {
+/// edge, vertically centred on the lyric area (the renderer draws it at the same place).
+pub fn unlock_button_rect(
+    window: Rect,
+    scale: f64,
+    lock_css: f64,
+    margin_css: f64,
+    gutter: Gutters,
+) -> Rect {
     let size = (lock_css * valid_scale(scale)).round() as i32;
     let right = window.right - (margin_css.max(0.0) * valid_scale(scale)).round() as i32;
-    let top = window.top + (window.height() - size) / 2;
+    let top = window.top
+        + player_lyrics_native::floating_lock_top_px(
+            gutter.top,
+            gutter.area_height(window.height()),
+            size,
+        );
     Rect {
         left: right - size,
         top,
@@ -197,6 +253,7 @@ pub struct Insets {
 }
 
 impl Insets {
+    #[cfg(test)]
     pub const NONE: Insets = Insets {
         left: 0,
         top: 0,
@@ -205,18 +262,14 @@ impl Insets {
     };
 }
 
-/// The insets of a floating window `height` px tall with `settings` at `scale`: the lyric area is
-/// `FLOATING_LINE_HEIGHT / FLOATING_PANEL_LINE_HEIGHT` of the height, vertically centred (ADR 0032).
-pub fn text_insets(settings: &FloatingLyricsSettings, scale: f64, height: i32) -> Insets {
-    let margin = (side_margin_css(settings) * valid_scale(scale)).round() as i32;
-    let share = player_lyrics_native::FLOATING_LINE_HEIGHT
-        / player_lyrics_native::FLOATING_PANEL_LINE_HEIGHT;
-    let room = ((f64::from(height) * (1.0 - share)) / 2.0).floor() as i32;
+/// The insets of a floating window with `gutter`: the margins and the rooms above and below the lyric area may hang
+/// past the work area, the area itself stays inside (ADR 0032).
+pub fn text_insets(gutter: Gutters) -> Insets {
     Insets {
-        left: margin,
-        top: room.max(0),
-        right: margin,
-        bottom: room.max(0),
+        left: gutter.lead.max(0),
+        top: gutter.top.max(0),
+        right: gutter.lead.max(0),
+        bottom: gutter.bottom.max(0),
     }
 }
 
@@ -234,22 +287,26 @@ pub fn resize_around_centre(
 }
 
 /// Where `apply` puts the window (before `place` keeps it on screen). `shown`: the rect of a window that was already
-/// open, None for one just created (it starts as a 1 x 1 px window at 0,0, so its rect says nothing). A new window goes
-/// to the saved position. An open window owns its position (the saved one may lag a drag by the save delay): it stays
-/// where it is, its lyric area's horizontal centre kept when its width changes (the 寬度 slider); with no saved
-/// position (重設位置) it goes to the default place.
+/// open, None for one just created (it starts as a 1 x 1 px window at 0,0, so its rect says nothing). The saved
+/// position is the lyric area's top-left. A new window goes to it (less the margin and the top room). An open window
+/// owns its position (the saved one may lag a drag by the save delay): its lyric area stays where it is, its
+/// horizontal centre kept when its width changes (the 寬度 slider) and its top-left kept when the font changes the
+/// margin or the top room (`old` is what the window was placed with, `gutter` what it is now); with no saved position
+/// (重設位置) it goes to the default place.
 pub fn apply_target(
     shown: Option<Rect>,
     new_width: i32,
+    old: Gutters,
     gutter: Gutters,
     saved: Option<FloatingLyricsPosition>,
 ) -> Option<FloatingLyricsPosition> {
     let (Some(rect), Some(_)) = (shown, saved) else {
-        return saved;
+        return saved.map(|area| gutter.window_from_area(area));
     };
+    let area_y = rect.top + old.top.max(0);
     Some(FloatingLyricsPosition {
-        x: resize_around_centre(rect.left, rect.width(), gutter, new_width, gutter),
-        y: rect.top,
+        x: resize_around_centre(rect.left, rect.width(), old, new_width, gutter),
+        y: area_y - gutter.top.max(0),
     })
 }
 
@@ -312,7 +369,7 @@ pub fn centre_on(bounds: Rect, size: (i32, i32), gutter: Gutters) -> FloatingLyr
     let lyric = gutter.lyric_width(size.0);
     FloatingLyricsPosition {
         x: bounds.left + (bounds.width() - lyric) / 2 - gutter.lead.max(0),
-        y: bounds.top + (bounds.height() - size.1) / 2,
+        y: bounds.top + (bounds.height() - gutter.area_height(size.1)) / 2 - gutter.top.max(0),
     }
 }
 
@@ -326,7 +383,7 @@ pub fn centre_axis(
 ) -> FloatingLyricsPosition {
     let (cx, cy) = (
         window.left + gutter.lead.max(0) + gutter.lyric_width(window.width()) / 2,
-        window.top + window.height() / 2,
+        window.top + gutter.top.max(0) + gutter.area_height(window.height()) / 2,
     );
     let holds =
         |area: &&Rect| cx >= area.left && cx < area.right && cy >= area.top && cy < area.bottom;
@@ -463,9 +520,7 @@ pub fn centre_window_axis(_app: &AppHandle, horizontal: bool) {
     let Some(window) = window() else { return };
     let Some(rect) = window.rect() else { return };
     let bounds: Vec<Rect> = monitors().iter().map(|m| m.0).collect();
-    let gutter = current().map_or(Gutters::NONE, |settings| {
-        gutter_px(&settings, window.scale())
-    });
+    let gutter = current().map_or(Gutters::NONE, |settings| window_gutter(window, &settings));
     place(window, Some(centre_axis(rect, &bounds, horizontal, gutter)));
 }
 
@@ -529,12 +584,12 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     crate::native_lyrics::apply_floating_chrome(app, settings);
     let (width, height) = window_size(window, settings);
     let shown = if created { None } else { window.rect() };
-    let wanted = apply_target(
-        shown,
-        width,
-        gutter_px(settings, window.scale()),
-        settings.position,
-    );
+    let gutter = window_gutter(window, settings);
+    let wanted = apply_target(shown, width, placed_with(), gutter, settings.position);
+    // The move events from here on are saved with this conversion.
+    if let Ok(mut guard) = PLACED_WITH.lock() {
+        *guard = gutter;
+    }
     window.set_size(width, height);
     place(window, wanted);
     renderer.set_click_through(WINDOW_LABEL, settings.locked);
@@ -553,10 +608,11 @@ fn window_size(window: Native, settings: &FloatingLyricsSettings) -> (i32, i32) 
         .map(|(bounds, scale)| f64::from(bounds.width()) / valid_scale(scale));
     let scale = window.scale();
     let width = lyric_width_css(settings, monitor_css) + chrome_width_css(settings);
-    let height = window_height_css(settings, HAS_TRANSLATION.load(Ordering::SeqCst));
+    let gutter = window_gutter(window, settings);
+    let area = area_height_px(settings, scale, HAS_TRANSLATION.load(Ordering::SeqCst));
     (
         (width * scale).round() as i32,
-        (height * scale).round() as i32,
+        gutter.top + area + gutter.bottom,
     )
 }
 
@@ -627,10 +683,11 @@ pub fn shutdown(app: &AppHandle) {
 
 /// The window moved (dragged, or placed by us): remember the position and save it once moving stops.
 pub fn remember_position(app: &AppHandle, position: PhysicalPosition<i32>) {
-    let position = FloatingLyricsPosition {
+    // The saved position is the lyric area's top-left, not the window's.
+    let position = placed_with().area_from_window(FloatingLyricsPosition {
         x: position.x,
         y: position.y,
-    };
+    });
     {
         let Ok(mut guard) = CURRENT.lock() else {
             return;
@@ -674,17 +731,13 @@ fn work_areas() -> Vec<Rect> {
 fn place(window: Native, wanted: Option<FloatingLyricsPosition>) {
     let Some(rect) = window.rect() else { return };
     let size = (rect.width(), rect.height());
-    let gutter = current().map_or(Gutters::NONE, |settings| {
-        gutter_px(&settings, window.scale())
-    });
+    let gutter = current().map_or(Gutters::NONE, |settings| window_gutter(window, &settings));
     // No saved position (first open, or 重設位置): the exact centre of the primary monitor.
     let wanted = wanted.or_else(|| {
         let bounds = monitors().first()?.0;
         (bounds.width() > 0 && bounds.height() > 0).then(|| centre_on(bounds, size, gutter))
     });
-    let insets = current().map_or(Insets::NONE, |settings| {
-        text_insets(&settings, window.scale(), size.1)
-    });
+    let insets = text_insets(gutter);
     let target = place_on_monitors_with(wanted, size, gutter, insets, &work_areas());
     if target.x != rect.left || target.y != rect.top {
         window.set_position(target.x, target.y);
@@ -754,6 +807,7 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
                     window.scale(),
                     lock_css(&settings),
                     side_margin_css(&settings),
+                    window_gutter(window, &settings),
                 )
                 .contains(x, y),
             )
@@ -807,17 +861,16 @@ mod tests {
             42.0,
             "no translation on this line: shrink"
         );
-        // Window = text height x 1.5: 45 * 1.875 = 84.375 -> 85; 30 * 1.875 = 56.25 -> 57.
-        assert_eq!(window_height_css(&settings, true), 85.0);
-        assert_eq!(window_height_css(&settings, false), 57.0);
+        // The window is the room above (main row only) + the area + the room below (follows the area).
+        let height = |settings: &FloatingLyricsSettings, translated: bool| {
+            let g = gutter_px(settings, 1.0, translated);
+            g.top + area_height_px(settings, 1.0, translated) + g.bottom
+        };
+        assert_eq!(height(&settings, true), 6 + 62 + 8);
+        assert_eq!(height(&settings, false), 6 + 42 + 6);
         settings.show_translation = false;
-        assert_eq!(window_height_css(&settings, true), 57.0);
+        assert_eq!(lyric_height_css(&settings, true), 42.0);
         settings.font_size_px = 8;
-        assert_eq!(
-            window_height_css(&settings, true),
-            15.0,
-            "small text: a small panel"
-        );
         assert_eq!(lock_css(&settings), 11.0, "the lock follows the main line");
         assert_eq!(side_margin_css(&settings), 2.0);
     }
@@ -835,10 +888,12 @@ mod tests {
         assert_eq!(lyric_width_css(&settings, Some(1920.0)), 1920.0 - 60.0);
         assert_eq!(lyric_width_css(&settings, None), 3000.0);
         assert_eq!(
-            gutter_px(&settings, 1.5),
+            gutter_px(&settings, 1.5, false),
             Gutters {
                 lead: 12,
-                trail: 78
+                trail: 78,
+                top: 9,
+                bottom: 9
             }
         );
     }
@@ -846,22 +901,33 @@ mod tests {
     #[test]
     fn unlock_button_scales_with_the_font_and_dpi() {
         let window = rect(1000, 500, 2600, 620);
+        let g = Gutters::NONE;
         assert_eq!(
-            unlock_button_rect(window, 1.0, 32.0, 0.0),
+            unlock_button_rect(window, 1.0, 32.0, 0.0, g),
             rect(2568, 544, 2600, 576)
         );
         assert_eq!(
-            unlock_button_rect(window, 1.0, 32.0, 8.0),
+            unlock_button_rect(window, 1.0, 32.0, 8.0, g),
             rect(2560, 544, 2592, 576),
             "in from the margin"
         );
-        let big = unlock_button_rect(window, 2.5, 32.0, 8.0);
+        let big = unlock_button_rect(window, 2.5, 32.0, 8.0, g);
         assert_eq!((big.width(), big.height()), (80, 80));
         assert_eq!(big.right, 2600 - 20);
         assert_eq!(big.top, 500 + (120 - 80) / 2);
         assert_eq!(
-            unlock_button_rect(window, f64::NAN, 32.0, 8.0),
-            unlock_button_rect(window, 1.0, 32.0, 8.0)
+            unlock_button_rect(window, f64::NAN, 32.0, 8.0, g),
+            unlock_button_rect(window, 1.0, 32.0, 8.0, g)
+        );
+        // With rooms the lock is centred on the lyric area, not on the window.
+        let rooms = Gutters {
+            top: 10,
+            bottom: 30,
+            ..Gutters::NONE
+        };
+        assert_eq!(
+            unlock_button_rect(window, 1.0, 32.0, 0.0, rooms).top,
+            500 + 10 + (80 - 32) / 2
         );
     }
 
@@ -878,7 +944,10 @@ mod tests {
             }
         );
         // With a 40 px lock gutter only the 760 px lyric area is centred.
-        let lock = Gutters { lead: 0, trail: 40 };
+        let lock = Gutters {
+            trail: 40,
+            ..Gutters::NONE
+        };
         assert_eq!(
             centre_axis(window, &monitors, true, lock),
             FloatingLyricsPosition {
@@ -890,6 +959,7 @@ mod tests {
         let margins = Gutters {
             lead: 10,
             trail: 50,
+            ..Gutters::NONE
         };
         assert_eq!(
             centre_axis(window, &monitors, true, margins),
@@ -959,31 +1029,185 @@ mod tests {
 
     #[test]
     fn apply_uses_the_saved_position_for_a_new_window_and_keeps_an_open_one() {
-        let gutter = Gutters { lead: 7, trail: 77 };
+        let gutter = Gutters {
+            lead: 7,
+            trail: 77,
+            top: 20,
+            bottom: 20,
+        };
+        // The saved position is the lyric area's top-left; the window is that less the margin and the top room.
         let saved = Some(FloatingLyricsPosition { x: 1234, y: 567 });
+        let window = Some(FloatingLyricsPosition { x: 1227, y: 547 });
         // A new window (still 1 x 1 at 0,0 from CreateWindowEx) goes to the saved position, not a resize of 0,0.
-        assert_eq!(apply_target(None, 1000, gutter, saved), saved);
-        assert_eq!(apply_target(None, 1000, gutter, None), None);
+        assert_eq!(apply_target(None, 1000, gutter, gutter, saved), window);
+        assert_eq!(apply_target(None, 1000, gutter, gutter, None), None);
         // An open window stays where it is even when the stored position lags a drag.
         assert_eq!(
-            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, saved),
+            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, gutter, saved),
             Some(FloatingLyricsPosition { x: 300, y: 200 })
         );
         // ... and keeps its lyric area centre on a width change.
         assert_eq!(
-            apply_target(Some(rect(500, 200, 1500, 350)), 1400, gutter, saved),
+            apply_target(Some(rect(500, 200, 1500, 350)), 1400, gutter, gutter, saved),
             Some(FloatingLyricsPosition { x: 300, y: 200 })
+        );
+        // A bigger font (more margin and top room) moves the window, not the lyric area.
+        let bigger = Gutters {
+            lead: 10,
+            trail: 90,
+            top: 28,
+            bottom: 28,
+        };
+        let at =
+            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, bigger, saved).unwrap();
+        assert_eq!(
+            bigger.area_from_window(at),
+            FloatingLyricsPosition {
+                x: 300 + 7 + (1000 - 84) / 2 - (1000 - 100) / 2,
+                y: 220
+            }
         );
         // 重設位置 (no saved position): the default place.
         assert_eq!(
-            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, None),
+            apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, gutter, None),
             None
         );
     }
 
     #[test]
+    fn the_saved_position_is_the_lyric_areas_top_left() {
+        let gutter = Gutters {
+            lead: 7,
+            trail: 77,
+            top: 20,
+            bottom: 20,
+        };
+        let area = FloatingLyricsPosition { x: 400, y: 300 };
+        let window = gutter.window_from_area(area);
+        assert_eq!(window, FloatingLyricsPosition { x: 393, y: 280 });
+        // Save then restore is the identity, whatever the margin and room.
+        assert_eq!(gutter.area_from_window(window), area);
+        let other = Gutters {
+            lead: 12,
+            trail: 90,
+            top: 31,
+            bottom: 40,
+        };
+        assert_eq!(other.area_from_window(other.window_from_area(area)), area);
+    }
+
+    #[test]
+    fn a_translation_row_never_moves_the_first_row() {
+        let settings = FloatingLyricsSettings {
+            font_size_px: 30,
+            translation_scale_percent: 50,
+            show_translation: true,
+            ..Default::default()
+        };
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let plain = gutter_px(&settings, scale, false);
+            let translated = gutter_px(&settings, scale, true);
+            // The room above is the same: with the window's top fixed, the area's top-left does not move.
+            assert_eq!(plain.top, translated.top);
+            assert_eq!(plain.lead, translated.lead);
+            let (plain_h, translated_h) = (
+                plain.top + area_height_px(&settings, scale, false) + plain.bottom,
+                translated.top + area_height_px(&settings, scale, true) + translated.bottom,
+            );
+            assert!(
+                translated_h > plain_h,
+                "the window grows below the main row"
+            );
+            let top_left = FloatingLyricsPosition { x: 600, y: 400 };
+            assert_eq!(
+                plain.window_from_area(top_left),
+                translated.window_from_area(top_left)
+            );
+            // The renderer recovers the same area from the window height.
+            for (g, translated) in [(plain, false), (translated, true)] {
+                let h = g.top + area_height_px(&settings, scale, translated) + g.bottom;
+                assert_eq!(
+                    player_lyrics_native::floating_area_height_px(f64::from(h), f64::from(g.top))
+                        as i32,
+                    area_height_px(&settings, scale, translated)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_lyric_area_is_what_stays_on_screen_and_what_is_centred() {
+        let g = Gutters {
+            lead: 7,
+            trail: 77,
+            top: 20,
+            bottom: 24,
+        };
+        let work = rect(0, 0, 1920, 1040);
+        let size = (1000, 20 + 110 + 24);
+        // Dragged far up-left: the area's top-left lands on the work area's.
+        let at = place_on_monitors_with(
+            Some(FloatingLyricsPosition { x: -100, y: -100 }),
+            size,
+            g,
+            text_insets(g),
+            &[work],
+        );
+        assert_eq!(
+            g.area_from_window(at),
+            FloatingLyricsPosition { x: 0, y: 0 }
+        );
+        // Far down-right: the area's bottom is on the work area's bottom, the lock column's right edge on its right.
+        let at = place_on_monitors_with(
+            Some(FloatingLyricsPosition { x: 1500, y: 1000 }),
+            size,
+            g,
+            text_insets(g),
+            &[work],
+        );
+        assert_eq!(at.y + size.1 - g.bottom, 1040);
+        assert_eq!(at.x + size.0 - g.lead, 1920);
+        // Centred: the area (not the window) is at the monitor's centre; the other axis is kept.
+        let centred = centre_on(work, size, g);
+        assert_eq!(
+            g.area_from_window(centred).y,
+            (1040 - 110) / 2,
+            "area centred vertically"
+        );
+        assert_eq!(g.area_from_window(centred).x, (1920 - (1000 - 84)) / 2);
+        let window = rect(100, 300, 1100, 300 + size.1);
+        assert_eq!(centre_axis(window, &[work], false, g).x, 100);
+        assert_eq!(centre_axis(window, &[work], true, g).y, 300);
+        assert_eq!(centre_axis(window, &[work], false, g).y, centred.y);
+        // Reset (no saved position) puts the area at the centre of the primary monitor.
+        assert_eq!(
+            place_on_monitors_with(None, size, g, text_insets(g), &[work]),
+            centred
+        );
+        // Nudging one pixel moves the area one pixel.
+        let nudged = place_on_monitors_with(
+            Some(FloatingLyricsPosition {
+                x: centred.x,
+                y: centred.y + 1,
+            }),
+            size,
+            g,
+            text_insets(g),
+            &[work],
+        );
+        assert_eq!(
+            g.area_from_window(nudged).y,
+            g.area_from_window(centred).y + 1
+        );
+    }
+
+    #[test]
     fn a_width_change_keeps_the_lyric_area_centre() {
-        let gutter = Gutters { lead: 7, trail: 77 };
+        let gutter = Gutters {
+            lead: 7,
+            trail: 77,
+            ..Gutters::NONE
+        };
         let centre = |left: i32, width: i32| left + 7 + (width - 84) / 2;
         let left = resize_around_centre(500, 1000, gutter, 1400, gutter);
         assert_eq!(left, 300);
@@ -1024,8 +1248,8 @@ mod tests {
                 None,
                 size,
                 Gutters {
-                    lead: 0,
-                    trail: 100
+                    trail: 100,
+                    ..Gutters::NONE
                 },
                 &areas
             )
@@ -1039,7 +1263,8 @@ mod tests {
                 size,
                 Gutters {
                     lead: 20,
-                    trail: 80
+                    trail: 80,
+                    ..Gutters::NONE
                 },
                 &areas
             )
