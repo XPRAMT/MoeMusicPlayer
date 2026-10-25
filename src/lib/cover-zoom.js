@@ -3,7 +3,7 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-reserve in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
-import { coverDrawPlan, coverOverlayWanted, intersectRects, overlayDrawRegion, overlayFollowTransform, overlayTransformCss, snapRectToDevicePixels } from './cover-overlay.js';
+import { coverDrawPlan, coverOverlayWanted, intersectRects, overlayDrawRegion, overlayFollowTransform, overlayOrigin, overlayTransformCss, parseSwipeFeedback, snapRectToDevicePixels, withoutSwipeFeedback } from './cover-overlay.js';
 
 export const COVER_ZOOM_MIN = 0.5;
 export const COVER_ZOOM_REST = 1;
@@ -215,7 +215,10 @@ export function createIdleGate(idleMs, onChange, timers = { set: (fn, ms) => set
  * after the cover settles at a scale other than the promote-time one, the visible part plus a bounded margin is drawn
  * into it at device resolution from the source-resolution image. Input never hides it: during a pan, zoom out or zoom
  * in it follows the stage by a compositor transform written together with the stage's own (frame / repin / resize),
- * and is redrawn sharp at the new scale once input stops for COVER_LAYER_IDLE_MS; the reset glide animates a copy drawn into the same canvas at the
+ * and is redrawn sharp at the new scale once input stops for COVER_LAYER_IDLE_MS. The swipe gestures' damped feedback on
+ * the stage (inline translate / scale / opacity / transition, swipe-dismiss.js) is copied onto the overlay in the same
+ * frame (change observer), pivoting on the stage's centre, instead of hiding it; every geometry here is read without that
+ * feedback (`stageRect`). The reset glide animates a copy drawn into the same canvas at the
  * screen-resolution thumbnail size instead of animating the stage (a running transform animation makes Chromium pick
  * the raster scale from the animation's largest scale, which on a phone is a ~3000 px tiled layer that is not ready in
  * time; a canvas is a texture, never tiled). The overlay is only shown/hidden (opacity) and the stage's image only
@@ -250,8 +253,9 @@ export function coverZoom(node, params) {
   let dispatchingCancel = false;
   let resetting = false;
   let frameId = 0;
-  /** The stage's style attribute as this action last wrote it: the change observer ignores these writes. @type {string | null} */
-  let ownStyle = null;
+  /** The stage's inline style without the swipe feedback properties, as this action last left it: a style change that
+   *  keeps it is the action's own transform write or swipe feedback (mirrored onto the overlay), not a foreign one. */
+  let ownStyle = nonFeedbackStyle(node.style);
   /** The scale the stage's layer was promoted (first rasterised) at: when the action starts and each time the page opens. */
   let promotedScale = 1;
   let wasActive = params.enabled !== false;
@@ -278,7 +282,7 @@ export function coverZoom(node, params) {
     state = next;
     node.style.transition = animate && !reduced() ? `transform ${COVER_RESET_MS}ms ease` : 'none';
     node.style.transform = coverZoomTransform(state);
-    ownStyle = node.getAttribute?.('style') ?? null;
+    ownStyle = nonFeedbackStyle(node.style);
     // A data attribute, not a class: Svelte rewrites the class list of this element when `has-artwork` toggles
     // (track change), which would drop a class added from here.
     if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
@@ -314,7 +318,7 @@ export function coverZoom(node, params) {
     const plan = coverDrawPlan({ visual, scale, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight, bleed: COVER_IMAGE_BLEED_PX, visible: snapped, dpr });
     if (!plan) return false;
     const radius = parseFloat(getComputedStyle(node).borderTopLeftRadius) || 0;
-    if (!overlay.draw(image, plan, snapped, radius * scale * dpr, visual)) return false;
+    if (!overlay.draw(image, plan, snapped, radius * scale * dpr, visual, layoutCentre(visual))) return false;
     if (hideStage) node.dataset.coverOverlay = '';
     else delete node.dataset.coverOverlay;
     return true;
@@ -325,7 +329,8 @@ export function coverZoom(node, params) {
   function drawSettled() {
     if (destroyed || resetting || layerGate.active || !active()) return;
     if (!coverOverlayWanted(state.scale, promotedScale)) { hideOverlay(); return; }
-    const visual = node.getBoundingClientRect();
+    // Drawn for the stage without its swipe feedback: the mirrored feedback keeps applying on top of the new drawing.
+    const visual = stageRect();
     const visible = visual.width > 0 ? clipToAncestors(node, visual) : null;
     const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1;
     const region = visible ? overlayDrawRegion({ visible, cover: visual, dpr }) : null;
@@ -335,7 +340,38 @@ export function coverZoom(node, params) {
   /** Keep a shown overlay on the stage now painted at `visual`: compositor transform only (no redraw). `paneBox` is the
    *  pane's client rect read at the same clean point as the stage's. @param {Rect} visual @param {Rect} paneBox */
   function followOverlay(visual, paneBox) {
-    if (overlay?.following) overlay.follow(visual, paneBox);
+    if (overlay?.following) overlay.follow(visual, paneBox, layoutCentre(visual));
+  }
+
+  /** The stage's un-transformed layout centre (its transform-origin, where the swipe feedback pivots) from its painted
+   *  rect without feedback. @param {Rect} visual */
+  function layoutCentre(visual) {
+    return { x: visual.left + visual.width / 2 - state.x, y: visual.top + visual.height / 2 - state.y };
+  }
+
+  /** Whether the stage may carry swipe feedback now: an inline translate/scale, or its settle transition still running. */
+  function feedbackLive() {
+    const style = node.style;
+    return Boolean(style.translate || style.scale || /translate|scale/.test(style.transition || ''));
+  }
+
+  /** The stage's painted client rect without the swipe feedback (`translate` / `scale`, which getBoundingClientRect
+   *  includes): every geometry here is the zoom's own; the overlay gets the feedback by mirroring. The computed (current,
+   *  also mid-transition) feedback is read only while there can be some, right after the rect read (style is clean). */
+  function stageRect() {
+    const rect = node.getBoundingClientRect();
+    if (!feedbackLive() || typeof getComputedStyle !== 'function') return rect;
+    const computed = getComputedStyle(node);
+    return withoutSwipeFeedback(rect, parseSwipeFeedback(computed.translate, computed.scale), state);
+  }
+
+  /** Copy the stage's swipe feedback (translate, scale, opacity, transition) onto the overlay: called from the change
+   *  observer (before paint) for every style change of the stage, so both move, fade and settle together. Not during the
+   *  reset glide, whose copy runs its own animation. */
+  function mirrorFeedback() {
+    if (!overlay) return;
+    const style = node.style;
+    overlay.mirror(resetting ? null : { translate: style.translate || '', scale: style.scale || '', opacity: style.opacity || '', transition: style.transition || '' });
   }
 
   /** The cover or its pane was resized (e.g. the squeeze while zooming, a window resize). ResizeObserver runs after
@@ -343,18 +379,18 @@ export function coverZoom(node, params) {
   function resized() {
     if (destroyed || resetting) return;
     if (!overlay?.following) { invalidateOverlay(); return; }
-    followOverlay(node.getBoundingClientRect(), overlay.paneRect());
+    followOverlay(stageRect(), overlay.paneRect());
     layerGate.poke();
   }
 
-  /** Something outside the gesture moved or resized the cover (window resize, swipe feedback, new image): fall back to
-   *  the stage at once (same frame) and draw again once it has been quiet. */
+  /** Something outside the gesture moved or resized the cover (window resize, another style write, new image): fall
+   *  back to the stage at once (same frame) and draw again once it has been quiet. */
   function invalidateOverlay() {
     if (destroyed || resetting) return;
     hideOverlay();
     if (coverOverlayWanted(state.scale, promotedScale)) layerGate.poke();
   }
-  const overlayObservers = observeCoverChanges(node, invalidateOverlay, resized, (record) => record.target === node && record.attributeName === 'style' && (node.getAttribute?.('style') ?? null) === ownStyle);
+  const overlayObservers = observeCoverChanges(node, invalidateOverlay, resized, mirrorFeedback, (record) => record.target === node && record.attributeName === 'style' && nonFeedbackStyle(node.style) === ownStyle);
 
   function schedule() {
     if (frameId) return;
@@ -365,7 +401,7 @@ export function coverZoom(node, params) {
     frameId = 0;
     if (resetting || !active()) { wheelPending = null; return; }
     // The only layout read of the frame: first, so nothing written yet can have dirtied the layout.
-    const geo = coverGeometry(node.getBoundingClientRect(), state);
+    const geo = coverGeometry(stageRect(), state);
     size = { width: geo.width, height: geo.height };
     // Only with a shown overlay: the pane is read at the same clean point (no forced layout).
     const paneBox = overlay?.following ? overlay.paneRect() : null;
@@ -408,7 +444,7 @@ export function coverZoom(node, params) {
     const token = ++repinToken;
     Promise.resolve(options.settleLayout?.()).then(() => {
       if (destroyed || token !== repinToken || resetting || !active()) return;
-      const geo = coverGeometry(node.getBoundingClientRect(), state);
+      const geo = coverGeometry(stageRect(), state);
       size = { width: geo.width, height: geo.height };
       const paneBox = overlay?.following ? overlay.paneRect() : null; // layout is clean again after the read above
       const next = anchoredZoom(geo, pin.u, pin, state.scale);
@@ -445,6 +481,7 @@ export function coverZoom(node, params) {
     glide = null;
     const to = node.getBoundingClientRect(); // animation cancelled: the un-transformed layout box
     const start = flipTransform(from, to);
+    overlay?.mirror(null); // the copy runs its own animation: no swipe feedback copied onto it
     // The copy at the screen-resolution thumbnail size glides, not the stage (see the action's doc comment). Without a
     // decoded image (fallback art) the stage itself glides.
     const target = overlay && drawOverlay(to, 1, to, true) ? overlay.element : node;
@@ -484,6 +521,7 @@ export function coverZoom(node, params) {
     hideOverlay();
     delete node.dataset.coverResetting;
     resetting = false;
+    mirrorFeedback();
     zoomGate.release();
     layerGate.release();
   }
@@ -672,18 +710,43 @@ function clipToAncestors(node, rect) {
   return visible;
 }
 
+/** The stage's swipe feedback properties (swipe-dismiss.js damped mode): mirrored onto the overlay, never a foreign change. */
+const FEEDBACK_PROPERTY = /^(translate|scale|opacity|transition(-.*)?)$/;
+
 /**
- * Watch for changes the gesture did not make (the owner's style writes, swipe feedback classes, a new image source, a
- * window resize: `onChange`) and for resizes of the cover or its pane (`onResize`, which may come from the zoom's own
- * squeeze); MutationObserver and ResizeObserver callbacks run before the next paint. Mutation records for which
- * `isOwn` is true (the action's own transform writes) are ignored.
- * @param {HTMLElement} node @param {() => void} onChange @param {() => void} onResize @param {(record: MutationRecord) => boolean} isOwn
+ * A signature of the inline style without the swipe feedback properties (and their longhands).
+ * @param {CSSStyleDeclaration | Record<string, unknown>} style
  */
-function observeCoverChanges(node, onChange, onResize, isOwn) {
+function nonFeedbackStyle(style) {
+  const declaration = /** @type {CSSStyleDeclaration} */ (style);
+  if (typeof declaration?.getPropertyValue === 'function' && typeof declaration.length === 'number') {
+    const parts = [];
+    for (let i = 0; i < declaration.length; i += 1) {
+      const name = declaration[i];
+      if (!FEEDBACK_PROPERTY.test(name)) parts.push(`${name}:${declaration.getPropertyValue(name)}`);
+    }
+    return parts.join(';');
+  }
+  return JSON.stringify(Object.entries(style ?? {}).filter(([name, value]) => !FEEDBACK_PROPERTY.test(name) && typeof value !== 'function' && value !== ''));
+}
+
+/**
+ * Watch for changes the gesture did not make (the owner's style writes, class changes, a new image source, a window
+ * resize: `onChange`) and for resizes of the cover or its pane (`onResize`, which may come from the zoom's own
+ * squeeze); MutationObserver and ResizeObserver callbacks run before the next paint. `onStyle` runs first for every
+ * batch of mutations (the swipe feedback is mirrored there, in the same frame as the stage's write). Mutation records
+ * for which `isOwn` is true (the action's own transform writes and swipe feedback) do not count as a change.
+ * @param {HTMLElement} node @param {() => void} onChange @param {() => void} onResize @param {() => void} onStyle
+ * @param {(record: MutationRecord) => boolean} isOwn
+ */
+function observeCoverChanges(node, onChange, onResize, onStyle, isOwn) {
   /** @type {Array<() => void>} */
   const stops = [];
   if (typeof MutationObserver === 'function') {
-    const mutations = new MutationObserver((records) => { if (records.some((record) => !isOwn(record))) onChange(); });
+    const mutations = new MutationObserver((records) => {
+      onStyle();
+      if (records.some((record) => !isOwn(record))) onChange();
+    });
     mutations.observe(node, { attributes: true, attributeFilter: ['style', 'class', 'src'], subtree: true });
     stops.push(() => mutations.disconnect());
   }
@@ -725,23 +788,48 @@ function createOverlayCanvas(node) {
   let shown = false;
   /** @type {{ visual: Rect, canvas: Rect, pane: { left: number, top: number } } | null} */
   let drawnAt = null;
+  /** The stage's swipe feedback as last mirrored, or null (none / the reset copy). @type {{ translate: string, scale: string, opacity: string, transition: string } | null} */
+  let feedback = null;
+  const shownOpacity = () => feedback?.opacity || '1';
+  /** @param {{ x: number, y: number }} origin */
+  const setOrigin = (origin) => { canvas.style.transformOrigin = `${origin.x.toFixed(2)}px ${origin.y.toFixed(2)}px`; };
   return {
     element: canvas,
     get shown() { return shown; },
     /** Shown with a drawing that can follow the stage. */
     get following() { return shown && drawnAt !== null; },
     paneRect() { return parent.getBoundingClientRect(); },
-    /** @param {Rect} visual the stage's painted client rect now @param {Rect} paneBox the pane's client rect now */
-    follow(visual, paneBox) {
+    /**
+     * @param {Rect} visual the stage's painted client rect now (without swipe feedback) @param {Rect} paneBox the pane's
+     * client rect now @param {{ x: number, y: number }} centre the stage's layout centre now (client px)
+     */
+    follow(visual, paneBox, centre) {
       if (!shown || !drawnAt) return;
-      const t = overlayFollowTransform(drawnAt.visual, drawnAt.canvas, visual, { x: paneBox.left - drawnAt.pane.left, y: paneBox.top - drawnAt.pane.top });
-      canvas.style.transform = overlayTransformCss(t);
+      const shift = { x: paneBox.left - drawnAt.pane.left, y: paneBox.top - drawnAt.pane.top };
+      // Pivot on the stage's centre (mirrored swipe scale); the follow translate is expressed for that pivot.
+      const origin = overlayOrigin(centre, { ...drawnAt.canvas, left: drawnAt.canvas.left + shift.x, top: drawnAt.canvas.top + shift.y });
+      setOrigin(origin);
+      canvas.style.transform = overlayTransformCss(overlayFollowTransform(drawnAt.visual, drawnAt.canvas, visual, shift, origin));
+    },
+    /**
+     * The stage's swipe feedback, copied as is (same values, same transition, same frame); null clears it. While shown
+     * the canvas's opacity is the stage's feedback opacity.
+     * @param {{ translate: string, scale: string, opacity: string, transition: string } | null} next
+     */
+    mirror(next) {
+      feedback = next;
+      const values = next ?? { translate: '', scale: '', transition: '' };
+      if ((canvas.style.transition ?? '') !== values.transition) canvas.style.transition = values.transition;
+      if ((canvas.style.translate ?? '') !== values.translate) canvas.style.translate = values.translate;
+      if ((canvas.style.scale ?? '') !== values.scale) canvas.style.scale = values.scale;
+      if (shown && canvas.style.opacity !== shownOpacity()) canvas.style.opacity = shownOpacity();
     },
     /**
      * @param {HTMLImageElement} image @param {NonNullable<ReturnType<typeof coverDrawPlan>>} plan @param {Rect} visible
      * @param {number} radius the rounded clip radius in canvas px @param {Rect} visual the stage's painted client rect
+     * @param {{ x: number, y: number }} centre the stage's layout centre (client px)
      */
-    draw(image, plan, visible, radius, visual) {
+    draw(image, plan, visible, radius, visual, centre) {
       const context = canvas.getContext('2d');
       if (!context) return false;
       const paneBox = parent.getBoundingClientRect();
@@ -752,6 +840,7 @@ function createOverlayCanvas(node) {
       canvas.style.width = `${visible.width}px`;
       canvas.style.height = `${visible.height}px`;
       canvas.style.transform = '';
+      setOrigin(overlayOrigin(centre, visible));
       drawnAt = { visual: { left: visual.left, top: visual.top, width: visual.width, height: visual.height }, canvas: { ...visible }, pane: { left: paneBox.left, top: paneBox.top } };
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = 'high';
@@ -764,7 +853,7 @@ function createOverlayCanvas(node) {
       }
       context.drawImage(image, plan.source.x, plan.source.y, plan.source.width, plan.source.height, plan.dest.x, plan.dest.y, plan.dest.width, plan.dest.height);
       context.restore();
-      canvas.style.opacity = '1';
+      canvas.style.opacity = shownOpacity();
       shown = true;
       return true;
     },

@@ -131,25 +131,74 @@ export function overlayDrawRegion({ visible, cover, dpr, pixelRatio = COVER_OVER
 }
 
 /**
- * The compositor transform (transform-origin: centre of the canvas box) that keeps an overlay drawn for the stage at
- * `drawnVisual` (its painted client rect then) aligned with the stage now painted at `visual`. `drawnCanvas` is the
- * canvas's client rect when it was drawn; `paneShift` is how far its containing pane has moved since (the canvas is
- * positioned in the pane, so it moves with it). The cover content is mapped by the same translate + scale as the stage:
+ * The compositor transform that keeps an overlay drawn for the stage at `drawnVisual` (its painted client rect then)
+ * aligned with the stage now painted at `visual`. `drawnCanvas` is the canvas's client rect when it was drawn;
+ * `paneShift` is how far its containing pane has moved since (the canvas is positioned in the pane, so it moves with
+ * it). The cover content is mapped by the same translate + scale as the stage:
  * p' = visual.left + (p - drawnVisual.left) * visual.width / drawnVisual.width.
+ * `origin` is the canvas's transform-origin in its own box (px from its top-left; default its centre): the overlay
+ * pivots the mirrored swipe `scale` on the stage's centre (`overlayOrigin`), and the translate is adjusted so the
+ * result is the same map whatever the origin: translate(a_K) scale(k) around the box centre K equals
+ * translate(a_K + (1 - k) (K - O)) scale(k) around O.
  * @param {Rect} drawnVisual @param {Rect} drawnCanvas @param {Rect} visual @param {{ x: number, y: number }} paneShift
+ * @param {{ x: number, y: number }} [origin]
  * @returns {{ x: number, y: number, scaleX: number, scaleY: number }}
  */
-export function overlayFollowTransform(drawnVisual, drawnCanvas, visual, paneShift) {
+export function overlayFollowTransform(drawnVisual, drawnCanvas, visual, paneShift, origin) {
   const scaleX = drawnVisual.width > 0 ? visual.width / drawnVisual.width : 1;
   const scaleY = drawnVisual.height > 0 ? visual.height / drawnVisual.height : 1;
   const drawnCentreX = drawnCanvas.left + drawnCanvas.width / 2;
   const drawnCentreY = drawnCanvas.top + drawnCanvas.height / 2;
+  const x = visual.left - (drawnCentreX + paneShift.x) + scaleX * (drawnCentreX - drawnVisual.left);
+  const y = visual.top - (drawnCentreY + paneShift.y) + scaleY * (drawnCentreY - drawnVisual.top);
+  if (!origin) return { x, y, scaleX, scaleY };
   return {
-    x: visual.left - (drawnCentreX + paneShift.x) + scaleX * (drawnCentreX - drawnVisual.left),
-    y: visual.top - (drawnCentreY + paneShift.y) + scaleY * (drawnCentreY - drawnVisual.top),
+    x: x + (1 - scaleX) * (drawnCanvas.width / 2 - origin.x),
+    y: y + (1 - scaleY) * (drawnCanvas.height / 2 - origin.y),
     scaleX,
     scaleY,
   };
+}
+
+/**
+ * The overlay's transform-origin (px in its own box) that puts its pivot on the stage's layout centre `centre` (client
+ * px; the stage's own transform-origin is its centre). `canvasBox` is the canvas's un-transformed client rect now.
+ * With it the stage's swipe feedback (`translate`, `scale`) copied onto the canvas maps every client point exactly like
+ * it does on the stage: CSS applies translate, then scale, then transform, all around transform-origin, so both become
+ * p -> C + t + s (q - C) of the point q they would paint at without the feedback.
+ * @param {{ x: number, y: number }} centre @param {Rect} canvasBox
+ */
+export function overlayOrigin(centre, canvasBox) {
+  return { x: centre.x - canvasBox.left, y: centre.y - canvasBox.top };
+}
+
+/** @typedef {{ x: number, y: number, scale: number }} SwipeFeedback */
+
+/**
+ * The swipe feedback (`swipe-dismiss.js` damped mode) from the computed `translate` and `scale` values ('none', '',
+ * '12px', '12px 3px', '0.97', '0.97 0.97').
+ * @param {string | undefined | null} translate @param {string | undefined | null} scale @returns {SwipeFeedback}
+ */
+export function parseSwipeFeedback(translate, scale) {
+  const t = typeof translate === 'string' && translate !== 'none' ? translate.trim().split(/\s+/).map((part) => parseFloat(part)) : [];
+  const s = typeof scale === 'string' && scale !== 'none' ? parseFloat(scale.trim().split(/\s+/)[0]) : NaN;
+  return { x: Number.isFinite(t[0]) ? t[0] : 0, y: Number.isFinite(t[1]) ? t[1] : 0, scale: Number.isFinite(s) && s > 0 ? s : 1 };
+}
+
+/**
+ * The stage's painted client rect without the swipe feedback, from a rect read with it (`getBoundingClientRect`
+ * includes the individual `translate` and `scale`). The feedback pivots on the layout centre C: R = C + t + s (V - C);
+ * `pan` is the stage's own transform translate (V's centre - C).
+ * @param {Rect} rect @param {SwipeFeedback} feedback @param {{ x: number, y: number }} pan @returns {Rect}
+ */
+export function withoutSwipeFeedback(rect, feedback, pan) {
+  if (feedback.x === 0 && feedback.y === 0 && feedback.scale === 1) return rect;
+  const s = feedback.scale;
+  const width = rect.width / s;
+  const height = rect.height / s;
+  const centreX = rect.left + rect.width / 2 - feedback.x - s * pan.x + pan.x;
+  const centreY = rect.top + rect.height / 2 - feedback.y - s * pan.y + pan.y;
+  return { left: centreX - width / 2, top: centreY - height / 2, width, height };
 }
 
 /** CSS for `overlayFollowTransform` ('' at identity). @param {{ x: number, y: number, scaleX: number, scaleY: number }} t */

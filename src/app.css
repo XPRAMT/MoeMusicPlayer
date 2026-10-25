@@ -2213,7 +2213,8 @@ input:focus-visible {
 }
 
 /* The overlay canvas (cover-zoom.js): persistent, its own layer, shown and hidden by opacity only; during input it
-   follows the stage by an inline compositor transform (default transform-origin: its centre). */
+   follows the stage by an inline compositor transform and copies the stage's swipe feedback (inline transform-origin:
+   the stage's centre). */
 .now-playing-artwork {
   position: relative;
 }
