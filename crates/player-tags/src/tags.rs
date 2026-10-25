@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
@@ -426,9 +426,69 @@ fn temp_path_for(path: &Path) -> PathBuf {
     path.with_file_name(format!(".moetmp-{name}"))
 }
 
+/// The original file's creation time, read before the edit (Windows only: the library shows it as 新增時間; other
+/// platforms cannot set it, so it is not read there).
+fn original_creation_time(path: &Path) -> Option<SystemTime> {
+    if !cfg!(windows) {
+        return None;
+    }
+    match fs::metadata(path).and_then(|meta| meta.created()) {
+        Ok(time) => Some(time),
+        Err(error) => {
+            eprintln!(
+                "[details] cannot keep the creation time of {}: reading it failed: {error}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Replace the original with the written temp file. On Windows the temp file first gets the original's creation time
+/// (`created`), so saving tags does not change it; after the rename it is read back and checked. Keeping it is best
+/// effort: a file system that cannot store or set it only logs a warning, the save itself still succeeds.
+fn replace_original(temp: &Path, path: &Path, created: Option<SystemTime>) -> Result<(), String> {
+    #[cfg(windows)]
+    if let Some(created) = created {
+        use std::os::windows::fs::FileTimesExt;
+        let set = fs::OpenOptions::new()
+            .write(true)
+            .open(temp)
+            .and_then(|file| file.set_times(fs::FileTimes::new().set_created(created)));
+        if let Err(error) = set {
+            eprintln!(
+                "[details] cannot keep the creation time of {}: setting it failed: {error}",
+                path.display()
+            );
+        }
+    }
+    fs::rename(temp, path).map_err(|e| format!("取代原檔失敗（檔案可能被占用）：{e}"))?;
+    if let Some(created) = created {
+        let kept = fs::metadata(path).and_then(|meta| meta.created());
+        match kept {
+            Ok(now) if same_to_file_system_resolution(now, created) => {}
+            Ok(now) => eprintln!(
+                "[details] creation time of {} not kept: {now:?} instead of {created:?}",
+                path.display()
+            ),
+            Err(error) => eprintln!(
+                "[details] creation time of {} not checked: {error}",
+                path.display()
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// FAT and exFAT store creation times in 10 ms steps (NTFS in 100 ns); anything closer than that counts as kept.
+fn same_to_file_system_resolution(a: SystemTime, b: SystemTime) -> bool {
+    let difference = a.duration_since(b).or_else(|_| b.duration_since(a));
+    difference.is_ok_and(|d| d < std::time::Duration::from_millis(10))
+}
+
 /// Apply a staged edit atomically: copy to a sibling temp file (`.moetmp-<name>`, same extension so the format is detected), write tags there (MP3 as
 /// ID3v2.4), verify by re-reading, then rename over the original. The file's mtime is
-/// updated normally. On failure the original is untouched.
+/// updated normally; on Windows its creation time is kept (see `replace_original`). On failure the original is untouched.
 pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     if is_read_only_format(path) {
         return Err("DFF 目前僅支援唯讀".into());
@@ -438,15 +498,17 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
         None => None,
     };
     let temp = temp_path_for(path);
+    // Read before anything is written: the temp file gets a new creation time, and the original's is put back on it.
+    let created = original_creation_time(path);
     let result = (|| {
         if is_dsd(path) {
-            return write_dsf_edit(path, &temp, edit, cover.as_ref());
+            return write_dsf_edit(path, &temp, edit, cover.as_ref(), created);
         }
         fs::copy(path, &temp).map_err(|e| format!("建立暫存檔失敗：{e}"))?;
         if let Some(file_type) = FileType::from_path(&temp).filter(|t| is_ape_family(*t)) {
             write_ape_edit(&temp, file_type, edit, cover.as_ref())?;
             lofty::read_from_path(&temp).map_err(|e| format!("寫入後驗證失敗：{e}"))?;
-            fs::rename(&temp, path).map_err(|e| format!("取代原檔失敗（檔案可能被占用）：{e}"))?;
+            replace_original(&temp, path, created)?;
             return Ok(());
         }
         let mut file = lofty::read_from_path(&temp).map_err(|e| format!("讀取標籤失敗：{e}"))?;
@@ -461,7 +523,7 @@ pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
             .map_err(|e| format!("寫入標籤失敗：{e}"))?;
         // Verify the temp file still parses before replacing the original.
         lofty::read_from_path(&temp).map_err(|e| format!("寫入後驗證失敗：{e}"))?;
-        fs::rename(&temp, path).map_err(|e| format!("取代原檔失敗（檔案可能被占用）：{e}"))?;
+        replace_original(&temp, path, created)?;
         Ok(())
     })();
     if result.is_err() {
@@ -544,6 +606,7 @@ fn write_dsf_edit(
     temp: &Path,
     edit: &TagEdit,
     cover: Option<&PreparedCover>,
+    created: Option<SystemTime>,
 ) -> Result<(), String> {
     let (_, existing) =
         player_dsd::id3::read_dsf(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
@@ -567,7 +630,7 @@ fn write_dsf_edit(
     if wrote_title != edit.fields.title {
         return Err("寫入後驗證失敗：標題與預期不符".into());
     }
-    fs::rename(temp, path).map_err(|e| format!("取代原檔失敗（檔案可能被占用）：{e}"))?;
+    replace_original(temp, path, created)?;
     Ok(())
 }
 

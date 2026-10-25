@@ -8,7 +8,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { PlaybackSnapshot } from './ipc';
   import { seekPlayback } from './ipc';
-  import { hasLyricsInUse, importTimestampShiftMs, lyricsToText } from './lyrics-import.js';
+  import { hasLyricsInUse, importTimestampShiftMs, lyricsToText, nextBakedDelayState } from './lyrics-import.js';
   import { emit } from '@tauri-apps/api/event';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, saveLyricsTimingOffsetSec } from './lyrics-timing-offset.js';
   import {
@@ -107,7 +107,8 @@
   // 導入使用中歌詞 writes the lyrics as they are shown now: the delay (and the lyrics' own offset) is baked into
   // every timestamp, same sign as lyricsDisplayOffsetMs, negatives clamp to 0 (user decision 2026-10-22).
   let onlineLyricsText = $derived(lyricsInUse ? lyricsToText(lyricsInUse, importTimestampShiftMs(lyricsInUse.offsetMs, timingDelaySec)) : null);
-  let importedLyrics: { text: string; delaySec: number } | null = null;
+  // A non-zero delay was baked into the lyrics field by 導入使用中歌詞 (see nextBakedDelayState).
+  let bakedDelayPending = false;
   let coverOptions = $state<CoverEditOptions>(loadCoverEditOptions());
 
   const isDirty = (key: keyof TagFields) => !!draft && !!original && draft[key] !== original[key];
@@ -175,16 +176,17 @@
     timingDelaySec = loadLyricsTimingOffsetSec(trackId);
     if (draft && onlineLyricsText !== null) {
       draft.lyrics = onlineLyricsText;
-      importedLyrics = { text: onlineLyricsText, delaySec: timingDelaySec };
+      bakedDelayPending = nextBakedDelayState(bakedDelayPending, { type: 'import', delaySec: timingDelaySec }).pending;
     }
   }
 
-  /** After a Save that wrote imported lyrics with the track's delay baked in, the delay goes back to 0 (the
-   * playback page and taskbar lyrics follow LYRICS_TIMING_OFFSET_EVENT), so it is not applied twice. */
-  function resetDelayBakedIntoSavedLyrics(savedLyrics: string) {
-    const imported = importedLyrics;
-    importedLyrics = null;
-    if (!imported || imported.delaySec === 0 || imported.text !== savedLyrics) return;
+  /** After a Save that wrote the lyrics field while an imported delay was baked in (edited afterwards or not), the
+   * delay goes back to 0 (the playback page and taskbar lyrics follow LYRICS_TIMING_OFFSET_EVENT), so it is not
+   * applied twice. */
+  function resetDelayBakedIntoSavedLyrics(lyricsDirty: boolean) {
+    const next = nextBakedDelayState(bakedDelayPending, { type: 'save', lyricsDirty });
+    bakedDelayPending = next.pending;
+    if (!next.resetDelay) return;
     timingDelaySec = saveLyricsTimingOffsetSec(trackId, 0);
     void Promise.resolve().then(() => emit(LYRICS_TIMING_OFFSET_EVENT, { trackId, delaySec: 0 })).catch(() => {});
   }
@@ -192,6 +194,7 @@
   /** Empties the lyrics field; like every other field it reaches the file only when 儲存 is pressed. */
   function clearLyrics() {
     if (draft) draft.lyrics = '';
+    bakedDelayPending = nextBakedDelayState(bakedDelayPending, { type: 'clear' }).pending;
   }
 
   function resetField(key: keyof TagFields) { if (draft && original) draft[key] = original[key]; }
@@ -390,7 +393,7 @@
           coverOptions,
         },
       });
-      if (isDirty('lyrics')) resetDelayBakedIntoSavedLyrics(draft.lyrics);
+      resetDelayBakedIntoSavedLyrics(isDirty('lyrics'));
       details = result;
       original = { ...result.fields };
       draft = { ...result.fields };

@@ -20,6 +20,24 @@ export function importTimestampShiftMs(lyricsOffsetMs, delaySec) {
   return Object.is(shift, -0) ? 0 : shift;
 }
 
+/**
+ * Whether the per-track lyrics delay has been baked into the lyrics field during this dialog session, and whether a
+ * Save resets the delay to 0 so it is not applied twice (ADR 0013). An import with a non-zero delay marks it pending;
+ * 清空, or an import with delay 0, cancels it; the next Save that writes the lyrics field (lyrics dirty) resets the
+ * delay, even when the imported lyrics were edited before saving. Every Save clears the pending state.
+ * @typedef {{ type: 'import', delaySec: number } | { type: 'clear' } | { type: 'save', lyricsDirty: boolean }} BakedDelayEvent
+ * @param {boolean} pending @param {BakedDelayEvent} event
+ * @returns {{ pending: boolean, resetDelay: boolean }}
+ */
+export function nextBakedDelayState(pending, event) {
+  switch (event.type) {
+    case 'import': return { pending: event.delaySec !== 0, resetDelay: false };
+    case 'clear': return { pending: false, resetDelay: false };
+    case 'save': return { pending: false, resetDelay: pending && event.lyricsDirty };
+    default: return { pending, resetDelay: false };
+  }
+}
+
 /** @param {number} ms */
 export function formatLrcTimestamp(ms) {
   const total = Math.max(0, Math.round(ms / 10));

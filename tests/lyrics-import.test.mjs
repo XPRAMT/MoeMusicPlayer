@@ -45,9 +45,40 @@ test('the details page resets the delay after saving imported lyrics and the pla
   const dialog = await readFile(new URL('../src/lib/TrackDetailsDialog.svelte', import.meta.url), 'utf8');
   assert.match(dialog, /lyricsToText\(lyricsInUse, importTimestampShiftMs\(lyricsInUse\.offsetMs, timingDelaySec\)\)/);
   assert.match(dialog, /saveLyricsTimingOffsetSec\(trackId, 0\)[^]*?emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId, delaySec: 0 \}\)/);
-  assert.match(dialog, /if \(isDirty\('lyrics'\)\) resetDelayBakedIntoSavedLyrics\(/);
+  assert.match(dialog, /resetDelayBakedIntoSavedLyrics\(isDirty\('lyrics'\)\)/);
+  assert.match(dialog, /function clearLyrics\(\) \{[^}]*nextBakedDelayState\(bakedDelayPending, \{ type: 'clear' \}\)/);
+  assert.match(dialog, /nextBakedDelayState\(bakedDelayPending, \{ type: 'import', delaySec: timingDelaySec \}\)/);
   const view = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
   assert.match(view, /listen<[^>]*>\(LYRICS_TIMING_OFFSET_EVENT[^]*?timingOffsetSec = loadLyricsTimingOffsetSec\(shown\)/);
+});
+
+test('a delay baked in by an import is reset by the next Save that writes the lyrics, edited or not', async () => {
+  const { nextBakedDelayState } = await import('../src/lib/lyrics-import.js');
+  /** @param {any[]} events */
+  const run = (events) => {
+    let pending = false;
+    const resets = [];
+    for (const event of events) {
+      const next = nextBakedDelayState(pending, event);
+      pending = next.pending;
+      if (event.type === 'save') resets.push(next.resetDelay);
+    }
+    return resets;
+  };
+  const save = { type: 'save', lyricsDirty: true };
+  // Import + save resets; editing the imported lyrics in between (still dirty) does not matter.
+  assert.deepEqual(run([{ type: 'import', delaySec: 1.5 }, save]), [true]);
+  assert.deepEqual(run([{ type: 'import', delaySec: -0.5 }, /* edit */ save]), [true]);
+  // Import with delay 0 bakes nothing.
+  assert.deepEqual(run([{ type: 'import', delaySec: 0 }, save]), [false]);
+  // 清空 after the import cancels the reset.
+  assert.deepEqual(run([{ type: 'import', delaySec: 1.5 }, { type: 'clear' }, save]), [false]);
+  // Re-import with delay 0 after a non-zero import cancels it.
+  assert.deepEqual(run([{ type: 'import', delaySec: 1.5 }, { type: 'import', delaySec: 0 }, save]), [false]);
+  // A second save after the reset does not reset again.
+  assert.deepEqual(run([{ type: 'import', delaySec: 1.5 }, save, save]), [true, false]);
+  // A save that does not write the lyrics field never resets, and still clears the pending state.
+  assert.deepEqual(run([{ type: 'import', delaySec: 1.5 }, { type: 'save', lyricsDirty: false }, save]), [false, false]);
 });
 
 test('the import button is always enabled', async () => {
