@@ -9,6 +9,7 @@
     shouldReleasePlaybackSeekDraft,
   } from './playback-scrubber';
   import { playbackSeekKeyStepMs } from './shortcuts.js';
+  import { progressRun, type ProgressMotion } from './progress-run.js';
   import type { TimelineStyle } from './ipc';
   import {
     estimatePlaybackPosition,
@@ -74,10 +75,10 @@
       ? Math.min(100, Math.max(0, (displayedPositionMs / durationMs) * 100))
       : 0,
   );
-  // CSS run of the bar: from the current ratio to 1 in the remaining time, linear. It restarts only when the clock
-  // jumps (seek, new track, play/pause, deviation > 250 ms) or a drag ends; smooth corrections leave it running.
-  // Two identical keyframe names alternate so that a restart is a change of animation-name.
-  // The run is plain linear and moves sub-pixel (the user chose smoothness over the per-frame repaint while playing).
+  // Compositor run of the bar (progress-run.js): from the current ratio to 1 in the remaining time, linear, transform
+  // only, so it costs no style, layout or paint work per frame. It restarts only when the clock jumps (seek, new track,
+  // play/pause, deviation > 250 ms) or a drag ends; smooth corrections leave it running. `run.name` alternates so that a
+  // restart at identical numbers is still a change. Linear and sub-pixel (the user chose smoothness over snapping).
   let run = $state<{ ratio: number; remainingMs: number | null; name: string }>({ ratio: 0, remainingMs: null, name: 'playback-progress-run-a' });
   $effect(() => {
     const current = clock;
@@ -88,13 +89,13 @@
     const name = untrack(() => run.name) === 'playback-progress-run-a' ? 'playback-progress-run-b' : 'playback-progress-run-a';
     run = { ...next, name };
   });
-  const progressStyle = $derived.by(() => {
+  const progressMotion = $derived.by((): ProgressMotion => {
     if (hasDraft || !clock || durationMs == null || durationMs <= 0 || durationMs !== clock.durationMs) {
-      return `--progress-ratio: ${progressPercent / 100}; animation: none`;
+      return { ratio: progressPercent / 100, remainingMs: null, key: 'parked' };
     }
     return run.remainingMs === null
-      ? `--progress-ratio: ${run.ratio}; animation: none`
-      : `--progress-ratio: ${run.ratio}; --progress-run-ms: ${Math.round(run.remainingMs)}ms; animation: ${run.name} ${Math.round(run.remainingMs)}ms linear forwards`;
+      ? { ratio: run.ratio, remainingMs: null, key: 'parked' }
+      : { ratio: run.ratio, remainingMs: Math.round(run.remainingMs), key: run.name };
   });
   const seekEnabled = $derived(canControl && trackId !== null && isPlaybackSeekableDuration(durationMs));
   // Keep the range input enabled while non-seek commands are busy so :disabled opacity does not flash the timeline.
@@ -192,7 +193,8 @@
 
 <div class="progress-row" data-timeline-style={timelineStyle}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
-  <div class="progress-hit" style={progressStyle}>
+  <div class="progress-hit" use:progressRun={progressMotion}>
+    <div class="progress-track" aria-hidden="true"><div class="progress-band"></div></div>
     <input
       class="progress-slider"
       type="range"
@@ -207,6 +209,7 @@
       onchange={commitDraft}
       onblur={commitDraft}
     />
+    <div class="progress-thumb-rail" aria-hidden="true"><div class="progress-thumb-mover"><span class="progress-thumb"></span></div></div>
   </div>
   <span class="progress-time progress-time-duration">{formatDuration(durationMs)}</span>
 </div>

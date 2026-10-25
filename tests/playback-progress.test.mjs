@@ -78,18 +78,21 @@ test('progress slider remains visible and is not collapsed with volume-state hid
 test('progress slider publishes playhead percent for the edge glow gradient', () => {
   const css = readFileSync(path.join(root, 'src/app.css'), 'utf8');
   assert.match(progressSource, /const progressPercent = \$derived\(/);
-  assert.match(progressSource, /class="progress-hit" style=\{progressStyle\}/);
-  assert.match(progressSource, /--progress-ratio: \$\{run\.ratio\}/);
-  assert.match(css, /@property --progress-ratio\s*\{\s*syntax:\s*'<number>';/);
-  assert.match(css, /--progress-pct:\s*calc\(var\(--progress-ratio\) \* 100%\)/);
-  assert.match(css, /\.progress-hit::after/);
+  assert.match(progressSource, /class="progress-hit" use:progressRun=\{progressMotion\}/);
+  assert.match(progressSource, /ratio: run\.ratio/);
+  assert.match(progressSource, /class="progress-track"[^>]*><div class="progress-band">/);
+  assert.match(progressSource, /class="progress-thumb-mover"><span class="progress-thumb">/);
+  // No registered custom property is animated any more (it cost a style recalc + layout every frame).
+  assert.doesNotMatch(css, /@property --progress-ratio|--progress-pct|playback-progress-run/);
+  assert.match(css, /\.progress-band \{[^}]*width: 300%;/);
+  assert.match(css, /\.progress-track \{/);
   assert.match(css, /--dock-edge-progress-row:\s*10px/);
   assert.match(css, /--dock-edge-progress-hit:\s*20px/);
   assert.match(css, /\.progress-slider \{[^}]*inset: calc\(0\.5 \* \(var\(--dock-progress-row\) - var\(--dock-progress-hit\)\)\) 0;/);
   assert.match(css, /grid-template-rows: var\(--dock-progress-row\) auto;/);
   assert.match(css, /--dock-edge-progress-track:\s*3px/);
   assert.match(css, /margin-top:\s*calc\(-0\.5 \* var\(--dock-progress-row\) - 0\.5 \* var\(--dock-progress-track\)\)/);
-  assert.match(css, /\.progress-hit::after[\s\S]*?transform:\s*translateY\(-50%\)/);
+  assert.match(css, /\.progress-track \{[^}]*transform:\s*translateY\(-50%\)/);
 });
 
 

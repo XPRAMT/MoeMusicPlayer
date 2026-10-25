@@ -2190,6 +2190,11 @@ input:focus-visible {
   container-type: inline-size;
 }
 
+/* The reset glide paints the already-restored layout from the zoomed box: it stays above the lyrics until it lands. */
+.now-playing-view .cover-stage[data-cover-resetting] {
+  z-index: 1;
+}
+
 .now-playing-view .cover-stage[data-cover-zoomed] {
   position: relative;
   z-index: 1;
@@ -3898,7 +3903,7 @@ input:focus-visible {
   height: auto;
   margin: 0;
   border-radius: 0;
-  /* Hit target only — the 3px line is painted by .progress-hit::after. */
+  /* Hit target only — the 3px line is painted by .progress-track. */
   background: transparent;
 }
 
@@ -4177,14 +4182,6 @@ input:focus-visible {
   background-size: 100% 3px;
 }
 
-/* The bar runs as a linear CSS animation of this registered number (ADR 0028): both the gradient and the painted
-   thumb read it, and both are placed in percentages, so a width change needs no recalculation. */
-@property --progress-ratio {
-  syntax: '<number>';
-  inherits: true;
-  initial-value: 0;
-}
-
 /* The Now Playing karaoke edge (ADR 0041 D10): the gradient position along the current line, animated by CSS. */
 @property --lyric-line-fill {
   syntax: '<percentage>';
@@ -4192,11 +4189,10 @@ input:focus-visible {
   initial-value: 0%;
 }
 
-@keyframes playback-progress-run-a { to { --progress-ratio: 1; } }
-@keyframes playback-progress-run-b { to { --progress-ratio: 1; } }
-
+/* The bar moves by compositor-only transform animations (progress-run.js, ADR 0028): the glow band and the thumb mover
+   are translated by percentages of their own width, so there is no per-frame style, layout or paint work and a width
+   change needs no recalculation. */
 .progress-hit {
-  --progress-ratio: 0;
   --progress-glow: color-mix(in srgb, var(--accent) 72%, var(--accent-bright));
   --progress-thumb: 10px;
   position: relative;
@@ -4205,45 +4201,69 @@ input:focus-visible {
 
 /* 3px painted track centered in the hit band; hit placement keeps this line
    on/above the dock top while the lower half of the hit may enter the dock. */
-.progress-hit::after {
-  content: '';
+.progress-track {
   position: absolute;
   top: 50%;
   right: 0;
   left: 0;
   z-index: 0;
   height: var(--dock-progress-track, 3px);
+  overflow: hidden;
   border-radius: 99px;
   pointer-events: none;
   transform: translateY(-50%);
-  --progress-pct: calc(var(--progress-ratio) * 100%);
+}
+
+/* 3 x the track, its middle on the track's left edge at rest; translateX(ratio / 3 of its own width) = ratio x track puts
+   the glow centre (the band's middle) on the playhead. The glow keeps a fixed shape (+-32% of the track, then a 34% fade
+   to the base alpha) instead of the old stops that were clamped to the track ends. */
+.progress-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -150%;
+  width: 300%;
+  will-change: transform;
   background: linear-gradient(
     90deg,
-    rgba(var(--accent-rgb), 0.32) 0%,
-    rgba(var(--accent-rgb), 0.42) max(0%, calc(var(--progress-pct) - 32%)),
-    rgba(var(--accent-rgb), 0.62) max(0%, calc(var(--progress-pct) - 12%)),
-    var(--progress-glow) var(--progress-pct),
-    rgba(var(--accent-rgb), 0.62) min(100%, calc(var(--progress-pct) + 12%)),
-    rgba(var(--accent-rgb), 0.42) min(100%, calc(var(--progress-pct) + 32%)),
-    rgba(var(--accent-rgb), 0.32) 100%
+    rgba(var(--accent-rgb), 0.32) 28%,
+    rgba(var(--accent-rgb), 0.42) 39.3333%,
+    rgba(var(--accent-rgb), 0.62) 46%,
+    var(--progress-glow) 50%,
+    rgba(var(--accent-rgb), 0.62) 54%,
+    rgba(var(--accent-rgb), 0.42) 60.6667%,
+    rgba(var(--accent-rgb), 0.32) 72%
   );
 }
 
-.progress-hit:has(.progress-slider:disabled)::after,
-.progress-hit:has(.progress-slider:disabled)::before {
+.progress-hit:has(.progress-slider:disabled) .progress-track,
+.progress-hit:has(.progress-slider:disabled) .progress-thumb-rail {
   opacity: 0.4;
 }
 
-/* Painted thumb positioned by percentage of the track, so a layout width change (dock
-   reflow when the playback page opens/closes) moves it with the track instead of the
-   native thumb jumping. No transition on position. The native thumb stays for hit-testing. */
-.progress-hit::before {
-  content: '';
+/* Painted thumb: the rail spans the thumb's travel (thumb/2 .. 100% - thumb/2, the same as the native thumb) and its
+   mover is translated by ratio x 100% of that width, so a layout width change (dock reflow when the playback page
+   opens/closes) moves it with the track. The native thumb stays for hit-testing. */
+.progress-thumb-rail {
   position: absolute;
-  top: 50%;
-  /* Same travel as the native thumb: thumb/2 .. 100% - thumb/2. */
-  left: calc(var(--progress-thumb) / 2 + (100% - var(--progress-thumb)) * var(--progress-ratio, 0));
+  top: calc(50% - var(--progress-thumb) / 2);
+  right: calc(var(--progress-thumb) / 2);
+  left: calc(var(--progress-thumb) / 2);
   z-index: 2;
+  height: var(--progress-thumb);
+  pointer-events: none;
+}
+
+.progress-thumb-mover {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.progress-thumb {
+  position: absolute;
+  top: 0;
+  left: calc(var(--progress-thumb) / -2);
   box-sizing: border-box;
   width: var(--progress-thumb);
   height: var(--progress-thumb);
@@ -4253,9 +4273,6 @@ input:focus-visible {
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.35),
     0 0 4px rgba(var(--accent-rgb), 0.35);
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-  transition: none;
 }
 
 .progress-slider {
@@ -4860,11 +4877,6 @@ input:focus-visible {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-
-  /* The progress bar run is a clock, not decorative motion: it keeps its real length (ADR 0028). */
-  .progress-hit.progress-hit {
-    animation-duration: var(--progress-run-ms, 0ms) !important;
   }
 }
 
