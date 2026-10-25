@@ -174,7 +174,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   linearly to the next line's anchor until that line starts. Amended (superseded by the centre rule further down): the strip always uses the right anchor
   (`LYRICS_STRIP_ALIGN` / `FloatingLyricsRules.STRIP_ALIGN` = right; cells' text right-aligned too), whatever the
   文字排版 setting, whose buttons stay enabled and apply to 「無」; before the first line it rests on the first, after the
-  last on the last (`lyrics-strip.js` `lyricsStripOffset`, Kotlin `FloatingLyricsRules.stripOffset`). The shift is
+  last on the last (Rust `player-lyrics-rules::strip_offset`, Kotlin `FloatingLyricsRules.stripOffset`; the JS copy `lyrics-strip.js` is deleted). The shift is
   a pure function of the lyrics time (position + offsets), so seek and pause follow the playback clock at once.
   Amended (2026-10-23, measured): only the cells that can show during the current glide plus one lyric area of margin
   on each side are drawn (`lyricsStripWindow`, Kotlin `FloatingLyricsRules.stripWindow`); each keeps its layout offset
@@ -208,7 +208,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   that the first line's start is no jump, the same 200 ms rule applies to it: in the 200 ms before the first line
   starts (shortened so it never begins before position 0) every line except the first fades from 1 to the
   not-current factor, and the first stays 1; at its start it is the current line and the others are already at the
-  factor. From the last line's start nothing fades (it stays 1). Android computes the same weights from its own position (`FloatingLyricsRules.cellWeight`), so a prelude shorter than 200 ms starts already part-way through the first-line lead-in at position 0, whereas Windows shortens the fade so it never begins before position 0. Pure functions in `lyrics-strip.js`:
+  factor. From the last line's start nothing fades (it stays 1). Android computes the same weights from its own position (`FloatingLyricsRules.cellWeight`), so a prelude shorter than 200 ms starts already part-way through the first-line lead-in at position 0, whereas Windows shortens the fade so it never begins before position 0. Pure functions (then in `lyrics-strip.js`, now only Rust `strip_focus` / `line_weight`):
   `lyricsStripFocus(startTimesMs, positionMs)` -> `{ current, incoming, progress, fadeStartMs, fadeMs }`,
   `lyricsLineWeight(focus, index)` (0 not current ... 1 current) and
   `lyricsLineOpacityFactor(weight, inactiveOpacityPercent, animation)` = `inactive + (1 - inactive) * weight` (the
@@ -300,7 +300,7 @@ square zone on each side, as wide as the area is high (half the width when the a
 where everything the lyrics draw (main line, translation, shadow, outline) falls linearly from opaque at the inner
 edge to transparent at the outer edge. The padlock column and the move-mode background are not faded. Since the outer
 edge is transparent, the horizontal clip room kept for the shadow at the area's sides is gone. Rules:
-`player-lyrics-rules::edge_fade_*`, `lyricsEdgeFade*` (lyrics-strip.js, shared vectors `edgeFade`),
+`player-lyrics-rules::edge_fade_*` (shared vectors `edgeFade`),
 `FloatingLyricsRules.edgeFade*`. Android masks the lyric column (`EdgeFadeLayout`) with a `LinearGradient` in
 `DST_IN` on a saved layer. Windows (from 2026-10-23) renders the lyric content once per window into a `CompositionVisualSurface`
 and paints it through a `CompositionMaskBrush` whose mask is a static horizontal gradient from the same rule, which
