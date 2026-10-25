@@ -32,19 +32,23 @@ export function formatDetailsSampleRate(hz) {
 const pad2 = (value) => String(value).padStart(2, '0');
 
 /**
- * Local date and time to the second with the UTC offset, e.g. `2026-04-29 20:59:41 (UTC+8)`, `(UTC+5:30)`, `(UTC-3:30)`.
+ * Local date and time to the second, e.g. `2026-10-23 02:16:58`. With `zone` the UTC offset follows,
+ * e.g. `2026-04-29 20:59:41 (UTC+8)`, `(UTC+5:30)`, `(UTC-3:30)`: shown when the stored time may be a wall-clock time
+ * without a zone (FAT, exFAT, an SD card, unknown; the backend's `timesAbsolute` is false).
  * Nothing known shows a dash.
  * @param {number | null | undefined} ms Unix time in milliseconds.
- * @param {number} [offsetMinutes] Minutes east of UTC; defaults to this system's offset at that instant.
+ * @param {{ zone?: boolean, offsetMinutes?: number }} [options] `zone` defaults to true; `offsetMinutes` (minutes east
+ *   of UTC) defaults to this system's offset at that instant.
  */
-export function formatDetailsDate(ms, offsetMinutes) {
+export function formatDetailsDate(ms, options = {}) {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return '—';
-  const offset = offsetMinutes ?? -new Date(ms).getTimezoneOffset();
+  const offset = options.offsetMinutes ?? -new Date(ms).getTimezoneOffset();
   const local = new Date(ms + offset * 60_000);
-  const abs = Math.abs(offset);
-  const zone = `UTC${offset >= 0 ? '+' : '-'}${Math.floor(abs / 60)}${abs % 60 ? `:${pad2(abs % 60)}` : ''}`;
   const day = `${local.getUTCFullYear()}-${pad2(local.getUTCMonth() + 1)}-${pad2(local.getUTCDate())}`;
   const time = `${pad2(local.getUTCHours())}:${pad2(local.getUTCMinutes())}:${pad2(local.getUTCSeconds())}`;
+  if (options.zone === false) return `${day} ${time}`;
+  const abs = Math.abs(offset);
+  const zone = `UTC${offset >= 0 ? '+' : '-'}${Math.floor(abs / 60)}${abs % 60 ? `:${pad2(abs % 60)}` : ''}`;
   return `${day} ${time} (${zone})`;
 }
 

@@ -6,13 +6,21 @@ import { formatBitrateKbps, formatDetailsBitrate, formatDetailsDate, formatDetai
 
 test('details panel dates show seconds and the UTC offset', () => {
   const ms = Date.UTC(2026, 3, 29, 12, 59, 41, 999);
-  assert.equal(formatDetailsDate(ms, 480), '2026-04-29 20:59:41 (UTC+8)');
-  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 2, 3, 4, 5), 0), '2026-01-02 03:04:05 (UTC+0)');
-  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 1, 0, 0, 7), 330), '2026-01-01 05:30:07 (UTC+5:30)');
-  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 1, 2, 0, 9), -210), '2025-12-31 22:30:09 (UTC-3:30)');
-  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 1, 0, 0, 0), 345), '2026-01-01 05:45:00 (UTC+5:45)');
+  assert.equal(formatDetailsDate(ms, { offsetMinutes: 480 }), '2026-04-29 20:59:41 (UTC+8)');
+  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 2, 3, 4, 5), { offsetMinutes: 0 }), '2026-01-02 03:04:05 (UTC+0)');
+  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 1, 0, 0, 7), { offsetMinutes: 330 }), '2026-01-01 05:30:07 (UTC+5:30)');
+  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 1, 2, 0, 9), { offsetMinutes: -210 }), '2025-12-31 22:30:09 (UTC-3:30)');
+  assert.equal(formatDetailsDate(Date.UTC(2026, 0, 1, 0, 0, 0), { offsetMinutes: 345 }), '2026-01-01 05:45:00 (UTC+5:45)');
   assert.match(formatDetailsDate(ms), /^2026-04-\d\d \d\d:\d\d:41 \(UTC[+-]\d+(:\d\d)?\)$/);
   for (const bad of [null, undefined, Number.NaN]) assert.equal(formatDetailsDate(bad), '—');
+});
+
+test('absolute times (NTFS, internal storage, SMB, WebDAV) show local time without the zone suffix', () => {
+  const ms = Date.UTC(2026, 9, 22, 18, 16, 58, 400);
+  assert.equal(formatDetailsDate(ms, { zone: false, offsetMinutes: 480 }), '2026-10-23 02:16:58');
+  assert.equal(formatDetailsDate(ms, { zone: true, offsetMinutes: 480 }), '2026-10-23 02:16:58 (UTC+8)');
+  assert.match(formatDetailsDate(ms, { zone: false }), /^2026-10-2\d \d\d:\d\d:58$/);
+  assert.equal(formatDetailsDate(null, { zone: false }), '—');
 });
 
 test('shared bitrate rule: whole kbps below 1000, Mbps (/1000, trailing zeros trimmed) from 1000 up', () => {
@@ -53,8 +61,9 @@ test('the details panel uses both helpers', () => {
   const dialog = readFileSync(new URL('../src/lib/TrackDetailsDialog.svelte', import.meta.url), 'utf8');
   assert.match(dialog, /formatDetailsBitrate\(/);
   assert.match(dialog, /formatDetailsSampleRate\(/);
-  assert.match(dialog, /formatDetailsDate\(details\.modifiedUnixMs\)/);
-  assert.match(dialog, /formatDetailsDate\(details\.createdUnixMs\)/);
+  // Both times follow the same backend flag.
+  assert.match(dialog, /formatDetailsDate\(details\.modifiedUnixMs, \{ zone: !details\.timesAbsolute \}\)/);
+  assert.match(dialog, /formatDetailsDate\(details\.createdUnixMs, \{ zone: !details\.timesAbsolute \}\)/);
 });
 
 test('duration shows a tenth of a second', () => {

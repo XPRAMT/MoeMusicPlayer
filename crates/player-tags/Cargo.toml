@@ -28,6 +28,9 @@ serde = { version = "1", features = ["derive"] }
 # Opus spectrogram.
 player-wavpack = { path = "../player-wavpack" }
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["Win32_Storage_FileSystem"] }
+
 [target.'cfg(not(target_os = "android"))'.dependencies]
 player-opus = { path = "../player-opus" }
 

@@ -97,6 +97,11 @@ pub struct TrackDetails {
     pub modified_unix_ms: Option<u64>,
     /// File creation time when the platform reports it (Windows); `None` otherwise.
     pub created_unix_ms: Option<u64>,
+    /// The two times are absolute instants (NTFS, ReFS, Android internal storage, SMB, WebDAV), so the panel shows them
+    /// in local time without a zone; `false` when they may be a wall-clock time without one (FAT, exFAT, an SD card,
+    /// unknown), and the panel adds the UTC offset (`file_times`).
+    #[serde(default)]
+    pub times_absolute: bool,
     pub format: String,
     /// e.g. "ID3v2.3", "VorbisComments", "MP4 ilst"; empty when no tag.
     pub tag_format: String,
@@ -343,6 +348,7 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         file_size,
         modified_unix_ms,
         created_unix_ms,
+        times_absolute: crate::file_times::times_absolute(path),
         format: path
             .extension()
             .map(|e| e.to_string_lossy().to_uppercase())

@@ -22,7 +22,7 @@
     trackNumber: string; trackTotal: string; discNumber: string; discTotal: string; date: string; lyrics: string;
   };
   type TrackDetails = {
-    path: string; fileName: string; fileSize: number; modifiedUnixMs: number | null; createdUnixMs: number | null; format: string;
+    path: string; fileName: string; fileSize: number; modifiedUnixMs: number | null; createdUnixMs: number | null; timesAbsolute?: boolean; format: string;
     tagFormat: string; readOnly: boolean; readOnlyReason: string | null; remote?: boolean; fields: TagFields;
     properties: { durationMs: number; overallBitrateKbps: number | null; audioBitrateKbps: number | null; sampleRate: number | null; bitDepth: number | null; channels: number | null };
     cover: { mime: string; width: number; height: number; bytes: number } | null;
@@ -467,9 +467,9 @@
         <dt>{tr("取樣率")}</dt><dd>{formatDetailsSampleRate(details.properties.sampleRate)}</dd>
         <dt>{tr("位元深度")}</dt><dd>{details.properties.bitDepth ? `${details.properties.bitDepth} bit` : '—'}</dd>
         <dt>{tr("聲道")}</dt><dd>{details.properties.channels ?? '—'}</dd>
-        <dt>{tr("修改時間")}</dt><dd>{formatDetailsDate(details.modifiedUnixMs)}</dd>
+        <dt>{tr("修改時間")}</dt><dd>{formatDetailsDate(details.modifiedUnixMs, { zone: !details.timesAbsolute })}</dd>
         <dt>{tr("檔案大小")}</dt><dd>{formatBytes(details.fileSize)}</dd>
-        <dt>{tr("建立時間")}</dt><dd>{formatDetailsDate(details.createdUnixMs)}</dd>
+        <dt>{tr("建立時間")}</dt><dd>{formatDetailsDate(details.createdUnixMs, { zone: !details.timesAbsolute })}</dd>
       </dl>
 
       <section class="track-details-cover">

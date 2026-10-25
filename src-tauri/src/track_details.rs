@@ -327,6 +327,9 @@ pub(crate) fn read_remote_details(
     details.file_size = length;
     details.modified_unix_ms = modified;
     details.created_unix_ms = created;
+    // SMB carries UTC FILETIMEs and WebDAV GMT dates: the server's times are instants (the scratch copy's volume is not
+    // where the file lives).
+    details.times_absolute = true;
     details.file_name = remote_file_name(path);
     details.path = path.to_owned();
     details.remote = true;
@@ -376,6 +379,7 @@ pub(crate) fn save_remote(
     details.file_size = after.len;
     details.modified_unix_ms = after.modified_ms.and_then(|ms| u64::try_from(ms).ok());
     details.created_unix_ms = None;
+    details.times_absolute = true;
     details.file_name = remote_file_name(path);
     details.path = path.to_owned();
     details.remote = true;
@@ -420,6 +424,8 @@ fn present_details(
     if location.starts_with("content://") {
         details.modified_unix_ms = android_io::document_modified_ms(app, &location);
         details.created_unix_ms = None;
+        // The provider does not tell where the document lives (the work copy's volume is not it).
+        details.times_absolute = false;
     }
     details.file_name = name;
     details.path = location;

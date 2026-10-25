@@ -5,6 +5,7 @@
 
 pub mod ape_cover;
 pub mod cover;
+pub mod file_times;
 pub mod spectrogram;
 pub mod tags;
 
