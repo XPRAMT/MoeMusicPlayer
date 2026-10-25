@@ -207,7 +207,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 ### 5.3 定案與實作（D10）
 
 **連續模式：方案 C。**（Windows 原生工作列與浮動歌詞、Android 浮動歌詞）
-- 行起點是硬節點：該行第一個字形的中心在行起點時剛好落在歌詞區中心（行級歌詞也一樣，`StripLayout.anchors`／JS `layoutLyricsStrip` 第 4 參數／Kotlin `firstGlyphCenters`，取代原本的左緣）。連續模式完全忽略個別字的時間（極短的字會讓捲動速度忽快忽慢）：有逐字時間的行只有兩個硬節點，行起點，與行結束（最後一個字的結束時間，該行最後一個字形的中心落在歌詞區中心）；所有行的節點依時間排序，用一條單調 C1 曲線串起來（`word_strip_knots`＋`knot_cubic`，切線為 Fritsch–Butland 加權調和平均，第一個與最後一個節點為 0，與行級的 `strip_cubic` 同一族），所以行內與「行結束到下一行起點」的空檔速度都平滑變化，沒有停停走走，也沒有 0.5–1.5 倍速度帶與字導引。沒有逐字時間的行只有起點節點；單一字形的行（首尾字形中心相同）或結束不晚於起點的行沒有結束節點；從行結束到下一個起點節點的空檔速度（(下一行起點值 − 結束值) ÷ (下一行起點 − 結束時間)）大於該行自己的速度（(最後一個字形中心 − 第一個字形中心) ÷ (結束 − 起點)）時也不放結束節點，曲線從本行起點直接滑到下一行起點，相等時保留（各語言以交叉相乘比較，結果一致），最後一行（沒有下一行）保留結束節點；理由：最後一個字結束得太接近下一行時（例如 `[03:32.70]` 拿出下一颗软糖 結束於 215180、下一行起點 215190，20 px 字、40 px 行距），結束節點會讓捲動條在 10 ms 內移動 60 px（120 Hz 下單幀 16 px 再 44 px，前後約 1 px／幀），略過後整段約 0.6 px／幀；同一首歌另有 10 ms、30 ms 的空檔；重疊時（下一行起點不晚於本行結束）後一行的起點取代前面的節點，值維持非遞減；最後一行停在最後一個字的結束（逐字行不用每字 500 ms 的估計）。行級歌詞仍用原本的 PCHIP 行曲線（只改錨點）。沿用音訊時鐘的漂移修正（`plan::StripInput.word_glide` 為節點，下次重排在下一個節點）。
+- 行起點是硬節點：該行第一個字形的中心在行起點時剛好落在歌詞區中心（行級歌詞也一樣，`StripLayout.anchors`／JS `layoutLyricsStrip` 第 4 參數／Kotlin `firstGlyphCenters`，取代原本的左緣）。連續模式完全忽略個別字的時間（極短的字會讓捲動速度忽快忽慢）。每一行各自判斷有沒有逐字時間，不是整首歌切換模式（使用者核准）：有逐字時間的行只有兩個硬節點，行起點，與行結束（最後一個字的結束時間，該行最後一個字形的中心落在歌詞區中心）；所有行的節點依時間排序，用一條單調 C1 曲線串起來（`word_strip_knots`＋`knot_cubic`，切線為 Fritsch–Butland 加權調和平均，第一個與最後一個節點為 0，與行級的 `strip_cubic` 同一族），所以行內與「行結束到下一行起點」的空檔速度都平滑變化，沒有停停走走，也沒有 0.5–1.5 倍速度帶與字導引。沒有逐字時間的行只有起點節點；單一字形的行（首尾字形中心相同）或結束不晚於起點的行沒有結束節點；從行結束到下一個起點節點的空檔速度（(下一行起點值 − 結束值) ÷ (下一行起點 − 結束時間)）大於該行自己的速度（(最後一個字形中心 − 第一個字形中心) ÷ (結束 − 起點)）時也不放結束節點，曲線從本行起點直接滑到下一行起點，相等時保留（各語言以交叉相乘比較，結果一致），最後一行（沒有下一行）保留結束節點；理由：最後一個字結束得太接近下一行時（例如 `[03:32.70]` 拿出下一颗软糖 結束於 215180、下一行起點 215190，20 px 字、40 px 行距），結束節點會讓捲動條在 10 ms 內移動 60 px（120 Hz 下單幀 16 px 再 44 px，前後約 1 px／幀），略過後整段約 0.6 px／幀；同一首歌另有 10 ms、30 ms 的空檔；重疊時（下一行起點不晚於本行結束）後一行的起點取代前面的節點，值維持非遞減。最後一行：有逐字時間時停在最後一個字的結束（不用估計）；沒有逐字時間時加上與行級相同的終點節點（`final_arrival_ms`：行起點加每個字形 500 ms，不超過曲目結尾；該行最後一個字形的中心），所以整首只有少數逐字行的歌，最後一行也照樣從第一個字形滑到最後一個字形，不會停在第一個字形（例：`[03:51.30]` 啦啦啦啦啦啦啦啦 沒有逐字、前面的 拿出下一颗软糖 有逐字，終點節點為 231300 → 235300）。`word_strip_knots(lines, final_arrival_ms)`／JS `wordStripKnots(lines, finalArrivalMs)`／Kotlin `wordStripKnots(lines, finalArrivalMs)`；Android 的終點取決於曲目長度，所以 `StripModel.wordLines` 只存每行的節點輸入，`LyricsFramePlanner` 依（捲動條、終點）建一次節點，不在每幀建。整首都沒有逐字時間時，節點曲線與行級的 `strip_cubic` 完全相同（時間嚴格遞增時逐係數相等，Rust `without_word_times_the_knot_glide_is_the_line_glide`、JS 同名測試），Windows 與 Android 仍走原本的行級路徑，以免同時間行等邊界情況有任何差異；只要有一行逐字就走節點路徑。行級歌詞仍用原本的 PCHIP 行曲線（只改錨點）。沿用音訊時鐘的漂移修正（`plan::StripInput.word_glide` 為節點，下次重排在下一個節點）。
 - 遮罩（實驗性，使用者核准；若不滿意可整筆還原提交 a457599；下列以「非目前歌詞透明度」a 為參數的描述已被 5.4 取代，現為主要／次要兩個值，`centre_mask_stops(W, em, main, secondary)`）：固定在歌詞區、不隨文字移動的靜態遮罩（`centre_mask_stops(W, em, a)`，Rust／JS／Kotlin 共用向量 `centreMask`）。W＝歌詞區寬、e＝主行字級 1 em、a＝「非目前歌詞透明度」÷100：x 在 [0, e] 由 0 直線升到 a，[e, W/2 − e/2] 由 a 直線升到 1，中心 1 em 為 1，右側對稱。歌詞區窄於 4 em 時 e 改用 W/4，各段長度仍為正、往兩端單調遞減、不超過 1；a＝1 時中間全平，只剩兩端 1 em 淡出。取代先前的置中遮罩（中心 1 em 不透明、直線降到兩端 0、不套用非目前透明度）。
 - 行級與逐字歌詞都用這張遮罩，取代邊緣淡出與行淡化：連續模式下沒有每行的非目前透明度權重與 200 ms 過渡，所有格的透明度係數為 1，透明度只由位置決定。
 - 譯文列沒有自己的節點：它是同一條捲動條的格，跟著主列的位移，並用同一張遮罩（以主列的 em 計算）。
@@ -219,7 +219,8 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 - 已唱的部分用主題主色，還沒唱的用文字顏色；一整行只有一條邊界，沿一條平滑曲線（`karaoke_glide`）移動：第一個字起點時在第一個字的左緣、最後一個字結束時在最後一個字的右緣（整行亮）是硬節點，中間以每個字的起點（左緣）與結束（右緣）為軟導引，速度維持在整行平均掃描速度的 0.5–1.5 倍；開始前停在第一個字左緣，結束後整行主色。與播放頁共用同一條曲線（播放頁以字寬比例為座標）。
 - Windows：每行快取白色與主色兩張表面（版面相同，陰影／描邊的顏色都取自文字顏色，所以兩張的陰影一樣），兩個同位置 sprite 加互補 `InsetClip`：主色那張從行首切到邊界，白色那張從邊界到行尾（`WordClip`）。陰影沒有接縫；不在每幀點陣化；邊界移動至少 1/8 裝置像素才提交。下一行的主色副本會預先點陣化。主色由主視窗以 `lyrics-accent-color` 廣播。
 - Android：主色副本另存一份 `LineRasterCache`，以 `clipRect` 分兩段畫；邊界移動至少 1 個裝置像素才重畫。主色經 `floatingLyricsUpdate { accentColor }` 送達；行資料帶 `words`（`{s, e, t}`）與 `lead`（前導空白的 UTF-16 長度）。
-- 譯文列不變色；沒有逐字的行整行顯示；長句橫向捲動照常（裁切掛在 sprite／畫布上，跟著捲動位移）。
+- 每一行各自判斷：只有自己帶逐字時間的行才掃色，同一首歌裡沒有逐字的行照一般行顯示（Windows `word_ranges()`、Android 每行的 `karaoke`、播放頁 `karaokeLineAnimation` 都以行為單位）。
+- 譯文列不變色；長句橫向捲動照常（裁切掛在 sprite／畫布上，跟著捲動位移）。
 
 **量測**（`--example demo`，3 個視窗：1 個浮動、2 個工作列樣式，都在 120 Hz 主螢幕（3840×2160）；release 建置，每段 32 秒、取中間 20 秒；`MOE_DEMO_WORDS=1` 為每行 80% 逐字）：
 
@@ -261,7 +262,7 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
   - 服務層的內嵌字幕與 Unusable 改用旁檔；
   - yrc 取代 LRC；
   - 逐字旗標。
-- 原生與 Android 規則：`crates/player-lyrics-rules` 的 `words.rs` 單元測試與共用向量（`stripGlide`、`karaokeGlide`、`glide`、`centreMask`、`sung`），JS `tests/lyrics-rules-vectors.test.mjs`、Kotlin `LyricsRulesVectorsTest`；三邊都有卡拉 OK 邊界的逐幀連續性測試；`player-lyrics-native` 的 `plan.rs` 測試逐字計畫（`word_timed_plans_follow_the_glide_and_keep_every_cell_whole`：節點曲線、譯文跟著同一位移、沒有行淡化）。
+- 原生與 Android 規則：`crates/player-lyrics-rules` 的 `words.rs` 單元測試與共用向量（`stripGlide`、`karaokeGlide`、`glide`、`centreMask`、`sung`），JS `tests/lyrics-rules-vectors.test.mjs`、Kotlin `LyricsRulesVectorsTest`；三邊都有卡拉 OK 邊界的逐幀連續性測試；`player-lyrics-native` 的 `plan.rs` 測試逐字計畫（`word_timed_plans_follow_the_glide_and_keep_every_cell_whole`：節點曲線、譯文跟著同一位移、沒有行淡化；`a_last_line_without_words_glides_to_the_terminal_knot_in_a_word_timed_song`）；共用向量 `stripGlide` 每例帶 `finalArrivalMs`（含上述歌曲、終點被曲目結尾截斷、逐字最後一行忽略估計、純行級）；Kotlin `aLastLineWithoutWordTimesGlidesToItsLastGlyphInAWordTimedSong`。
 - 前端：`tests/lyrics-word-highlight.test.mjs` 檢查時間計算、簡繁、掃色 keyframes 與 `@property`、沒有 fill／filter、減少動態時改用換色、羅馬音逐字與顯示順序。
 - `player-core` 的 `lyric_roles` 測試：日文＋羅馬字＋中文兩種順序、長音、韓文＋羅馬字＋英文、英文原文＋中文、中文＋拼音（含組合聲調）、Style 提示、無法判斷時的位置規則；`lyric_formats` 與 `lyrics` 另測 SRT 多行與成對 cue、ASS Style、LRC 兩種順序與寫入格式讀回。
 
