@@ -193,6 +193,9 @@ fn listen(app: &AppHandle, renderer: NativeLyrics) {
                 state,
                 position_ms: p.position_ms,
                 duration_ms: p.duration_ms,
+                activity: player_lyrics_native::pause_hide::Activity::from_state(
+                    &p.state, p.playing,
+                ),
             });
         }
     });
@@ -278,6 +281,7 @@ pub fn taskbar_look(settings: &TaskbarLyricsSettings, light: bool) -> Look {
         secondary_opacity_percent: f64::from(settings.secondary_opacity_percent),
         font_weight: settings.font_weight,
         animation: animation(settings.animation),
+        hide_when_paused: settings.hide_when_paused,
     }
 }
 
@@ -294,6 +298,7 @@ pub fn floating_look(settings: &FloatingLyricsSettings) -> Look {
         secondary_opacity_percent: f64::from(settings.secondary_opacity_percent),
         font_weight: settings.font_weight,
         animation: animation(settings.animation),
+        hide_when_paused: settings.hide_when_paused,
     }
 }
 

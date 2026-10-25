@@ -11,6 +11,7 @@
 //! size/DPI change. The rules themselves are `player-lyrics-rules`. Needs Windows 10 1809 or later (otherwise no
 //! lyrics windows are created).
 
+pub mod pause_hide;
 pub mod plan;
 pub mod sampling;
 pub mod shared_cache;
@@ -96,6 +97,8 @@ pub struct PlaybackSample {
     pub state: PlayState,
     pub position_ms: f64,
     pub duration_ms: Option<f64>,
+    /// For 「暫停時隱藏」: what the player is doing (`pause_hide::Activity::from_state` of the snapshot).
+    pub activity: pause_hide::Activity,
 }
 
 /// The look of one window, from `TaskbarLyricsSettings` / `FloatingLyricsSettings`.
@@ -116,6 +119,18 @@ pub struct Look {
     /// Weight of the original text (100-1000); translation rows are `translation_weight` of it.
     pub font_weight: u16,
     pub animation: Animation,
+    /// 「暫停時隱藏」: the window fades out while playback is paused or stopped (`pause_hide`).
+    pub hide_when_paused: bool,
+}
+
+impl Look {
+    /// Whether `other` differs only in what needs no new rasters or plans (the 「暫停時隱藏」 switch).
+    pub fn same_drawing(&self, other: &Look) -> bool {
+        Look {
+            hide_when_paused: other.hide_when_paused,
+            ..self.clone()
+        } == *other
+    }
 }
 
 /// The translation (and romanization) weight: 50 lighter than the original text, never below 1.

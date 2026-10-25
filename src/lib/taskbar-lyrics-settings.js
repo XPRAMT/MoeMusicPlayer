@@ -30,12 +30,17 @@ export const TASKBAR_LYRICS_ALIGNMENTS = Object.freeze(['left', 'center', 'right
 export const TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR = '#00e1ff';
 
 export const TASKBAR_LYRICS_TEXT_EFFECTS = Object.freeze(['shadow', 'stroke', 'none']);
+/**
+ * 「暫停時隱藏」 (taskbar and floating lyrics, each saved apart; default on): the window fades out while playback is paused
+ * or stopped and back in when it plays; track changes, buffering and seeking never hide it.
+ */
+export const LYRICS_HIDE_WHEN_PAUSED_DEFAULT = true;
 /** Which taskbars show lyrics (ADR 0031): every monitor, the player window's monitor, or the chosen monitors. */
 export const TASKBAR_LYRICS_DISPLAY_MODES = Object.freeze(['all', 'playerMonitor', 'custom']);
 /** Same cap as settings.rs `MAX_CUSTOM_MONITORS`. */
 export const TASKBAR_LYRICS_MAX_CUSTOM_MONITORS = 32;
 
-/** @typedef {{ animation: 'none'|'continuous', enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], mainOpacityPercent: number, secondaryOpacityPercent: number, fontWeight: number }} TaskbarLyricsSettings */
+/** @typedef {{ animation: 'none'|'continuous', enabled: boolean, align: 'left'|'center'|'right', fontSizePx: number, translationScalePercent: number, useCustomColor: boolean, customColor: string, showTranslation: boolean, textEffect: 'shadow'|'stroke'|'none', displayMode: 'all'|'playerMonitor'|'custom', customMonitors: string[], mainOpacityPercent: number, secondaryOpacityPercent: number, fontWeight: number, hideWhenPaused: boolean }} TaskbarLyricsSettings */
 
 /** @type {Readonly<TaskbarLyricsSettings>} */
 export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
@@ -53,6 +58,7 @@ export const DEFAULT_TASKBAR_LYRICS_SETTINGS = Object.freeze({
   secondaryOpacityPercent: LYRICS_SECONDARY_OPACITY_PERCENT.default,
   fontWeight: LYRICS_FONT_WEIGHT.default,
   animation: 'none',
+  hideWhenPaused: LYRICS_HIDE_WHEN_PAUSED_DEFAULT,
 });
 
 /**
@@ -123,6 +129,7 @@ export function normalizeTaskbarLyricsSettings(value) {
     secondaryOpacityPercent: normalizeLyricsOpacity(source.secondaryOpacityPercent, LYRICS_SECONDARY_OPACITY_PERCENT),
     fontWeight: normalizeLyricsFontWeight(source.fontWeight),
     animation: normalizeLyricsAnimation(source.animation),
+    hideWhenPaused: typeof source.hideWhenPaused === 'boolean' ? source.hideWhenPaused : defaults.hideWhenPaused,
   };
 }
 

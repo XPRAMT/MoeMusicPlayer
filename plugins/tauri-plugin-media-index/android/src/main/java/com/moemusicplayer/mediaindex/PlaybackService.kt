@@ -257,6 +257,9 @@ class PlaybackService : MediaSessionService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) = publishClock(true)
 
+        // A pause while buffering changes no `isPlaying`: 「暫停時隱藏」 needs it too.
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = publishClock(true)
+
         override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) = publishClock(true)
 
         override fun onPositionDiscontinuity(
@@ -305,6 +308,8 @@ class PlaybackService : MediaSessionService() {
             wake = wake,
             // A stepped position was reached somewhere in the last poll interval: anchor in the middle of it.
             anchorBackNanos = if (wake) 0L else CLOCK_POLL_MS * 1_000_000L / 2,
+            wantsPlay = player.playWhenReady,
+            buffering = state == Player.STATE_BUFFERING,
         )
     }
 

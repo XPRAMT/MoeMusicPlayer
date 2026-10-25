@@ -9,7 +9,7 @@
   import { LYRICS_MAIN_OPACITY_PERCENT, LYRICS_SECONDARY_OPACITY_PERCENT, TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
 
   type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight'>
-    & Partial<Pick<LyricsLookSettings, 'align' | 'useCustomColor' | 'customColor' | 'animation'>>;
+    & Partial<Pick<LyricsLookSettings, 'align' | 'useCustomColor' | 'customColor' | 'animation' | 'hideWhenPaused'>>;
 
   let {
     settings,
@@ -23,6 +23,7 @@
     withAlign = true,
     withColor = true,
     withAnimation = true,
+    withHideWhenPaused = false,
     enable,
     displayExtra,
     sizeExtra,
@@ -41,6 +42,8 @@
     withAlign?: boolean;
     withColor?: boolean;
     withAnimation?: boolean;
+    /** 「暫停時隱藏」 (taskbar and floating lyrics only), after the page's own display toggles and before 動畫. */
+    withHideWhenPaused?: boolean;
     /** 「啟用」 toggle, first in 顯示. */
     enable?: Snippet;
     /** Page-only display settings, after 顯示譯文 and before 動畫. */
@@ -62,6 +65,12 @@
     <span><strong>{tr("顯示譯文")}</strong><small>{tr("在每行原文下方顯示翻譯")}</small></span>
   </label>
   {@render displayExtra?.()}
+  {#if withHideWhenPaused}
+    <label class="lyrics-preference-toggle">
+      <input type="checkbox" checked={settings.hideWhenPaused ?? true} onchange={(event) => onChange({ hideWhenPaused: event.currentTarget.checked })} />
+      <span><strong>{tr("暫停時隱藏")}</strong><small>{tr("暫停或停止播放時淡出歌詞，繼續播放時再顯示")}</small></span>
+    </label>
+  {/if}
   {#if withAnimation}
     <div class="cover-corner-setting" role="group" aria-labelledby="{idPrefix}-animation-label">
       <span id="{idPrefix}-animation-label" class="cover-corner-setting-label"><strong>{tr("動畫")}</strong></span>

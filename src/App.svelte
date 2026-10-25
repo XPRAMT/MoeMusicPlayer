@@ -4662,6 +4662,7 @@
                       fontAriaLabel={tr("工作列歌詞字體大小")}
                       colorAriaLabel={tr("工作列歌詞顏色")}
                       autoColorHint={tr("關閉時依工作列的深淺色自動使用黑色或白色")}
+                      withHideWhenPaused
                     >
                       {#snippet enable()}
                         <label class="lyrics-preference-toggle">
@@ -4723,6 +4724,7 @@
                       colorAriaLabel={tr("浮動歌詞顏色")}
                       autoColorHint={tr("關閉時使用白色")}
                       alignLabel={tr("文字排版")}
+                      withHideWhenPaused
                     >
                       {#snippet enable()}
                         <label class="lyrics-preference-toggle">

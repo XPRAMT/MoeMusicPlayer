@@ -23,6 +23,10 @@ internal class ClockSnapshot(
     val active: Boolean,
     /** [FloatingLyricsRules.NO_TIME] while the track length is unknown. */
     val durationMs: Long,
+    /** The player's `playWhenReady`: the user wants it to play (「暫停時隱藏」 tells a pause from buffering by it). */
+    val wantsPlay: Boolean = playing,
+    /** STATE_BUFFERING. */
+    val buffering: Boolean = false,
 )
 
 /**
@@ -39,6 +43,13 @@ internal object LyricsClock {
     @Volatile
     var onWake: (() -> Unit)? = null
 
+    /**
+     * Called on the publishing thread (the main thread) after a wake publication and after [clear]: the playing state
+     * may have changed (「暫停時隱藏」, [FloatingLyricsOverlay]).
+     */
+    @Volatile
+    var onPlayState: (() -> Unit)? = null
+
     /** How many readers want the clock kept fresh by polling (the GL overlay while it exists). */
     val demand = AtomicInteger()
 
@@ -50,6 +61,8 @@ internal object LyricsClock {
     private var lastActive = false
     private var lastDuration = FloatingLyricsRules.NO_TIME
     private var lastAnchorNanos = 0L
+    private var lastWantsPlay = false
+    private var lastBuffering = false
 
     /**
      * Publish a report. With `wake` false the snapshot is only replaced when the position (or anything else) differs
@@ -67,9 +80,12 @@ internal object LyricsClock {
         nowNanos: Long,
         wake: Boolean,
         anchorBackNanos: Long = 0L,
+        wantsPlay: Boolean = playing,
+        buffering: Boolean = false,
     ) {
         val unchanged = trackId == lastTrackId && positionMs == lastPositionMs && playing == lastPlaying &&
-            speed == lastSpeed && active == lastActive && durationMs == lastDuration
+            speed == lastSpeed && active == lastActive && durationMs == lastDuration &&
+            wantsPlay == lastWantsPlay && buffering == lastBuffering
         // Nothing new: while paused the old anchor is exact; while playing it is kept until it is [REANCHOR_NANOS] old.
         if (!wake && unchanged && (!playing || nowNanos - lastAnchorNanos < REANCHOR_NANOS)) return
         lastTrackId = trackId
@@ -78,11 +94,16 @@ internal object LyricsClock {
         lastSpeed = speed
         lastActive = active
         lastDuration = durationMs
+        lastWantsPlay = wantsPlay
+        lastBuffering = buffering
         // A changed coarse position was reached somewhere between the previous poll and now: anchor in the middle.
         val anchor = nowNanos - anchorBackNanos
         lastAnchorNanos = nowNanos
-        snapshot = ClockSnapshot(trackId, ++generation, positionMs, anchor, playing, speed, active, durationMs)
-        if (wake) onWake?.invoke()
+        snapshot = ClockSnapshot(trackId, ++generation, positionMs, anchor, playing, speed, active, durationMs, wantsPlay, buffering)
+        if (wake) {
+            onWake?.invoke()
+            onPlayState?.invoke()
+        }
     }
 
     /** No player (service stopped): readers see no clock. */
@@ -92,6 +113,7 @@ internal object LyricsClock {
         lastTrackId = null
         lastPositionMs = Long.MIN_VALUE
         onWake?.invoke()
+        onPlayState?.invoke()
     }
 
     /** Test hook: forget everything. */
@@ -99,6 +121,7 @@ internal object LyricsClock {
     fun resetForTest() {
         snapshot = null
         onWake = null
+        onPlayState = null
         generation = 0L
         lastTrackId = null
         lastPositionMs = Long.MIN_VALUE
@@ -107,6 +130,8 @@ internal object LyricsClock {
         lastActive = false
         lastDuration = FloatingLyricsRules.NO_TIME
         lastAnchorNanos = 0L
+        lastWantsPlay = false
+        lastBuffering = false
         demand.set(0)
     }
 

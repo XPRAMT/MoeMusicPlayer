@@ -723,6 +723,8 @@
   "顯示{0}欄": "Show the {0} column",
   "顯示羅馬拼音": "Show romanization",
   "顯示譯文": "Show translation",
+  "暫停時隱藏": "Hide when paused",
+  "暫停或停止播放時淡出歌詞，繼續播放時再顯示": "Fade the lyrics out while playback is paused or stopped, and back in when it plays",
   "Android 13 以上須開啟「音樂來源」中的「所有檔案存取權」才能讀取系統桌布；未授權時顯示純色背景。": "On Android 13 and later, “All files access” under “Music sources” must be enabled to read the system wallpaper; without it a solid background is shown.",
   "Android 文件資料夾（舊版，待遷移）": "Android Documents folder (legacy, awaiting migration)",
   "Android 的音訊輸出上限為 192 kHz，所以輸出取樣率固定為 176.4 kHz。": "Android audio output is limited to 192 kHz, so the output sample rate is fixed at 176.4 kHz.",

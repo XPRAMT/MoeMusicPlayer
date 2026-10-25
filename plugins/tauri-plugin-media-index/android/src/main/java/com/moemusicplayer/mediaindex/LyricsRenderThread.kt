@@ -47,6 +47,8 @@ internal class LyricsRenderThread(private val onFatal: (String) -> Unit) {
     private var lastH = 0
     private var lastComplete = false
     private var fatalReported = false
+    /** 「暫停時隱藏」: the window is faded out, so no frames are asked for (or drawn) until it shows again. */
+    private var suspended = false
     private val planner = LyricsFramePlanner()
     private val clockModel = ClockModel()
     private val current = FrameParams()
@@ -78,6 +80,26 @@ internal class LyricsRenderThread(private val onFatal: (String) -> Unit) {
     fun attach(target: Surface) {
         if (released) return
         handler.post { onAttach(target) }
+    }
+
+    /**
+     * 「暫停時隱藏」: `true` once the window has faded out (no frames at all, not even for a clock event or the next line);
+     * `false` before it fades in (one frame now with a full redraw, then as usual).
+     */
+    fun setSuspended(value: Boolean) {
+        if (released) return
+        handler.post {
+            if (suspended == value) return@post
+            suspended = value
+            if (value) {
+                frameScheduled = false
+                choreographer.removeFrameCallback(frameCallback)
+                handler.removeCallbacks(delayedWake)
+            } else {
+                forceRedraw = true
+                scheduleFrame()
+            }
+        }
     }
 
     /** The surface was resized or redrawn by the system: draw it again. */
@@ -163,7 +185,7 @@ internal class LyricsRenderThread(private val onFatal: (String) -> Unit) {
     }
 
     private fun scheduleFrame() {
-        if (frameScheduled || !surfaceReady || released) return
+        if (frameScheduled || !surfaceReady || released || suspended) return
         frameScheduled = true
         choreographer.postFrameCallback(frameCallback)
     }
@@ -171,7 +193,7 @@ internal class LyricsRenderThread(private val onFatal: (String) -> Unit) {
     private fun doFrame(frameTimeNanos: Long) {
         frameScheduled = false
         handler.removeCallbacks(delayedWake)
-        if (!surfaceReady || released) return
+        if (!surfaceReady || released || suspended) return
         val value = state ?: return
         try {
             step(value, frameTimeNanos)

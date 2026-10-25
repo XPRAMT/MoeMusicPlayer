@@ -1036,6 +1036,15 @@ pub struct TaskbarLyricsSettings {
     /// Line animation; older files without it keep the one-line-at-a-time look.
     #[serde(default)]
     pub animation: LyricsAnimation,
+    /// 「暫停時隱藏」: the windows fade out while playback is paused or stopped and back in when it plays (track
+    /// changes, buffering and seeking never hide them). Files without it have it on.
+    #[serde(default = "default_hide_when_paused")]
+    pub hide_when_paused: bool,
+}
+
+/// 「暫停時隱藏」 is on unless the user turned it off (taskbar and floating lyrics, each saved apart).
+pub fn default_hide_when_paused() -> bool {
+    true
 }
 
 fn default_main_opacity_percent() -> u8 {
@@ -1113,6 +1122,7 @@ impl Default for TaskbarLyricsSettings {
             secondary_opacity_percent: default_secondary_opacity_percent(),
             font_weight: default_lyrics_font_weight(),
             animation: LyricsAnimation::None,
+            hide_when_paused: default_hide_when_paused(),
         }
     }
 }
@@ -1164,6 +1174,9 @@ pub struct FloatingLyricsSettings {
     /// Line animation, saved apart from the taskbar lyrics'.
     #[serde(default)]
     pub animation: LyricsAnimation,
+    /// 「暫停時隱藏」 (see `TaskbarLyricsSettings`), saved apart from the taskbar lyrics'.
+    #[serde(default = "default_hide_when_paused")]
+    pub hide_when_paused: bool,
     /// Fixed mode: click-through, only the unlock button reacts. False: move mode (draggable).
     pub locked: bool,
     /// None: the default place on the primary monitor.
@@ -1228,6 +1241,7 @@ impl Default for FloatingLyricsSettings {
             width_px: Self::DEFAULT_WIDTH_PX,
             landscape_width_px: Self::DEFAULT_WIDTH_PX,
             animation: LyricsAnimation::None,
+            hide_when_paused: default_hide_when_paused(),
             locked: false,
             position: None,
         }
@@ -1292,6 +1306,7 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         animation: field("animation")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.animation),
+        hide_when_paused: flag("hideWhenPaused", defaults.hide_when_paused),
         locked: flag("locked", defaults.locked),
         position: field("position").and_then(|value| serde_json::from_value(value).ok()),
     }
@@ -1351,6 +1366,9 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
         animation: field("animation")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.animation),
+        hide_when_paused: field("hideWhenPaused")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(defaults.hide_when_paused),
         custom_monitors: field("customMonitors")
             .and_then(|value| value.as_array().cloned())
             .map(|ids| {
@@ -3625,6 +3643,36 @@ mod tests {
     }
 
     #[test]
+    fn hide_when_paused_is_on_by_default_and_saved_apart_per_window() {
+        assert!(TaskbarLyricsSettings::default().hide_when_paused);
+        assert!(FloatingLyricsSettings::default().hide_when_paused);
+        // Older files without the field, and junk, have it on.
+        assert!(lenient_taskbar_lyrics(Some(serde_json::json!({}))).hide_when_paused);
+        assert!(lenient_floating_lyrics(Some(serde_json::json!({}))).hide_when_paused);
+        assert!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({"hideWhenPaused": "no"})))
+                .hide_when_paused
+        );
+        assert!(
+            !lenient_taskbar_lyrics(Some(serde_json::json!({"hideWhenPaused": false})))
+                .hide_when_paused
+        );
+        assert!(
+            !lenient_floating_lyrics(Some(serde_json::json!({"hideWhenPaused": false})))
+                .hide_when_paused
+        );
+        // The typed commands (`settings_set_*`) accept a page that does not send it yet.
+        let mut taskbar = serde_json::to_value(TaskbarLyricsSettings::default()).unwrap();
+        taskbar.as_object_mut().unwrap().remove("hideWhenPaused");
+        let taskbar: TaskbarLyricsSettings = serde_json::from_value(taskbar).unwrap();
+        assert!(taskbar.hide_when_paused);
+        let mut floating = serde_json::to_value(FloatingLyricsSettings::default()).unwrap();
+        floating.as_object_mut().unwrap().remove("hideWhenPaused");
+        let floating: FloatingLyricsSettings = serde_json::from_value(floating).unwrap();
+        assert!(floating.hide_when_paused);
+    }
+
+    #[test]
     fn older_settings_files_get_floating_lyrics_off_without_touching_taskbar_lyrics() {
         let directory = test_directory("floating-lyrics-migration");
         let path = directory.join("settings.json");
@@ -3800,6 +3848,7 @@ mod tests {
             secondary_opacity_percent: 85,
             font_weight: 700,
             animation: LyricsAnimation::Continuous,
+            hide_when_paused: false,
         };
         store
             .update(|settings| {
@@ -3815,6 +3864,7 @@ mod tests {
         assert_eq!(persisted["taskbarLyrics"]["fontSizePx"], 20);
         assert_eq!(persisted["taskbarLyrics"]["textEffect"], "stroke");
         assert_eq!(persisted["taskbarLyrics"]["animation"], "continuous");
+        assert_eq!(persisted["taskbarLyrics"]["hideWhenPaused"], false);
         // Animation: old files and junk keep the one-line look; taskbar and floating are saved apart.
         assert_eq!(
             lenient_taskbar_lyrics(Some(serde_json::json!({}))).animation,

@@ -1,5 +1,8 @@
 ﻿package com.moemusicplayer.mediaindex
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
@@ -10,6 +13,7 @@ import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
@@ -93,6 +97,8 @@ object FloatingLyricsOverlay {
     /** The floating settings' own pair: "none" draws the line at main; "continuous" feeds both into the static mask. */
     private var mainOpacityPercent = FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT
     private var secondaryOpacityPercent = FloatingLyricsRules.DEFAULT_SECONDARY_OPACITY_PERCENT
+    /** 「暫停時隱藏」 (this tab's own, default on): the window fades out while playback is paused or stopped. */
+    private var hideWhenPaused = true
     private var widthDp = 800
     private var landscapeWidthDp = 800
     private var rotationWatch: android.content.ComponentCallbacks? = null
@@ -238,6 +244,7 @@ object FloatingLyricsOverlay {
         if (root == null) create(context)
         if (root == null) return
         applyLook()
+        applyPauseVisibility(animate = true)
         applyMode()
         pushGl(context)
     }
@@ -259,6 +266,7 @@ object FloatingLyricsOverlay {
         animation = if (settings.optString("animation", "none") == "continuous") "continuous" else "none"
         mainOpacityPercent = FloatingLyricsRules.mainOpacityPercent(settings.optInt("mainOpacityPercent", FloatingLyricsRules.DEFAULT_MAIN_OPACITY_PERCENT))
         secondaryOpacityPercent = FloatingLyricsRules.secondaryOpacityPercent(settings.optInt("secondaryOpacityPercent", FloatingLyricsRules.DEFAULT_SECONDARY_OPACITY_PERCENT))
+        hideWhenPaused = settings.optBoolean("hideWhenPaused", true)
         widthDp = FloatingLyricsRules.widthDp(settings.optInt("widthPx", 800))
         landscapeWidthDp = FloatingLyricsRules.widthDp(settings.optInt("landscapeWidthPx", 800))
     }
@@ -581,7 +589,105 @@ object FloatingLyricsOverlay {
         rotationWatch = watch
         appliedLocked = null
         LyricsTrace.configure(context)
+        // 「暫停時隱藏」: a new window starts hidden until the player is seen playing (no flash while paused).
+        pauseGate = PauseGate()
+        pauseHidden = null
+        LyricsClock.onPlayState = playStateHook
+        observePlayState(animate = false)
         PlaybackService.startClockFeed()
+    }
+
+    // ---- 「暫停時隱藏」 (ADR 0032): the gate follows the playback service's clock reports; the window fades its alpha
+    // between 0 and its normal value (the locked cap included) over 200 ms, takes no touches and shows no lock button
+    // while hidden, and the render thread asks for no frames once the fade-out is over.
+
+    private var pauseGate = PauseGate()
+    /** What the window was last set to (null: not yet). */
+    private var pauseHidden: Boolean? = null
+    private var pauseFade: ValueAnimator? = null
+    /** Runs on the publishing thread, which is the main thread (the player's). */
+    private val playStateHook: () -> Unit = { observePlayState(animate = true) }
+    private val pauseTick = Runnable {
+        pauseGate.tick(SystemClock.uptimeMillis())
+        schedulePauseTick()
+        applyPauseVisibility(animate = true)
+    }
+
+    /** Main thread: feed the newest clock report to the gate and apply the result. */
+    private fun observePlayState(animate: Boolean) {
+        if (root == null) return
+        pauseGate.observe(PauseHide.activity(LyricsClock.snapshot), SystemClock.uptimeMillis())
+        schedulePauseTick()
+        applyPauseVisibility(animate)
+    }
+
+    private fun schedulePauseTick() {
+        main.removeCallbacks(pauseTick)
+        val due = pauseGate.dueAt() ?: return
+        main.postDelayed(pauseTick, (due - SystemClock.uptimeMillis()).coerceAtLeast(1L))
+    }
+
+    /** The window's alpha while shown: 1, or the system's cap for a touch-through (locked) overlay on Android 12+. */
+    private fun shownAlpha(context: Context): Float {
+        val systemLimit = if (isLocked(context) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.INPUT_SERVICE) as InputManager).maximumObscuringOpacityForTouch
+        } else {
+            null
+        }
+        return FloatingLyricsRules.windowAlpha(systemLimit)
+    }
+
+    /** Hide or show the window for the gate and the setting; `animate` false sets it at once (a new window). */
+    private fun applyPauseVisibility(animate: Boolean) {
+        val view = root ?: return
+        val layout = params ?: return
+        val context = appContext ?: return
+        val hidden = !pauseGate.visible(hideWhenPaused)
+        if (pauseHidden == hidden) return
+        pauseHidden = hidden
+        pauseFade?.cancel()
+        pauseFade = null
+        // Showing: frames again (one full redraw) before the alpha rises. The touch flag and the lock button follow
+        // at once (applyMode), both ways.
+        if (!hidden) glPanel?.setSuspended(false)
+        val target = if (hidden) 0f else shownAlpha(context)
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val finish = {
+            if (hidden && pauseHidden == true && root === view) glPanel?.setSuspended(true)
+        }
+        if (!animate || layout.alpha == target) {
+            layout.alpha = target
+            applyMode(force = true)
+            finish()
+            return
+        }
+        // One 200 ms animator (the system's animator duration scale applies: "remove animations" makes it instant).
+        val fade = ValueAnimator.ofFloat(layout.alpha, target)
+        pauseFade = fade
+        applyMode(force = true)
+        fade.duration = PauseHide.FADE_MS
+        fade.addUpdateListener { animation ->
+            if (root === view && pauseFade === animation) {
+                layout.alpha = animation.animatedValue as Float
+                try {
+                    windowManager.updateViewLayout(view, layout)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        fade.addListener(object : AnimatorListenerAdapter() {
+            private var cancelled = false
+            override fun onAnimationCancel(animation: Animator) {
+                cancelled = true
+            }
+
+            override fun onAnimationEnd(animation: Animator) {
+                if (pauseFade !== animation) return
+                pauseFade = null
+                if (!cancelled) finish()
+            }
+        })
+        fade.start()
     }
 
     /** The window height follows the font and the reserved translation row (a fixed height: the surface has no content size). */
@@ -640,6 +746,12 @@ object FloatingLyricsOverlay {
     }
 
     private fun remove() {
+        if (LyricsClock.onPlayState === playStateHook) LyricsClock.onPlayState = null
+        main.removeCallbacks(pauseTick)
+        val fade = pauseFade
+        pauseFade = null
+        fade?.cancel()
+        pauseHidden = null
         glPanel?.destroy()
         glPanel = null
         val view = root ?: return
@@ -707,33 +819,36 @@ object FloatingLyricsOverlay {
 
     /** The lock state the window (flags, alpha, background, lock button) was last set for; null before the first apply. */
     private var appliedLocked: Boolean? = null
+    private var appliedHidden: Boolean? = null
 
-    private fun applyMode() {
+    private fun applyMode(force: Boolean = false) {
         val view = root ?: return
         val layout = params ?: return
         val context = appContext ?: return
         val locked = isLocked(context)
-        val flags = if (locked) {
+        // Hidden by 「暫停時隱藏」: no touches either (the window is not there for the user).
+        val hidden = pauseHidden == true
+        val flags = if (locked || hidden) {
             layout.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         } else {
             layout.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         }
         // The window itself is opaque (the lines carry the main and secondary opacity). Android 12+ only lets touches
         // pass through an overlay up to the system's maximum obscuring opacity (normally 0.8), so a locked overlay is
-        // capped at that limit; the drawn values are not compensated.
-        val systemLimit = if (locked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (context.getSystemService(Context.INPUT_SERVICE) as InputManager).maximumObscuringOpacityForTouch
-        } else {
-            null
+        // capped at that limit; the drawn values are not compensated. While the pause fade runs it owns the alpha.
+        val alpha = when {
+            pauseFade != null -> layout.alpha
+            hidden -> 0f
+            else -> shownAlpha(context)
         }
-        val alpha = FloatingLyricsRules.windowAlpha(systemLimit)
         // Nothing changed since the last apply (every page update calls this): no new window layout pass.
-        if (appliedLocked == locked && layout.flags == flags && layout.alpha == alpha) return
+        if (!force && appliedLocked == locked && appliedHidden == hidden && layout.flags == flags && layout.alpha == alpha) return
         appliedLocked = locked
+        appliedHidden = hidden
         layout.flags = flags
         layout.alpha = alpha
         // Move mode: the render thread draws the lyric area's background (never the lock gutter).
-        lockButton?.visibility = if (locked) View.GONE else View.VISIBLE
+        lockButton?.visibility = if (locked || hidden) View.GONE else View.VISIBLE
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
         } catch (_: Exception) {

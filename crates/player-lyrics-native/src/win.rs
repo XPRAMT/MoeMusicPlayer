@@ -43,6 +43,7 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Matrix3x2, Vector2, Vector3};
 
+use crate::pause_hide::{PauseGate, FADE_MS};
 use crate::plan;
 use crate::sampling::{self, Curve};
 use crate::{
@@ -1265,6 +1266,68 @@ struct Win {
     prewarm: Vec<(OwnedRows, TextStyle)>,
     /// Until when any of them still moves (`None` = nothing moves).
     moving_until: Option<Instant>,
+    /// Click-through as the owner asked (`ClickThrough`); a window hidden by 「暫停時隱藏」 is click-through anyway.
+    through: bool,
+    /// 「暫停時隱藏」 hid the window (its root fades to 0 and it takes no mouse input).
+    pause_hidden: bool,
+    /// When the hide fade started: once it is over the window is skipped entirely (no refresh, no frames).
+    hidden_at: Option<Instant>,
+}
+
+impl Win {
+    /// Hidden by 「暫停時隱藏」 and the fade-out is over: nothing of it is visible.
+    fn fully_hidden(&self, now: Instant) -> bool {
+        self.pause_hidden
+            && self.hidden_at.is_some_and(|at| {
+                now.saturating_duration_since(at).as_secs_f64() * 1000.0 >= FADE_MS
+            })
+    }
+}
+
+/// The system's "Show animations in Windows" (Settings > Accessibility > Visual effects); off: hide and show at once.
+fn animations_enabled() -> bool {
+    let mut on = BOOL(1);
+    unsafe {
+        if SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut BOOL as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_err()
+        {
+            return true;
+        }
+    }
+    on.as_bool()
+}
+
+/// Fades a window's root visual to `to` with one composition animation (no per-frame commits), or sets it at once.
+fn fade_root(gfx: &Gfx, root: &ContainerVisual, to: f32, animate: bool) -> Result<()> {
+    if !animate {
+        root.StopAnimation(&HSTRING::from("Opacity"))?;
+        return root.SetOpacity(to);
+    }
+    // Without a key frame at 0 the animation starts from the current value, so a fade reversed half-way does not jump.
+    let animation = gfx.compositor.CreateScalarKeyFrameAnimation()?;
+    animation.InsertKeyFrame(1.0, to)?;
+    animation.SetDuration(windows::Foundation::TimeSpan {
+        Duration: (FADE_MS * 10_000.0) as i64,
+    })?;
+    root.StartAnimation(&HSTRING::from("Opacity"), &animation)
+}
+
+/// Applies the click-through style: what the owner asked, or always while hidden by 「暫停時隱藏」.
+fn apply_click_through(win: &Win) {
+    let through = win.through || win.pause_hidden || win.kind == Kind::Taskbar;
+    unsafe {
+        let ex = GetWindowLongPtrW(win.hwnd, GWL_EXSTYLE);
+        let flag = WS_EX_TRANSPARENT.0 as isize;
+        let next = if through { ex | flag } else { ex & !flag };
+        if next != ex {
+            SetWindowLongPtrW(win.hwnd, GWL_EXSTYLE, next);
+        }
+    }
 }
 
 fn create_window(id: &str, kind: Kind, owner: Option<isize>) -> Result<HWND> {
@@ -1422,6 +1485,10 @@ struct Renderer {
     last_reading: Option<Instant>,
     /// False on Windows older than 10 1809, or without a dispatcher queue: no lyrics windows at all.
     supported: bool,
+    /// 「暫停時隱藏」: the playback activity seen so far (one gate for every window; each window's own setting decides).
+    gate: PauseGate,
+    /// Time base of `gate` (ms since then).
+    epoch: Instant,
 }
 
 fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
@@ -1466,6 +1533,8 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         source: None,
         sync: plan::AudioSync::default(),
         last_reading: None,
+        gate: PauseGate::new(),
+        epoch: Instant::now(),
     };
     let mut last_check = Instant::now();
     loop {
@@ -1477,6 +1546,7 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         }
         pump_messages();
         r.pending();
+        r.pause_tick();
         if r.gfx
             .as_ref()
             .is_some_and(|g| g.replaced.swap(false, Ordering::SeqCst))
@@ -1525,7 +1595,12 @@ fn run(rx: Receiver<Cmd>, events: Arc<dyn Events>) {
         }
         // Idle (a still line): the next line's rasters are drawn now, long before they are needed.
         r.prewarm_batch();
-        let next = r.windows.values().filter_map(|w| w.wake_at).min();
+        let next = r
+            .windows
+            .values()
+            .filter_map(|w| w.wake_at)
+            .chain(r.pause_due())
+            .min();
         let mut timeout = DEVICE_CHECK.saturating_sub(last_check.elapsed());
         if let Some(at) = next {
             timeout = timeout.min(at.saturating_duration_since(Instant::now()));
@@ -1638,7 +1713,7 @@ impl Renderer {
         let frame = present_time();
         let mut lost = false;
         for (id, win) in self.windows.iter_mut() {
-            if win.moving_until.is_none() {
+            if win.moving_until.is_none() || win.pause_hidden {
                 continue;
             }
             let result = sample_window(win, frame);
@@ -1717,6 +1792,83 @@ impl Renderer {
         }
     }
 
+    fn gate_ms(&self, now: Instant) -> f64 {
+        now.saturating_duration_since(self.epoch).as_secs_f64() * 1000.0
+    }
+
+    /// When a pending 「暫停時隱藏」 idle hide is due.
+    fn pause_due(&self) -> Option<Instant> {
+        let due = self.gate.due_at()?;
+        Some(self.epoch + Duration::from_secs_f64(due.max(0.0) / 1000.0))
+    }
+
+    /// Re-evaluates the gate once a pending idle hide is due.
+    fn pause_tick(&mut self) {
+        if self.pause_due().is_some_and(|at| at <= Instant::now()) {
+            let now = self.gate_ms(Instant::now());
+            self.gate.tick(now);
+            self.apply_pause_hide(None, true);
+        }
+    }
+
+    /// Brings the windows (`only`, or all) in line with the gate and their own setting: a hidden window fades its
+    /// root to 0 and takes no mouse input (the floating padlock included); a shown one fades back and is redrawn
+    /// (its refreshes were skipped while hidden).
+    fn apply_pause_hide(&mut self, only: Option<&str>, animate: bool) {
+        let animate = animate && animations_enabled();
+        let now = Instant::now();
+        let mut shown = Vec::new();
+        for (id, win) in self.windows.iter_mut() {
+            if only.is_some_and(|o| o != id) {
+                continue;
+            }
+            let Some(look) = win.look.as_ref() else {
+                continue;
+            };
+            let hidden = !self.gate.visible(look.hide_when_paused);
+            if hidden == win.pause_hidden {
+                continue;
+            }
+            debug_log(&format!(
+                "pause hide {id}: {} ({:?})",
+                if hidden { "hide" } else { "show" },
+                self.gate.activity()
+            ));
+            win.pause_hidden = hidden;
+            win.hidden_at = if hidden {
+                Some(if animate {
+                    now
+                } else {
+                    now.checked_sub(Duration::from_secs_f64(FADE_MS / 1000.0))
+                        .unwrap_or(now)
+                })
+            } else {
+                None
+            };
+            if hidden {
+                // No padlock and no tooltip while hidden.
+                if let Some(s) = shared(win.hwnd) {
+                    s.lock_rect.set(RECT::default());
+                    s.over_lock.set(false);
+                    s.mouse_inside.set(false);
+                }
+                let tip = String::new();
+                update_tooltip(win, RECT::default(), &tip);
+                win.moving_until = None;
+                win.wake_at = None;
+            } else {
+                shown.push(id.clone());
+            }
+            apply_click_through(win);
+            if let (Some(gfx), Some(root)) = (self.gfx.as_ref(), win.root.as_ref()) {
+                if let Err(e) = fade_root(gfx, root, if hidden { 0.0 } else { 1.0 }, animate) {
+                    eprintln!("lyrics window {id}: {e}");
+                }
+            }
+        }
+        self.dirty.extend(shown);
+    }
+
     fn mark_all(&mut self) {
         self.dirty.extend(self.windows.keys().cloned());
     }
@@ -1739,12 +1891,21 @@ impl Renderer {
             }
             Cmd::Look(id, look) => {
                 if let Some(win) = self.windows.get_mut(&id) {
-                    if win.look != look {
-                        win.look = look;
+                    let first = win.look.is_none();
+                    // The 「暫停時隱藏」 switch alone needs no new rasters.
+                    let redraw = match (&win.look, &look) {
+                        (Some(old), Some(new)) => !old.same_drawing(new),
+                        (None, None) => false,
+                        _ => true,
+                    };
+                    win.look = look;
+                    if redraw {
                         win.cache.clear();
                         win.measured = None;
-                        self.dirty.push(id);
+                        self.dirty.push(id.clone());
                     }
+                    // A window's first look sets its visibility at once (nothing was drawn yet), later ones fade.
+                    self.apply_pause_hide(Some(&id), !first);
                 }
             }
             Cmd::Chrome(id, chrome) => {
@@ -1765,15 +1926,9 @@ impl Renderer {
                 }
             }
             Cmd::ClickThrough(id, through) => {
-                if let Some(win) = self.windows.get(&id) {
-                    unsafe {
-                        let ex = GetWindowLongPtrW(win.hwnd, GWL_EXSTYLE);
-                        let flag = WS_EX_TRANSPARENT.0 as isize;
-                        let next = if through { ex | flag } else { ex & !flag };
-                        if next != ex {
-                            SetWindowLongPtrW(win.hwnd, GWL_EXSTYLE, next);
-                        }
-                    }
+                if let Some(win) = self.windows.get_mut(&id) {
+                    win.through = through;
+                    apply_click_through(win);
                 }
             }
             Cmd::Lyrics(lyrics) => {
@@ -1788,6 +1943,8 @@ impl Renderer {
             }
             Cmd::Playback(sample) => {
                 let now = Instant::now();
+                self.gate.observe(sample.activity, self.gate_ms(now));
+                self.apply_pause_hide(None, true);
                 let same = self.clock.track_id == sample.track_id
                     && self.clock.state == sample.state
                     && self.clock.duration_ms == sample.duration_ms;
@@ -1917,6 +2074,9 @@ impl Renderer {
             words: Vec::new(),
             prewarm: Vec::new(),
             moving_until: None,
+            through: kind == Kind::Taskbar,
+            pause_hidden: false,
+            hidden_at: None,
         };
         if let Some(gfx) = &self.gfx {
             attach(gfx, &mut win);
@@ -1998,7 +2158,17 @@ impl Renderer {
         let mut reports = Vec::new();
         for id in &ids {
             if let Some(win) = self.windows.get_mut(id) {
-                match refresh(gfx, win, &ctx) {
+                // Hidden by 「暫停時隱藏」 and faded out: nothing to draw; showing it again redraws it.
+                if win.fully_hidden(ctx.now) {
+                    continue;
+                }
+                let result = refresh(gfx, win, &ctx);
+                if win.pause_hidden {
+                    // Fading out: a still picture, no frames and no line-change wake-ups.
+                    win.moving_until = None;
+                    win.wake_at = None;
+                }
+                match result {
                     Ok(has) => {
                         if win.kind == Kind::Floating && win.has_translation != Some(has) {
                             win.has_translation = Some(has);
@@ -2100,6 +2270,9 @@ fn attach(gfx: &Gfx, win: &mut Win) {
     })();
     match made {
         Ok((target, root)) => {
+            if win.pause_hidden {
+                let _ = root.SetOpacity(0.0);
+            }
             win.target = Some(target);
             win.root = Some(root);
         }

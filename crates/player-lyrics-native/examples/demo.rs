@@ -134,6 +134,7 @@ fn main() {
         state: PlayState::Playing,
         position_ms: 0.0,
         duration_ms: Some(600_000.0),
+        activity: player_lyrics_native::pause_hide::Activity::Playing,
     });
     let look = |font: f64| Look {
         align: Align::Center,
@@ -146,6 +147,7 @@ fn main() {
         secondary_opacity_percent: 50.0,
         font_weight: 500,
         animation,
+        hide_when_paused: false,
     };
     let place = |hwnd: isize, x: i32, y: i32, w: i32, h: i32| unsafe {
         let _ = SetWindowPos(

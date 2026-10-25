@@ -91,6 +91,11 @@ internal class GlLyricsPanel(context: Context, private val onFatal: (String) -> 
         }
     }
 
+    /** 「暫停時隱藏」: no frames while the window is faded out (see [LyricsRenderThread.setSuspended]). */
+    fun setSuspended(value: Boolean) {
+        if (!destroyed) renderThread.setSuspended(value)
+    }
+
     /** Stop everything: the render thread (and its EGL objects) end, the clock no longer needs to be polled. */
     fun destroy() {
         if (destroyed) return

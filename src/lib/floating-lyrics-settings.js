@@ -2,6 +2,7 @@
 // plus the move/fixed mode and the window position. The line, translation and marquee rules are the taskbar ones.
 
 import {
+  LYRICS_HIDE_WHEN_PAUSED_DEFAULT,
   TASKBAR_LYRICS_ALIGNMENTS,
   TASKBAR_LYRICS_DEFAULT_CUSTOM_COLOR,
   TASKBAR_LYRICS_TEXT_EFFECTS,
@@ -99,6 +100,7 @@ export const DEFAULT_FLOATING_LYRICS_SETTINGS = Object.freeze({
   showTranslation: true,
   textEffect: 'shadow',
   animation: 'none',
+  hideWhenPaused: LYRICS_HIDE_WHEN_PAUSED_DEFAULT,
   locked: false,
   position: null,
 });
@@ -168,6 +170,7 @@ export function normalizeFloatingLyricsSettings(value) {
     showTranslation: look.showTranslation,
     textEffect: look.textEffect,
     animation: look.animation,
+    hideWhenPaused: typeof source.hideWhenPaused === 'boolean' ? source.hideWhenPaused : defaults.hideWhenPaused,
     locked: typeof source.locked === 'boolean' ? source.locked : defaults.locked,
     position: normalizeFloatingLyricsPosition(source.position),
   };

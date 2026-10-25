@@ -239,13 +239,15 @@ export interface TaskbarLyricsSettings {
   fontWeight: number;
   /** none: one line at a time; continuous: all lines in one strip that scrolls with playback (ADR 0032). */
   animation: LyricsAnimation;
+  /** 「暫停時隱藏」: fade the window out while paused or stopped (not during track changes, buffering or seeking). Saved apart per tab. */
+  hideWhenPaused: boolean;
 }
 
 export type LyricsAnimation = 'none' | 'continuous';
 
 /** The look options shared by the taskbar and floating lyrics. */
 export type LyricsLookSettings = Pick<TaskbarLyricsSettings,
-  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight' | 'animation'>;
+  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight' | 'animation' | 'hideWhenPaused'>;
 
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
 export interface FloatingLyricsSettings extends LyricsLookSettings {
