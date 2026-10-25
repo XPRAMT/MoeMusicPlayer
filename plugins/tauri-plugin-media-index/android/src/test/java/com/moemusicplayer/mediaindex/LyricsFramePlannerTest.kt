@@ -70,8 +70,14 @@ class LyricsFramePlannerTest {
         val reserved = layout(true)
         assertEquals(plain.mainRowH, plain.areaH)
         assertEquals(plain.mainRowH + plain.secondRowH, reserved.areaH)
-        assertEquals(FloatingLyricsRules.panelRoomPx(reserved.areaH), reserved.room)
-        assertEquals(reserved.areaH + 2 * reserved.room, reserved.surfaceH)
+        assertEquals(FloatingLyricsRules.panelRoomPx(reserved.areaH), reserved.bottomRoom)
+        assertEquals(reserved.topRoom + reserved.areaH + reserved.bottomRoom, reserved.surfaceH)
+        // The translation row never moves the first row: the room above and the main row's top are the same.
+        assertEquals(plain.topRoom, reserved.topRoom)
+        assertEquals(plain.mainRowTop, reserved.mainRowTop)
+        assertEquals(plain.areaTop, reserved.areaTop)
+        assertEquals(reserved.mainRowTop + reserved.mainRowH, reserved.secondRowTop)
+        assertTrue(reserved.bottomRoom >= plain.bottomRoom)
         assertEquals(400 + 40 + 14, reserved.surfaceW)
         assertTrue(reserved.surfaceH > plain.surfaceH)
     }

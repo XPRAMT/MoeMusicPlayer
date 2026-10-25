@@ -296,7 +296,6 @@ class FloatingLyricsRulesTest {
         // 7 px side margins, 20 px room above and below: the panel hangs out by exactly that.
         assertEquals(Pair(-7, -20), FloatingLyricsRules.clampPosition(-300, -300, 1_000, 150, 1_080, 2_400, 7, 20, 7, 20))
         assertEquals(Pair(87, 2_270), FloatingLyricsRules.clampPosition(900, 3_000, 1_000, 150, 1_080, 2_400, 7, 20, 7, 20))
-        assertEquals(20, FloatingLyricsRules.textVerticalInset(150))
     }
 
     @Test
@@ -431,5 +430,90 @@ class FloatingLyricsRulesTest {
         }
         assertEquals(30, redraws.size)
         assertEquals(30f, shown)
+    }
+
+    // ---- the saved position is the lyric area's top-left (ADR 0032)
+
+    @Test
+    fun theWindowOriginIsTheAreaOriginLessTheMarginAndTheTopRoom() {
+        assertEquals(Pair(93, 480), FloatingLyricsRules.windowOrigin(100, 500, 7, 20))
+        assertEquals(Pair(100, 500), FloatingLyricsRules.areaOrigin(93, 480, 7, 20))
+        // A saved position survives any margin / room: restore then save returns the same area origin.
+        for ((margin, room) in listOf(0 to 0, 7 to 20, 12 to 31)) {
+            val (wx, wy) = FloatingLyricsRules.windowOrigin(321, 654, margin, room)
+            assertEquals(Pair(321, 654), FloatingLyricsRules.areaOrigin(wx, wy, margin, room))
+        }
+    }
+
+    @Test
+    fun theTopRoomComesFromTheMainRowAlone() {
+        assertEquals(20, FloatingLyricsRules.panelTopRoomPx(110))
+        val main = 110
+        val withTranslation = main + 90
+        // Toggling the translation keeps the area's top for a fixed window top; only the window height differs.
+        val windowTop = 300
+        val top = FloatingLyricsRules.panelTopRoomPx(main)
+        val areaTopPlain = windowTop + top
+        val areaTopTranslated = windowTop + FloatingLyricsRules.panelTopRoomPx(main)
+        assertEquals(areaTopPlain, areaTopTranslated)
+        val plainHeight = top + main + FloatingLyricsRules.panelRoomPx(main)
+        val translatedHeight = top + withTranslation + FloatingLyricsRules.panelRoomPx(withTranslation)
+        assertTrue(translatedHeight > plainHeight)
+    }
+
+    @Test
+    fun theClampKeepsTheLyricAreaOnTheScreen() {
+        val margin = 7
+        val top = 20
+        val area = 110
+        // Far up-left: the area's top-left is at (0, 0), so the window sits at (-margin, -top).
+        assertEquals(Pair(-margin, -top), FloatingLyricsRules.clampWindowToArea(-300, -300, 1_000, area, top, margin, 1_080, 2_400))
+        // Far down: the area's bottom edge is the screen's bottom edge.
+        val (_, y) = FloatingLyricsRules.clampWindowToArea(0, 5_000, 1_000, area, top, margin, 1_080, 2_400)
+        assertEquals(2_400, y + top + area)
+        // The same area height with a taller (translated) area: the area, not the window, is clamped.
+        val tall = 200
+        val (_, y2) = FloatingLyricsRules.clampWindowToArea(0, 5_000, 1_000, tall, top, margin, 1_080, 2_400)
+        assertEquals(2_400, y2 + top + tall)
+        // Far right: the margin right of the lock stays on the screen.
+        val (x, _) = FloatingLyricsRules.clampWindowToArea(5_000, 100, 1_000, area, top, margin, 1_080, 2_400)
+        assertEquals(1_080, x + 1_000 - margin)
+    }
+
+    @Test
+    fun centringUsesTheAreaNotTheWindow() {
+        val screenW = 1_080
+        val screenH = 2_400
+        val margin = 7
+        val top = 20
+        for (area in listOf(110, 200)) {
+            val areaY = FloatingLyricsRules.centredStart(screenH, area)
+            val (_, wy) = FloatingLyricsRules.windowOrigin(0, areaY, margin, top)
+            // The area (not the window) is centred.
+            assertEquals(areaY, wy + top)
+            assertEquals((screenH - area) / 2, areaY)
+        }
+        val width = 1_000
+        val gutter = 60 + 2 * margin
+        val windowX = FloatingLyricsRules.lyricCentredStart(screenW, width, gutter, margin)
+        val (areaX, _) = FloatingLyricsRules.areaOrigin(windowX, 0, margin, top)
+        assertEquals(FloatingLyricsRules.centredStart(screenW, width - gutter), areaX)
+    }
+
+    @Test
+    fun theStatusBarModeCentresTheAreaOnTheBar() {
+        val top = 20
+        val area = 40
+        val areaY = FloatingLyricsRules.centredOnBar(64, area)
+        assertEquals(12, areaY)
+        val (_, wy) = FloatingLyricsRules.windowOrigin(0, areaY, 0, top)
+        assertEquals(areaY - top, wy)
+        // The bar's centre is the area's centre whatever the room.
+        assertEquals(64, 2 * (wy + top) + area)
+    }
+
+    @Test
+    fun theLockStaysCentredOnTheLyricArea() {
+        assertEquals(20 + (110 - 40) / 2, FloatingLyricsRules.lockTop(20, 110, 40))
     }
 }

@@ -21,7 +21,7 @@ internal interface TextMetrics {
 /**
  * The panel's geometry in px, one pure function of the font metrics, the width and whether the translation row is
  * reserved (ADR 0032): the lyric area is the main row plus, when reserved, the translation row; the surface is that
- * plus the panel room (`panelRoomPx`) above and below, with the transparent side margins and the lock gutter at the
+ * plus the panel room above (from the main row only, `panelTopRoomPx`) and below (`panelRoomPx` of the area), with the transparent side margins and the lock gutter at the
  * sides. Everything the window layout and the renderer position is derived here, so they cannot disagree.
  */
 internal class LyricsLayout(
@@ -37,13 +37,18 @@ internal class LyricsLayout(
     val mainRowH: Int = maxOf(1, FloatingLyricsRules.lineHeightPx(mainAscent, mainDescent))
     val secondRowH: Int = maxOf(1, FloatingLyricsRules.lineHeightPx(secondAscent, secondDescent))
     val areaH: Int = mainRowH + if (reserveTranslation) secondRowH else 0
-    val room: Int = FloatingLyricsRules.panelRoomPx(areaH)
+
+    /** Room above the lyric area: from the main row only, so the translation row never moves the first row. */
+    val topRoom: Int = FloatingLyricsRules.panelTopRoomPx(mainRowH)
+
+    /** Room below the lyric area: follows the whole area (the translation row hangs below the main row). */
+    val bottomRoom: Int = FloatingLyricsRules.panelRoomPx(areaH)
     val surfaceW: Int = areaWidthPx + lockPx + 2 * marginPx
-    val surfaceH: Int = areaH + 2 * room
+    val surfaceH: Int = topRoom + areaH + bottomRoom
     val areaLeft: Int = marginPx
-    val areaTop: Int = room
-    val mainRowTop: Int = room
-    val secondRowTop: Int = room + mainRowH
+    val areaTop: Int = topRoom
+    val mainRowTop: Int = topRoom
+    val secondRowTop: Int = topRoom + mainRowH
 
     /** Top of a rasterised line image (text plus `pad`) in a row that starts at `rowTop`; the text is centred in the row. */
     fun imageTop(rowTop: Int, rowH: Int, ascent: Float, descent: Float, pad: Int): Float =

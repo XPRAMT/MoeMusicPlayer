@@ -354,10 +354,9 @@ object FloatingLyricsOverlay {
         val layout = params ?: return
         val context = appContext ?: return
         val (screenWidth, screenHeight) = screenSize(context)
-        val height = if (view.height > 0) view.height else view.measuredHeight
-        // The lyric area (not the lock gutter) at the centre.
+        // The lyric area (not the lock gutter, not the rooms) at the centre.
         layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context) + 2 * marginPx(context), marginPx(context))
-        layout.y = FloatingLyricsRules.centredStart(screenHeight, height)
+        layout.y = FloatingLyricsRules.centredStart(screenHeight, areaHeightPx(context)) - panelTopRoom
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
         } catch (_: Exception) {
@@ -446,7 +445,7 @@ object FloatingLyricsOverlay {
             if (root !== view) return@post
             val (screenWidth, _) = screenSize(context)
             layout.x = FloatingLyricsRules.statusBarX(screenWidth, layout.width, topCutout(), dp(context, 4))
-            layout.y = FloatingLyricsRules.centredOnBar(statusBarHeight(context), view.height)
+            layout.y = FloatingLyricsRules.centredOnBar(statusBarHeight(context), areaHeightPx(context)) - panelTopRoom
             savePosition(context, layout)
             try {
                 (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
@@ -462,7 +461,7 @@ object FloatingLyricsOverlay {
         if (dx == 0 && dy == 0) return
         val (screenWidth, screenHeight) = screenSize(context)
         val (x, y) = clampToText(
-            layout.x + dx.coerceIn(-1, 1), layout.y + dy.coerceIn(-1, 1), layout.width, view.height, screenWidth, screenHeight,
+            layout.x + dx.coerceIn(-1, 1), layout.y + dy.coerceIn(-1, 1), layout.width, screenWidth, screenHeight,
         )
         layout.x = x
         layout.y = y
@@ -479,7 +478,7 @@ object FloatingLyricsOverlay {
         val layout = params ?: return
         val (screenWidth, screenHeight) = screenSize(context)
         if (horizontal) layout.x = FloatingLyricsRules.lyricCentredStart(screenWidth, layout.width, lockPx(context) + 2 * marginPx(context), marginPx(context))
-        else layout.y = FloatingLyricsRules.centredStart(screenHeight, view.height)
+        else layout.y = FloatingLyricsRules.centredStart(screenHeight, areaHeightPx(context)) - panelTopRoom
         savePosition(context, layout)
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
@@ -487,17 +486,70 @@ object FloatingLyricsOverlay {
         }
     }
 
-    /** `FloatingLyricsRules.clampPosition` with this panel's insets: only the lyric text area must stay on screen. */
-    private fun clampToText(x: Int, y: Int, width: Int, height: Int, screenWidth: Int, screenHeight: Int): Pair<Int, Int> {
-        val context = appContext ?: return FloatingLyricsRules.clampPosition(x, y, width, height, screenWidth, screenHeight)
-        val margin = marginPx(context)
-        val room = FloatingLyricsRules.textVerticalInset(height)
-        return FloatingLyricsRules.clampPosition(x, y, width, height, screenWidth, screenHeight, margin, room, margin, room)
+    /** `FloatingLyricsRules.clampWindowToArea` for this panel: only the lyric area must stay on screen. */
+    private fun clampToText(x: Int, y: Int, width: Int, screenWidth: Int, screenHeight: Int): Pair<Int, Int> {
+        val context = appContext ?: return Pair(x, y)
+        return FloatingLyricsRules.clampWindowToArea(x, y, width, areaHeightPx(context), panelTopRoom, panelMargin, screenWidth, screenHeight)
     }
 
+    /**
+     * The margin and the room above the lyric area the window position was last converted with (the window is the
+     * lyric area's top-left less these). A change of font or size moves the window by the difference, so the lyric
+     * area, which is what is saved, stays where it is.
+     */
+    private var panelMargin = 0
+    private var panelTopRoom = 0
+
+    /** Room above the lyric area: from the main row only (the translation row never moves the first row). */
+    private fun topRoomPx(context: Context): Int = FloatingLyricsRules.panelTopRoomPx(mainRowHeightPx(context))
+
+    private fun mainRowHeightPx(context: Context): Int {
+        val metrics = Paint().apply { typeface = lyricTypeface(fontWeight); textSize = mainFontPx(context) }.fontMetrics
+        return maxOf(1, FloatingLyricsRules.lineHeightPx(metrics.ascent, metrics.descent))
+    }
+
+    /** The lyric area's height now: GL, the layout's (translation row reserved for the track); Views, the column's. */
+    private fun areaHeightPx(context: Context): Int {
+        val layout = params
+        if (glPanel != null && layout != null) return glLayout(context, layout.width).areaH
+        val column = fadeLayout
+        if (column != null && column.height > 0) return column.height
+        return mainRowHeightPx(context)
+    }
+
+    /** Brings the window position in line with the margin and top room of the current font (the lyric area stays put). */
+    private fun syncPanelOrigin(context: Context) {
+        val layout = params ?: return
+        val margin = marginPx(context)
+        val top = topRoomPx(context)
+        if (margin == panelMargin && top == panelTopRoom) return
+        layout.x += panelMargin - margin
+        layout.y += panelTopRoom - top
+        panelMargin = margin
+        panelTopRoom = top
+        val view = root ?: return
+        try {
+            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Keeps the lock centred on the lyric area (the window's top room is fixed, the area's height may change). */
+    private fun placeLock(context: Context, areaPx: Int) {
+        val lock = lockButton ?: return
+        val params = lock.layoutParams as? FrameLayout.LayoutParams ?: return
+        val top = FloatingLyricsRules.lockTop(panelTopRoom, areaPx, lockPx(context))
+        if (params.topMargin != top) {
+            params.topMargin = top
+            lock.layoutParams = params
+        }
+    }
+
+    /** Saves the lyric area's top-left (not the window's) for this orientation. */
     private fun savePosition(context: Context, layout: WindowManager.LayoutParams) {
         val (keyX, keyY) = positionKeys(context)
-        prefs(context).edit().putInt(keyX, layout.x).putInt(keyY, layout.y).apply()
+        val (areaX, areaY) = FloatingLyricsRules.areaOrigin(layout.x, layout.y, panelMargin, panelTopRoom)
+        prefs(context).edit().putInt(keyX, areaX).putInt(keyY, areaY).apply()
     }
 
     private fun isLandscape(context: Context): Boolean {
@@ -557,10 +609,8 @@ object FloatingLyricsOverlay {
         val (keyX, keyY) = positionKeys(context)
         if (prefs.contains(keyX) && prefs.contains(keyY)) {
             val (screenWidth, screenHeight) = screenSize(context)
-            val height = if (view.height > 0) view.height else view.measuredHeight
-            val (x, y) = clampToText(
-                prefs.getInt(keyX, 0), prefs.getInt(keyY, 0), layout.width, height, screenWidth, screenHeight,
-            )
+            val (windowX, windowY) = FloatingLyricsRules.windowOrigin(prefs.getInt(keyX, 0), prefs.getInt(keyY, 0), panelMargin, panelTopRoom)
+            val (x, y) = clampToText(windowX, windowY, layout.width, screenWidth, screenHeight)
             layout.x = x
             layout.y = y
             try {
@@ -596,23 +646,27 @@ object FloatingLyricsOverlay {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val (screenWidth, screenHeight) = screenSize(context)
         val button = lockPx(context)
+        panelMargin = marginPx(context)
+        panelTopRoom = topRoomPx(context)
         // The shadow / glow may draw past the lyric area into the transparent room around it.
         val frame = FrameLayout(context).apply { clipChildren = false; clipToPadding = false }
         val column = EdgeFadeLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
-        // The panel is text height x 1.5: the room above and below the area (text height x 1.1) tracks its height
-        // (the translation line comes and goes).
+        // The room above the area is fixed (from the main row); the room below tracks the area's height (the
+        // translation line comes and goes), and the lock stays centred on the area.
         column.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-            val room = FloatingLyricsRules.panelRoomPx(bottom - top)
-            if (frame.paddingTop != room || frame.paddingBottom != room) {
-                frame.post { frame.setPadding(frame.paddingLeft, room, frame.paddingRight, room) }
+            val topRoom = panelTopRoom
+            val bottomRoom = FloatingLyricsRules.panelRoomPx(bottom - top)
+            if (frame.paddingTop != topRoom || frame.paddingBottom != bottomRoom) {
+                frame.post { frame.setPadding(frame.paddingLeft, topRoom, frame.paddingRight, bottomRoom) }
             }
+            placeLock(context, bottom - top)
         }
         fun line(): LyricLineView = LyricLineView(context)
         val first = line()
         val second = line()
         column.addView(first, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(second, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        frame.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL).apply {
+        frame.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
             marginStart = 0
             marginEnd = button
         })
@@ -623,7 +677,7 @@ object FloatingLyricsOverlay {
             contentDescription = "Lock"
             setOnClickListener { setLockedFromOverlay() }
         }
-        frame.addView(lock, FrameLayout.LayoutParams(button, button, Gravity.END or Gravity.CENTER_VERTICAL))
+        frame.addView(lock, FrameLayout.LayoutParams(button, button, Gravity.END or Gravity.TOP))
         val width = overlayWidth(context)
         val prefs = prefs(context)
         val layout = WindowManager.LayoutParams(
@@ -641,11 +695,10 @@ object FloatingLyricsOverlay {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
-            x = prefs.getInt(
-                positionKeys(context).first,
-                FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context)),
-            )
-            y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt())
+            // The saved position is the lyric area's top-left; the window is that less the margin and the top room.
+            x = if (prefs.contains(positionKeys(context).first)) prefs.getInt(positionKeys(context).first, 0) - panelMargin
+            else FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context))
+            y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt()) - panelTopRoom
         }
         frame.setOnTouchListener(DragListener(context))
         windowManager.addView(frame, layout)
@@ -701,6 +754,8 @@ object FloatingLyricsOverlay {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val (screenWidth, screenHeight) = screenSize(context)
         val button = lockPx(context)
+        panelMargin = marginPx(context)
+        panelTopRoom = topRoomPx(context)
         val panel = GlLyricsPanel(context) { reason -> onGlFatal(reason) }
         glPanel = panel
         // The surface fills the window (the shadow room and the margins are drawn by the renderer); the lock button is a
@@ -714,7 +769,10 @@ object FloatingLyricsOverlay {
             contentDescription = "Lock"
             setOnClickListener { setLockedFromOverlay() }
         }
-        frame.addView(lock, FrameLayout.LayoutParams(button, button, Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = marginPx(context) })
+        frame.addView(lock, FrameLayout.LayoutParams(button, button, Gravity.END or Gravity.TOP).apply {
+            marginEnd = marginPx(context)
+            topMargin = FloatingLyricsRules.lockTop(panelTopRoom, glLayout(context, width).areaH, button)
+        })
         val width = overlayWidth(context)
         val prefs = prefs(context)
         val layout = WindowManager.LayoutParams(
@@ -731,11 +789,10 @@ object FloatingLyricsOverlay {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
-            x = prefs.getInt(
-                positionKeys(context).first,
-                FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context)),
-            )
-            y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt())
+            // The saved position is the lyric area's top-left; the window is that less the margin and the top room.
+            x = if (prefs.contains(positionKeys(context).first)) prefs.getInt(positionKeys(context).first, 0) - panelMargin
+            else FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context))
+            y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt()) - panelTopRoom
         }
         frame.setOnTouchListener(DragListener(context))
         windowManager.addView(frame, layout)
@@ -781,10 +838,11 @@ object FloatingLyricsOverlay {
                 }
             }
         }
+        placeLock(context, info.areaH)
         if (layout.height != info.surfaceH) {
             layout.height = info.surfaceH
             val (screenWidth, screenHeight) = screenSize(context)
-            val (x, y) = clampToText(layout.x, layout.y, layout.width, info.surfaceH, screenWidth, screenHeight)
+            val (x, y) = clampToText(layout.x, layout.y, layout.width, screenWidth, screenHeight)
             layout.x = x
             layout.y = y
             try {
@@ -864,6 +922,7 @@ object FloatingLyricsOverlay {
         val view = root
         val layout = params
         if (view != null && layout != null) {
+            syncPanelOrigin(context)
             val width = overlayWidth(context)
             if (layout.width != width && rotating) {
                 // A rotation: that orientation's own width; `applyOrientation` places it.
@@ -874,8 +933,7 @@ object FloatingLyricsOverlay {
                 val x = FloatingLyricsRules.resizeAroundCentre(layout.x, layout.width, width, margin, lockPx(context) + margin)
                 layout.width = width
                 val (screenWidth, screenHeight) = screenSize(context)
-                val height = if (view.height > 0) view.height else view.measuredHeight
-                val (cx, cy) = clampToText(x, layout.y, width, height, screenWidth, screenHeight)
+                val (cx, cy) = clampToText(x, layout.y, width, screenWidth, screenHeight)
                 layout.x = cx
                 layout.y = cy
                 savePosition(context, layout)
@@ -896,6 +954,7 @@ object FloatingLyricsOverlay {
             lock.setPadding(inset, inset, inset, inset)
             lock.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             (lock.layoutParams as? FrameLayout.LayoutParams)?.let { it.width = button; it.height = button; lock.layoutParams = it }
+            if (glPanel == null) placeLock(context, areaHeightPx(context))
         }
         (mainText?.parent as? View)?.let { column ->
             (column.layoutParams as? FrameLayout.LayoutParams)?.let {
@@ -905,7 +964,7 @@ object FloatingLyricsOverlay {
             }
         }
         // Side margins; the room above and below follows the lyric area's height (the column's layout listener).
-        if (glPanel == null) root?.let { frame -> frame.setPadding(marginPx(context), frame.paddingTop, marginPx(context), frame.paddingBottom) }
+        if (glPanel == null) root?.let { frame -> frame.setPadding(marginPx(context), panelTopRoom, marginPx(context), frame.paddingBottom) }
         for ((view, scale) in listOf(mainText to 100, translationText to translationScalePercent)) {
             view ?: continue
             val px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, fontSizePx * scale / 100f, context.resources.displayMetrics)
@@ -1195,7 +1254,6 @@ object FloatingLyricsOverlay {
                         startX + (event.rawX - touchX).toInt(),
                         startY + (event.rawY - touchY).toInt(),
                         view.width,
-                        view.height,
                         screenWidth,
                         screenHeight,
                     )

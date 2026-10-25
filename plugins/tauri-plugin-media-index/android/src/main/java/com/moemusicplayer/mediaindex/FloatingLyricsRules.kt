@@ -316,8 +316,39 @@ object FloatingLyricsRules {
     /** Transparent side margin (px) for the shadow / glow: a quarter of the main font, at least 1. */
     fun sideMarginPx(fontPx: Float): Int = maxOf(1, kotlin.math.ceil(fontPx * 0.25f).toInt())
 
-    /** Room above and below a lyric area `areaPx` tall (text height × 1.1) so the panel is text height × 1.5. */
+    /** Room for `areaPx` of lyric area (text height × 1.1): the panel is text height × 1.5 when the area is one row. */
     fun panelRoomPx(areaPx: Int): Int = if (areaPx <= 0) 0 else kotlin.math.ceil(areaPx * 2.0 / 11.0).toInt()
+
+    /**
+     * Transparent room above the lyric area: from the MAIN row alone, so showing or hiding the translation row never
+     * moves the first row (ADR 0032). Only the room below follows the whole area ([panelRoomPx] of its height).
+     */
+    fun panelTopRoomPx(mainRowPx: Int): Int = panelRoomPx(mainRowPx)
+
+    /** The saved position is the lyric area's top-left; the window's top-left is that less the margin and the top room. */
+    fun windowOrigin(areaX: Int, areaY: Int, marginPx: Int, topRoomPx: Int): Pair<Int, Int> =
+        Pair(areaX - marginPx, areaY - topRoomPx)
+
+    /** The inverse of [windowOrigin]: the lyric area's top-left of a window at (`windowX`, `windowY`). */
+    fun areaOrigin(windowX: Int, windowY: Int, marginPx: Int, topRoomPx: Int): Pair<Int, Int> =
+        Pair(windowX + marginPx, windowY + topRoomPx)
+
+    /** Top of the lock button (px from the window's top) so it stays centred on the lyric area. */
+    fun lockTop(topRoomPx: Int, areaPx: Int, lockPx: Int): Int = topRoomPx + (areaPx - lockPx) / 2
+
+    /**
+     * Keeps a window's lyric area on the screen (window coordinates in and out): only the area must stay on it; the
+     * side margins, the margin right of the lock and the rooms above and below may go past the edges. `areaPx` is the
+     * area's current height (main row plus the translation row when shown).
+     */
+    fun clampWindowToArea(
+        x: Int, y: Int, width: Int, areaPx: Int, topRoomPx: Int, marginPx: Int, screenWidth: Int, screenHeight: Int,
+    ): Pair<Int, Int> {
+        val bottomRoom = panelRoomPx(areaPx)
+        return clampPosition(
+            x, y, width, topRoomPx + areaPx + bottomRoom, screenWidth, screenHeight, marginPx, topRoomPx, marginPx, bottomRoom,
+        )
+    }
 
     /** Top of a panel `heightPx` tall whose vertical centre is the status bar's (can be above the screen top). */
     fun centredOnBar(barHeightPx: Int, heightPx: Int): Int = (barHeightPx - heightPx) / 2
@@ -522,9 +553,6 @@ object FloatingLyricsRules {
         x.coerceIn(-insetLeft, maxOf(-insetLeft, screenWidth - width + insetRight)),
         y.coerceIn(-insetTop, maxOf(-insetTop, screenHeight - height + insetBottom)),
     )
-
-    /** Transparent room above (and below) the lyric area: the panel is text height × 1.5, the area × 1.1, centred. */
-    fun textVerticalInset(panelHeight: Int): Int = maxOf(0, panelHeight * 2 / 15)
 
     /**
      * A width change keeps the lyric area's horizontal centre: the new left edge of a panel that was `oldWidth` wide
