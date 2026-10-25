@@ -1,6 +1,6 @@
 // The glides of word-timed lyrics (ADR 0041 D10): `smoothGlide` drives the karaoke colour edge (Now Playing, 「無」 mode on
 // Windows and Android); the continuous strip's word glide ignores individual words and is a plain monotone cubic
-// through line start / line end knots (`wordStripKnots`, `knotCubic`). Reference implementation of
+// through per-line knots (`wordStripKnots`, `knotCubic`). Reference implementation of
 // `crates/player-lyrics-rules/src/glide.rs` and `LyricsGlide` in
 // `WordLyricsRules.kt`; checked by the shared vectors (scripts/generate-lyrics-rules-vectors.mjs).
 //
@@ -200,17 +200,21 @@ export function karaokeGlide(spans, words) {
 }
 
 /**
- * The continuous strip's word glide knots `[lyrics ms, strip px on the lyric area's centre]`. Individual word times are
- * ignored: a line has its start (first glyph's centre `cellStart + anchor` on the centre) and, when it has word times,
- * its end (`endMs`, the last word's end; last glyph's centre `cellStart + lastCentre`), skipped for a one-glyph line,
- * an end not after the start, or when the gap from the end to the next line's start would move faster than the line
- * itself (the strip then glides from this line's start straight to the next start; the last line keeps its end). Times
- * strictly increase (a later knot at or before an earlier one's time replaces it, so the later line's start wins an
- * overlap) and values never decrease.
+ * The continuous strip's word glide knots `[lyrics ms, strip px on the lyric area's centre]`. Each line is judged on
+ * its own; individual word times are ignored. Every line has its start (first glyph's centre `cellStart + anchor` on
+ * the centre). A word-timed line (`endMs`) also has its end (the last word's end; last glyph's centre
+ * `cellStart + lastCentre`), skipped for a one-glyph line, an end not after the start, or when the gap from the end to
+ * the next line's start would move faster than the line itself (the strip then glides from this line's start straight
+ * to the next start; the last line keeps its end). When the last line has no word times, `finalArrivalMs`
+ * (`lyricsStripFinalArrivalMs`: 500 ms per grapheme, capped at the track end) adds the terminal knot with its last
+ * glyph's centre, as the line glide does; a word-timed last line uses its own end instead. Times strictly increase (a
+ * later knot at or before an earlier one's time replaces it, so the later line's start wins an overlap) and values
+ * never decrease.
  * @param {{ startMs: number, cellStart: number, anchor?: number, endMs?: number | null, lastCentre?: number }[]} lines
+ * @param {number | null} [finalArrivalMs]
  * @returns {[number, number][]}
  */
-export function wordStripKnots(lines) {
+export function wordStripKnots(lines, finalArrivalMs = null) {
   /** @type {[number, number][]} */
   const knots = [];
   const push = (/** @type {number} */ t, /** @type {number} */ v) => {
@@ -235,6 +239,10 @@ export function wordStripKnots(lines) {
     }
     push(end, value);
   });
+  const last = lines[lines.length - 1];
+  if (last && last.endMs == null && finalArrivalMs != null && finalArrivalMs > last.startMs) {
+    push(finalArrivalMs, Math.max(startOf(last), last.cellStart + Math.max(0, last.lastCentre ?? 0)));
+  }
   return knots;
 }
 

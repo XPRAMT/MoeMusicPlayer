@@ -190,7 +190,7 @@ fn word_rules_match_the_shared_vectors() {
                 last_centre: f(&l["lastCentre"]),
             })
             .collect();
-        let knots = word_strip_knots(&lines);
+        let knots = word_strip_knots(&lines, c["finalArrivalMs"].as_f64());
         let expected = pairs(&c["knots"]);
         assert_eq!(knots.len(), expected.len(), "strip knots");
         for (a, e) in knots.iter().zip(&expected) {

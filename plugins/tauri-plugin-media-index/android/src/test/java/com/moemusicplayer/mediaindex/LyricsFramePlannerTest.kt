@@ -272,12 +272,14 @@ class LyricsFramePlannerTest {
                     if (it.isNull("endMs")) null else it.getDouble("endMs"), it.getDouble("lastCentre"),
                 )
             }
-            val knots = WordLyricsRules.WordKnots.of(WordLyricsRules.wordStripKnots(knotLines))
             val n = knotLines.size
+            // The planner adds the terminal knot itself from the track length: a huge grapheme count makes the arrival
+            // the track end, set to the vector's `finalArrivalMs` (none: the last start, which adds no knot).
+            val arrival = if (c.isNull("finalArrivalMs")) knotLines[n - 1].startMs.toLong() else c.getLong("finalArrivalMs")
             val strip = StripModel(
                 LongArray(n) { knotLines[it].startMs.toLong() }, Array(n) { "x" }, Array(n) { "" },
                 FloatArray(n) { knotLines[it].cellStart.toFloat() }, FloatArray(n) { 10f }, FloatArray(n) { 10f }, FloatArray(n),
-                FloatArray(n), FloatArray(n), knots, 1,
+                FloatArray(n), FloatArray(n), knotLines, 1_000_000,
             )
             val base = state(inputs(listOf(line(0, "x")), animation = cont))
             val model = RenderModel(
@@ -289,11 +291,33 @@ class LyricsFramePlannerTest {
             for (i in 0 until samples.length()) {
                 val sample = samples.getJSONObject(i)
                 val t = sample.getDouble("t")
-                val p = plan(s, clock(), t)
+                val p = plan(s, clock(duration = arrival), t)
                 val value = sample.getJSONArray("expected").getDouble(0)
                 assertEquals(sample.toString(), 200.0 - value, p.rawOffset, 1e-3)
             }
         }
+    }
+
+    @Test
+    fun aLastLineWithoutWordTimesGlidesToItsLastGlyphInAWordTimedSong() {
+        // Each line on its own (ADR 0041 D10): the second line is word-timed, the last (啦啦啦啦啦啦啦啦) is not, so it
+        // glides from its first glyph to its last over 500 ms per grapheme (9000 -> 13000) instead of resting.
+        val s = stripState(listOf(
+            line(1000, "aaaa"),
+            line(3000, "bbbbbb", times = listOf(3000.0 to 3500.0, 3500.0 to 4200.0)),
+            line(9000, "啦啦啦啦啦啦啦啦"),
+        ))
+        val strip = s.model.strip!!
+        val last = strip.starts.size - 1
+        val atStart = plan(s, clock(), 9000.0)
+        val mid = plan(s, clock(), 11000.0)
+        val end = plan(s, clock(), 13000.0)
+        val after = plan(s, clock(), 15000.0)
+        assertEquals(200.0 - strip.cells[last] - strip.firstGlyphCenters[last], atStart.rawOffset, 1e-3)
+        assertTrue("moving through the last line", mid.rawOffset < atStart.rawOffset - 1.0 && mid.rawOffset > end.rawOffset + 1.0)
+        assertTrue(mid.animating)
+        assertEquals(200.0 - strip.cells[last] - strip.lastGlyphCenters[last], end.rawOffset, 1e-3)
+        assertEquals(end.rawOffset, after.rawOffset, 0.0)
     }
 
     @Test

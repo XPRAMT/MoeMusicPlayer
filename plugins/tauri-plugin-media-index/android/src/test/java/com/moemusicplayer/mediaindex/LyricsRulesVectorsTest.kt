@@ -122,7 +122,7 @@ class LyricsRulesVectorsTest {
                 WordLyricsRules.KnotLine(it.getDouble("startMs"), it.getDouble("cellStart"), it.getDouble("anchor"),
                     if (it.isNull("endMs")) null else it.getDouble("endMs"), it.getDouble("lastCentre"))
             }
-            val knots = WordLyricsRules.wordStripKnots(lines)
+            val knots = WordLyricsRules.wordStripKnots(lines, if (c.isNull("finalArrivalMs")) null else c.getDouble("finalArrivalMs"))
             val expected = c.getJSONArray("knots").pairs()
             assertEquals("strip knots", expected.size, knots.size)
             knots.forEachIndexed { i, k ->

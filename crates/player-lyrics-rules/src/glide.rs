@@ -1,7 +1,8 @@
 //! The smoothed glide of word-timed lyrics (ADR 0041 D10), port of `src/lib/lyrics-glide.js` (the reference) and
 //! `WordLyricsRules.kt`, checked by the shared vectors. `smooth_glide` drives the karaoke colour edge; the continuous
-//! strip's word glide ignores individual words and is a plain monotone cubic through line start / line end knots
-//! (`word_strip_knots`, `knot_cubic`).
+//! strip's word glide ignores individual words and is a plain monotone cubic through per-line knots: every line's start,
+//! a word-timed line's end and, after a last line without word times, the terminal estimate (`word_strip_knots`,
+//! `knot_cubic`).
 //!
 //! Hard knots (the line start and end of a karaoke line) are hit exactly. Between two hard knots the curve
 //! follows soft guides (the words) with its speed kept within `GLIDE_MIN_SPEED..GLIDE_MAX_SPEED` x the stretch's
@@ -239,13 +240,15 @@ pub struct KnotLine {
 }
 
 /// The continuous strip's word glide knots `(lyrics ms, strip px on the lyric area's centre)` (`wordStripKnots` in JS).
-/// Individual word times are ignored: a line has its start (first glyph's centre on the area's centre) and, when it
-/// has word times, its end (the last word's end, last glyph's centre), which is skipped for a one-glyph line, an end
-/// not after the start, or when the gap from the end to the next line's start would move faster than the line itself
-/// (the strip then glides from this line's start straight to the next start; the last line keeps its end). Times
-/// strictly increase (a later knot at or before an earlier one's time replaces it, so the later line's start wins an
-/// overlap) and values never decrease.
-pub fn word_strip_knots(lines: &[KnotLine]) -> Vec<(f64, f64)> {
+/// Each line is judged on its own; individual word times are ignored. Every line has its start (first glyph's centre on
+/// the area's centre). A word-timed line (`end_ms`) also has its end (the last word's end, last glyph's centre), which
+/// is skipped for a one-glyph line, an end not after the start, or when the gap from the end to the next line's start
+/// would move faster than the line itself (the strip then glides from this line's start straight to the next start;
+/// the last line keeps its end). When the last line has no word times, `final_arrival_ms` (`final_arrival_ms`: 500 ms
+/// per grapheme, capped at the track end) adds the terminal knot with its last glyph's centre, as the line glide
+/// (`strip_cubic`) does; a word-timed last line uses its own end instead. Times strictly increase (a later knot at or
+/// before an earlier one's time replaces it, so the later line's start wins an overlap) and values never decrease.
+pub fn word_strip_knots(lines: &[KnotLine], final_arrival_ms: Option<f64>) -> Vec<(f64, f64)> {
     let start_of = |line: &KnotLine| line.cell_start + line.anchor.max(0.0);
     let has_start = |line: &KnotLine| line.start_ms.is_finite() && start_of(line).is_finite();
     let mut knots: Vec<(f64, f64)> = Vec::with_capacity(lines.len() * 2);
@@ -280,6 +283,15 @@ pub fn word_strip_knots(lines: &[KnotLine]) -> Vec<(f64, f64)> {
                     push(end, value);
                 }
             }
+        }
+    }
+    if let (Some(arrival), Some(last)) = (final_arrival_ms, lines.last()) {
+        if last.end_ms.is_none() && arrival > last.start_ms {
+            let start = start_of(last);
+            push(
+                arrival,
+                start.max(last.cell_start + last.last_centre.max(0.0)),
+            );
         }
     }
     knots
@@ -476,15 +488,18 @@ mod tests {
 
     #[test]
     fn knots_are_line_starts_and_last_word_ends() {
-        let knots = word_strip_knots(&[
-            line(1000.0, 0.0, 10.0, Some(2000.0), 90.0),
-            // No word times: the start knot only.
-            line(3000.0, 120.0, 8.0, None, 0.0),
-            // One glyph (first centre == last centre): no end knot.
-            line(4000.0, 200.0, 6.0, Some(4500.0), 6.0),
-            // End not after the start: no end knot.
-            line(5000.0, 260.0, 5.0, Some(5000.0), 80.0),
-        ]);
+        let knots = word_strip_knots(
+            &[
+                line(1000.0, 0.0, 10.0, Some(2000.0), 90.0),
+                // No word times: the start knot only.
+                line(3000.0, 120.0, 8.0, None, 0.0),
+                // One glyph (first centre == last centre): no end knot.
+                line(4000.0, 200.0, 6.0, Some(4500.0), 6.0),
+                // End not after the start: no end knot.
+                line(5000.0, 260.0, 5.0, Some(5000.0), 80.0),
+            ],
+            None,
+        );
         assert_eq!(
             knots,
             vec![
@@ -499,13 +514,16 @@ mod tests {
 
     #[test]
     fn an_overlapping_next_start_wins_and_values_never_decrease() {
-        let knots = word_strip_knots(&[
-            line(1000.0, 0.0, 10.0, Some(3000.0), 90.0),
-            line(2500.0, 100.0, 10.0, Some(4000.0), 50.0),
-            line(2500.0, 200.0, 4.0, None, 0.0),
-        ]);
+        let knots = word_strip_knots(
+            &[
+                line(1000.0, 0.0, 10.0, Some(3000.0), 90.0),
+                line(2500.0, 100.0, 10.0, Some(4000.0), 50.0),
+                line(2500.0, 200.0, 4.0, None, 0.0),
+            ],
+            None,
+        );
         assert_eq!(knots, vec![(1000.0, 10.0), (2500.0, 204.0)]);
-        assert!(word_strip_knots(&[]).is_empty());
+        assert!(word_strip_knots(&[], None).is_empty());
     }
 
     /// 拿出下一颗软糖 ends 10 ms before the next line starts (20 px glyphs, 40 px gap): the end knot would force a 60 px
@@ -518,7 +536,7 @@ mod tests {
             line(215190.0, 460.0, 10.0, None, 0.0),
             line(231300.0, 680.0, 10.0, None, 0.0),
         ];
-        let knots = word_strip_knots(&lines);
+        let knots = word_strip_knots(&lines, None);
         assert_eq!(
             knots,
             vec![
@@ -541,15 +559,137 @@ mod tests {
         assert!(largest < 1.5, "largest frame step {largest} px");
     }
 
+    /// Each line is judged on its own: in 十年有多长 the last line 啦啦啦啦啦啦啦啦 has no word times, so it keeps the
+    /// terminal knot (500 ms per grapheme from its start, its last glyph's centre) even though an earlier line is
+    /// word-timed; it no longer rests on its first glyph.
+    #[test]
+    fn a_last_line_without_word_times_glides_to_its_last_glyph() {
+        let mut lines = vec![
+            line(207810.0, 0.0, 10.0, None, 0.0),
+            line(212700.0, 280.0, 10.0, Some(215180.0), 130.0),
+            line(215190.0, 460.0, 10.0, None, 0.0),
+            line(231300.0, 680.0, 10.0, None, 150.0),
+        ];
+        let arrival = crate::final_arrival_ms(231300.0, "啦啦啦啦啦啦啦啦", None);
+        assert_eq!(arrival, 235300.0);
+        let knots = word_strip_knots(&lines, Some(arrival));
+        assert_eq!(
+            knots,
+            vec![
+                (207810.0, 10.0),
+                (212700.0, 290.0),
+                (215190.0, 470.0),
+                (231300.0, 690.0),
+                (235300.0, 830.0)
+            ]
+        );
+        // Capped at the track end.
+        let capped = crate::final_arrival_ms(231300.0, "啦啦啦啦啦啦啦啦", Some(233000.0));
+        assert_eq!(
+            word_strip_knots(&lines, Some(capped)).last(),
+            Some(&(233000.0, 830.0))
+        );
+        // The strip moves through the last line instead of resting at its start.
+        assert!(knot_value(&knots, 233300.0) > 700.0 && knot_value(&knots, 233300.0) < 830.0);
+        // A word-timed last line uses its own end, never the estimate.
+        lines[3].end_ms = Some(240000.0);
+        assert_eq!(
+            word_strip_knots(&lines, Some(arrival)).last(),
+            Some(&(240000.0, 830.0))
+        );
+        // An arrival not after the last start adds nothing.
+        lines[3].end_ms = None;
+        assert_eq!(
+            word_strip_knots(&lines, Some(231300.0)).last(),
+            Some(&(231300.0, 690.0))
+        );
+    }
+
+    /// A song without word times: the knot glide with the terminal knot is the line glide (`strip_cubic`) at every
+    /// time, for several layouts (the windows still take the line path for such a song, so it stays bit-exact).
+    #[test]
+    fn without_word_times_the_knot_glide_is_the_line_glide() {
+        let mut seed = 5u64;
+        let mut rand = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as f64 / (1u64 << 31) as f64
+        };
+        for case in 0..12 {
+            let n = 1 + case * 3;
+            let mains: Vec<f64> = (0..n).map(|_| 20.0 + rand() * 300.0).collect();
+            let trans: Vec<f64> = (0..n).map(|_| rand() * 350.0).collect();
+            let mut layout = crate::layout_strip(&mains, &trans, 24.0);
+            layout.anchors = mains.iter().map(|w| rand() * w.min(20.0)).collect();
+            let lasts: Vec<f64> = mains.iter().map(|w| w - rand() * 10.0).collect();
+            let mut starts = Vec::new();
+            let mut t = 300.0 + rand() * 1000.0;
+            for i in 0..n {
+                starts.push(t);
+                t += if i % 5 == 4 {
+                    15000.0
+                } else {
+                    20.0 + rand() * 4000.0
+                };
+            }
+            let arrival = starts[n - 1] + 200.0 + rand() * 4000.0;
+            let lines: Vec<KnotLine> = (0..n)
+                .map(|i| {
+                    line(
+                        starts[i],
+                        layout.starts[i],
+                        layout.anchors[i],
+                        None,
+                        lasts[i],
+                    )
+                })
+                .collect();
+            let knots = word_strip_knots(&lines, Some(arrival));
+            let view = 500.0;
+            let fin = crate::FinalLine {
+                end_ms: Some(arrival),
+                last_glyph_center: Some(lasts[n - 1]),
+            };
+            let mut at = starts[0] - 500.0;
+            while at < arrival + 500.0 {
+                let line_mode = crate::strip_cubic(
+                    &starts,
+                    &layout,
+                    crate::Align::Left,
+                    at,
+                    view,
+                    crate::Align::Center,
+                    Some(fin),
+                );
+                let [v, s, c2, c3] = knot_cubic(&knots, at);
+                let unified = [view / 2.0 - v, -s, -c2, -c3];
+                for k in 0..4 {
+                    let tol = 1e-9 * (1.0 + line_mode[k].abs());
+                    assert!(
+                        (unified[k] - line_mode[k]).abs() <= tol,
+                        "case {case} at {at} coefficient {k}: {} vs {}",
+                        unified[k],
+                        line_mode[k]
+                    );
+                }
+                at += 1000.0 / 120.0;
+            }
+        }
+    }
+
     /// A long pause after a line keeps its end knot; a gap exactly as fast as the line keeps it too; the last line
     /// keeps its end.
     #[test]
     fn an_end_knot_stays_for_a_slow_or_equally_fast_gap() {
-        let knots = word_strip_knots(&[
-            line(1000.0, 0.0, 10.0, Some(2000.0), 110.0),
-            line(30000.0, 140.0, 10.0, Some(31000.0), 110.0),
-            line(32000.0, 340.0, 10.0, Some(33000.0), 60.0),
-        ]);
+        let knots = word_strip_knots(
+            &[
+                line(1000.0, 0.0, 10.0, Some(2000.0), 110.0),
+                line(30000.0, 140.0, 10.0, Some(31000.0), 110.0),
+                line(32000.0, 340.0, 10.0, Some(33000.0), 60.0),
+            ],
+            None,
+        );
         assert_eq!(
             knots,
             vec![
@@ -594,7 +734,7 @@ mod tests {
                 dur * rand() + 50.0 + rand() * 900.0
             };
         }
-        let knots = word_strip_knots(&lines);
+        let knots = word_strip_knots(&lines, None);
         assert!(knots.len() > lines.len());
         for w in knots.windows(2) {
             assert!(w[1].0 > w[0].0 && w[1].1 >= w[0].1);

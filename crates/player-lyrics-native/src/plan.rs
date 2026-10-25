@@ -177,9 +177,10 @@ pub struct StripInput<'a> {
     pub rate: f64,
     /// Lyrics time at which `rate` returns to 1 (`None` = no correction running).
     pub slew_until_ms: Option<f64>,
-    /// Word-timed lyrics (ADR 0041 D10): the knots `(lyrics ms, strip px)` of the word glide
-    /// (`rules::word_strip_knots`, joined by `rules::knot_cubic`), the target is the area's centre, and every cell
-    /// stays at factor 1 (the static centre mask dims instead of the line fades). `None`: the line glide.
+    /// Lyrics with a word-timed line (ADR 0041 D10): the per-line knots `(lyrics ms, strip px)` of the word glide
+    /// (`rules::word_strip_knots`, with the terminal knot when the last line has no word times, joined by
+    /// `rules::knot_cubic`); the target is the area's centre. `None`: the line glide (the same motion for lyrics
+    /// without word times). Every cell stays at factor 1 either way (the static centre mask dims instead).
     pub word_glide: Option<&'a [(f64, f64)]>,
 }
 
@@ -538,7 +539,7 @@ mod tests {
                 last_centre: 0.0,
             },
         ];
-        let knots = rules::word_strip_knots(&lines);
+        let knots = rules::word_strip_knots(&lines, None);
         // Two knots on the first line (start, last word's end), one on the second.
         assert_eq!(knots.len(), 3);
         for at in [0.0, 1000.0, 1200.0, 2200.0, 2500.0] {
@@ -579,6 +580,50 @@ mod tests {
             };
             assert!((offset_at(&i, l.start_ms) - (200.0 - l.cell_start - anchor)).abs() < 1e-9);
         }
+    }
+
+    /// A word-timed line followed by a last line without word times: the plan glides through the last line to the
+    /// terminal knot (its last glyph's centre on the area's centre at the estimated arrival) instead of resting on its
+    /// first glyph.
+    #[test]
+    fn a_last_line_without_words_glides_to_the_terminal_knot_in_a_word_timed_song() {
+        let starts = [1000.0, 3000.0];
+        let layout = rules::layout_strip(&[100.0, 160.0], &[], 20.0);
+        let lines = [
+            rules::KnotLine {
+                start_ms: 1000.0,
+                cell_start: layout.starts[0],
+                anchor: 6.0,
+                end_ms: Some(2200.0),
+                last_centre: 85.0,
+            },
+            rules::KnotLine {
+                start_ms: 3000.0,
+                cell_start: layout.starts[1],
+                anchor: 10.0,
+                end_ms: None,
+                last_centre: 150.0,
+            },
+        ];
+        let arrival = rules::final_arrival_ms(3000.0, "啦啦啦啦啦啦啦啦", None);
+        let knots = rules::word_strip_knots(&lines, Some(arrival));
+        assert_eq!(knots.last(), Some(&(7000.0, layout.starts[1] + 150.0)));
+        let at = 3200.0;
+        let i = StripInput {
+            word_glide: Some(&knots),
+            ..input(&starts, &layout, at, true)
+        };
+        let plan = plan_strip(&i);
+        assert_eq!(plan.wake_ms, Some(7000.0 - at));
+        let mut t = 0.0;
+        while t <= plan.offset.last().unwrap().0 {
+            assert!(
+                (cubic_value_at(&plan.offset, t) - offset_at(&i, at + t * 1000.0)).abs() < 1e-6
+            );
+            t += 0.01;
+        }
+        assert!((offset_at(&i, 7000.0) - (200.0 - layout.starts[1] - 150.0)).abs() < 1e-9);
+        assert!(offset_at(&i, 5000.0) < offset_at(&i, 3000.0) - 1.0);
     }
 
     #[test]

@@ -72,8 +72,12 @@ internal class StripModel(
     val translationWidths: FloatArray,
     val lastGlyphCenters: FloatArray,
     val firstGlyphCenters: FloatArray,
-    /** Word-timed lyrics (ADR 0041 D10): the word glide's knots (lyrics ms, strip px); null for line-timed lyrics. */
-    val wordKnots: WordLyricsRules.WordKnots?,
+    /**
+     * Lyrics with a word-timed line (ADR 0041 D10): the word glide's per-line knot inputs (the planner adds the
+     * terminal estimate, which depends on the track length); null without any word-timed line (the line glide, the
+     * same motion).
+     */
+    val wordLines: List<WordLyricsRules.KnotLine>?,
     /** Grapheme count of the last line (the terminal glide's duration estimate), counted once. */
     val lastGraphemes: Int,
 ) {

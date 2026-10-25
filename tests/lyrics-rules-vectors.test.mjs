@@ -55,7 +55,7 @@ test('the smoothed glide (ADR 0041 D10) matches the shared vectors', async () =>
     for (const s of c.samples) close(glideAt(pieces, s.t)[0], s.expected[0], `karaoke ${s.t}`);
   }
   for (const c of v.stripGlide) {
-    const knots = wordStripKnots(c.lines);
+    const knots = wordStripKnots(c.lines, c.finalArrivalMs);
     samePieces(knots, c.knots, 'strip knots');
     for (const s of c.samples) knotCubic(knots, s.t).forEach((x, k) => close(x, s.expected[k], `strip glide ${s.t}`));
   }
@@ -138,4 +138,45 @@ test('a word-timed line ending just before the next starts glides straight on in
     { startMs: 30000, cellStart: 140, anchor: 10, endMs: 31000, lastCentre: 110 },
     { startMs: 32000, cellStart: 340, anchor: 10, endMs: 33000, lastCentre: 60 },
   ]), [[1000, 10], [2000, 110], [30000, 150], [31000, 250], [32000, 350], [33000, 400]]);
+});
+
+test('each line is judged on its own: a last line without word times keeps the terminal glide', async () => {
+  const { wordStripKnots, knotValue } = await import('../src/lib/lyrics-glide.js');
+  const { lyricsStripFinalArrivalMs } = await import('../src/lib/lyrics-strip.js');
+  // 十年有多长: 拿出下一颗软糖 is word-timed, 啦啦啦啦啦啦啦啦 (the last line) is not.
+  const lines = [
+    { startMs: 207810, cellStart: 0, anchor: 10, endMs: null, lastCentre: 0 },
+    { startMs: 212700, cellStart: 280, anchor: 10, endMs: 215180, lastCentre: 130 },
+    { startMs: 215190, cellStart: 460, anchor: 10, endMs: null, lastCentre: 0 },
+    { startMs: 231300, cellStart: 680, anchor: 10, endMs: null, lastCentre: 150 },
+  ];
+  const arrival = lyricsStripFinalArrivalMs(231300, '啦啦啦啦啦啦啦啦');
+  assert.equal(arrival, 235300);
+  const knots = wordStripKnots(lines, arrival);
+  assert.deepEqual(knots, [[207810, 10], [212700, 290], [215190, 470], [231300, 690], [235300, 830]]);
+  const mid = knotValue(knots, 233300);
+  assert.ok(mid > 700 && mid < 830, `moving through the last line: ${mid}`);
+  // A word-timed last line uses its own end.
+  assert.deepEqual(wordStripKnots([...lines.slice(0, 3), { ...lines[3], endMs: 240000 }], arrival).at(-1), [240000, 830]);
+});
+
+test('without word times the knot glide is the line glide at every time', async () => {
+  const { wordStripKnots, knotCubic } = await import('../src/lib/lyrics-glide.js');
+  const { layoutLyricsStrip, lyricsStripCubic } = await import('../src/lib/lyrics-strip.js');
+  const layouts = [
+    { mains: [100], trans: [0], anchors: [6], lasts: [94], starts: [1000], arrival: 3000 },
+    { mains: [80, 40, 200, 60], trans: [120, 0, 0, 90], anchors: [5, 12, 9, 7], lasts: [70, 30, 190, 55], starts: [1000, 1150, 4000, 20000], arrival: 23000 },
+    { mains: [30, 30, 300], trans: [], anchors: [4, 4, 10], lasts: [25, 26, 280], starts: [500, 520, 5000], arrival: 6200 },
+  ];
+  for (const c of layouts) {
+    const layout = layoutLyricsStrip(c.mains, c.trans, 24, c.anchors);
+    const lines = c.starts.map((startMs, i) => ({ startMs, cellStart: layout.starts[i], anchor: c.anchors[i], endMs: null, lastCentre: c.lasts[i] }));
+    const knots = wordStripKnots(lines, c.arrival);
+    const finalLine = { endMs: c.arrival, lastGlyphCenter: c.lasts[c.lasts.length - 1] };
+    for (let t = c.starts[0] - 500; t < c.arrival + 500; t += 1000 / 120) {
+      const line = lyricsStripCubic(c.starts, layout, 'left', t, 500, 'center', finalLine);
+      const [v, s, c2, c3] = knotCubic(knots, t);
+      [250 - v, -s, -c2, -c3].forEach((x, k) => close(x, line[k], `${JSON.stringify(c.starts)} at ${t} [${k}]`));
+    }
+  }
 });

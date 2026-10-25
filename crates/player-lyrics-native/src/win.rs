@@ -2316,11 +2316,15 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             .collect();
         let sources: Vec<&crate::LyricLine> = lines.iter().map(|l| l.1).collect();
         let lines: Vec<(f64, &str, &str)> = lines.into_iter().map(|l| l.0).collect();
-        // Word-timed lyrics (ADR 0041 D10): the glide's knots are the line starts and last-word ends. Line- and word-timed alike see
-        // the static continuous mask (experimental) instead of edge fades and line fades. Translations have no word effects: they follow the main row.
+        // Word-timed lines (ADR 0041 D10), each judged on its own: every line start is a knot, a word-timed line adds
+        // its last word's end, a last line without word times the terminal estimate. Line- and word-timed alike see
+        // the static continuous mask (experimental) instead of edge fades and line fades. Translations have no word
+        // effects: they follow the main row.
         let word_ranges: Vec<Option<Vec<(usize, usize)>>> =
             sources.iter().map(|l| l.word_ranges()).collect();
-        let word_mode = word_ranges.iter().any(Option::is_some);
+        // Without any word-timed line the knots are exactly the line glide's (`strip_cubic`, tested in
+        // `without_word_times_the_knot_glide_is_the_line_glide`), so such a song keeps the line path bit for bit.
+        let any_word_line = word_ranges.iter().any(Option::is_some);
         has_translation = lines.iter().any(|l| !l.2.is_empty());
         if lines.is_empty() {
             return Ok(false);
@@ -2391,13 +2395,13 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         let last = lines.last().unwrap();
         let arrival =
             rules::final_arrival_ms(last.0, last.1, ctx.clock.duration_ms.map(|d| d + offset));
-        let knots = word_mode.then(|| {
+        let knots = any_word_line.then(|| {
             let knot_lines: Vec<rules::KnotLine> = lines
                 .iter()
                 .enumerate()
                 .map(|(i, l)| {
-                    // Only the line's start and, with word times, the end of its last word: the words themselves
-                    // never shape the glide.
+                    // Only the line's start and, with its own word times, the end of its last word: the words
+                    // themselves never shape the glide.
                     let end_ms = word_ranges[i]
                         .as_ref()
                         .and_then(|_| sources[i].words.last())
@@ -2411,7 +2415,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     }
                 })
                 .collect();
-            rules::word_strip_knots(&knot_lines)
+            rules::word_strip_knots(&knot_lines, Some(arrival))
         });
         let input = plan::StripInput {
             word_glide: knots.as_deref(),

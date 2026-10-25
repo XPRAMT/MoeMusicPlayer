@@ -183,22 +183,22 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
         val lastCenters = FloatArray(kept.size) { main.lastGlyphCenter(texts[it]) }
         val firstCenters = FloatArray(kept.size) { main.firstGlyphCenter(texts[it]) }
         val (cells, widths) = FloatingLyricsRules.stripLayout(mainWidths, translationWidths, main.width("　"))
-        val wordKnots = if (kept.any { it.wordRanges != null }) {
-            WordLyricsRules.WordKnots.of(
-                WordLyricsRules.wordStripKnots(kept.mapIndexed { index, line ->
-                    val times = line.wordTimes
-                    val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
-                    WordLyricsRules.KnotLine(
-                        line.startMs.toDouble(), cells[index].toDouble(), firstCenters[index].toDouble(), end, lastCenters[index].toDouble(),
-                    )
-                }),
-            )
+        // Each line on its own (ADR 0041 D10): a word-timed line adds its last word's end, the others only their start.
+        // Without any word-timed line the knots are exactly the line glide's, so that path is kept.
+        val wordLines = if (kept.any { it.wordRanges != null }) {
+            kept.mapIndexed { index, line ->
+                val times = line.wordTimes
+                val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
+                WordLyricsRules.KnotLine(
+                    line.startMs.toDouble(), cells[index].toDouble(), firstCenters[index].toDouble(), end, lastCenters[index].toDouble(),
+                )
+            }
         } else {
             null
         }
         return StripModel(
             LongArray(kept.size) { kept[it].startMs }, texts, translations, cells, widths, mainWidths, translationWidths,
-            lastCenters, firstCenters, wordKnots, FloatingLyricsRules.graphemeCount(texts.last()),
+            lastCenters, firstCenters, wordLines, FloatingLyricsRules.graphemeCount(texts.last()),
         )
     }
 

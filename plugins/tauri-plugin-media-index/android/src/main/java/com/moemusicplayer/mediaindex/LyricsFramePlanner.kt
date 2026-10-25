@@ -102,12 +102,15 @@ internal class FrameParams {
  * built on the shared rules
  * ([FloatingLyricsRules], [WordLyricsRules], checked against the shared vectors), but on a fractional clock and with
  * sub-pixel positions: a moving position is rounded to 1/8 px, a resting one to a whole pixel (so a still line is
- * crisp). One instance per render thread; it keeps only a cache of the line glide's knots.
+ * crisp). One instance per render thread; it keeps only a cache of the glide's knots.
  */
 internal class LyricsFramePlanner {
     private var knotsModel: StripModel? = null
     private var knotsEnd = FloatingLyricsRules.NO_TIME
     private var knots: FloatingLyricsRules.StripKnots? = null
+    private var wordKnotsModel: StripModel? = null
+    private var wordKnotsEnd = FloatingLyricsRules.NO_TIME
+    private var wordKnots: WordLyricsRules.WordKnots? = null
 
     /**
      * Plans the frame at `positionMs` (fractional, the smoothed clock; NaN: no clock) into `out`. `clock` supplies the
@@ -137,15 +140,22 @@ internal class LyricsFramePlanner {
         val offset: Float
         val firstT: Double
         val lastT: Double
-        val wordKnots = strip.wordKnots
-        if (wordKnots != null && wordKnots.times.isNotEmpty()) {
-            offset = (areaW / 2.0 - WordLyricsRules.knotValue(wordKnots, lyricsMs)).toFloat()
-            firstT = wordKnots.times[0]
-            lastT = wordKnots.times[wordKnots.times.size - 1]
+        val duration = duration(clock, model)
+        val trackEnd = if (duration != FloatingLyricsRules.NO_TIME) duration + model.offsetMs else FloatingLyricsRules.NO_TIME
+        val arrival = FloatingLyricsRules.finalLineArrivalFromGraphemes(strip.starts[strip.starts.size - 1], strip.lastGraphemes, trackEnd)
+        val wordLines = strip.wordLines
+        if (wordLines != null && (wordKnotsModel !== strip || wordKnotsEnd != arrival)) {
+            // Built once per strip and arrival (the terminal knot follows the track length), never per frame.
+            wordKnots = WordLyricsRules.WordKnots.of(WordLyricsRules.wordStripKnots(wordLines, arrival.toDouble()))
+            wordKnotsModel = strip
+            wordKnotsEnd = arrival
+        }
+        val words = if (wordLines != null) wordKnots else null
+        if (words != null && words.times.isNotEmpty()) {
+            offset = (areaW / 2.0 - WordLyricsRules.knotValue(words, lyricsMs)).toFloat()
+            firstT = words.times[0]
+            lastT = words.times[words.times.size - 1]
         } else {
-            val duration = duration(clock, model)
-            val trackEnd = if (duration != FloatingLyricsRules.NO_TIME) duration + model.offsetMs else FloatingLyricsRules.NO_TIME
-            val arrival = FloatingLyricsRules.finalLineArrivalFromGraphemes(strip.starts[strip.starts.size - 1], strip.lastGraphemes, trackEnd)
             if (knotsModel !== strip || knotsEnd != arrival) {
                 knots = FloatingLyricsRules.stripKnots(
                     strip.starts, strip.cells, strip.widths, FloatingLyricsRules.STRIP_ALIGN, arrival,

@@ -121,8 +121,14 @@ const karaokeCases = [
   const pieces = karaokeGlide(/** @type {any} */ (c.spans), /** @type {any} */ (c.words));
   return { ...c, pieces, samples: glideSamples(pieces, sampleTimes(600, 2500)) };
 });
-// The strip glide ignores word times: only line starts and last-word ends. Cases: ordinary lines, a line without word
-// times, a one-glyph line, an end not after its start, an overlap, and a long gap.
+// The strip glide ignores word times and judges each line on its own: every line start, a word-timed line's last-word
+// end and, after a last line without word times, the terminal knot (`finalArrivalMs`, null = none). Cases: ordinary
+// lines, a line without word times, a one-glyph line, an end not after its start, an overlap, and a long gap.
+const songTail = [
+  { startMs: 207810, cellStart: 0, anchor: 10, endMs: null, lastCentre: 0 },
+  { startMs: 212700, cellStart: 280, anchor: 10, endMs: 215180, lastCentre: 130 },
+  { startMs: 215190, cellStart: 460, anchor: 10, endMs: null, lastCentre: 0 },
+];
 const stripGlideCases = [
   [
     { startMs: 1000, cellStart: 0, anchor: 10, endMs: 2400, lastCentre: 110 },
@@ -152,13 +158,33 @@ const stripGlideCases = [
     { startMs: 30000, cellStart: 140, anchor: 10, endMs: 31000, lastCentre: 110 },
     { startMs: 32000, cellStart: 340, anchor: 10, endMs: null, lastCentre: 0 },
   ],
-];
-const stripGlide = stripGlideCases.map((lines) => {
-  const knots = wordStripKnots(lines);
+].map((lines) => ({ lines, finalArrivalMs: null }));
+// 十年有多长: a word-timed line, then the last line 啦啦啦啦啦啦啦啦 without word times glides from its first glyph to its
+// last at 500 ms per grapheme (231300 → 235300), or up to the track end.
+const lastLine = { startMs: 231300, cellStart: 680, anchor: 10, endMs: null, lastCentre: 150 };
+stripGlideCases.push(
+  { lines: [...songTail, lastLine], finalArrivalMs: lyricsStripFinalArrivalMs(231300, '啦啦啦啦啦啦啦啦') },
+  { lines: [...songTail, lastLine], finalArrivalMs: lyricsStripFinalArrivalMs(231300, '啦啦啦啦啦啦啦啦', 233000) },
+  // A word-timed last line uses its own end; the estimate is ignored.
+  { lines: [...songTail, { ...lastLine, endMs: 240000 }], finalArrivalMs: 235300 },
+  // Line-timed only, with the terminal knot (the same motion as the line glide).
+  {
+    lines: [
+      { startMs: 1000, cellStart: 0, anchor: 8, endMs: null, lastCentre: 70 },
+      { startMs: 3000, cellStart: 104, anchor: 12, endMs: null, lastCentre: 40 },
+      { startMs: 3500, cellStart: 180, anchor: 9, endMs: null, lastCentre: 90 },
+    ],
+    finalArrivalMs: 5000,
+  },
+);
+const stripGlide = stripGlideCases.map(({ lines, finalArrivalMs }) => {
+  const knots = wordStripKnots(lines, finalArrivalMs);
   const from = knots.length > 0 ? knots[0][0] - 100 : 0;
   const to = knots.length > 0 ? knots[knots.length - 1][0] + 100 : 100;
-  return { lines, knots, samples: sampleTimes(from, to).map((t) => ({ t, expected: knotCubic(knots, t) })) };
+  return { lines, finalArrivalMs, knots, samples: sampleTimes(from, to).map((t) => ({ t, expected: knotCubic(knots, t) })) };
 });
+const songKnots = stripGlide[stripGlide.length - 4].knots;
+if (JSON.stringify(songKnots[songKnots.length - 1]) !== JSON.stringify([235300, 830])) throw new Error('the last line lost its terminal knot');
 const centreMask = [];
 for (const [areaWidth, emPx, main, secondary] of [
   [1000, 40, 1, 0.5], [80, 40, 1, 0.5], [300, 24, 1, 0.05], [1000, 40, 1, 1], [400, 30, 1, 0], [0, 40, 1, 0.5],

@@ -4,7 +4,8 @@ package com.moemusicplayer.mediaindex
  * Word-timed lyrics in the floating window (ADR 0041 D10), the same rules as `player-lyrics-rules/src/glide.rs`,
  * `words.rs` and `src/lib/lyrics-glide.js` / `lyrics-word-strip.js` (checked against the shared vectors): the smoothed
  * glide (hard knots exact, soft guides followed within 0.5x-1.5x of each stretch's average speed, monotone, C1) for the
- * karaoke edge, the strip's word glide (a monotone C1 cubic through line start / last-word end knots only), and the
+ * karaoke edge, the strip's word glide (a monotone C1 cubic through per-line knots only: line starts, a word-timed
+ * line's last-word end, the terminal estimate after a last line without word times), and the
  * static centre mask.
  */
 internal object WordLyricsRules {
@@ -172,8 +173,13 @@ internal object WordLyricsRules {
         return smoothGlide(listOf(start to spans[0].first, end to spans[n - 1].second), listOf(guides), false)
     }
 
-    /** The continuous strip's word glide knots `(lyrics ms, strip px)` (`word_strip_knots`), see [wordStripKnots]. */
-    fun wordStripKnots(lines: List<KnotLine>): List<Pair<Double, Double>> {
+    /**
+     * The continuous strip's word glide knots `(lyrics ms, strip px)` (`word_strip_knots`). Each line is judged on its
+     * own: every line has its start knot, a word-timed line (`endMs`) its last word's end (skipped for one glyph, an
+     * end not after the start, or a gap to the next start faster than the line), and when the last line has no word
+     * times `finalArrivalMs` adds the terminal knot (its last glyph centre), as the line glide does.
+     */
+    fun wordStripKnots(lines: List<KnotLine>, finalArrivalMs: Double? = null): List<Pair<Double, Double>> {
         val knots = ArrayList<Pair<Double, Double>>(lines.size * 2)
         fun push(t: Double, v: Double) {
             if (!t.isFinite() || !v.isFinite()) return
@@ -198,6 +204,10 @@ internal object WordLyricsRules {
                 if (gapMs <= 0.0 || (startOf(next) - value) * (end - line.startMs) > (value - start) * gapMs) continue
             }
             push(end, value)
+        }
+        val last = lines.lastOrNull()
+        if (last != null && last.endMs == null && finalArrivalMs != null && finalArrivalMs > last.startMs) {
+            push(finalArrivalMs, maxOf(startOf(last), last.cellStart + maxOf(0.0, last.lastCentre)))
         }
         return knots
     }
