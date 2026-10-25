@@ -374,5 +374,7 @@ offset, the karaoke edge and the line choice in a pure planner (`LyricsFramePlan
 Positions are 1/8 px while moving and whole pixels at rest; an unchanged frame is not drawn and an idle overlay requests
 no frames. Differences from Windows: the clock is anchored on `System.nanoTime()` and carried on by the render thread
 (Windows asks the audio engine for `position_at`), the shadow and outline are baked into the textures like the cached
-Windows surfaces, and the Views renderer stays as an automatic fallback (and a hidden switch) until the GL path is
-validated on the device.
+Windows surfaces, and the Views renderer was deleted after the GL path was validated on the phone (no fallback: if GL cannot work the overlay shows nothing
+until it is switched off and on again). The Windows window follows the same panel rule (ADR 0032, 2026-10-25 amendment): the room above
+the lyric area comes from the main row alone, the saved position is the lyric area's top-left, and the renderer places the first row
+in a slot derived from the chosen font only (`floating_top_room_px`, `floating_area_height_px`, `floating_main_slot_css`).
