@@ -138,6 +138,20 @@ const stripGlideCases = [
     { startMs: 40000, cellStart: 640, anchor: 7, endMs: 41000, lastCentre: 100 },
   ],
   [{ startMs: 500, cellStart: 0, anchor: 4, endMs: 900, lastCentre: 4 }],
+  // A line ending 10 ms before the next starts (20 px glyphs, 40 px gap): the gap would be faster than the line, so its
+  // end knot is skipped and the strip glides from its start straight to the next start.
+  [
+    { startMs: 207810, cellStart: 0, anchor: 10, endMs: null, lastCentre: 0 },
+    { startMs: 212700, cellStart: 280, anchor: 10, endMs: 215180, lastCentre: 130 },
+    { startMs: 215190, cellStart: 460, anchor: 10, endMs: null, lastCentre: 0 },
+    { startMs: 231300, cellStart: 680, anchor: 10, endMs: null, lastCentre: 0 },
+  ],
+  // A long pause keeps the end knot; a gap exactly as fast as the line keeps it too.
+  [
+    { startMs: 1000, cellStart: 0, anchor: 10, endMs: 2000, lastCentre: 110 },
+    { startMs: 30000, cellStart: 140, anchor: 10, endMs: 31000, lastCentre: 110 },
+    { startMs: 32000, cellStart: 340, anchor: 10, endMs: null, lastCentre: 0 },
+  ],
 ];
 const stripGlide = stripGlideCases.map((lines) => {
   const knots = wordStripKnots(lines);

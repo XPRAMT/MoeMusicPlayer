@@ -240,10 +240,14 @@ pub struct KnotLine {
 
 /// The continuous strip's word glide knots `(lyrics ms, strip px on the lyric area's centre)` (`wordStripKnots` in JS).
 /// Individual word times are ignored: a line has its start (first glyph's centre on the area's centre) and, when it
-/// has word times, its end (the last word's end, last glyph's centre), which is skipped for a one-glyph line or an end
-/// not after the start. Times strictly increase (a later knot at or before an earlier one's time replaces it, so the
-/// later line's start wins an overlap) and values never decrease.
+/// has word times, its end (the last word's end, last glyph's centre), which is skipped for a one-glyph line, an end
+/// not after the start, or when the gap from the end to the next line's start would move faster than the line itself
+/// (the strip then glides from this line's start straight to the next start; the last line keeps its end). Times
+/// strictly increase (a later knot at or before an earlier one's time replaces it, so the later line's start wins an
+/// overlap) and values never decrease.
 pub fn word_strip_knots(lines: &[KnotLine]) -> Vec<(f64, f64)> {
+    let start_of = |line: &KnotLine| line.cell_start + line.anchor.max(0.0);
+    let has_start = |line: &KnotLine| line.start_ms.is_finite() && start_of(line).is_finite();
     let mut knots: Vec<(f64, f64)> = Vec::with_capacity(lines.len() * 2);
     let mut push = |t: f64, v: f64| {
         if !t.is_finite() || !v.is_finite() {
@@ -255,13 +259,26 @@ pub fn word_strip_knots(lines: &[KnotLine]) -> Vec<(f64, f64)> {
         let v = knots.last().map_or(v, |k| v.max(k.1));
         knots.push((t, v));
     };
-    for line in lines {
-        let start = line.cell_start + line.anchor.max(0.0);
+    for (i, line) in lines.iter().enumerate() {
+        let start = start_of(line);
         push(line.start_ms, start);
         if let Some(end) = line.end_ms {
             let value = line.cell_start + line.last_centre.max(0.0);
             if end > line.start_ms && value > start {
-                push(end, value);
+                // The gap to the next start is faster than the line when (next - value) / (next_ms - end) >
+                // (value - start) / (end - start); cross-multiplied (both spans positive) so every language agrees.
+                let faster_gap = lines[i + 1..]
+                    .iter()
+                    .find(|l| has_start(l))
+                    .is_some_and(|next| {
+                        let gap_ms = next.start_ms - end;
+                        gap_ms <= 0.0
+                            || (start_of(next) - value) * (end - line.start_ms)
+                                > (value - start) * gap_ms
+                    });
+                if !faster_gap {
+                    push(end, value);
+                }
             }
         }
     }
@@ -489,6 +506,61 @@ mod tests {
         ]);
         assert_eq!(knots, vec![(1000.0, 10.0), (2500.0, 204.0)]);
         assert!(word_strip_knots(&[]).is_empty());
+    }
+
+    /// 拿出下一颗软糖 ends 10 ms before the next line starts (20 px glyphs, 40 px gap): the end knot would force a 60 px
+    /// move in 10 ms, so it is skipped and every 120 Hz frame around the boundary moves only a little.
+    #[test]
+    fn an_end_knot_is_skipped_when_the_gap_is_faster_than_the_line() {
+        let lines = [
+            line(207810.0, 0.0, 10.0, None, 0.0),
+            line(212700.0, 280.0, 10.0, Some(215180.0), 130.0),
+            line(215190.0, 460.0, 10.0, None, 0.0),
+            line(231300.0, 680.0, 10.0, None, 0.0),
+        ];
+        let knots = word_strip_knots(&lines);
+        assert_eq!(
+            knots,
+            vec![
+                (207810.0, 10.0),
+                (212700.0, 290.0),
+                (215190.0, 470.0),
+                (231300.0, 690.0)
+            ]
+        );
+        let frame = 1000.0 / 120.0;
+        let mut t = 214000.0;
+        let mut prev = knot_value(&knots, t);
+        let mut largest: f64 = 0.0;
+        while t < 216500.0 {
+            t += frame;
+            let now = knot_value(&knots, t);
+            largest = largest.max(now - prev);
+            prev = now;
+        }
+        assert!(largest < 1.5, "largest frame step {largest} px");
+    }
+
+    /// A long pause after a line keeps its end knot; a gap exactly as fast as the line keeps it too; the last line
+    /// keeps its end.
+    #[test]
+    fn an_end_knot_stays_for_a_slow_or_equally_fast_gap() {
+        let knots = word_strip_knots(&[
+            line(1000.0, 0.0, 10.0, Some(2000.0), 110.0),
+            line(30000.0, 140.0, 10.0, Some(31000.0), 110.0),
+            line(32000.0, 340.0, 10.0, Some(33000.0), 60.0),
+        ]);
+        assert_eq!(
+            knots,
+            vec![
+                (1000.0, 10.0),
+                (2000.0, 110.0),
+                (30000.0, 150.0),
+                (31000.0, 250.0),
+                (32000.0, 350.0),
+                (33000.0, 400.0)
+            ]
+        );
     }
 
     /// The curve hits every knot, never goes backwards, and its speed is continuous (also across line boundaries and

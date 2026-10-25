@@ -202,9 +202,11 @@ export function karaokeGlide(spans, words) {
 /**
  * The continuous strip's word glide knots `[lyrics ms, strip px on the lyric area's centre]`. Individual word times are
  * ignored: a line has its start (first glyph's centre `cellStart + anchor` on the centre) and, when it has word times,
- * its end (`endMs`, the last word's end; last glyph's centre `cellStart + lastCentre`), skipped for a one-glyph line or
- * an end not after the start. Times strictly increase (a later knot at or before an earlier one's time replaces it, so
- * the later line's start wins an overlap) and values never decrease.
+ * its end (`endMs`, the last word's end; last glyph's centre `cellStart + lastCentre`), skipped for a one-glyph line,
+ * an end not after the start, or when the gap from the end to the next line's start would move faster than the line
+ * itself (the strip then glides from this line's start straight to the next start; the last line keeps its end). Times
+ * strictly increase (a later knot at or before an earlier one's time replaces it, so the later line's start wins an
+ * overlap) and values never decrease.
  * @param {{ startMs: number, cellStart: number, anchor?: number, endMs?: number | null, lastCentre?: number }[]} lines
  * @returns {[number, number][]}
  */
@@ -216,14 +218,23 @@ export function wordStripKnots(lines) {
     while (knots.length > 0 && knots[knots.length - 1][0] >= t) knots.pop();
     knots.push([t, knots.length > 0 ? Math.max(v, knots[knots.length - 1][1]) : v]);
   };
-  for (const line of lines) {
-    const start = line.cellStart + Math.max(0, line.anchor ?? 0);
+  const startOf = (/** @type {typeof lines[number]} */ line) => line.cellStart + Math.max(0, line.anchor ?? 0);
+  lines.forEach((line, i) => {
+    const start = startOf(line);
     push(line.startMs, start);
-    if (line.endMs != null) {
-      const value = line.cellStart + Math.max(0, line.lastCentre ?? 0);
-      if (line.endMs > line.startMs && value > start) push(line.endMs, value);
+    if (line.endMs == null) return;
+    const end = line.endMs;
+    const value = line.cellStart + Math.max(0, line.lastCentre ?? 0);
+    if (!(end > line.startMs && value > start)) return;
+    // The gap to the next start is faster than the line when (next - value) / (nextMs - end) >
+    // (value - start) / (end - start); cross-multiplied (both spans positive) so every language agrees.
+    const next = lines.slice(i + 1).find((l) => Number.isFinite(l.startMs) && Number.isFinite(startOf(l)));
+    if (next) {
+      const gapMs = next.startMs - end;
+      if (gapMs <= 0 || (startOf(next) - value) * (end - line.startMs) > (value - start) * gapMs) return;
     }
-  }
+    push(end, value);
+  });
   return knots;
 }
 

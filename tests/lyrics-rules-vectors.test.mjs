@@ -113,3 +113,29 @@ test('the strip word glide only knows line starts and last-word ends: exact, mon
   assert.equal(nextKnotBreak(knots, 9000), null);
   assert.deepEqual(wordStripKnots([]), []);
 });
+
+test('a word-timed line ending just before the next starts glides straight on instead of jumping', async () => {
+  const { wordStripKnots, knotValue } = await import('../src/lib/lyrics-glide.js');
+  // 拿出下一颗软糖 ends 10 ms before the next line (20 px glyphs, 40 px gap): its end knot is skipped.
+  const knots = wordStripKnots([
+    { startMs: 207810, cellStart: 0, anchor: 10, endMs: null },
+    { startMs: 212700, cellStart: 280, anchor: 10, endMs: 215180, lastCentre: 130 },
+    { startMs: 215190, cellStart: 460, anchor: 10, endMs: null },
+    { startMs: 231300, cellStart: 680, anchor: 10, endMs: null },
+  ]);
+  assert.deepEqual(knots, [[207810, 10], [212700, 290], [215190, 470], [231300, 690]]);
+  let largest = 0;
+  let prev = knotValue(knots, 214000);
+  for (let t = 214000 + 1000 / 120; t < 216500; t += 1000 / 120) {
+    const now = knotValue(knots, t);
+    largest = Math.max(largest, now - prev);
+    prev = now;
+  }
+  assert.ok(largest < 1.5, `largest frame step ${largest} px`);
+  // A long pause, and a gap exactly as fast as the line, keep the end knot; so does the last line.
+  assert.deepEqual(wordStripKnots([
+    { startMs: 1000, cellStart: 0, anchor: 10, endMs: 2000, lastCentre: 110 },
+    { startMs: 30000, cellStart: 140, anchor: 10, endMs: 31000, lastCentre: 110 },
+    { startMs: 32000, cellStart: 340, anchor: 10, endMs: 33000, lastCentre: 60 },
+  ]), [[1000, 10], [2000, 110], [30000, 150], [31000, 250], [32000, 350], [33000, 400]]);
+});

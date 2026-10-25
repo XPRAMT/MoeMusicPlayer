@@ -180,14 +180,24 @@ internal object WordLyricsRules {
             while (knots.isNotEmpty() && knots[knots.size - 1].first >= t) knots.removeAt(knots.size - 1)
             knots.add(t to if (knots.isNotEmpty()) maxOf(v, knots[knots.size - 1].second) else v)
         }
-        for (line in lines) {
-            val start = line.cellStart + maxOf(0.0, line.anchor)
+        fun startOf(line: KnotLine) = line.cellStart + maxOf(0.0, line.anchor)
+        for ((i, line) in lines.withIndex()) {
+            val start = startOf(line)
             push(line.startMs, start)
-            val end = line.endMs
-            if (end != null) {
-                val value = line.cellStart + maxOf(0.0, line.lastCentre)
-                if (end > line.startMs && value > start) push(end, value)
+            val end = line.endMs ?: continue
+            val value = line.cellStart + maxOf(0.0, line.lastCentre)
+            if (!(end > line.startMs && value > start)) continue
+            // The gap to the next start is faster than the line when (next - value) / (nextMs - end) >
+            // (value - start) / (end - start); cross-multiplied (both spans positive) so every language agrees.
+            var next: KnotLine? = null
+            for (j in i + 1 until lines.size) {
+                if (lines[j].startMs.isFinite() && startOf(lines[j]).isFinite()) { next = lines[j]; break }
             }
+            if (next != null) {
+                val gapMs = next.startMs - end
+                if (gapMs <= 0.0 || (startOf(next) - value) * (end - line.startMs) > (value - start) * gapMs) continue
+            }
+            push(end, value)
         }
         return knots
     }
