@@ -1,8 +1,10 @@
 // Now-playing cover overlay canvas (ADR 0036): pure geometry for drawing the cover into a <canvas> that sits above the
 // cover stage. Two uses, one element: (1) the reset glide animates a copy drawn at the screen-resolution thumbnail size
 // (the cover's on-screen size at zoom 1, in device pixels) instead of the stage itself; (2) after a zoom/pan settles,
-// only the visible part of the cover is drawn at device resolution from the source-resolution image, so the zoomed
-// cover is sharp without a giant compositor layer. `cover-zoom.js` owns the element; everything here is testable math.
+// the visible part of the cover plus a bounded margin is drawn at device resolution from the source-resolution image, so
+// the zoomed cover is sharp without a giant compositor layer; during later input the drawn canvas follows the stage by a
+// compositor transform (`overlayFollowTransform`) until the next settled draw. `cover-zoom.js` owns the element;
+// everything here is testable math.
 
 /** @typedef {{ left: number, top: number, width: number, height: number }} Rect */
 
@@ -86,6 +88,74 @@ export function coverDrawPlan({ visual, scale, naturalWidth, naturalHeight, blee
       height: visual.height * ratio,
     },
   };
+}
+
+/** The settled draw covers at most this many times the visible area's device pixels (visible part + margin). */
+export const COVER_OVERLAY_MARGIN_PIXEL_RATIO = 2;
+/** The overlay canvas backing never exceeds this many device pixels on a side (unless the visible part alone does). */
+export const COVER_OVERLAY_MAX_DIMENSION = 4096;
+
+/**
+ * The client rect the settled overlay is drawn for: the visible part of the cover grown by a margin, so content that a
+ * pan or zoom-out brings into view is already sharp. The margin is the same on every side, clamped to the cover's own
+ * painted rect (a side that hits the cover edge stops, the others keep growing), and grows only while the region stays
+ * within `pixelRatio` times the visible area and `maxDimension` device pixels per side.
+ * @param {{ visible: Rect, cover: Rect, dpr: number, pixelRatio?: number, maxDimension?: number }} input @returns {Rect}
+ */
+export function overlayDrawRegion({ visible, cover, dpr, pixelRatio = COVER_OVERLAY_MARGIN_PIXEL_RATIO, maxDimension = COVER_OVERLAY_MAX_DIMENSION }) {
+  const base = intersectRects(visible, cover) ?? visible;
+  const ratio = dpr > 0 ? dpr : 1;
+  const maxArea = base.width * base.height * Math.max(1, pixelRatio);
+  const maxWidth = Math.max(base.width, maxDimension / ratio);
+  const maxHeight = Math.max(base.height, maxDimension / ratio);
+  /** @param {number} m */
+  const grow = (m) => intersectRects({ left: base.left - m, top: base.top - m, width: base.width + 2 * m, height: base.height + 2 * m }, cover) ?? base;
+  /** @param {Rect} r */
+  const fits = (r) => r.width * r.height <= maxArea * (1 + 1e-9) && r.width <= maxWidth + 1e-9 && r.height <= maxHeight + 1e-9;
+  const limit = Math.max(
+    base.left - cover.left,
+    base.top - cover.top,
+    cover.left + cover.width - (base.left + base.width),
+    cover.top + cover.height - (base.top + base.height),
+  );
+  if (!(limit > 0)) return base;
+  const whole = grow(limit);
+  if (fits(whole)) return whole;
+  let lo = 0;
+  let hi = limit;
+  for (let i = 0; i < 40; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (fits(grow(mid))) lo = mid; else hi = mid;
+  }
+  return grow(lo);
+}
+
+/**
+ * The compositor transform (transform-origin: centre of the canvas box) that keeps an overlay drawn for the stage at
+ * `drawnVisual` (its painted client rect then) aligned with the stage now painted at `visual`. `drawnCanvas` is the
+ * canvas's client rect when it was drawn; `paneShift` is how far its containing pane has moved since (the canvas is
+ * positioned in the pane, so it moves with it). The cover content is mapped by the same translate + scale as the stage:
+ * p' = visual.left + (p - drawnVisual.left) * visual.width / drawnVisual.width.
+ * @param {Rect} drawnVisual @param {Rect} drawnCanvas @param {Rect} visual @param {{ x: number, y: number }} paneShift
+ * @returns {{ x: number, y: number, scaleX: number, scaleY: number }}
+ */
+export function overlayFollowTransform(drawnVisual, drawnCanvas, visual, paneShift) {
+  const scaleX = drawnVisual.width > 0 ? visual.width / drawnVisual.width : 1;
+  const scaleY = drawnVisual.height > 0 ? visual.height / drawnVisual.height : 1;
+  const drawnCentreX = drawnCanvas.left + drawnCanvas.width / 2;
+  const drawnCentreY = drawnCanvas.top + drawnCanvas.height / 2;
+  return {
+    x: visual.left - (drawnCentreX + paneShift.x) + scaleX * (drawnCentreX - drawnVisual.left),
+    y: visual.top - (drawnCentreY + paneShift.y) + scaleY * (drawnCentreY - drawnVisual.top),
+    scaleX,
+    scaleY,
+  };
+}
+
+/** CSS for `overlayFollowTransform` ('' at identity). @param {{ x: number, y: number, scaleX: number, scaleY: number }} t */
+export function overlayTransformCss(t) {
+  if (Math.abs(t.x) < 0.005 && Math.abs(t.y) < 0.005 && Math.abs(t.scaleX - 1) < 1e-6 && Math.abs(t.scaleY - 1) < 1e-6) return '';
+  return `translate(${t.x.toFixed(2)}px, ${t.y.toFixed(2)}px) scale(${t.scaleX.toFixed(5)}, ${t.scaleY.toFixed(5)})`;
 }
 
 /**

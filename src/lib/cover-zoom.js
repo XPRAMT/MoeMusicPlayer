@@ -3,7 +3,7 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-reserve in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
-import { coverDrawPlan, coverOverlayWanted, intersectRects, snapRectToDevicePixels } from './cover-overlay.js';
+import { coverDrawPlan, coverOverlayWanted, intersectRects, overlayDrawRegion, overlayFollowTransform, overlayTransformCss, snapRectToDevicePixels } from './cover-overlay.js';
 
 export const COVER_ZOOM_MIN = 0.5;
 export const COVER_ZOOM_REST = 1;
@@ -14,8 +14,8 @@ export const COVER_DOUBLE_TAP_SLOP_PX = 24;
 export const COVER_PAN_SLOP_PX = 6;
 /** No zoom input for this long = the zoom gesture is over: the lyrics re-wrap and re-centre once. */
 export const COVER_ZOOM_SETTLE_MS = 50;
-/** No input for this long = the cover has settled: the overlay canvas draws the visible part sharp (ADR 0036). */
-export const COVER_LAYER_IDLE_MS = 200;
+/** No input for this long = the cover has settled: the overlay canvas is redrawn sharp at the new scale (ADR 0036). */
+export const COVER_LAYER_IDLE_MS = 50;
 /** The double-click / double-tap reset glide. */
 export const COVER_RESET_MS = 200;
 const COVER_WHEEL_ANCHOR_SLOP_PX = 2;
@@ -96,6 +96,17 @@ export function coverZoomFromFractions(saved, width, height) {
 export function coverZoomTransform(state) {
   if (state.scale === COVER_ZOOM_REST) return '';
   return `translate(${state.x.toFixed(2)}px, ${state.y.toFixed(2)}px) scale(${state.scale.toFixed(4)})`;
+}
+
+/**
+ * The stage's painted client rect for `state`, from a geometry read in the same frame (its layout box scaled around
+ * the centre and panned): what getBoundingClientRect would return after the write, without reading it.
+ * @param {ReturnType<typeof coverGeometry>} geometry @param {CoverZoomState} state
+ */
+export function coverVisualRect(geometry, state) {
+  const width = geometry.width * state.scale;
+  const height = geometry.height * state.scale;
+  return { left: geometry.layoutX + state.x - width / 2, top: geometry.layoutY + state.y - height / 2, width, height };
 }
 
 /**
@@ -201,8 +212,10 @@ export function createIdleGate(idleMs, onChange, timers = { set: (fn, ms) => set
  * Layers (ADR 0036): the stage is a compositor layer for its whole life (app.css: permanent `will-change: transform`
  * and `z-index`), so no gesture or animation ever creates or tears down a layer. A will-change layer keeps the raster
  * scale it was promoted at, so the action adds one persistent overlay <canvas> next to the stage (in the artwork pane):
- * after the cover settles at a scale other than the promote-time one, the visible part is drawn into it at device
- * resolution from the source-resolution image; the reset glide animates a copy drawn into the same canvas at the
+ * after the cover settles at a scale other than the promote-time one, the visible part plus a bounded margin is drawn
+ * into it at device resolution from the source-resolution image. Input never hides it: during a pan, zoom out or zoom
+ * in it follows the stage by a compositor transform written together with the stage's own (frame / repin / resize),
+ * and is redrawn sharp at the new scale once input stops for COVER_LAYER_IDLE_MS; the reset glide animates a copy drawn into the same canvas at the
  * screen-resolution thumbnail size instead of animating the stage (a running transform animation makes Chromium pick
  * the raster scale from the animation's largest scale, which on a phone is a ~3000 px tiled layer that is not ready in
  * time; a canvas is a texture, never tiled). The overlay is only shown/hidden (opacity) and the stage's image only
@@ -237,6 +250,8 @@ export function coverZoom(node, params) {
   let dispatchingCancel = false;
   let resetting = false;
   let frameId = 0;
+  /** The stage's style attribute as this action last wrote it: the change observer ignores these writes. @type {string | null} */
+  let ownStyle = null;
   /** The scale the stage's layer was promoted (first rasterised) at: when the action starts and each time the page opens. */
   let promotedScale = 1;
   let wasActive = params.enabled !== false;
@@ -247,11 +262,11 @@ export function coverZoom(node, params) {
 
   const overlay = createOverlayCanvas(node);
 
-  // Input activity: on at the first input of a gesture (the overlay is hidden, the transformed stage is what moves),
-  // off COVER_LAYER_IDLE_MS after the last one (the settled cover is drawn sharp into the overlay).
+  // Input activity: on at the first input of a gesture, off COVER_LAYER_IDLE_MS after the last one, when the settled
+  // cover is redrawn sharp into the overlay. Input never hides the overlay: while it is on, an overlay that is shown
+  // follows the stage by a compositor transform (`followOverlay`); without one the stage itself shows.
   const layerGate = createIdleGate(COVER_LAYER_IDLE_MS, (on) => {
-    if (on) hideOverlay();
-    else drawSettled();
+    if (!on) drawSettled();
   });
   const zoomGate = createIdleGate(COVER_ZOOM_SETTLE_MS, (on) => {
     if (!on) wheelAnchor = null;
@@ -263,6 +278,7 @@ export function coverZoom(node, params) {
     state = next;
     node.style.transition = animate && !reduced() ? `transform ${COVER_RESET_MS}ms ease` : 'none';
     node.style.transform = coverZoomTransform(state);
+    ownStyle = node.getAttribute?.('style') ?? null;
     // A data attribute, not a class: Svelte rewrites the class list of this element when `has-artwork` toggles
     // (track change), which would drop a class added from here.
     if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
@@ -298,18 +314,37 @@ export function coverZoom(node, params) {
     const plan = coverDrawPlan({ visual, scale, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight, bleed: COVER_IMAGE_BLEED_PX, visible: snapped, dpr });
     if (!plan) return false;
     const radius = parseFloat(getComputedStyle(node).borderTopLeftRadius) || 0;
-    if (!overlay.draw(image, plan, snapped, radius * scale * dpr)) return false;
+    if (!overlay.draw(image, plan, snapped, radius * scale * dpr, visual)) return false;
     if (hideStage) node.dataset.coverOverlay = '';
     else delete node.dataset.coverOverlay;
     return true;
   }
 
-  /** The settled cover (no input for COVER_LAYER_IDLE_MS): draw only its visible part, sharp. */
+  /** The settled cover (no input for COVER_LAYER_IDLE_MS): draw its visible part plus a bounded margin, sharp, replacing
+   *  whatever the overlay showed (one task: never a frame without either). At the promote-time scale none is needed. */
   function drawSettled() {
-    if (destroyed || resetting || layerGate.active || !active() || !coverOverlayWanted(state.scale, promotedScale)) return;
+    if (destroyed || resetting || layerGate.active || !active()) return;
+    if (!coverOverlayWanted(state.scale, promotedScale)) { hideOverlay(); return; }
     const visual = node.getBoundingClientRect();
     const visible = visual.width > 0 ? clipToAncestors(node, visual) : null;
-    if (!visible || !drawOverlay(visual, state.scale, visible, false)) hideOverlay();
+    const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1;
+    const region = visible ? overlayDrawRegion({ visible, cover: visual, dpr }) : null;
+    if (!region || !drawOverlay(visual, state.scale, region, false)) hideOverlay();
+  }
+
+  /** Keep a shown overlay on the stage now painted at `visual`: compositor transform only (no redraw). `paneBox` is the
+   *  pane's client rect read at the same clean point as the stage's. @param {Rect} visual @param {Rect} paneBox */
+  function followOverlay(visual, paneBox) {
+    if (overlay?.following) overlay.follow(visual, paneBox);
+  }
+
+  /** The cover or its pane was resized (e.g. the squeeze while zooming, a window resize). ResizeObserver runs after
+   *  layout, before paint, so both reads are clean: a shown overlay is re-aligned in this frame, then redrawn once quiet. */
+  function resized() {
+    if (destroyed || resetting) return;
+    if (!overlay?.following) { invalidateOverlay(); return; }
+    followOverlay(node.getBoundingClientRect(), overlay.paneRect());
+    layerGate.poke();
   }
 
   /** Something outside the gesture moved or resized the cover (window resize, swipe feedback, new image): fall back to
@@ -319,7 +354,7 @@ export function coverZoom(node, params) {
     hideOverlay();
     if (coverOverlayWanted(state.scale, promotedScale)) layerGate.poke();
   }
-  const overlayObservers = observeCoverChanges(node, invalidateOverlay);
+  const overlayObservers = observeCoverChanges(node, invalidateOverlay, resized, (record) => record.target === node && record.attributeName === 'style' && (node.getAttribute?.('style') ?? null) === ownStyle);
 
   function schedule() {
     if (frameId) return;
@@ -332,6 +367,8 @@ export function coverZoom(node, params) {
     // The only layout read of the frame: first, so nothing written yet can have dirtied the layout.
     const geo = coverGeometry(node.getBoundingClientRect(), state);
     size = { width: geo.width, height: geo.height };
+    // Only with a shown overlay: the pane is read at the same clean point (no forced layout).
+    const paneBox = overlay?.following ? overlay.paneRect() : null;
     /** @type {CoverZoomState | null} */
     let next = null;
     /** @type {{ u: { x: number, y: number }, x: number, y: number } | null} */
@@ -358,6 +395,8 @@ export function coverZoom(node, params) {
     }
     const scaleChanged = next !== null && next.scale !== state.scale;
     if (next && (scaleChanged || Math.abs(next.x - state.x) >= 0.01 || Math.abs(next.y - state.y) >= 0.01)) apply(next, false);
+    // The overlay moves with the stage in the same write (pan, zoom out, zoom in: a sub-region of what was drawn sharp).
+    if (paneBox) followOverlay(coverVisualRect(geo, state), paneBox);
     // The scale change moves the layout (squeeze) after this write: re-pin the anchor before this frame is painted.
     if (scaleChanged && pin) repin(pin);
   }
@@ -371,8 +410,11 @@ export function coverZoom(node, params) {
       if (destroyed || token !== repinToken || resetting || !active()) return;
       const geo = coverGeometry(node.getBoundingClientRect(), state);
       size = { width: geo.width, height: geo.height };
+      const paneBox = overlay?.following ? overlay.paneRect() : null; // layout is clean again after the read above
       const next = anchoredZoom(geo, pin.u, pin, state.scale);
       if (Math.abs(next.x - state.x) >= 0.01 || Math.abs(next.y - state.y) >= 0.01) apply(next, false);
+      // Same task as the stage's compensating transform: the overlay never disagrees with the squeezed layout.
+      if (paneBox) followOverlay(coverVisualRect(geo, state), paneBox);
     }, () => {});
   }
 
@@ -462,7 +504,8 @@ export function coverZoom(node, params) {
   function down(event) {
     if (!active() || resetting) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    // Any finger or button on the cover may move it (pinch, pan, swipe feedback): the stage shows until all are up.
+    // Any finger or button on the cover may move it (pinch, pan): no settled redraw until all are up. A shown overlay
+    // stays and follows the stage.
     layerGate.hold();
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
@@ -630,21 +673,23 @@ function clipToAncestors(node, rect) {
 }
 
 /**
- * Watch for changes the gesture did not make (the owner's size/style writes, swipe feedback classes, a new image source,
- * a window resize) and report them; MutationObserver and ResizeObserver callbacks run before the next paint.
- * @param {HTMLElement} node @param {() => void} onChange
+ * Watch for changes the gesture did not make (the owner's style writes, swipe feedback classes, a new image source, a
+ * window resize: `onChange`) and for resizes of the cover or its pane (`onResize`, which may come from the zoom's own
+ * squeeze); MutationObserver and ResizeObserver callbacks run before the next paint. Mutation records for which
+ * `isOwn` is true (the action's own transform writes) are ignored.
+ * @param {HTMLElement} node @param {() => void} onChange @param {() => void} onResize @param {(record: MutationRecord) => boolean} isOwn
  */
-function observeCoverChanges(node, onChange) {
+function observeCoverChanges(node, onChange, onResize, isOwn) {
   /** @type {Array<() => void>} */
   const stops = [];
   if (typeof MutationObserver === 'function') {
-    const mutations = new MutationObserver(onChange);
+    const mutations = new MutationObserver((records) => { if (records.some((record) => !isOwn(record))) onChange(); });
     mutations.observe(node, { attributes: true, attributeFilter: ['style', 'class', 'src'], subtree: true });
     stops.push(() => mutations.disconnect());
   }
   if (typeof ResizeObserver === 'function') {
     let first = true;
-    const sizes = new ResizeObserver(() => { if (first) { first = false; return; } onChange(); });
+    const sizes = new ResizeObserver(() => { if (first) { first = false; return; } onResize(); });
     sizes.observe(node);
     if (node.parentElement) sizes.observe(node.parentElement);
     stops.push(() => sizes.disconnect());
@@ -663,7 +708,8 @@ function observeCoverChanges(node, onChange) {
 /**
  * The persistent overlay canvas, appended to the stage's parent (the artwork pane, `position: relative` in app.css).
  * It keeps its compositor layer for the stage's life (app.css `.cover-stage-overlay`); showing and hiding only changes
- * its opacity, and its backing store shrinks to 1x1 while hidden.
+ * its opacity, and its backing store shrinks to 1x1 while hidden. It remembers where it was drawn (the stage's painted
+ * rect, its own client rect, the pane's position) so `follow` can keep it on a moving stage with a transform only.
  * @param {HTMLElement} node
  */
 function createOverlayCanvas(node) {
@@ -677,14 +723,25 @@ function createOverlayCanvas(node) {
   canvas.height = 1;
   parent.appendChild(canvas);
   let shown = false;
+  /** @type {{ visual: Rect, canvas: Rect, pane: { left: number, top: number } } | null} */
+  let drawnAt = null;
   return {
     element: canvas,
     get shown() { return shown; },
+    /** Shown with a drawing that can follow the stage. */
+    get following() { return shown && drawnAt !== null; },
+    paneRect() { return parent.getBoundingClientRect(); },
+    /** @param {Rect} visual the stage's painted client rect now @param {Rect} paneBox the pane's client rect now */
+    follow(visual, paneBox) {
+      if (!shown || !drawnAt) return;
+      const t = overlayFollowTransform(drawnAt.visual, drawnAt.canvas, visual, { x: paneBox.left - drawnAt.pane.left, y: paneBox.top - drawnAt.pane.top });
+      canvas.style.transform = overlayTransformCss(t);
+    },
     /**
      * @param {HTMLImageElement} image @param {NonNullable<ReturnType<typeof coverDrawPlan>>} plan @param {Rect} visible
-     * @param {number} radius the rounded clip radius in canvas px
+     * @param {number} radius the rounded clip radius in canvas px @param {Rect} visual the stage's painted client rect
      */
-    draw(image, plan, visible, radius) {
+    draw(image, plan, visible, radius, visual) {
       const context = canvas.getContext('2d');
       if (!context) return false;
       const paneBox = parent.getBoundingClientRect();
@@ -694,6 +751,8 @@ function createOverlayCanvas(node) {
       canvas.style.top = `${visible.top - paneBox.top - parent.clientTop + parent.scrollTop}px`;
       canvas.style.width = `${visible.width}px`;
       canvas.style.height = `${visible.height}px`;
+      canvas.style.transform = '';
+      drawnAt = { visual: { left: visual.left, top: visual.top, width: visual.width, height: visual.height }, canvas: { ...visible }, pane: { left: paneBox.left, top: paneBox.top } };
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = 'high';
       context.save();
@@ -711,6 +770,8 @@ function createOverlayCanvas(node) {
     },
     hide() {
       canvas.style.opacity = '0';
+      canvas.style.transform = '';
+      drawnAt = null;
       canvas.width = 1;
       canvas.height = 1;
       shown = false;

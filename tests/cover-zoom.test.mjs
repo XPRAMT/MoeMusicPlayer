@@ -441,30 +441,217 @@ test('reset with artwork: the copy canvas glides (drawn at the thumbnail size be
   }
 });
 
-test('a settled zoom draws only the visible part into the overlay; the next input hides it at once', async () => {
+/** Where the transformed canvas is painted (transform-origin: centre), from its pane position and inline transform. */
+function paintedCanvasRect(canvas, paneBox) {
+  const left = paneBox.left + parseFloat(canvas.style.left);
+  const top = paneBox.top + parseFloat(canvas.style.top);
+  const width = parseFloat(canvas.style.width);
+  const height = parseFloat(canvas.style.height);
+  const match = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\((-?[\d.]+), (-?[\d.]+)\)/.exec(canvas.style.transform || '');
+  const [x, y, sx, sy] = match ? match.slice(1).map(Number) : [0, 0, 1, 1];
+  const cx = left + width / 2 + x;
+  const cy = top + height / 2 + y;
+  return { left: cx - (width * sx) / 2, top: cy - (height * sy) / 2, width: width * sx, height: height * sy };
+}
+
+/** The client rect a content region drawn for the stage at `drawnVisual` must occupy when the stage is at `visual`. */
+function mappedRect(rect, drawnVisual, visual) {
+  const s = visual.width / drawnVisual.width;
+  return { left: visual.left + (rect.left - drawnVisual.left) * s, top: visual.top + (rect.top - drawnVisual.top) * s, width: rect.width * s, height: rect.height * s };
+}
+
+function assertRectClose(actual, expected, message, epsilon = 0.02) {
+  for (const key of ['left', 'top', 'width', 'height']) {
+    assert.ok(Math.abs(actual[key] - expected[key]) < epsilon, `${message}: ${key} ${actual[key]} vs ${expected[key]}`);
+  }
+}
+
+test('overlay follow: a pan moves the drawn canvas by the same delta, no scale', async () => {
+  const { overlayFollowTransform, overlayTransformCss } = await import('../src/lib/cover-overlay.js');
+  const drawnVisual = { left: 0, top: 0, width: 600, height: 600 };
+  const drawnCanvas = { left: 100, top: 0, width: 400, height: 400 };
+  const panned = { ...drawnVisual, left: 30, top: -20 };
+  assert.deepEqual(overlayFollowTransform(drawnVisual, drawnCanvas, panned, { x: 0, y: 0 }), { x: 30, y: -20, scaleX: 1, scaleY: 1 });
+  // The pane (and the canvas with it) moved by -12 px in the same frame: the transform absorbs it.
+  assert.deepEqual(overlayFollowTransform(drawnVisual, drawnCanvas, panned, { x: -12, y: 0 }), { x: 42, y: -20, scaleX: 1, scaleY: 1 });
+  assert.equal(overlayTransformCss(overlayFollowTransform(drawnVisual, drawnCanvas, drawnVisual, { x: 0, y: 0 })), '');
+  assert.equal(overlayTransformCss({ x: 30, y: -20, scaleX: 1, scaleY: 1 }), 'translate(30.00px, -20.00px) scale(1.00000, 1.00000)');
+});
+
+test('overlay follow: zooming out around an anchor keeps the anchor content point under it, also when the pane moves', async () => {
+  const { overlayFollowTransform } = await import('../src/lib/cover-overlay.js');
+  // Drawn at 3x: stage painted at (0, 0) 600x600, canvas covering (100, 50) 400x400. Zoom out to 2x at (250, 250).
+  const drawnVisual = { left: 0, top: 0, width: 600, height: 600 };
+  const drawnCanvas = { left: 100, top: 50, width: 400, height: 400 };
+  const anchor = { x: 250, y: 250 };
+  const k = 2 / 3;
+  const visual = { left: anchor.x - (anchor.x - drawnVisual.left) * k, top: anchor.y - (anchor.y - drawnVisual.top) * k, width: 400, height: 400 };
+  for (const shift of [{ x: 0, y: 0 }, { x: -40, y: 7 }]) {
+    const t = overlayFollowTransform(drawnVisual, drawnCanvas, visual, shift);
+    assert.ok(Math.abs(t.scaleX - k) < 1e-12 && Math.abs(t.scaleY - k) < 1e-12);
+    // The canvas point that was at the anchor (client, at draw time) is at the anchor again.
+    const cx = drawnCanvas.left + drawnCanvas.width / 2 + shift.x;
+    const cy = drawnCanvas.top + drawnCanvas.height / 2 + shift.y;
+    const px = cx + t.x + t.scaleX * (anchor.x + shift.x - cx);
+    const py = cy + t.y + t.scaleY * (anchor.y + shift.y - cy);
+    assert.ok(Math.abs(px - anchor.x) < 1e-9 && Math.abs(py - anchor.y) < 1e-9, JSON.stringify({ shift, px, py }));
+  }
+});
+
+test('overlay draw region: visible part plus an even margin, capped at 2x the pixels and clamped to the cover', async () => {
+  const { overlayDrawRegion, COVER_OVERLAY_MARGIN_PIXEL_RATIO } = await import('../src/lib/cover-overlay.js');
+  assert.equal(COVER_OVERLAY_MARGIN_PIXEL_RATIO, 2);
+  const cover = { left: -400, top: -400, width: 1200, height: 1200 };
+  // Centred: an even margin on every side until the area is twice the visible area.
+  const centred = overlayDrawRegion({ visible: { left: 0, top: 0, width: 400, height: 400 }, cover, dpr: 3 });
+  const side = 400 * Math.SQRT2;
+  assertRectClose(centred, { left: -(side - 400) / 2, top: -(side - 400) / 2, width: side, height: side }, 'centred', 1e-6);
+  // At the cover's left edge: that side stops, the others keep growing to the same pixel budget.
+  const edge = overlayDrawRegion({ visible: { left: -400, top: 0, width: 400, height: 400 }, cover, dpr: 3 });
+  assert.equal(edge.left, -400);
+  assert.ok(Math.abs(edge.width * edge.height - 2 * 400 * 400) < 1e-3);
+  assert.ok(Math.abs((edge.width - 400) - (edge.height - 400) / 2) < 1e-6, 'right margin = top margin = bottom margin');
+  // Small cover: the whole cover is under the budget.
+  const small = { left: -50, top: -50, width: 500, height: 500 };
+  assert.deepEqual(overlayDrawRegion({ visible: { left: 0, top: 0, width: 400, height: 400 }, cover: small, dpr: 2 }), small);
+  // Nothing outside the visible part: the visible part itself.
+  const whole = { left: 10, top: 10, width: 300, height: 300 };
+  assert.deepEqual(overlayDrawRegion({ visible: whole, cover: whole, dpr: 2 }), whole);
+  // A side never exceeds the max canvas dimension (4 x 125 = 500 device px), unless the visible part already does.
+  const capped = overlayDrawRegion({ visible: { left: 0, top: 0, width: 100, height: 100 }, cover, dpr: 4, maxDimension: 500 });
+  assert.ok(capped.width <= 125 + 1e-6 && capped.height <= 125 + 1e-6 && capped.width > 100);
+  const huge = overlayDrawRegion({ visible: { left: 0, top: 0, width: 400, height: 400 }, cover, dpr: 4, maxDimension: 500 });
+  assertRectClose(huge, { left: 0, top: 0, width: 400, height: 400 }, 'visible part over the cap', 1e-6);
+});
+
+/** A 200x200 cover whose layout centre is (layout.x, layout.y) and whose painted rect follows its inline transform. */
+function liveCover(layout) {
+  const { node, listeners } = fakeCover({ left: 0, top: 0, width: 200, height: 200 });
+  node.getBoundingClientRect = () => {
+    const match = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(node.style.transform || '');
+    const [x, y, s] = match ? match.slice(1).map(Number) : [0, 0, 1];
+    return { left: layout.x + x - 100 * s, top: layout.y + y - 100 * s, width: 200 * s, height: 200 * s };
+  };
+  node.getAttribute = (name) => (name === 'style' ? JSON.stringify(node.style) : null);
+  node.querySelector = () => ({ complete: true, naturalWidth: 1000, naturalHeight: 1000 });
+  return { node, listeners };
+}
+
+test('input never hides a shown overlay: pointer down, zoom out and zoom in follow the stage in the same task; redrawn 50 ms after', async () => {
+  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  assert.equal(COVER_LAYER_IDLE_MS, 50);
+  const { pane, drawn, canvases } = fakeOverlayDom();
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  const layout = { x: 300, y: 300 };
+  let paneBox = { left: 20, top: 50, width: 500, height: 500 };
+  pane.getBoundingClientRect = () => ({ ...paneBox });
+  let action;
+  try {
+    const { node, listeners } = liveCover(layout);
+    pane.appendChild(node);
+    let squeeze = false;
+    action = coverZoom(node, {
+      initial: { scale: 3, x: 0, y: 0 },
+      onZoom: () => { squeeze = true; },
+      // The owner commits the squeeze the scale change caused: the cover's layout and its pane move left by 30 px.
+      settleLayout: () => { if (squeeze) { squeeze = false; layout.x -= 30; paneBox = { ...paneBox, left: paneBox.left - 30 }; } return Promise.resolve(); },
+    });
+    const overlay = canvases[0];
+    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
+    assert.equal(drawn.length, 1);
+    assert.equal(overlay.style.opacity, '1');
+    assert.equal(overlay.style.transform, '');
+    const drawnVisual = node.getBoundingClientRect();
+    const drawnCanvas = paintedCanvasRect(overlay, paneBox);
+    const touch = (id, x, y) => ({ pointerId: id, clientX: x, clientY: y, pointerType: 'touch', type: 'pointerup', timeStamp: 0, cancelable: true, preventDefault() {} });
+    listeners.get('pointerdown')(touch(1, 350, 320));
+    assert.equal(overlay.style.opacity, '1', 'pointer down keeps the overlay');
+    listeners.get('pointerup')(touch(1, 350, 320));
+    const wheel = (deltaY) => listeners.get('wheel')({ deltaY, deltaMode: 0, clientX: 350, clientY: 320, preventDefault() {} });
+    for (const [deltaY, label] of [[120, 'zoom out'], [-200, 'zoom in']]) {
+      wheel(deltaY);
+      assert.equal(overlay.style.opacity, '1', `${label}: not hidden in the handler`);
+      frames.shift()();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      assert.equal(frames.length, 0, `${label}: no later frame`);
+      assert.equal(overlay.style.opacity, '1', `${label}: still shown`);
+      assert.notEqual(overlay.style.transform, '');
+      // After the squeeze and the stage's re-pin (same task): the canvas content sits exactly on the stage.
+      assertRectClose(paintedCanvasRect(overlay, paneBox), mappedRect(drawnCanvas, drawnVisual, node.getBoundingClientRect()), label);
+    }
+    assert.equal(drawn.length, 1, 'no redraw while the input runs');
+    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
+    assert.equal(drawn.length, 2, 'redrawn sharp at the new scale once quiet');
+    assert.equal(overlay.style.transform, '');
+    assert.equal(overlay.style.opacity, '1');
+  } finally {
+    action?.destroy();
+    clearOverlayDom();
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});
+
+test('without a drawn overlay (first zoom from 1x) the stage shows until the cover settles; at the promote-time scale none is drawn', async () => {
   const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
   const { pane, drawn, canvases } = fakeOverlayDom();
   const frames = [];
   globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
   globalThis.cancelAnimationFrame = () => {};
+  let action;
   try {
-    const { node, listeners } = fakeCover({ left: 0, top: 0, width: 600, height: 600 });
+    const { node, listeners } = liveCover({ x: 300, y: 300 });
     pane.appendChild(node);
-    node.querySelector = () => ({ complete: true, naturalWidth: 1000, naturalHeight: 1000 });
-    const action = coverZoom(node, { initial: { scale: 3, x: 0, y: 0 } });
+    action = coverZoom(node, { settleLayout: () => Promise.resolve() });
     const overlay = canvases[0];
-    assert.equal(overlay.style.opacity, undefined, 'nothing is drawn before the cover has been quiet');
+    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
+    assert.equal(drawn.length, 0, 'scale 1 at the promote-time scale: no overlay');
+    listeners.get('wheel')({ deltaY: -200, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
+    frames.shift()();
+    await Promise.resolve(); await Promise.resolve();
+    assert.notEqual(overlay.style.opacity, '1', 'nothing drawn yet: the stage shows');
     await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
     assert.equal(drawn.length, 1);
     assert.equal(overlay.style.opacity, '1');
-    assert.equal('coverOverlay' in node.dataset, false, 'the stage image stays painted (ready) under the sharp view');
-    // A wheel step: the overlay is hidden in the handler, before the transformed stage moves.
-    listeners.get('wheel')({ deltaY: -50, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
+    // Back at the promote-time scale (the owner drops the zoom): no overlay.
+    action.update({ settleLayout: () => Promise.resolve(), syncScale: 1 });
+    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
     assert.equal(overlay.style.opacity, '0');
-    assert.equal('coverOverlay' in node.dataset, false);
-    action.destroy();
   } finally {
+    action?.destroy();
     clearOverlayDom();
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});
+
+test('the change observer ignores the action\'s own transform writes but hides the overlay on a foreign change', async () => {
+  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const { pane, canvases } = fakeOverlayDom();
+  const observers = [];
+  globalThis.MutationObserver = class { constructor(callback) { observers.push(callback); } observe() {} disconnect() {} };
+  globalThis.requestAnimationFrame = (fn) => { fn(); return 0; };
+  globalThis.cancelAnimationFrame = () => {};
+  let action;
+  try {
+    const { node, listeners } = liveCover({ x: 300, y: 300 });
+    pane.appendChild(node);
+    action = coverZoom(node, { initial: { scale: 3, x: 0, y: 0 }, settleLayout: () => Promise.resolve() });
+    const overlay = canvases[0];
+    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
+    assert.equal(overlay.style.opacity, '1');
+    listeners.get('wheel')({ deltaY: 100, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
+    observers[0]([{ target: node, attributeName: 'style' }]);
+    assert.equal(overlay.style.opacity, '1', 'own transform write');
+    node.style.translate = '12px 0px'; // swipe feedback
+    observers[0]([{ target: node, attributeName: 'style' }]);
+    assert.equal(overlay.style.opacity, '0', 'foreign style write');
+  } finally {
+    action?.destroy();
+    clearOverlayDom();
+    delete globalThis.MutationObserver;
     delete globalThis.requestAnimationFrame;
     delete globalThis.cancelAnimationFrame;
   }
