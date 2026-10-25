@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { currentWordIndex, karaokeLineAnimation } from '../src/lib/lyrics-word-highlight.js';
+import { currentWordIndex, karaokeLineAnimation, karaokeWordsOf } from '../src/lib/lyrics-word-highlight.js';
 import { lyricsForDisplay } from '../src/lib/lyrics-traditional.js';
 
 const words = [
@@ -24,6 +24,35 @@ function easingAt(/** @type {string} */ easing, /** @type {number} */ p) {
   }
   return value;
 }
+
+test('a line with its own end but no word times sweeps as one word from its start to its end', () => {
+  const line = { startMs: 2000, endMs: 4000, text: 'Hello world', words: undefined };
+  const sweep = karaokeWordsOf(line);
+  assert.deepEqual(sweep, [{ s: 2000, e: 4000, t: 'Hello world' }]);
+  const a = karaokeLineAnimation(sweep, [110], 2500, 0);
+  assert.ok(a);
+  assert.equal(a.delayMs, -500);
+  assert.equal(a.durationMs, 2000);
+  assert.equal(easingAt(a.easing, 0), 0);
+  assert.equal(easingAt(a.easing, 1), 1);
+  assert.ok(Math.abs(easingAt(a.easing, 0.5) - 0.5) < 1e-3);
+  // The offset moves the start and the end alike.
+  const shifted = karaokeLineAnimation(sweep, [110], 2500, 300);
+  assert.equal(shifted.delayMs, -800);
+  assert.equal(shifted.durationMs, 2000);
+  // Reduced motion: the whole line lights at its start, like a one-word line.
+  const reduced = karaokeLineAnimation(sweep, [110], 2500, 0, true);
+  assert.equal(easingAt(reduced.easing, 0.001), 1);
+});
+
+test('a line without word times and without an end is not swept; word-timed lines keep their words', () => {
+  assert.deepEqual(karaokeWordsOf({ startMs: 2000, text: 'plain' }), []);
+  assert.deepEqual(karaokeWordsOf({ startMs: 2000, endMs: 2000, text: 'plain' }), []);
+  assert.deepEqual(karaokeWordsOf({ startMs: 2000, endMs: 3000, text: '' }), []);
+  assert.deepEqual(karaokeWordsOf({ startMs: null, endMs: 3000, text: 'x' }), []);
+  assert.deepEqual(karaokeWordsOf(null), []);
+  assert.equal(karaokeWordsOf({ startMs: 1000, endMs: 9000, text: '早安', words }), words);
+});
 
 test('one edge per line: from the first word start to the last word end, along the karaoke glide', () => {
   const a = karaokeLineAnimation(words, widths, 1100, 0);

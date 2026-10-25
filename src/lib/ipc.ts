@@ -681,7 +681,7 @@ export interface LyricLine {
   textTraditional?: string;
   /** `translation` in Taiwan Traditional glyphs, only when that differs. */
   translationTraditional?: string;
-  /** The end of the line when its source gives one (SRT, ASS, yrc). */
+  /** The end of the line when its source gives one (SRT, ASS, yrc, QRC, enhanced LRC closing stamp). */
   endMs?: number;
   /** Word timing (ADR 0041): start, end (ms) and text; `text` is the texts joined. Absent for line-level lyrics. */
   words?: LyricWord[];

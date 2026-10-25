@@ -47,7 +47,8 @@ pub struct LyricWord {
 #[serde(rename_all = "camelCase")]
 pub struct LyricLine {
     pub start_ms: Option<u64>,
-    /// The end of the line when the source says it (SRT, ASS, yrc); LRC lines end at the next one.
+    /// The end of the line when the source says it: SRT cue end, ASS event end, yrc and QRC line start + length (or
+    /// a later last word end), enhanced LRC closing stamp. Plain LRC lines have none (they end at the next one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<u64>,
     pub text: String,
@@ -192,9 +193,9 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
             }
         }
 
-        let (text, words) = match enhanced_lrc_words(remainder.trim(), offset_ms) {
-            Some((text, words)) => (text, words),
-            None => (remainder.trim().to_owned(), Vec::new()),
+        let (text, words, end_ms) = match enhanced_lrc_words(remainder.trim(), offset_ms) {
+            Some((text, words, end_ms)) => (text, words, end_ms),
+            None => (remainder.trim().to_owned(), Vec::new(), None),
         };
         // `[00:01.00][00:01.00]text` names one cue twice; it must not turn into its own
         // translation when same-timestamp rows are folded below.
@@ -204,6 +205,8 @@ pub fn parse_lrc(input: &str) -> Result<ParsedLyrics, LyricsParseError> {
             if !text.is_empty() {
                 lines.extend(timestamps.into_iter().map(|start_ms| LyricLine {
                     words: words.clone(),
+                    // The closing stamp; never before the line's start.
+                    end_ms: end_ms.map(|end| end.max(start_ms)),
                     ..LyricLine::timed(start_ms, text.clone())
                 }));
             }
@@ -514,8 +517,9 @@ const OPEN_WORD_END: u64 = u64::MAX;
 /// Enhanced LRC (A2 extension) word stamps: `<mm:ss.xx>word <mm:ss.xx>word<mm:ss.xx>`. Each word
 /// runs from its stamp to the next one; a final stamp with no text after it is the end of the last
 /// word. Text before the first stamp joins the first word. Returns the line text (stamps removed,
-/// the words joined) and the words, or `None` when the text has no word stamp.
-fn enhanced_lrc_words(text: &str, offset_ms: i64) -> Option<(String, Vec<LyricWord>)> {
+/// the words joined), the words and the closing stamp (the line's own end) when there is one, or `None` when the text
+/// has no word stamp.
+fn enhanced_lrc_words(text: &str, offset_ms: i64) -> Option<(String, Vec<LyricWord>, Option<u64>)> {
     let mut stamps: Vec<(u64, String)> = Vec::new();
     let mut leading = String::new();
     let mut rest = text;
@@ -558,7 +562,12 @@ fn enhanced_lrc_words(text: &str, offset_ms: i64) -> Option<(String, Vec<LyricWo
         });
     }
     let line: String = words.iter().map(|word| word.text.as_str()).collect();
-    Some((line, words))
+    // A closing stamp (the last stamp, with no text after it) is the line's own end.
+    let end = stamps
+        .last()
+        .filter(|(_, word)| word.is_empty() && !words.is_empty())
+        .map(|(end, _)| *end);
+    Some((line, words, end))
 }
 
 /// The last word of an enhanced LRC line without a closing stamp ends at the next line's start

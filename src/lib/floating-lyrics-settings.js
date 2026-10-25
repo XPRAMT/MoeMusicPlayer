@@ -179,7 +179,7 @@ export function normalizeFloatingLyricsSettings(value) {
 /**
  * Lyrics for the Android overlay: timed lines only, sorted, with the lyrics' own offset and the per-track delay folded
  * into one offset (the overlay draws the line at `position + offsetMs`, like `findActiveLyricIndex`).
- * @param {{ trackId: string | null, offsetMs?: number | null, lines: { startMs?: number | null, text?: string | null, translation?: string | null }[] } | null} data
+ * @param {{ trackId: string | null, offsetMs?: number | null, lines: { startMs?: number | null, endMs?: number | null, text?: string | null, translation?: string | null }[] } | null} data
  * @param {number} combinedOffsetMs from `lyricsDisplayOffsetMs`
  * @param {number | null} durationMs
  */
@@ -190,12 +190,15 @@ export function buildFloatingLyricsNativeData(data, combinedOffsetMs, durationMs
     .filter(({ line }) => typeof line?.startMs === 'number' && Number.isFinite(line.startMs))
     .sort((left, right) => /** @type {number} */ (left.line.startMs) - /** @type {number} */ (right.line.startMs) || left.index - right.index)
     .map(({ line }) => {
-      /** @type {{ startMs: number, text: string, translation: string, words?: { s: number, e: number, t: string }[], lead?: number }} */
+      /** @type {{ startMs: number, endMs?: number, text: string, translation: string, words?: { s: number, e: number, t: string }[], lead?: number }} */
       const out = {
         startMs: Math.round(/** @type {number} */ (line.startMs)),
         text: (line.text ?? '').trim(),
         translation: (line.translation ?? '').trim(),
       };
+      // The line's own end (ADR 0041 D10), in the same time as `startMs` (the offset applies to both alike).
+      const endMs = /** @type {{ endMs?: number | null }} */ (line).endMs;
+      if (typeof endMs === 'number' && Number.isFinite(endMs)) out.endMs = Math.round(endMs);
       // Word timing (ADR 0041), untrimmed like the line text it spells; `lead` = UTF-16 units trimmed off the front.
       const words = /** @type {{ words?: { s: number, e: number, t: string }[] | null }} */ (line).words;
       if (Array.isArray(words) && words.length > 0 && words.map((word) => word.t).join('') === (line.text ?? '')) {

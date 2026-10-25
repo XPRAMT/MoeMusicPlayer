@@ -13,7 +13,7 @@
   } from './ipc';
   import { createLyricsController } from './lyrics-controller.js';
   import { lyricsForDisplay } from './lyrics-traditional.js';
-  import { karaokeLineAnimation, LYRIC_LINE_ANIMATION, wordTexts } from './lyrics-word-highlight.js';
+  import { karaokeLineAnimation, karaokeWordsOf, LYRIC_LINE_ANIMATION, wordTexts } from './lyrics-word-highlight.js';
   import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
   import {
     LYRIC_CUE_LEAD_MS,
@@ -322,14 +322,15 @@
       : -1,
   );
   let plainLayout = $derived(buildLyricsLayout(lines, layoutPreferences, preferences.lineGapPx, layoutWidth));
-  // Word highlight (ADR 0041 D10): only the current line with word timing is split into words, and one CSS
+  // Word highlight (ADR 0041 D10): only the current line with word timing (or its own end time) is split into words, and one CSS
   // animation moves a single accent edge over it (`karaokeLine`). Recomputed only on a line change, seek, play/pause
   // or offset change; the clock's regular samples do not touch it, so no style is written while a line plays.
   let wordsPlaying = $derived(effectivePlaybackState === 'playing' && (playbackClock ? playbackClock.playing : isPlaying));
   let currentLineWords = $derived.by(() => {
     const index = visibleActiveTimedIndex;
     const line = index >= 0 ? timedLines[index]?.line : undefined;
-    const words = line?.words ?? [];
+    // A line with its own end but no word times is swept as one word spanning it (`karaokeWordsOf`).
+    const words = karaokeWordsOf(line);
     // Romanization rows get word effects only with their own word timing; translation rows never do.
     const romanizationWords = line?.romanizationWords ?? [];
     if (words.length === 0 && romanizationWords.length === 0) return null;

@@ -39,6 +39,41 @@ class LyricsRulesVectorsTest {
     }
 
     @Test
+    fun finalArrivalWithItsOwnEnd() {
+        for (c in vectors.cases("finalArrivalWithEnd")) {
+            val own = if (c.isNull("ownEndMs")) null else c.getLong("ownEndMs")
+            val end = if (c.isNull("trackEndMs")) FloatingLyricsRules.NO_TIME else c.getLong("trackEndMs")
+            val start = c.getLong("lineStartMs")
+            val duration = FloatingLyricsRules.terminalLineDurationMs(start, own, c.getString("text"))
+            assertEquals(c.toString(), c.getLong("durationMs"), duration)
+            assertEquals(c.toString(), c.getLong("expected"), FloatingLyricsRules.finalLineArrivalFromEstimate(start, duration, end))
+        }
+    }
+
+    @Test
+    fun knotLineEndsPerLine() {
+        for (c in vectors.cases("knotLineEnds")) {
+            val (end, cap) = WordLyricsRules.knotLineEnds(
+                c.getDouble("startMs"), c.getString("text"),
+                if (c.isNull("lastWordEndMs")) null else c.getDouble("lastWordEndMs"),
+                if (c.isNull("ownEndMs")) null else c.getDouble("ownEndMs"),
+                c.getBoolean("isLast"),
+            )
+            assertEquals(c.toString(), if (c.isNull("endMs")) null else c.getDouble("endMs"), end)
+            assertEquals(c.toString(), if (c.isNull("capMs")) null else c.getDouble("capMs"), cap)
+        }
+    }
+
+    @Test
+    fun wholeLineWord() {
+        for (c in vectors.cases("wholeLineWord")) {
+            val expected = c.optJSONArray("expected")?.let { it.getDouble(0) to it.getDouble(1) }
+            assertEquals(c.toString(), expected,
+                WordLyricsRules.wholeLineWord(c.getDouble("lineStartMs"), if (c.isNull("ownEndMs")) null else c.getDouble("ownEndMs")))
+        }
+    }
+
+    @Test
     fun lineCap() {
         for (c in vectors.cases("lineCap")) {
             assertEquals(c.toString(), c.getLong("expected"), FloatingLyricsRules.lineCapMs(c.getString("text")))

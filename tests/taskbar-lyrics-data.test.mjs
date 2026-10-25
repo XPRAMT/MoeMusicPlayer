@@ -25,6 +25,19 @@ test('synced lyrics become timed lines with only what the taskbar draws', () => 
   });
 });
 
+test('a line\'s own end (SRT/ASS, yrc/QRC) is carried to the native windows', () => {
+  const data = buildTaskbarLyricsData('a', lyrics({
+    lines: [
+      { startMs: 1000, endMs: 3500, text: '第一行', translation: null, romanization: null },
+      { startMs: 4000, endMs: null, text: '第二行', translation: null, romanization: null },
+    ],
+  }));
+  assert.deepEqual(data.lines, [
+    { startMs: 1000, endMs: 3500, text: '第一行', translation: null, romanization: null },
+    { startMs: 4000, text: '第二行', translation: null, romanization: null },
+  ]);
+});
+
 test('plain lyrics, no lyrics and lyrics of another track give no lines', () => {
   const none = { trackId: 'a', offsetMs: 0, lines: [] };
   assert.deepEqual(buildTaskbarLyricsData('a', lyrics({ synced: false })), none);

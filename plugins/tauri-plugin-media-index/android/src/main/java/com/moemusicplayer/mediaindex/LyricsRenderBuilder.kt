@@ -153,8 +153,14 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
             val line = lines[index]
             val times = line.wordTimes
             val ranges = line.wordRanges
-            if (times != null && ranges != null && texts[index].isNotEmpty()) {
-                WordLyricsRules.karaokeGlide(main.spans(texts[index], ranges), times)
+            val text = texts[index]
+            if (times != null && ranges != null && text.isNotEmpty()) {
+                WordLyricsRules.karaokeGlide(main.spans(text, ranges), times)
+            } else if (times == null && text.isNotEmpty()) {
+                // No word times but its own end (ADR 0041 D10): one word spanning the whole line; neither: not swept.
+                WordLyricsRules.wholeLineWord(line.startMs.toDouble(), line.endMs?.toDouble())?.let { word ->
+                    WordLyricsRules.karaokeGlide(main.spans(text, listOf(0 to text.length)), listOf(word))
+                }
             } else {
                 null
             }
@@ -184,19 +190,29 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
         val firstCenters = FloatArray(kept.size) { main.firstGlyphCenter(texts[it]) }
         val (cells, widths) = FloatingLyricsRules.stripLayout(mainWidths, translationWidths, main.width("　"))
         // Each line on its own (ADR 0041 D10), line- and word-timed lyrics alike: a word-timed line adds its last word's
-        // end, any other line its duration cap (used when the next line starts later); without a cap that applies the
-        // knots are exactly the former line glide's.
-        val wordLines = kept.mapIndexed { index, line ->
+        // end, a line with its own end time that end, any other line its duration cap (used when the next line starts
+        // later); without an end or cap that applies the knots are exactly the former line glide's.
+        val wordEnds = kept.map { line ->
             val times = line.wordTimes
-            val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
+            if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
+        }
+        val lastIndex = kept.size - 1
+        val wordLines = kept.mapIndexed { index, line ->
+            val (end, cap) = WordLyricsRules.knotLineEnds(
+                line.startMs.toDouble(), texts[index], wordEnds[index], line.endMs?.toDouble(), index == lastIndex,
+            )
             WordLyricsRules.KnotLine(
-                line.startMs.toDouble(), cells[index].toDouble(), firstCenters[index].toDouble(), end, lastCenters[index].toDouble(),
-                if (end == null) FloatingLyricsRules.lineCapMs(texts[index]).toDouble() else null,
+                line.startMs.toDouble(), cells[index].toDouble(), firstCenters[index].toDouble(), end, lastCenters[index].toDouble(), cap,
             )
         }
+        // The terminal line: its own end when it has one and no word times, else the estimate.
+        val last = kept[lastIndex]
+        val lastDuration = FloatingLyricsRules.terminalLineDurationMs(
+            last.startMs, if (wordEnds[lastIndex] == null) last.endMs else null, texts[lastIndex],
+        )
         return StripModel(
             LongArray(kept.size) { kept[it].startMs }, texts, translations, cells, widths, mainWidths, translationWidths,
-            lastCenters, firstCenters, wordLines, FloatingLyricsRules.terminalLineEstimateMs(texts.last()),
+            lastCenters, firstCenters, wordLines, lastDuration,
         )
     }
 

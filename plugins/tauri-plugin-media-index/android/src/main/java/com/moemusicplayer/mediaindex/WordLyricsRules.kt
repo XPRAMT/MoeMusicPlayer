@@ -19,8 +19,9 @@ internal object WordLyricsRules {
     data class GlidePiece(val t: Double, val v: Double, val s: Double, val c: Double)
 
     /**
-     * One line of the strip: its start, cell left edge, first glyph centre, last glyph centre and either, with word
-     * times, its last word's end, or, without them, its duration cap (`FloatingLyricsRules.lineCapMs`; null: none).
+     * One line of the strip: its start, cell left edge, first glyph centre, last glyph centre and either its end (with
+     * word times its last word's end, without them its own end time, not on the last line) or its duration cap
+     * (`FloatingLyricsRules.lineCapMs`; null: none). [knotLineEnds] picks them per line.
      */
     class KnotLine(
         val startMs: Double,
@@ -30,6 +31,25 @@ internal object WordLyricsRules {
         val lastCentre: Double,
         val capMs: Double? = null,
     )
+
+    /**
+     * `player-lyrics-rules` `knot_line_ends`, per line (never per file): with word times the last word's end; else the
+     * line's own end time when it is after the start, except on the last line (its own end is the terminal knot,
+     * `FloatingLyricsRules.terminalLineDurationMs`); else no end and the cap `FloatingLyricsRules.lineCapMs`.
+     * Returns (endMs, capMs).
+     */
+    /**
+     * `player-lyrics-rules` `whole_line_word`: the "none" mode karaoke word of a line without word times that has its
+     * own end time, one word from its start to its end; null without an end after the start (not swept).
+     */
+    fun wholeLineWord(startMs: Double, ownEndMs: Double?): Pair<Double, Double>? =
+        ownEndMs?.takeIf { it.isFinite() && it > startMs }?.let { startMs to it }
+
+    fun knotLineEnds(startMs: Double, text: String, lastWordEndMs: Double?, ownEndMs: Double?, isLast: Boolean): Pair<Double?, Double?> {
+        val own = ownEndMs?.takeIf { it.isFinite() && it > startMs && !isLast }
+        val end = lastWordEndMs ?: own
+        return end to (if (end == null) FloatingLyricsRules.lineCapMs(text).toDouble() else null)
+    }
 
     /** `smooth_glide`: hard knots `(t, v)`, guides between knot j and j + 1, eased (speed 0) ends or not. */
     fun smoothGlide(hard: List<Pair<Double, Double>>, guides: List<List<Pair<Double, Double>>>, easeEnds: Boolean): List<GlidePiece> {

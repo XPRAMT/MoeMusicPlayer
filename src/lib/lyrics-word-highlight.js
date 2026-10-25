@@ -31,6 +31,22 @@ export function wordTexts(words, texts) {
   return words.map((word, index) => (texts && texts.length === words.length ? texts[index] : word.t));
 }
 
+/**
+ * The words the current line sweeps: its own word timing; for a line without word times that has its own end time
+ * (`endMs` after `startMs`: SRT/ASS cue, yrc/QRC line), one word spanning the whole line from its start to its end
+ * (`whole_line_word` in player-lyrics-rules); otherwise none (the line is not swept).
+ * @param {{ startMs?: number | null, endMs?: number | null, text?: string | null, words?: { s: number, e: number, t: string }[] | null } | null | undefined} line
+ * @returns {{ s: number, e: number, t: string }[]}
+ */
+export function karaokeWordsOf(line) {
+  if (!line) return [];
+  if (Array.isArray(line.words) && line.words.length > 0) return line.words;
+  const { startMs, endMs, text } = line;
+  if (!text || typeof startMs !== 'number' || !Number.isFinite(startMs)) return [];
+  if (typeof endMs !== 'number' || !Number.isFinite(endMs) || !(endMs > startMs)) return [];
+  return [{ s: startMs, e: endMs, t: text }];
+}
+
 /** @param {number} x */
 const round = (x) => Math.round(x * 1e4) / 1e4;
 

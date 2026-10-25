@@ -584,7 +584,31 @@ pub fn render() -> String {
         ),
         (vec![(5.0, 9.0)], vec![(700.0, 700.0)]),
         (vec![], vec![]),
+        // A line without word times but with its own end: one word spanning the line (`whole_line_word`).
+        (
+            vec![(0.0, 160.0)],
+            vec![whole_line_word(1000.0, Some(2200.0)).unwrap()],
+        ),
     ];
+    // `whole_line_word`: the karaoke word of a line without word times; none without an end after the start.
+    let whole_line = [
+        (1000.0, Some(2200.0)),
+        (1000.0, None),
+        (1000.0, Some(1000.0)),
+        (1000.0, Some(900.0)),
+    ]
+    .iter()
+    .map(|&(start, end)| {
+        J::Obj(vec![
+            ("lineStartMs", num(start)),
+            ("ownEndMs", opt(end)),
+            (
+                "expected",
+                whole_line_word(start, end).map_or(J::Null, |(s, e)| nums(&[s, e])),
+            ),
+        ])
+    })
+    .collect();
     let karaoke = karaoke_cases
         .iter()
         .map(|(spans, words)| {
@@ -721,7 +745,165 @@ pub fn render() -> String {
         ],
         Some(final_arrival_ms(36000.0, "夜明けまで", None)),
     ));
+    // Own line end times (ADR 0041 D10), judged per line by `knot_line_ends`: word times → the last word's end; else
+    // the line's own end (SRT cue end, yrc / QRC line length, enhanced LRC closing stamp) → that end; else → the cap.
+    // The last line: its own end, else the estimate (`final_arrival_with_end_ms`).
+    let judged = |start: f64,
+                  cell: f64,
+                  anchor: f64,
+                  last: f64,
+                  text: &str,
+                  word_end: Option<f64>,
+                  own_end: Option<f64>,
+                  is_last: bool| {
+        let (end_ms, cap_ms) = knot_line_ends(start, text, word_end, own_end, is_last);
+        KnotLine {
+            end_ms,
+            cap_ms,
+            ..line(start, cell, anchor, None, last)
+        }
+    };
+    // SRT-like lines, each with its cue end, the last one's end as the terminal knot.
+    strip_glide_cases.push((
+        vec![
+            judged(
+                1000.0,
+                0.0,
+                5.0,
+                95.0,
+                "First line",
+                None,
+                Some(3500.0),
+                false,
+            ),
+            judged(
+                9000.0,
+                120.0,
+                5.0,
+                85.0,
+                "Second one",
+                None,
+                Some(11000.0),
+                false,
+            ),
+            judged(
+                12000.0,
+                230.0,
+                10.0,
+                110.0,
+                "君の声が",
+                None,
+                Some(15500.0),
+                true,
+            ),
+        ],
+        Some(final_arrival_with_end_ms(
+            12000.0,
+            "君の声が",
+            Some(15500.0),
+            None,
+        )),
+    ));
+    // A cue ending after the next one starts: the next start replaces the end knot.
+    strip_glide_cases.push((
+        vec![
+            judged(
+                1000.0,
+                0.0,
+                10.0,
+                70.0,
+                "重叠的句子",
+                None,
+                Some(7000.0),
+                false,
+            ),
+            judged(
+                5000.0,
+                120.0,
+                10.0,
+                50.0,
+                "下一句",
+                None,
+                Some(9000.0),
+                true,
+            ),
+        ],
+        Some(final_arrival_with_end_ms(
+            5000.0,
+            "下一句",
+            Some(9000.0),
+            None,
+        )),
+    ));
+    // The last line's own end past the track end: capped there.
+    strip_glide_cases.push((
+        vec![
+            judged(1000.0, 0.0, 10.0, 50.0, "最初", None, Some(2500.0), false),
+            judged(
+                6000.0,
+                80.0,
+                10.0,
+                90.0,
+                "最后一句",
+                None,
+                Some(12000.0),
+                true,
+            ),
+        ],
+        Some(final_arrival_with_end_ms(
+            6000.0,
+            "最后一句",
+            Some(12000.0),
+            Some(10000.0),
+        )),
+    ));
+    // One song mixing the three kinds: own end, word-timed (its word end wins over its own end), neither (the cap), a
+    // line with an end not after its start (the cap), and a last line with its own end.
+    let mixed_case = strip_glide_cases.len();
+    strip_glide_cases.push((
+        vec![
+            judged(1000.0, 0.0, 10.0, 30.0, "啊啊", None, Some(4000.0), false),
+            judged(
+                10000.0,
+                60.0,
+                10.0,
+                70.0,
+                "你好吗",
+                Some(11500.0),
+                Some(13000.0),
+                false,
+            ),
+            judged(20000.0, 140.0, 10.0, 30.0, "再见", None, None, false),
+            judged(
+                30000.0,
+                200.0,
+                10.0,
+                30.0,
+                "嗯嗯",
+                None,
+                Some(30000.0),
+                false,
+            ),
+            judged(
+                40000.0,
+                260.0,
+                10.0,
+                50.0,
+                "晚安啦",
+                None,
+                Some(46000.0),
+                true,
+            ),
+        ],
+        Some(final_arrival_with_end_ms(
+            40000.0,
+            "晚安啦",
+            Some(46000.0),
+            None,
+        )),
+    ));
     let mut song_knots = Vec::new();
+    let mut mixed_knots = Vec::new();
     let mut cap_knots = Vec::new();
     let strip_glide = strip_glide_cases
         .iter()
@@ -733,6 +915,9 @@ pub fn render() -> String {
             }
             if i == cap_case {
                 cap_knots = knots.clone();
+            }
+            if i == mixed_case {
+                mixed_knots = knots.clone();
             }
             let (from, to) = match (knots.first(), knots.last()) {
                 (Some(a), Some(b)) => (a.0 - 100.0, b.0 + 100.0),
@@ -765,6 +950,74 @@ pub fn render() -> String {
         Some(&(224190.0, 170.0)),
         "重新学会做梦和期望 lost its capped end"
     );
+    assert_eq!(
+        mixed_knots,
+        vec![
+            (1000.0, 10.0),
+            (4000.0, 30.0),
+            (10000.0, 70.0),
+            (11500.0, 130.0),
+            (20000.0, 150.0),
+            (22000.0, 170.0),
+            (30000.0, 210.0),
+            (32000.0, 230.0),
+            (40000.0, 270.0),
+            (46000.0, 310.0),
+        ],
+        "a line lost its own end, word end or cap"
+    );
+    // The per-line end and cap (`knot_line_ends`) and the terminal arrival with an own end
+    // (`final_arrival_with_end_ms`).
+    let line_ends = [
+        (1000.0, "啊啊", Some(1800.0), Some(2500.0), false),
+        (1000.0, "啊啊", None, Some(2500.0), false),
+        (1000.0, "啊啊", None, Some(1000.0), false),
+        (1000.0, "啊啊", None, Some(900.0), false),
+        (1000.0, "Hello", None, None, false),
+        (1000.0, "啊啊", None, Some(2500.0), true),
+        (1000.0, "啊啊", Some(1800.0), None, true),
+        (1000.0, "啊啊", None, None, true),
+    ]
+    .iter()
+    .map(|&(start, text, word_end, own_end, is_last)| {
+        let (end, cap) = knot_line_ends(start, text, word_end, own_end, is_last);
+        J::Obj(vec![
+            ("startMs", num(start)),
+            ("text", s(text)),
+            ("lastWordEndMs", opt(word_end)),
+            ("ownEndMs", opt(own_end)),
+            ("isLast", J::Bool(is_last)),
+            ("endMs", opt(end)),
+            ("capMs", opt(cap)),
+        ])
+    })
+    .collect();
+    let final_arrival_with_end = [
+        (1000.0, "啊啊", Some(2500.0), None),
+        (1000.0, "啊啊", Some(2500.0), Some(2200.0)),
+        (1000.0, "啊啊", None, None),
+        (1000.0, "Hello world", None, Some(2000.0)),
+        (1000.0, "啊啊", Some(1000.0), None),
+        (1000.0, "啊啊", Some(900.0), None),
+    ]
+    .iter()
+    .map(|&(start, text, own_end, track_end)| {
+        J::Obj(vec![
+            ("lineStartMs", num(start)),
+            ("text", s(text)),
+            ("ownEndMs", opt(own_end)),
+            ("trackEndMs", opt(track_end)),
+            (
+                "durationMs",
+                num(terminal_line_duration_ms(start, own_end, text)),
+            ),
+            (
+                "expected",
+                num(final_arrival_with_end_ms(start, text, own_end, track_end)),
+            ),
+        ])
+    })
+    .collect();
 
     let mut centre_mask = Vec::new();
     for (area_width, em_px, main, secondary) in [
@@ -827,6 +1080,8 @@ pub fn render() -> String {
         ("scroll", J::Arr(scroll)),
         ("finalArrival", J::Arr(final_arrival)),
         ("lineCap", J::Arr(line_cap)),
+        ("finalArrivalWithEnd", J::Arr(final_arrival_with_end)),
+        ("knotLineEnds", J::Arr(line_ends)),
         ("strip", J::Arr(strip)),
         ("windows", J::Arr(windows)),
         ("breaks", J::Arr(breaks)),
@@ -834,6 +1089,7 @@ pub fn render() -> String {
         ("edgeFade", J::Arr(edge_fade)),
         ("glide", J::Arr(glide)),
         ("karaokeGlide", J::Arr(karaoke)),
+        ("wholeLineWord", J::Arr(whole_line)),
         ("stripGlide", J::Arr(strip_glide)),
         ("centreMask", J::Arr(centre_mask)),
         ("sung", J::Arr(sung)),

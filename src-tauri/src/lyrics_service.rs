@@ -74,7 +74,7 @@ pub struct LyricLineDto {
     pub text_traditional: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation_traditional: Option<String>,
-    /// The end of the line when its source gives one (SRT, ASS, yrc).
+    /// The end of the line when its source gives one (SRT, ASS, yrc, QRC, enhanced LRC closing stamp).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<u64>,
     /// Word timing (ADR 0041), short keys to keep the IPC small; empty for line-level lyrics.

@@ -115,11 +115,60 @@ fn grapheme_duration_ms(text: &str, wide: f64, narrow: f64) -> f64 {
 /// The lyrics time at which the terminal line's glide ends: the line start plus [`terminal_line_estimate_ms`],
 /// capped at the track end.
 pub fn final_arrival_ms(line_start_ms: f64, text: &str, track_end_ms: Option<f64>) -> f64 {
-    let estimated = line_start_ms + terminal_line_estimate_ms(text);
+    final_arrival_with_end_ms(line_start_ms, text, None, track_end_ms)
+}
+
+/// [`final_arrival_ms`] for a terminal line that may carry its own end time (SRT/ASS cue end, yrc/QRC line length, an
+/// enhanced LRC closing stamp): that end when it is after the line start, else the estimate; capped at the track end.
+pub fn final_arrival_with_end_ms(
+    line_start_ms: f64,
+    text: &str,
+    own_end_ms: Option<f64>,
+    track_end_ms: Option<f64>,
+) -> f64 {
+    let arrival = line_start_ms + terminal_line_duration_ms(line_start_ms, own_end_ms, text);
     match track_end_ms {
-        Some(end) if end.is_finite() => estimated.min(end),
-        _ => estimated,
+        Some(end) if end.is_finite() => arrival.min(end),
+        _ => arrival,
     }
+}
+
+/// How long the terminal line's glide takes, before the track-end cap: its own end time minus its start when it has
+/// one after the start, else [`terminal_line_estimate_ms`].
+pub fn terminal_line_duration_ms(line_start_ms: f64, own_end_ms: Option<f64>, text: &str) -> f64 {
+    match own_line_end(line_start_ms, own_end_ms) {
+        Some(end) => end - line_start_ms,
+        None => terminal_line_estimate_ms(text),
+    }
+}
+
+/// A line's own end time, when it is usable: finite and after the line's start.
+fn own_line_end(line_start_ms: f64, own_end_ms: Option<f64>) -> Option<f64> {
+    own_end_ms.filter(|end| end.is_finite() && *end > line_start_ms)
+}
+
+/// The karaoke word of a line without word times that has its own end time (the "none" mode and the Now Playing
+/// page, ADR 0041 D8/D10): one word spanning the whole line, `(start, end)`, swept by [`karaoke_glide`] like any
+/// one-word line. `None` without an end after the start: such a line is not swept.
+pub fn whole_line_word(line_start_ms: f64, own_end_ms: Option<f64>) -> Option<(f64, f64)> {
+    own_line_end(line_start_ms, own_end_ms).map(|end| (line_start_ms, end))
+}
+
+/// The end and the duration cap of one line of the continuous strip (`KnotLine::end_ms`, `KnotLine::cap_ms`, ADR 0041
+/// D10), decided per line, never per file: with word times, the end of its last word; else its own end time (after its
+/// start) when it has one, except on the last line, whose own end is the terminal knot instead
+/// ([`final_arrival_with_end_ms`]); else no end and the cap [`line_cap_ms`] (ignored on the last line, which gets the
+/// terminal knot).
+pub fn knot_line_ends(
+    line_start_ms: f64,
+    text: &str,
+    last_word_end_ms: Option<f64>,
+    own_end_ms: Option<f64>,
+    is_last: bool,
+) -> (Option<f64>, Option<f64>) {
+    let end =
+        last_word_end_ms.or_else(|| own_line_end(line_start_ms, own_end_ms).filter(|_| !is_last));
+    (end, end.is_none().then(|| line_cap_ms(text)))
 }
 
 /// Clamp of the per-track delay (seconds, -10..10 in tenths).

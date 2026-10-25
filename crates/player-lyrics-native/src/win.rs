@@ -2490,8 +2490,9 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         let sources: Vec<&crate::LyricLine> = lines.iter().map(|l| l.1).collect();
         let lines: Vec<(f64, &str, &str)> = lines.into_iter().map(|l| l.0).collect();
         // Every line judged on its own (ADR 0041 D10), line- and word-timed lyrics alike: every line start is a knot, a
-        // word-timed line adds its last word's end, any other line but the last its duration cap (`line_cap_ms`) when
-        // the next line starts later, a last line without word times the terminal estimate. Without a cap that
+        // word-timed line adds its last word's end, a line with its own end time (SRT/ASS, yrc/QRC) that end, any other
+        // line but the last its duration cap (`line_cap_ms`) when the next line starts later, a last line without word
+        // times its own end or else the terminal estimate. Without an end or cap that
         // applies the knots are exactly the former line glide's (`strip_cubic`, tested in
         // `without_word_times_the_knot_glide_is_the_line_glide`). Everything sees the static continuous mask
         // (experimental) instead of edge fades and line fades. Translations have no word effects: they follow the main
@@ -2566,25 +2567,45 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         // Every line, word-timed or not, sits with its first glyph's centre on the area's centre at its start.
         layout.anchors = first_centres;
         let last = lines.last().unwrap();
-        let arrival =
-            rules::final_arrival_ms(last.0, last.1, ctx.clock.duration_ms.map(|d| d + offset));
+        // The last word's end of a word-timed line (the words must spell its text).
+        let word_end = |i: usize| {
+            word_ranges[i]
+                .as_ref()
+                .and_then(|_| sources[i].words.last())
+                .map(|w| w.end_ms)
+        };
+        let last_index = lines.len() - 1;
+        // The terminal line: its own end time when it has one (and no word times), else the estimate; at most the
+        // track end.
+        let arrival = rules::final_arrival_with_end_ms(
+            last.0,
+            last.1,
+            word_end(last_index)
+                .is_none()
+                .then_some(sources[last_index].end_ms)
+                .flatten(),
+            ctx.clock.duration_ms.map(|d| d + offset),
+        );
         let knot_lines: Vec<rules::KnotLine> = lines
             .iter()
             .enumerate()
             .map(|(i, l)| {
-                // Only the line's start and, with its own word times, the end of its last word, or else its
-                // duration cap: the words themselves never shape the glide.
-                let end_ms = word_ranges[i]
-                    .as_ref()
-                    .and_then(|_| sources[i].words.last())
-                    .map(|w| w.end_ms);
+                // Only the line's start and, per line, the end of its last word, else its own end time, else its
+                // duration cap (`knot_line_ends`): the words themselves never shape the glide.
+                let (end_ms, cap_ms) = rules::knot_line_ends(
+                    l.0,
+                    l.1,
+                    word_end(i),
+                    sources[i].end_ms,
+                    i == last_index,
+                );
                 rules::KnotLine {
                     start_ms: l.0,
                     cell_start: layout.starts[i],
                     anchor: layout.anchors[i],
                     end_ms,
                     last_centre: last_centres[i],
-                    cap_ms: end_ms.is_none().then(|| rules::line_cap_ms(l.1)),
+                    cap_ms,
                 }
             })
             .collect();
@@ -2820,10 +2841,12 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         // accent. The line is rasterised twice (white and accent, same layout and the same shadow / outline colour)
         // and shown as two sprites of the same position with complementary clips (`WordClip`), so the shadow has no
         // seam, kerning and CJK spacing are the line's own, and nothing is drawn per frame.
-        // Translations keep the whole-line display.
-        let spans = line.word_ranges().and_then(|ranges| {
+        // Translations keep the whole-line display. A line without word times but with its own end time is swept as
+        // one word spanning the line (`karaoke_words`).
+        let karaoke = line.karaoke_words();
+        let spans = karaoke.as_ref().and_then(|(ranges, _)| {
             let layout = text_layout(gfx, text, font, style.weight, style.line_height).ok()?;
-            Some(word_spans(&layout, &ranges))
+            Some(word_spans(&layout, ranges))
         });
         let accent_style = TextStyle {
             color: ctx.accent,
@@ -2864,10 +2887,12 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             if let (Some(spans), Some(_)) = (words, &accent) {
                 let at = position + offset;
                 let margin = raster.margin as f64;
-                let times: Vec<(f64, f64)> = line
-                    .words
+                let times: Vec<(f64, f64)> = karaoke
+                    .as_ref()
+                    .map(|(_, times)| times.as_slice())
+                    .unwrap_or_default()
                     .iter()
-                    .map(|w| ((w.start_ms - at) / 1000.0, (w.end_ms - at) / 1000.0))
+                    .map(|&(s, e)| ((s - at) / 1000.0, (e - at) / 1000.0))
                     .collect();
                 let clips = [
                     gfx.compositor.CreateInsetClip()?,
@@ -2929,7 +2954,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                     vec![(next_text.to_string(), next_font, style.weight)],
                     style,
                 ));
-                if next.word_ranges().is_some() {
+                if next.karaoke_words().is_some() {
                     win.prewarm.push((
                         vec![(next_text.to_string(), next_font, style.weight)],
                         accent_style,

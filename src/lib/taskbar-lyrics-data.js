@@ -3,13 +3,13 @@
 // The window keeps no lyric state of its own, so it cannot disagree with the page.
 
 /** @typedef {{ s: number, e: number, t: string }} TaskbarLyricWord */
-/** @typedef {{ startMs: number, text: string, translation: string | null, romanization: null, words?: TaskbarLyricWord[] }} TaskbarLyricLine */
+/** @typedef {{ startMs: number, endMs?: number, text: string, translation: string | null, romanization: null, words?: TaskbarLyricWord[] }} TaskbarLyricLine */
 /** @typedef {{ trackId: string | null, offsetMs: number, lines: TaskbarLyricLine[] }} TaskbarLyricsData */
 
 /**
  * Only synchronized lyrics have lines to show; plain lyrics, no lyrics and a track still loading all give no lines.
  * @param {string | null | undefined} trackId
- * @param {{ trackId?: string, synced?: boolean, offsetMs?: number, lines?: Array<{ startMs: number | null, text: string, translation: string | null, words?: TaskbarLyricWord[] | null }> } | null | undefined} lyrics
+ * @param {{ trackId?: string, synced?: boolean, offsetMs?: number, lines?: Array<{ startMs: number | null, endMs?: number | null, text: string, translation: string | null, words?: TaskbarLyricWord[] | null }> } | null | undefined} lyrics
  * @returns {TaskbarLyricsData}
  */
 export function buildTaskbarLyricsData(trackId, lyrics) {
@@ -25,6 +25,9 @@ export function buildTaskbarLyricsData(trackId, lyrics) {
       .map((line) => {
         /** @type {TaskbarLyricLine} */
         const out = { startMs: /** @type {number} */ (line.startMs), text: line.text, translation: line.translation ?? null, romanization: null };
+        // The line's own end (SRT/ASS cue, yrc/QRC line, enhanced LRC closing stamp), in the same time as `startMs`:
+        // the continuous strip ends a line without word times there instead of at its duration cap (ADR 0041 D10).
+        if (typeof line.endMs === 'number' && Number.isFinite(line.endMs)) out.endMs = line.endMs;
         // Word timing (ADR 0041) only when there is some: the native windows glide by words and light the sung word.
         if (Array.isArray(line.words) && line.words.length > 0) out.words = line.words.map((word) => ({ s: word.s, e: word.e, t: word.t }));
         return out;

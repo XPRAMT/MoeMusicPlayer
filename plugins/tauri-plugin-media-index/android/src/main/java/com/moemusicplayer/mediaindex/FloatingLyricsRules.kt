@@ -72,6 +72,14 @@ object FloatingLyricsRules {
     fun finalLineArrivalMs(lineStartMs: Long, text: String, trackEndMs: Long?): Long =
         finalLineArrivalFromEstimate(lineStartMs, terminalLineEstimateMs(text), trackEndMs ?: NO_TIME)
 
+    /**
+     * How long the terminal line's glide takes before the track-end cap (`player-lyrics-rules`
+     * `terminal_line_duration_ms`): its own end minus its start when it has an end after the start, else
+     * [terminalLineEstimateMs]. Pass it to [finalLineArrivalFromEstimate].
+     */
+    fun terminalLineDurationMs(lineStartMs: Long, ownEndMs: Long?, text: String): Long =
+        if (ownEndMs != null && ownEndMs > lineStartMs) ownEndMs - lineStartMs else terminalLineEstimateMs(text)
+
     /** [finalLineArrivalMs] with [terminalLineEstimateMs] known already (once per strip); `trackEndMs` [NO_TIME] when unknown. */
     fun finalLineArrivalFromEstimate(lineStartMs: Long, estimateMs: Long, trackEndMs: Long): Long {
         val estimated = lineStartMs + estimateMs

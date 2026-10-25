@@ -822,6 +822,74 @@ mod tests {
         assert_eq!(parsed.lines[1].start_ms, Some(3_000));
     }
 
+    fn line_ends(text: &str) -> Vec<Option<u64>> {
+        match parse_any_lyrics(text).unwrap() {
+            LyricsContent::Parsed(parsed) => parsed.lines.iter().map(|line| line.end_ms).collect(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// ADR 0041 D10: every format that carries a line end yields it (embedded lyrics go through the same parsers).
+    #[test]
+    fn every_format_reads_its_line_end() {
+        // SRT: the cue end.
+        assert_eq!(
+            line_ends(
+                "1\n00:00:01,000 --> 00:00:03,500\nOne\n\n2\n00:00:05,000 --> 00:00:06,000\nTwo\n"
+            ),
+            [Some(3_500), Some(6_000)]
+        );
+        // ASS: the event end.
+        assert_eq!(
+            line_ends(
+                "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:04.20,A,Hi\n"
+            ),
+            [Some(4_200)]
+        );
+        // yrc: [start,duration] -> start + duration.
+        assert_eq!(
+            line_ends("[1000,2000](1000,500,0)a(1500,300,0)b\n"),
+            [Some(3_000)]
+        );
+        // Plain QRC: [start,duration] -> start + duration.
+        assert_eq!(
+            line_ends("[1000,2000]a(1000,500)b(1500,300)\n"),
+            [Some(3_000)]
+        );
+        // Enhanced LRC: the closing stamp; without one, no end; plain LRC: no end.
+        assert_eq!(
+            line_ends(
+                "[00:01.00]<00:01.00>a<00:01.50>b<00:02.50>\n[00:04.00]<00:04.00>c<00:04.50>d\n[00:06.00]plain\n"
+            ),
+            [Some(2_500), None, None]
+        );
+        // The exported form of a line with an end but no words reads back with its end.
+        assert_eq!(
+            line_ends("[00:01.00]<00:01.00>Hello world<00:03.25>\n"),
+            [Some(3_250)]
+        );
+    }
+
+    #[test]
+    fn merged_extra_rows_keep_the_main_line_end() {
+        // SRT paired cues with other ends: the first cue's end stays.
+        let srt = "1\n00:00:01,000 --> 00:00:03,000\n사랑해\n\n2\n00:00:01,000 --> 00:00:02,000\n我愛你\n";
+        let line = &parse_srt(srt).unwrap().lines[0];
+        assert_eq!(line.end_ms, Some(3_000));
+        assert_eq!(line.translation.as_deref(), Some("我愛你"));
+        // Enhanced LRC with a same-time translation row.
+        let lrc = "[00:01.00]<00:01.00>君の声<00:02.00>\n[00:01.00]你的聲音\n";
+        let parsed = parse_lrc(lrc).unwrap();
+        assert_eq!(parsed.lines.len(), 1);
+        assert_eq!(parsed.lines[0].end_ms, Some(2_000));
+        assert_eq!(parsed.lines[0].translation.as_deref(), Some("你的聲音"));
+        // ASS events of another style at the same time.
+        let ass = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:03.00,JP,君の声\nDialogue: 0:00:01.00,0:00:03.02,ZH,你的聲音\n";
+        let line = &parse_ass(ass).unwrap().lines[0];
+        assert_eq!(line.end_ms, Some(3_000));
+        assert_eq!(line.translation.as_deref(), Some("你的聲音"));
+    }
+
     #[test]
     fn srt_without_blank_lines_between_cues_still_splits_them() {
         let srt = "1\n00:00:01,000 --> 00:00:02,000\none\n2\n00:00:02,000 --> 00:00:03,000\ntwo\n";

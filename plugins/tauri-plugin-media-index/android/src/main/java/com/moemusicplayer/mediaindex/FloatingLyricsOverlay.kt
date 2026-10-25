@@ -48,6 +48,8 @@ object FloatingLyricsOverlay {
         val translation: String,
         val wordTimes: List<Pair<Double, Double>>? = null,
         val wordRanges: List<Pair<Int, Int>>? = null,
+        /** The line's own end time (`endMs`: SRT/ASS cue end, yrc/QRC line length, enhanced LRC closing stamp). */
+        val endMs: Long? = null,
     ) {
         /** Trimmed once here, not every frame. */
         val trimmedText: String = text.trim()
@@ -177,7 +179,8 @@ object FloatingLyricsOverlay {
                             ranges = r
                         }
                     }
-                    parsed.add(Line(item.optLong("startMs"), text, item.optString("translation", ""), times, ranges))
+                    val endMs = if (item.has("endMs") && !item.isNull("endMs")) item.optLong("endMs") else null
+                    parsed.add(Line(item.optLong("startMs"), text, item.optString("translation", ""), times, ranges, endMs))
                 }
             }
             parsed.sortBy { it.startMs }

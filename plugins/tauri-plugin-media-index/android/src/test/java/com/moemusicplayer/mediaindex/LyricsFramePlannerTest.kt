@@ -22,13 +22,15 @@ class LyricsFramePlannerTest {
     private val none = ANIMATION_NONE
     private val cont = ANIMATION_CONTINUOUS
 
-    private fun line(start: Long, text: String, translation: String = "", times: List<Pair<Double, Double>>? = null): FloatingLyricsOverlay.Line {
+    private fun line(
+        start: Long, text: String, translation: String = "", times: List<Pair<Double, Double>>? = null, end: Long? = null,
+    ): FloatingLyricsOverlay.Line {
         val ranges = times?.let { t ->
             var at = 0
             val per = text.length / t.size
             t.indices.map { i -> val r = at to (if (i == t.size - 1) text.length else at + per); at = r.second; r }
         }
-        return FloatingLyricsOverlay.Line(start, text, translation, times, ranges)
+        return FloatingLyricsOverlay.Line(start, text, translation, times, ranges, end)
     }
 
     private fun layout(reserve: Boolean = false, width: Int = 400) = LyricsLayout(7, 40, width, -20f, 6f, -16f, 5f, reserve)
@@ -191,6 +193,24 @@ class LyricsFramePlannerTest {
     }
 
     @Test
+    fun aLineWithItsOwnEndAndNoWordTimesIsSweptAsOneWord() {
+        // ADR 0041 D10: start 1000, own end 3000, no words: one word over the whole line; without an end: no sweep.
+        val s = state(inputs(listOf(line(1000, "abcdefghij", end = 3000), line(8000, "next"))))
+        assertTrue(s.model.karaoke[0] != null)
+        assertTrue(s.model.karaoke[1] == null)
+        val x0 = (400f - 100f) / 2f
+        assertEquals(x0, plan(s, clock(), 1000.0).karaokeX, 0.01f)
+        assertEquals(x0 + 50f, plan(s, clock(), 2000.0).karaokeX, 1.0f)
+        assertEquals(x0 + 100f, plan(s, clock(), 3500.0).karaokeX, 0.01f)
+        val plain = state(inputs(listOf(line(1000, "abcdefghij"), line(8000, "next"))))
+        assertTrue(plain.model.karaoke[0] == null)
+        // Word-timed lines keep their own words, whatever their end.
+        val words = listOf(1000.0 to 2000.0, 2000.0 to 3000.0)
+        val timed = state(inputs(listOf(line(0, "abcdefghij", times = words, end = 9000), line(8000, "next"))))
+        assertEquals(x0 + 100f, plan(timed, clock(), 3500.0).karaokeX, 0.01f)
+    }
+
+    @Test
     fun plansFollowTheSharedActiveLineVectors() {
         val vectors = vectors()
         val cases = vectors.getJSONArray("active")
@@ -334,6 +354,23 @@ class LyricsFramePlannerTest {
         assertTrue(interlude < 200.0 - strip.cells[0] - strip.lastGlyphCenters[0] - 1.0)
         assertTrue(interlude > 200.0 - strip.cells[1] - strip.firstGlyphCenters[1] + 1.0)
         assertEquals(200.0 - strip.cells[1] - strip.firstGlyphCenters[1], plan(s, clock(), 20_000.0).rawOffset, 1e-3)
+    }
+
+    @Test
+    fun aLineWithItsOwnEndEndsThereInsteadOfAtItsCap() {
+        // ADR 0041 D10, per line: "abcd" has its own end 6000 (not the 2000 ms cap), "efgh" has neither (its cap,
+        // 22000), and the last line "ijkl" ends at its own end 33000 (not the 1000 ms estimate).
+        val s = stripState(listOf(line(1000, "abcd", end = 6000), line(20_000, "efgh"), line(30_000, "ijkl", end = 33_000)))
+        val strip = s.model.strip!!
+        assertEquals(6000.0, strip.wordLines!![0].endMs!!, 0.0)
+        assertEquals(null, strip.wordLines!![0].capMs)
+        assertEquals(null, strip.wordLines!![1].endMs)
+        assertEquals(2000.0, strip.wordLines!![1].capMs!!, 0.0)
+        assertEquals(3000L, strip.lastEstimateMs)
+        assertEquals(200.0 - strip.cells[0] - strip.lastGlyphCenters[0], plan(s, clock(), 6000.0).rawOffset, 1e-3)
+        assertTrue(plan(s, clock(), 3000.0).rawOffset > 200.0 - strip.cells[0] - strip.lastGlyphCenters[0] + 1.0)
+        assertEquals(200.0 - strip.cells[1] - strip.lastGlyphCenters[1], plan(s, clock(), 22_000.0).rawOffset, 1e-3)
+        assertEquals(200.0 - strip.cells[2] - strip.lastGlyphCenters[2], plan(s, clock(duration = 60_000), 33_000.0).rawOffset, 1e-3)
     }
 
     @Test

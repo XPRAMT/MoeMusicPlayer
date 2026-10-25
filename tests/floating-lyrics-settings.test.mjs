@@ -85,6 +85,14 @@ test('native overlay data keeps timed lines in order with one combined offset', 
   assert.deepEqual(buildFloatingLyricsNativeData(null, 0), { trackId: null, offsetMs: 0, durationMs: null, lines: [] });
 });
 
+test('native overlay data carries each line\'s own end, in the same time as its start', () => {
+  const data = { trackId: 't1', offsetMs: 0, lines: [{ startMs: 1000, endMs: 2500.6, text: 'a' }, { startMs: 3000, text: 'b' }] };
+  assert.deepEqual(buildFloatingLyricsNativeData(data, 200).lines, [
+    { startMs: 1000, endMs: 2501, text: 'a', translation: '' },
+    { startMs: 3000, text: 'b', translation: '' },
+  ]);
+});
+
 test('the lyrics settings tab falls back to general where it does not exist', () => {
   assert.equal(normalizeLyricsSettingsTab('taskbar', true), 'taskbar');
   assert.equal(normalizeLyricsSettingsTab('taskbar', false), 'general');

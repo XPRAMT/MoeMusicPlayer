@@ -120,6 +120,31 @@ test('word-timed lines are written as enhanced LRC; line-only lyrics stay as bef
   assert.equal(lyricsToText({ synced: true, lines: [{ startMs: 5000, text: 'plain line' }] }), '[00:05.00]plain line');
 });
 
+test('a line with its own end but no word timing keeps the end as one enhanced LRC word', () => {
+  const lyrics = {
+    synced: true,
+    lines: [
+      { startMs: 1000, endMs: 3250, text: 'Hello world', translation: '你好世界' },
+      { startMs: 5000, text: 'no end' },
+      { startMs: 6000, endMs: 6000, text: 'end not after start' },
+      { startMs: 7000, endMs: 9000, text: 'ab', words: [{ s: 7000, e: 7500, t: 'a' }, { s: 7500, e: 8000, t: 'b' }] },
+    ],
+  };
+  assert.equal(
+    lyricsToText(lyrics),
+    [
+      '[00:01.00]<00:01.00>Hello world<00:03.25>',
+      '[00:01.00]你好世界',
+      '[00:05.00]no end',
+      '[00:06.00]end not after start',
+      // Word timing wins over the line's own end.
+      '[00:07.00]<00:07.00>a<00:07.50>b<00:08.00>',
+    ].join('\n'),
+  );
+  // The shift moves the end too.
+  assert.match(lyricsToText(lyrics, 500), /^\[00:01\.50\]<00:01\.50>Hello world<00:03\.75>/);
+});
+
 test('translation rows stay line-level; romanization gets word stamps only with word timing', () => {
   const words = [{ s: 1000, e: 1500, t: 'ni ' }, { s: 1500, e: 2000, t: 'hao' }];
   const base = { startMs: 1000, text: 'ab', words: [{ s: 1000, e: 1500, t: 'a' }, { s: 1500, e: 2000, t: 'b' }], translation: 'AB', romanization: 'ni hao' };

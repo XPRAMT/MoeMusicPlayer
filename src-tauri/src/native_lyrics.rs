@@ -74,6 +74,9 @@ struct DataPayload {
 #[serde(rename_all = "camelCase")]
 struct LinePayload {
     start_ms: f64,
+    /// The line's own end (`LyricLineDto.endMs`), when its source gives one.
+    #[serde(default)]
+    end_ms: Option<f64>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
@@ -149,34 +152,42 @@ pub fn renderer(app: &AppHandle) -> Option<&'static NativeLyrics> {
         .as_ref()
 }
 
+/// A `taskbar-lyrics-data` payload as the renderer's lyrics (`None` when it does not parse; `Some(None)`: no track).
+/// Every time (start, own end, word times) stays in lyrics time; the renderer applies the offset to all alike.
+fn lyrics_data(payload: &str) -> Option<Option<LyricsData>> {
+    let data = serde_json::from_str::<DataPayload>(payload).ok()?;
+    Some(data.track_id.map(|track_id| {
+        LyricsData {
+            track_id,
+            offset_ms: data.offset_ms,
+            lines: data
+                .lines
+                .into_iter()
+                .map(|line| LyricLine {
+                    start_ms: line.start_ms,
+                    end_ms: line.end_ms.filter(|end| end.is_finite()),
+                    text: line.text.unwrap_or_default(),
+                    translation: line.translation.unwrap_or_default(),
+                    words: line
+                        .words
+                        .into_iter()
+                        .map(|w| LyricWord {
+                            start_ms: w.s,
+                            end_ms: w.e,
+                            text: w.t,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }))
+}
+
 fn listen(app: &AppHandle, renderer: NativeLyrics) {
     let r = renderer.clone();
     app.listen_any("taskbar-lyrics-data", move |event| {
-        if let Ok(data) = serde_json::from_str::<DataPayload>(event.payload()) {
-            r.set_lyrics(data.track_id.map(|track_id| {
-                LyricsData {
-                    track_id,
-                    offset_ms: data.offset_ms,
-                    lines: data
-                        .lines
-                        .into_iter()
-                        .map(|line| LyricLine {
-                            start_ms: line.start_ms,
-                            text: line.text.unwrap_or_default(),
-                            translation: line.translation.unwrap_or_default(),
-                            words: line
-                                .words
-                                .into_iter()
-                                .map(|w| LyricWord {
-                                    start_ms: w.s,
-                                    end_ms: w.e,
-                                    text: w.t,
-                                })
-                                .collect(),
-                        })
-                        .collect(),
-                }
-            }));
+        if let Some(data) = lyrics_data(event.payload()) {
+            r.set_lyrics(data);
         }
     });
     let r = renderer.clone();
@@ -317,4 +328,24 @@ pub fn apply_floating_chrome(app: &AppHandle, settings: &FloatingLyricsSettings)
             unlock_tip: unlock,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lyrics_data_carries_each_lines_own_end() {
+        let data = lyrics_data(
+            r#"{"trackId":"t","offsetMs":250,"lines":[{"startMs":1000,"endMs":3500,"text":"a"},{"startMs":4000,"text":"b","words":[{"s":4000,"e":4500,"t":"b"}]}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(data.offset_ms, Some(250.0));
+        assert_eq!(data.lines[0].end_ms, Some(3500.0));
+        assert_eq!(data.lines[1].end_ms, None);
+        assert_eq!(data.lines[1].words[0].end_ms, 4500.0);
+        assert_eq!(lyrics_data(r#"{"trackId":null}"#), Some(None));
+        assert_eq!(lyrics_data("nonsense"), None);
+    }
 }

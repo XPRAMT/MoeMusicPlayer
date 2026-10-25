@@ -26,6 +26,10 @@ pub use win::NativeLyrics;
 #[derive(Clone, Debug, PartialEq)]
 pub struct LyricLine {
     pub start_ms: f64,
+    /// The line's own end time when its source gives one (SRT/ASS cue end, yrc/QRC line length, an enhanced LRC
+    /// closing stamp), in the same lyrics time as `start_ms`; the continuous strip's end knot for a line without word
+    /// times (ADR 0041 D10).
+    pub end_ms: Option<f64>,
     pub text: String,
     pub translation: String,
     /// Word timing of the main text (ADR 0041), empty for a line-timed line; the words spell `text` (untrimmed).
@@ -39,11 +43,31 @@ pub struct LyricWord {
     pub text: String,
 }
 
+/// The UTF-16 word ranges `(start, len)` in the trimmed text and the `(start, end)` times of the words the "none" mode
+/// sweeps (`LyricLine::karaoke_words`).
+pub type KaraokeWords = (Vec<(usize, usize)>, Vec<(f64, f64)>);
+
 impl LyricLine {
     /// The UTF-16 ranges of the words in the trimmed text, when the line is word-timed and its words spell it.
     pub fn word_ranges(&self) -> Option<Vec<(usize, usize)>> {
         let words: Vec<&str> = self.words.iter().map(|w| w.text.as_str()).collect();
         player_lyrics_rules::word_utf16_ranges(&self.text, &words)
+    }
+
+    /// What the "none" mode sweeps (ADR 0041 D10): the UTF-16 ranges `(start, len)` in the trimmed text and the
+    /// `(start, end)` times of the line's own words when they spell it; for a line without word times that has its own
+    /// end time, one word spanning the whole trimmed text (`whole_line_word`). `None`: the line is not swept.
+    pub fn karaoke_words(&self) -> Option<KaraokeWords> {
+        if let Some(ranges) = self.word_ranges() {
+            let times = self.words.iter().map(|w| (w.start_ms, w.end_ms)).collect();
+            return Some((ranges, times));
+        }
+        let text = self.text.trim();
+        if !self.words.is_empty() || text.is_empty() {
+            return None;
+        }
+        let word = player_lyrics_rules::whole_line_word(self.start_ms, self.end_ms)?;
+        Some((vec![(0, text.encode_utf16().count())], vec![word]))
     }
 }
 
@@ -258,6 +282,51 @@ pub fn fit_font_size(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn line(text: &str, end_ms: Option<f64>, words: Vec<LyricWord>) -> LyricLine {
+        LyricLine {
+            start_ms: 1000.0,
+            end_ms,
+            text: text.to_owned(),
+            translation: String::new(),
+            words,
+        }
+    }
+
+    #[test]
+    fn a_line_with_its_own_end_is_swept_as_one_word_and_word_timed_lines_are_unchanged() {
+        // Start and its own end, no word times: one word over the trimmed text.
+        assert_eq!(
+            line(" 君の声 ", Some(3000.0), Vec::new()).karaoke_words(),
+            Some((vec![(0, 3)], vec![(1000.0, 3000.0)]))
+        );
+        // Neither words nor an end (or an end not after the start): not swept.
+        assert_eq!(line("君の声", None, Vec::new()).karaoke_words(), None);
+        assert_eq!(
+            line("君の声", Some(1000.0), Vec::new()).karaoke_words(),
+            None
+        );
+        // Word-timed: its own words, whatever its end.
+        let words = vec![
+            LyricWord {
+                start_ms: 1000.0,
+                end_ms: 1500.0,
+                text: "君の".into(),
+            },
+            LyricWord {
+                start_ms: 1500.0,
+                end_ms: 2000.0,
+                text: "声".into(),
+            },
+        ];
+        assert_eq!(
+            line("君の声", Some(3000.0), words).karaoke_words(),
+            Some((
+                vec![(0, 2), (2, 1)],
+                vec![(1000.0, 1500.0), (1500.0, 2000.0)]
+            ))
+        );
+    }
 
     #[test]
     fn fitting_and_effect_colour_match_the_js() {

@@ -228,9 +228,10 @@ pub fn karaoke_glide(spans: &[(f64, f64)], words: &[(f64, f64)]) -> Vec<GlidePie
 }
 
 /// One line of the continuous strip for the word glide: its start, its cell's left edge (px along the strip), its first
-/// glyph's centre (px from the cell's left edge), its last glyph's centre (px from the cell's left edge) and either,
-/// for a word-timed line, the end of its last word, or, for a line without word times, its duration cap
-/// (`crate::line_cap_ms` of its text; `None`: no cap).
+/// glyph's centre (px from the cell's left edge), its last glyph's centre (px from the cell's left edge) and either its
+/// end (a word-timed line: the end of its last word; a line without word times: its own end time from the file, not on
+/// the last line) or its duration cap (`crate::line_cap_ms` of its text; `None`: no cap). `crate::knot_line_ends`
+/// picks them per line.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KnotLine {
     pub start_ms: f64,
@@ -243,16 +244,17 @@ pub struct KnotLine {
 
 /// The continuous strip's glide knots `(lyrics ms, strip px on the lyric area's centre)`, for line- and word-timed
 /// lyrics alike. Each line is judged on its own; individual word times are ignored. Every line has its start (first
-/// glyph's centre on the area's centre). A word-timed line (`end_ms`) also has its end (the last word's end, last
-/// glyph's centre); a line without word times that is not the last line has one at `start_ms + cap_ms` (its duration
+/// glyph's centre on the area's centre). A line with an end (`end_ms`: the last word's end, or the line's own end time)
+/// also has its end knot (last glyph's centre); a line without one that is not the last line has one at
+/// `start_ms + cap_ms` (its duration
 /// cap, `crate::line_cap_ms`: 1000 ms per wide grapheme, 500 ms per other one), so a long interlude after it does not
 /// drag it across the whole gap. An end knot is skipped for a one-glyph line, an end not after the start, when the
 /// next line starts at or before it (for a capped line: the next start is within the cap, so nothing changes), or when
 /// the gap from the end to the next line's start would move faster than the line itself (the strip then glides from
-/// this line's start straight to the next start; the last line keeps its end). When the last line has no word times,
-/// `final_arrival_ms` (`final_arrival_ms`: 500 ms per wide grapheme, 250 ms per other one, capped at the track end)
-/// adds the terminal knot with its last glyph's centre, as the line glide (`strip_cubic`) does; a word-timed last line
-/// uses its own end instead. Times strictly increase (a later knot at or before an earlier one's time replaces it, so
+/// this line's start straight to the next start; the last line keeps its end). When the last line has no `end_ms`,
+/// `final_arrival_ms` (`crate::final_arrival_with_end_ms`: its own end time, else 500 ms per wide grapheme and 250 ms
+/// per other one; capped at the track end) adds the terminal knot with its last glyph's centre, as the line glide
+/// (`strip_cubic`) does; a word-timed last line uses its last word's end instead. Times strictly increase (a later knot at or before an earlier one's time replaces it, so
 /// the later line's start wins an overlap) and values never decrease.
 pub fn word_strip_knots(lines: &[KnotLine], final_arrival_ms: Option<f64>) -> Vec<(f64, f64)> {
     let start_of = |line: &KnotLine| line.cell_start + line.anchor.max(0.0);
@@ -506,6 +508,133 @@ mod tests {
             cap_ms: Some(crate::line_cap_ms(text)),
             ..line(start, cell, anchor, None, last)
         }
+    }
+
+    /// A line judged by `crate::knot_line_ends`: word end, else its own end, else the cap.
+    #[allow(clippy::too_many_arguments)]
+    fn judged(
+        start: f64,
+        cell: f64,
+        anchor: f64,
+        last: f64,
+        text: &str,
+        word_end: Option<f64>,
+        own_end: Option<f64>,
+        is_last: bool,
+    ) -> KnotLine {
+        let (end_ms, cap_ms) = crate::knot_line_ends(start, text, word_end, own_end, is_last);
+        KnotLine {
+            end_ms,
+            cap_ms,
+            ..line(start, cell, anchor, None, last)
+        }
+    }
+
+    /// Each line on its own (never per file): word times → the last word's end; else its own end (SRT cue end, yrc /
+    /// QRC line length, an enhanced LRC closing stamp) → that end; else → the cap. The last line: its own end, else the
+    /// terminal estimate.
+    #[test]
+    fn a_line_without_word_times_ends_at_its_own_end_time() {
+        assert_eq!(
+            crate::knot_line_ends(1000.0, "啊啊", Some(1800.0), Some(2500.0), false),
+            (Some(1800.0), None)
+        );
+        assert_eq!(
+            crate::knot_line_ends(1000.0, "啊啊", None, Some(2500.0), false),
+            (Some(2500.0), None)
+        );
+        // An end not after the start is no end: the cap applies.
+        assert_eq!(
+            crate::knot_line_ends(1000.0, "啊啊", None, Some(1000.0), false),
+            (None, Some(2000.0))
+        );
+        assert_eq!(
+            crate::knot_line_ends(1000.0, "啊啊", None, None, false),
+            (None, Some(2000.0))
+        );
+        // The last line's own end is the terminal knot, not an end knot.
+        assert_eq!(
+            crate::knot_line_ends(1000.0, "啊啊", None, Some(2500.0), true),
+            (None, Some(2000.0))
+        );
+        assert_eq!(
+            crate::final_arrival_with_end_ms(1000.0, "啊啊", Some(2500.0), None),
+            2500.0
+        );
+        assert_eq!(
+            crate::final_arrival_with_end_ms(1000.0, "啊啊", Some(2500.0), Some(2200.0)),
+            2200.0
+        );
+        assert_eq!(
+            crate::final_arrival_with_end_ms(1000.0, "啊啊", None, None),
+            2000.0
+        );
+        assert_eq!(
+            crate::final_arrival_with_end_ms(1000.0, "啊啊", Some(900.0), None),
+            2000.0
+        );
+
+        // The "none" mode sweeps such a line as one word over the whole line; without an end it is not swept.
+        assert_eq!(
+            crate::whole_line_word(1000.0, Some(2500.0)),
+            Some((1000.0, 2500.0))
+        );
+        assert_eq!(crate::whole_line_word(1000.0, None), None);
+        assert_eq!(crate::whole_line_word(1000.0, Some(1000.0)), None);
+        let sweep = karaoke_glide(&[(0.0, 120.0)], &[(1000.0, 2500.0)]);
+        assert_eq!(glide_value(&sweep, 1000.0), 0.0);
+        assert_eq!(glide_value(&sweep, 2500.0), 120.0);
+        assert!((glide_value(&sweep, 1750.0) - 60.0).abs() < 1e-6);
+
+        // One song mixing the three kinds: an SRT-like line with its own end before a long gap (its end, not the 2 s
+        // cap), a word-timed line, a line with neither (the cap), and a last line with its own end.
+        let lines = [
+            judged(1000.0, 0.0, 10.0, 30.0, "啊啊", None, Some(4000.0), false),
+            judged(
+                10000.0,
+                60.0,
+                10.0,
+                70.0,
+                "你好吗",
+                Some(11500.0),
+                Some(13000.0),
+                false,
+            ),
+            judged(20000.0, 140.0, 10.0, 30.0, "再见", None, None, false),
+            judged(
+                40000.0,
+                200.0,
+                10.0,
+                50.0,
+                "晚安啦",
+                None,
+                Some(46000.0),
+                true,
+            ),
+        ];
+        let arrival = crate::final_arrival_with_end_ms(40000.0, "晚安啦", Some(46000.0), None);
+        assert_eq!(
+            word_strip_knots(&lines, Some(arrival)),
+            vec![
+                (1000.0, 10.0),
+                (4000.0, 30.0),
+                (10000.0, 70.0),
+                (11500.0, 130.0),
+                (20000.0, 150.0),
+                (22000.0, 170.0),
+                (40000.0, 210.0),
+                (46000.0, 250.0),
+            ]
+        );
+        // An own end later than the next start (overlap): the next start replaces it.
+        let overlap = [
+            judged(1000.0, 0.0, 10.0, 30.0, "啊啊", None, Some(6000.0), false),
+            judged(5000.0, 60.0, 10.0, 30.0, "啊啊", None, Some(8000.0), true),
+        ];
+        assert_eq!(
+            word_strip_knots(&overlap, Some(8000.0)),
+            vec![(1000.0, 10.0), (5000.0, 70.0), (8000.0, 90.0)]
+        );
     }
 
     /// 十年有多长: 重新学会做梦和期望 (9 wide graphemes, 20 px each) at 03:35.19, then a 16 s interlude until
