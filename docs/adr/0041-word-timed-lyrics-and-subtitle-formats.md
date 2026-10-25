@@ -290,3 +290,9 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 - Windows 原生：`Look.font_weight`；DirectWrite 的 `DWRITE_FONT_WEIGHT` 只收 1..=999，設定值 1000 以 999 繪製（`dwrite_weight`）。點陣列改為 `(文字, 字級 px, 字重)`，主列用 `fontWeight`、譯文列用 −50，所以點陣鍵（`plan::raster_key`）含每一列的字重：字重不同的視窗不共用點陣。字重會改變文字寬度、第一與最後字形中心，所以連續模式的行寬量測鍵（`Win.measured`）含字重；設定改變時整份快取與量測清除並重新規劃（`Cmd::Look`），不是每幀。卡拉 OK 的白色與主色兩張表面用同一字重。行框以 Segoe UI Medium 的 ascent／descent 計算，沒有隨字重改變（同一字型家族各字重的垂直度量相同）。
 - Android：`LyricLineView.setLook` 帶字重，API 28 以上 `Typeface.create(Typeface.DEFAULT, weight, false)`；minSdk 24，更舊的系統只有一般與粗體，字重 ≥ 600 用粗體、否則一般（`FloatingLyricsRules.typefaceChoice`）。`LineLook`（`LineRasterCache` 的鍵）含字重，改變時所有行重新點陣化並重新量測；`stripFor` 的鍵含字重。字重隨 `floatingLyricsUpdate` 的 settings 傳入，不需新通道。
 - 非可變字型（Segoe UI、Roboto 等系統字型視版本）無法呈現所有字重，系統會對應到最近的可用字重，不特別處理。
+
+### 5.6 線上歌詞自動套用的門檻（現行規則，自 AGENTS.md 移入）
+
+- `player-core` 的 `auto_lyric_candidate`：在依分數排序的候選中，取第一個同步歌詞且通過 `passes_auto_match_gates` 的候選。門檻兩者都要過：標題正規化相似度 ≥ 0.88（`AUTO_MATCH_TITLE_MIN_SIMILARITY`），時長差 ≤ 2 秒（`AUTO_MATCH_MAX_DURATION_DIFF_MS`，任一方未知即不合格）。
+- 分數（`score_lyric_candidate`，夾在 0..1）只用於排序、不決定是否採用：標題 0.55、演出者 0.25、時長 0.15、專輯 0.05，缺欄位的項目不加分。D6 的逐字候選同分時排在行級候選之前，所以門檻不變。
+- 手動選擇永遠優先於自動套用。
