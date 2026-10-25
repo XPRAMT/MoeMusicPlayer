@@ -735,7 +735,8 @@ function nonFeedbackStyle(style) {
  * resize: `onChange`) and for resizes of the cover or its pane (`onResize`, which may come from the zoom's own
  * squeeze); MutationObserver and ResizeObserver callbacks run before the next paint. `onStyle` runs first for every
  * batch of mutations (the swipe feedback is mirrored there, in the same frame as the stage's write). Mutation records
- * for which `isOwn` is true (the action's own transform writes and swipe feedback) do not count as a change.
+ * for which `isOwn` is true (the action's own transform writes and swipe feedback), and records of an attribute the
+ * batch left at its old value (`unchangedInBatch`), do not count as a change.
  * @param {HTMLElement} node @param {() => void} onChange @param {() => void} onResize @param {() => void} onStyle
  * @param {(record: MutationRecord) => boolean} isOwn
  */
@@ -745,9 +746,9 @@ function observeCoverChanges(node, onChange, onResize, onStyle, isOwn) {
   if (typeof MutationObserver === 'function') {
     const mutations = new MutationObserver((records) => {
       onStyle();
-      if (records.some((record) => !isOwn(record))) onChange();
+      if (records.some((record) => !isOwn(record) && !unchangedInBatch(record, records))) onChange();
     });
-    mutations.observe(node, { attributes: true, attributeFilter: ['style', 'class', 'src'], subtree: true });
+    mutations.observe(node, { attributes: true, attributeFilter: ['style', 'class', 'src'], subtree: true, attributeOldValue: true });
     stops.push(() => mutations.disconnect());
   }
   if (typeof ResizeObserver === 'function') {
@@ -766,6 +767,22 @@ function observeCoverChanges(node, onChange, onResize, onStyle, isOwn) {
     stops.push(() => node.removeEventListener('load', onChange, true));
   }
   return { disconnect() { for (const stop of stops) stop(); } };
+}
+
+/**
+ * Whether the batch made no net change to `record`'s attribute: the old value of the batch's first record for that
+ * element and attribute equals the attribute's value now. The browser emits a record for every write, even one that
+ * changes nothing (swipe-dismiss's `classList.remove('is-swiping')` on a stage that never had the class, at every
+ * finger lift and at the pinch's synthetic pointercancel); such records are not a change of the cover. A record
+ * without an old value (attributeOldValue unsupported) counts as a change.
+ * @param {MutationRecord} record @param {MutationRecord[]} records
+ */
+function unchangedInBatch(record, records) {
+  const name = record.attributeName;
+  const target = /** @type {Element} */ (record.target);
+  if (!name || typeof target?.getAttribute !== 'function') return false;
+  const first = records.find((other) => other.target === target && other.attributeName === name) ?? record;
+  return first.oldValue !== undefined && first.oldValue === target.getAttribute(name);
 }
 
 /**

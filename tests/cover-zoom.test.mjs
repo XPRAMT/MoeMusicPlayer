@@ -713,25 +713,41 @@ test('swipe feedback geometry: parsed from computed values, removed from a read 
 
 /**
  * A 200x200 stage at layout centre `layout` for both actions (coverZoom and swipeDismiss): several listeners per type,
- * dispatchEvent, a style whose writes queue one MutationObserver batch per microtask like the browser, and a painted
- * rect that includes the swipe feedback.
+ * dispatchEvent, a style and a class list whose writes queue one MutationObserver record each (with its old value, also
+ * for a write that changes nothing) and one batch per microtask like the browser, and a painted rect that includes the
+ * swipe feedback.
  */
 function sharedStage(layout) {
   const listeners = new Map();
   const observers = [];
-  let pending = false;
+  let pending = [];
   let node;
-  const flush = () => { pending = false; for (const callback of observers) callback([{ target: node, attributeName: 'style' }]); };
-  const style = new Proxy({}, {
+  const flush = () => { const records = pending; pending = []; for (const callback of observers) callback(records); };
+  const record = (attributeName) => {
+    if (pending.length === 0) queueMicrotask(flush);
+    pending.push({ target: node, attributeName, oldValue: node.getAttribute(attributeName) });
+  };
+  const styleValues = {};
+  const style = new Proxy(styleValues, {
     set(target, key, value) {
+      record('style');
       target[key] = value;
-      if (!pending) { pending = true; queueMicrotask(flush); }
       return true;
     },
   });
+  const classes = new Set(['cover-stage', 'has-artwork']);
   node = {
     style, dataset: {}, offsetWidth: 200, offsetHeight: 200,
-    classList: { add() {}, remove() {} },
+    classList: {
+      add(name) { record('class'); classes.add(name); },
+      remove(name) { record('class'); classes.delete(name); },
+      contains: (name) => classes.has(name),
+    },
+    getAttribute: (name) => {
+      if (name === 'class') return [...classes].join(' ');
+      if (name === 'style') return Object.entries(styleValues).filter(([, value]) => value != null && value !== '').map(([key, value]) => `${key}: ${value};`).join(' ') || null;
+      return null;
+    },
     addEventListener: (type, handler) => { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); },
     removeEventListener: (type, handler) => { const list = listeners.get(type) ?? []; const i = list.indexOf(handler); if (i >= 0) list.splice(i, 1); },
     dispatchEvent(event) { for (const handler of [...(listeners.get(event.type) ?? [])]) handler(event); return true; },
@@ -948,6 +964,56 @@ test('pinch on a zoomed cover after the first finger moved (swipe feedback, synt
     assert.equal(drawn.length, 2);
   } finally {
     swipe?.destroy();
+    zoom?.destroy();
+    env.restore();
+    clearOverlayDom();
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});
+
+test('mutation records that leave the attribute at its old value (no-op class or style writes) do not hide the overlay', async () => {
+  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const { pane, canvases } = fakeOverlayDom();
+  const env = installSharedStageGlobals();
+  globalThis.requestAnimationFrame = () => 1;
+  globalThis.cancelAnimationFrame = () => {};
+  let zoom;
+  try {
+    const stage = sharedStage({ x: 300, y: 300 });
+    const { node } = stage;
+    pane.appendChild(node);
+    zoom = coverZoom(node, { initial: { scale: 3, x: 0, y: 0 }, settleLayout: () => Promise.resolve() });
+    stage.observers.push(...env.observers);
+    const overlay = canvases[0];
+    await wait(COVER_LAYER_IDLE_MS + 30);
+    assert.equal(overlay.style.opacity, '1');
+    // swipe-dismiss's up() on a stage that never had the class: a class record with no change.
+    node.classList.remove('is-swiping');
+    await settle();
+    assert.equal(overlay.style.opacity, '1', 'no-op class record');
+    // Added and removed in one batch: no net change.
+    node.classList.add('is-swiping');
+    node.classList.remove('is-swiping');
+    await settle();
+    assert.equal(overlay.style.opacity, '1', 'no net change in the batch');
+    // A real class change still hides it.
+    node.classList.add('is-swiping');
+    await settle();
+    assert.equal(overlay.style.opacity, '0', 'real class change');
+    // ...and so does a real style change after it is drawn again.
+    await wait(COVER_LAYER_IDLE_MS + 30);
+    assert.equal(overlay.style.opacity, '1');
+    node.style.width = '320px';
+    await settle();
+    assert.equal(overlay.style.opacity, '0', 'real style change');
+    // The owner writes the same (non-own) value again: no change.
+    await wait(COVER_LAYER_IDLE_MS + 30);
+    assert.equal(overlay.style.opacity, '1');
+    node.style.width = '320px';
+    await settle();
+    assert.equal(overlay.style.opacity, '1', 'no-op style record');
+  } finally {
     zoom?.destroy();
     env.restore();
     clearOverlayDom();
