@@ -212,6 +212,16 @@ export function buildFloatingLyricsNativeData(data, combinedOffsetMs, durationMs
   };
 }
 
+/**
+ * 「顯示在其他應用程式上層」 notice of the floating lyrics tab: Android only, and only once the status has been
+ * read and says the permission is missing (granted or still unknown → nothing, so it never flashes).
+ * @param {string | undefined | null} platform
+ * @param {{ canDrawOverlays?: boolean } | null | undefined} status
+ */
+export function floatingLyricsOverlayNoticeVisible(platform, status) {
+  return platform === 'android' && status != null && status.canDrawOverlays !== true;
+}
+
 /** The settings tabs of the lyrics section; the taskbar tab exists on Windows only. */
 export const LYRICS_SETTINGS_TABS = Object.freeze(['general', 'taskbar', 'floating']);
 export const LYRICS_SETTINGS_TAB_STORAGE_KEY = 'moe.settings.lyricsTab';

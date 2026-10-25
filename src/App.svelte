@@ -220,6 +220,7 @@
     FLOATING_LYRICS_WIDTH_PX,
     floatingLyricsWidthField,
     floatingLyricsWidthMax,
+    floatingLyricsOverlayNoticeVisible,
     pressFloatingLyricsNudge,
     LYRICS_SETTINGS_TAB_STORAGE_KEY,
     buildFloatingLyricsNativeData,
@@ -2720,13 +2721,20 @@
     }
   }
 
-  // Back from the system permission page (or from the overlay's own lock button): read the state again.
+  // Back from the system permission page (or from the overlay's own lock button): read the state again, so the
+  // 「顯示在其他應用程式上層」 notice disappears as soon as the permission is granted. The WebView may report the
+  // return either as visibilitychange or only as a window focus, so both trigger a read.
   $effect(() => {
     if (!isAndroidPlatform || settingsSection !== 'lyrics' || visibleLyricsSettingsTab !== 'floating') return;
     void refreshFloatingLyricsAndroidStatus();
     const onVisible = () => { if (document.visibilityState === 'visible') void refreshFloatingLyricsAndroidStatus(); };
+    const onFocus = () => void refreshFloatingLyricsAndroidStatus();
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
   });
 
   function setTaskbarLyricsSettings(patch: Partial<TaskbarLyricsSettings>): void {
@@ -4726,24 +4734,20 @@
                       alignLabel={tr("文字排版")}
                       withHideWhenPaused
                     >
+                      {#snippet displayNotice()}
+                    {#if floatingLyricsOverlayNoticeVisible(capabilities?.platform, floatingLyricsAndroidStatus)}
+                      <div class="cover-corner-setting">
+                        <span class="cover-corner-setting-label"><strong>{tr("顯示在其他應用程式上層")}</strong></span>
+                        <p class="taskbar-lyrics-monitor-hint">{tr("尚未允許：請在系統設定中允許 MoeMusicPlayer「顯示在其他應用程式上層」，浮動歌詞才會出現。")}</p>
+                        <button class="soft-button" type="button" onclick={openOverlayPermissionSettings}>{tr("開啟系統設定")}</button>
+                      </div>
+                    {/if}
+                      {/snippet}
                       {#snippet enable()}
                         <label class="lyrics-preference-toggle">
                           <input type="checkbox" checked={floatingLyricsSettings.enabled} onchange={(event) => setFloatingLyricsSettings({ enabled: event.currentTarget.checked })} />
                           <span><strong>{tr("啟用")}</strong><small>{tr("可以和工作列歌詞同時開啟")}</small></span>
                         </label>
-                      {/snippet}
-                      {#snippet displayExtra()}
-                    {#if capabilities?.platform === 'android'}
-                      <div class="cover-corner-setting">
-                        <span class="cover-corner-setting-label"><strong>{tr("顯示在其他應用程式上層")}</strong></span>
-                        <p class="taskbar-lyrics-monitor-hint">{floatingLyricsAndroidStatus?.canDrawOverlays
-                          ? tr("已允許。")
-                          : tr("尚未允許：請在系統設定中允許 MoeMusicPlayer「顯示在其他應用程式上層」，浮動歌詞才會出現。")}</p>
-                        {#if !floatingLyricsAndroidStatus?.canDrawOverlays}
-                          <button class="soft-button" type="button" onclick={openOverlayPermissionSettings}>{tr("開啟系統設定")}</button>
-                        {/if}
-                      </div>
-                    {/if}
                       {/snippet}
                       {#snippet position()}
                     <div class="cover-corner-setting" role="group" aria-labelledby="{scope}floating-lyrics-panel-label">

@@ -24,6 +24,7 @@
     withColor = true,
     withAnimation = true,
     withHideWhenPaused = false,
+    displayNotice,
     enable,
     displayExtra,
     sizeExtra,
@@ -44,7 +45,9 @@
     withAnimation?: boolean;
     /** 「暫停時隱藏」 (taskbar and floating lyrics only), after the page's own display toggles and before 動畫. */
     withHideWhenPaused?: boolean;
-    /** 「啟用」 toggle, first in 顯示. */
+    /** Page-only notice at the very top of 顯示, before 啟用 (floating lyrics on Android: the missing overlay permission). */
+    displayNotice?: Snippet;
+    /** 「啟用」 toggle, first in 顯示 after displayNotice. */
     enable?: Snippet;
     /** Page-only display settings, after 顯示譯文 and before 動畫. */
     displayExtra?: Snippet;
@@ -59,6 +62,7 @@
 
 <section class="quick-settings-group" aria-labelledby="{idPrefix}-display-heading">
   <h3 id="{idPrefix}-display-heading">{tr("顯示")}</h3>
+  {@render displayNotice?.()}
   {@render enable?.()}
   <label class="lyrics-preference-toggle">
     <input type="checkbox" checked={settings.showTranslation} onchange={(event) => onChange({ showTranslation: event.currentTarget.checked })} />
