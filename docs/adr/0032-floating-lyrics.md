@@ -353,6 +353,23 @@ row is 50 lighter. Windows draws it through DirectWrite (ADR 0034 amendment). An
 `Typeface.create(DEFAULT, weight, false)` on API 28+ and bold from 600 below that (minSdk is 24); it is part of
 `LineLook`, so a change re-rasterises every line. See ADR 0041 5.5.
 
+## Amendment: 「暫停時隱藏」
+
+`floatingLyrics.hideWhenPaused` (default on, saved apart from the taskbar's) reaches the overlay with the other look
+fields (`floatingLyricsUpdate` settings). The rules are the Windows ones (ADR 0034 amendment) in `PauseHide.kt`
+(`PauseHide.activity`, `PauseGate`, `PauseHideTest`): `ClockSnapshot` now carries `wantsPlay` (`playWhenReady`) and
+`buffering`, and `PlaybackService` also publishes on `onPlayWhenReadyChanged` (a pause while buffering changes no
+`isPlaying`). Playing shows; not wanted (paused) hides at once; buffering while wanted holds (a manual switch is
+buffering after `setMediaItem`, seeking too); ended, idle, no player and ready-but-held-back (audio focus) hide after
+3 s, which covers a natural end while the next file is checked by `MediaPreflight`. `LyricsClock.onPlayState` runs the
+overlay's check on the main thread after every wake publication and `clear()`. Hiding animates the window's
+`LayoutParams.alpha` from its current value to 0 (showing: to 1, or to the locked cap on Android 12+) over 200 ms with a
+`ValueAnimator` (the system animator scale applies, so "remove animations" makes it instant), sets
+`FLAG_NOT_TOUCHABLE` and hides the lock button at once, and once faded out the render thread stops asking for frames
+(`LyricsRenderThread.setSuspended`); showing resumes frames with a full redraw before the alpha rises. A new overlay
+starts hidden until the player is seen playing. A stop clears the clock (no snapshot), so on Android it hides after the
+3 s delay rather than at once.
+
 ## Android overlay rendering notes (frame cost)
 
 ### Current renderer: OpenGL ES on a render thread (default)

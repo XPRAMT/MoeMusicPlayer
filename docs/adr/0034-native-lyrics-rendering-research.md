@@ -363,6 +363,23 @@ lighter) and `plan::raster_key` includes every row's weight, so windows with dif
 `DWRITE_FONT_WEIGHT` accepts 1..=999: the setting's 1000 is drawn as 999. A look change clears the window's cache and
 its measurements, which include the weight, and re-plans the strip.
 
+## Amendment: 「暫停時隱藏」
+
+Taskbar and floating windows each have `hideWhenPaused` (default on, `Look.hide_when_paused`). The decision is the pure
+`pause_hide::PauseGate`, one per renderer and fed with every playback sample: `pause_hide::Activity::from_state` maps the
+snapshot's state (`playing` with the playing flag shows; `paused` and `stopped` hide at once; `buffering`, `loading`,
+`opening`, `initializing` and `playing` without the flag hold the current visibility; `ready`, `ended`, `empty`,
+`error` hide only after they lasted `IDLE_HIDE_DELAY_MS` = 3 s). Why the delay: during a switch the Windows worker
+reports `ready` for a moment after the new file opened (`load_track`) and `ended` while the queue walk checks the next
+file (`advance_ended_queue`), and the 500 ms page poll can sample either; a real pause never passes through them. A
+window that opens before anything plays starts hidden (no flash). A window whose setting is on and whose gate is not
+shown fades its root visual to 0 with one `ScalarKeyFrameAnimation` (200 ms, no key at 0 so a reversed fade starts
+where it is; instant when the system's client-area animations are off), becomes `WS_EX_TRANSPARENT` whatever the owner
+asked (so a locked floating window's padlock and a move-mode window take no input; the padlock rect and tooltip are
+cleared), and once the fade is over it is skipped by `refresh_dirty` and `sample_frame`, so a hidden window costs no
+frames and no refreshes; the renderer only wakes for a due idle hide. Showing fades back to 1 and redraws it. The
+switch alone (`Look::same_drawing`) does not clear rasters. Tests: `pause_hide::tests`.
+
 ## Amendment: Android renderer
 
 The Android floating lyrics follow the same model as the Windows renderer, on OpenGL ES instead of Windows.UI.Composition
