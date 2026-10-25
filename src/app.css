@@ -824,9 +824,13 @@ input:focus-visible {
   width: 100%;
   min-width: 0;
   height: 36px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   margin: 0 0 10px;
+  /* Lives in .sidebar-scroll: revealing it on focus (focusSidebarSearch) keeps the whole
+     field, border included, clear of the scroller edge. */
+  scroll-margin-block: 8px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -864,7 +868,7 @@ input:focus-visible {
   cursor: not-allowed;
 }
 
-/* Nav items scroll; brand, search and the pinned 設定 entry stay put. The scroller
+/* Search and nav items scroll together; the brand and the pinned 設定 entry stay put. The scroller
    extends into the sidebar padding so the active-item accent bar is not clipped. */
 .sidebar-scroll {
   display: flex;

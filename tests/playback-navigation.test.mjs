@@ -277,13 +277,19 @@ test('visible UI icons use Tabler components except the original brand mark', ()
   assert.match(playlistEntrySource, /sort: PlaylistListSort/);
 });
 
-test('sidebar nav items scroll while 設定 stays pinned, and narrow widths use the MOE logo panel', async () => {
+test('sidebar search and nav items scroll while the brand and 設定 stay pinned, and narrow widths use the MOE logo panel', async () => {
   const css = await (await import('node:fs/promises')).readFile(new URL('../src/app.css', import.meta.url), 'utf8');
+  const brandStart = appSource.indexOf('<div class="brand-lockup">');
   const scrollStart = appSource.indexOf('<div class="sidebar-scroll">');
   const settingsStart = appSource.indexOf('<nav class="sidebar-settings"');
-  assert.ok(scrollStart >= 0 && settingsStart > scrollStart);
+  assert.ok(brandStart >= 0 && scrollStart > brandStart && settingsStart > scrollStart, 'brand above the scroller, 設定 below it');
   const scrollBlock = appSource.slice(scrollStart, settingsStart);
+  assert.match(scrollBlock, /^<div class="sidebar-scroll">\s*<label class="sidebar-search-field">[\s\S]*?<\/label>\s*<nav class="primary-nav">/, 'search is the first item in the scroller, before 曲庫');
+  assert.ok(scrollBlock.indexOf('class="sidebar-search-field"') < scrollBlock.indexOf('<span class="nav-label">曲庫'));
+  assert.equal(appSource.split('class="sidebar-search-field"').length, 2, 'only one sidebar search field');
   assert.match(scrollBlock, /<nav class="primary-nav">[\s\S]*<PlaylistTree/);
+  assert.doesNotMatch(appSource, /librarySearchInput\?\.focus\(\)/, 'programmatic focus goes through focusSidebarSearch');
+  assert.match(css, /\.sidebar-search-field \{[^}]*flex: 0 0 auto;[^}]*scroll-margin-block: 8px;/s);
   assert.match(css, /\.sidebar-scroll \{[^}]*overflow-y: auto;/s);
   assert.match(appSource, /class="nav-panel-toggle"[\s\S]*?aria-expanded=\{isNavPanelOpen\}[\s\S]*?<img src=\{brandIcon\}/);
   assert.match(appSource, /class="nav-panel-scrim"[^>]*onclick=\{\(\) => closeNavPanel\('outside', false\)\}/);

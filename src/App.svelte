@@ -205,6 +205,7 @@
     toggleTaskbarLyricsMonitor,
   } from './lib/taskbar-lyrics-settings.js';
   import { NAV_PANEL_MEDIA_QUERY, NAV_PANEL_NAVIGATION_SELECTOR, reduceNavPanelOpen } from './lib/nav-panel.js';
+  import { focusSidebarSearch } from './lib/sidebar-search-focus.js';
   import PlaybackQueueList from './lib/PlaybackQueueList.svelte';
   import SyncErrorDetails from './lib/SyncErrorDetails.svelte';
   import NowPlayingArrangement from './lib/NowPlayingArrangement.svelte';
@@ -3735,7 +3736,7 @@
     libraryListRevision += 1;
     await closeNowPlaying();
     await tick();
-    librarySearchInput?.focus();
+    focusSidebarSearch(librarySearchInput);
   }
 
   async function openTrackField(field: TrackFieldFilter['field'], value?: string): Promise<void> {
@@ -3748,7 +3749,7 @@
     libraryFieldFilter = { field, value: resolved };
     libraryListRevision += 1;
     await tick();
-    librarySearchInput?.focus();
+    focusSidebarSearch(librarySearchInput);
   }
 
   function selectSettingsSection(section: SettingsSection): void {
@@ -4997,6 +4998,7 @@
       </div>
     </div>
 
+    <div class="sidebar-scroll">
     <label class="sidebar-search-field">
       <IconSearch size={16} stroke={1.6} aria-hidden="true" />
       <input
@@ -5010,7 +5012,6 @@
       />
     </label>
 
-    <div class="sidebar-scroll">
     <nav class="primary-nav">
       <button
         class="nav-link"
