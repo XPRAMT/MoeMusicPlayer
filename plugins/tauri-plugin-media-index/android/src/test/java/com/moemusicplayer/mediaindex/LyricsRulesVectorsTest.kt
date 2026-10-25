@@ -39,6 +39,13 @@ class LyricsRulesVectorsTest {
     }
 
     @Test
+    fun lineCap() {
+        for (c in vectors.cases("lineCap")) {
+            assertEquals(c.toString(), c.getLong("expected"), FloatingLyricsRules.lineCapMs(c.getString("text")))
+        }
+    }
+
+    @Test
     fun stripOffsetAndWindow() {
         for (c in vectors.cases("strip")) {
             val main = c.getJSONArray("main").floats()
@@ -120,7 +127,8 @@ class LyricsRulesVectorsTest {
             val linesJson = c.getJSONArray("lines")
             val lines = (0 until linesJson.length()).map { linesJson.getJSONObject(it) }.map {
                 WordLyricsRules.KnotLine(it.getDouble("startMs"), it.getDouble("cellStart"), it.getDouble("anchor"),
-                    if (it.isNull("endMs")) null else it.getDouble("endMs"), it.getDouble("lastCentre"))
+                    if (it.isNull("endMs")) null else it.getDouble("endMs"), it.getDouble("lastCentre"),
+                    if (it.isNull("capMs")) null else it.getDouble("capMs"))
             }
             val knots = WordLyricsRules.wordStripKnots(lines, if (c.isNull("finalArrivalMs")) null else c.getDouble("finalArrivalMs"))
             val expected = c.getJSONArray("knots").pairs()

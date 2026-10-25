@@ -171,6 +171,15 @@ fn line(
         anchor,
         end_ms,
         last_centre,
+        cap_ms: None,
+    }
+}
+
+/// A line without word times with its duration cap (`line_cap_ms` of its text).
+fn capped(start_ms: f64, cell_start: f64, anchor: f64, last_centre: f64, text: &str) -> KnotLine {
+    KnotLine {
+        cap_ms: Some(line_cap_ms(text)),
+        ..line(start_ms, cell_start, anchor, None, last_centre)
     }
 }
 
@@ -181,6 +190,7 @@ fn line_json(l: &KnotLine) -> J {
         ("anchor", num(l.anchor)),
         ("endMs", opt(l.end_ms)),
         ("lastCentre", num(l.last_centre)),
+        ("capMs", opt(l.cap_ms)),
     ])
 }
 
@@ -256,7 +266,7 @@ pub fn render() -> String {
     // wide grapheme), CJK, Latin with spaces, mixed kana + Latin, Hangul, full-width ASCII, half-width katakana,
     // e + U+0301 (one narrow grapheme), か + U+3099 (one wide), a wide emoji, U+3000 (F), ambiguous punctuation, ❤️
     // (U+2764 is N even with VS16) and a flag (regional indicators are N).
-    let final_arrival = [
+    let arrival_cases = [
         (1000.0, "abc", None),
         (1000.0, "", None),
         (1000.0, "夜に駆ける", Some(2500.0)),
@@ -275,17 +285,31 @@ pub fn render() -> String {
         (0.0, "“…”", None),
         (0.0, "❤\u{fe0f}", None),
         (0.0, "🇯🇵", None),
-    ]
-    .iter()
-    .map(|&(start, text, end)| {
-        J::Obj(vec![
-            ("lineStartMs", num(start)),
-            ("text", s(text)),
-            ("trackEndMs", opt(end)),
-            ("expected", num(final_arrival_ms(start, text, end))),
-        ])
-    })
-    .collect();
+    ];
+    let final_arrival = arrival_cases
+        .iter()
+        .map(|&(start, text, end)| {
+            J::Obj(vec![
+                ("lineStartMs", num(start)),
+                ("text", s(text)),
+                ("trackEndMs", opt(end)),
+                ("expected", num(final_arrival_ms(start, text, end))),
+            ])
+        })
+        .collect();
+    // The duration cap of a line without word times (ADR 0041 D10): the same graphemes and table, 1000 ms per wide
+    // one, 500 ms per other one, at least 500 ms.
+    let line_cap = arrival_cases
+        .iter()
+        .map(|&(_, text, _)| text)
+        .chain(["重新学会做梦和期望"])
+        .map(|text| {
+            J::Obj(vec![
+                ("text", s(text)),
+                ("expected", num(line_cap_ms(text))),
+            ])
+        })
+        .collect();
 
     let main = [100.0, 50.0, 80.0, 120.0];
     let translation = [60.0, 90.0, 0.0, 40.0];
@@ -621,6 +645,7 @@ pub fn render() -> String {
     .collect();
     // 十年有多长: a word-timed line, then the last line 啦啦啦啦啦啦啦啦 without word times glides from its first glyph to
     // its last at 500 ms per grapheme (231300 → 235300), or up to the track end.
+    let song_case = strip_glide_cases.len();
     let last_line = line(231300.0, 680.0, 10.0, None, 150.0);
     let with_last = |last: KnotLine| {
         let mut lines = song_tail.clone();
@@ -656,15 +681,58 @@ pub fn render() -> String {
         ],
         Some(5000.0),
     ));
+    // The cap of a line without word times (ADR 0041 D10): 1000 ms per wide grapheme, 500 ms per other one, when the
+    // next line starts later. 重新学会做梦和期望 (03:35.19, 9 wide graphemes, 20 px each) ends at 03:44.19 and the
+    // strip glides on to 啦啦啦啦啦啦啦啦 (03:51.30) over the remaining 7.11 s.
+    let cap_case = strip_glide_cases.len();
+    let interlude = vec![
+        capped(215190.0, 0.0, 10.0, 170.0, "重新学会做梦和期望"),
+        capped(231300.0, 220.0, 10.0, 150.0, "啦啦啦啦啦啦啦啦"),
+    ];
+    strip_glide_cases.push((
+        interlude,
+        Some(final_arrival_ms(231300.0, "啦啦啦啦啦啦啦啦", None)),
+    ));
+    // The next line within the cap: no end knot (unchanged).
+    strip_glide_cases.push((
+        vec![
+            capped(1000.0, 0.0, 10.0, 170.0, "重新学会做梦和期望"),
+            capped(8000.0, 220.0, 10.0, 150.0, "啦啦啦啦啦啦啦啦"),
+        ],
+        None,
+    ));
+    // A half-width English line: 11 graphemes (the space included) x 500 ms.
+    strip_glide_cases.push((
+        vec![
+            capped(1000.0, 0.0, 5.0, 105.0, "Hello world"),
+            capped(20000.0, 130.0, 5.0, 60.0, "Next"),
+        ],
+        None,
+    ));
+    // A line-timed song: capped lines before long gaps, lines whose next start is within the cap, a one-glyph line,
+    // and the terminal knot.
+    strip_glide_cases.push((
+        vec![
+            capped(1000.0, 0.0, 10.0, 90.0, "星を数えて"),
+            capped(3000.0, 120.0, 10.0, 130.0, "君と二人きり"),
+            capped(20000.0, 270.0, 10.0, 10.0, "嗯"),
+            capped(30000.0, 310.0, 5.0, 85.0, "la la la"),
+            capped(36000.0, 420.0, 10.0, 70.0, "夜明けまで"),
+        ],
+        Some(final_arrival_ms(36000.0, "夜明けまで", None)),
+    ));
     let mut song_knots = Vec::new();
-    let case_count = strip_glide_cases.len();
+    let mut cap_knots = Vec::new();
     let strip_glide = strip_glide_cases
         .iter()
         .enumerate()
         .map(|(i, (lines, arrival))| {
             let knots = word_strip_knots(lines, *arrival);
-            if i + 4 == case_count {
+            if i == song_case {
                 song_knots = knots.clone();
+            }
+            if i == cap_case {
+                cap_knots = knots.clone();
             }
             let (from, to) = match (knots.first(), knots.last()) {
                 (Some(a), Some(b)) => (a.0 - 100.0, b.0 + 100.0),
@@ -691,6 +759,11 @@ pub fn render() -> String {
         song_knots.last(),
         Some(&(235300.0, 830.0)),
         "the last line lost its terminal knot"
+    );
+    assert_eq!(
+        cap_knots.get(1),
+        Some(&(224190.0, 170.0)),
+        "重新学会做梦和期望 lost its capped end"
     );
 
     let mut centre_mask = Vec::new();
@@ -753,6 +826,7 @@ pub fn render() -> String {
         ("offsets", J::Arr(offsets)),
         ("scroll", J::Arr(scroll)),
         ("finalArrival", J::Arr(final_arrival)),
+        ("lineCap", J::Arr(line_cap)),
         ("strip", J::Arr(strip)),
         ("windows", J::Arr(windows)),
         ("breaks", J::Arr(breaks)),

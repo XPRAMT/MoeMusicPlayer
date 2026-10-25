@@ -270,6 +270,7 @@ class LyricsFramePlannerTest {
                 WordLyricsRules.KnotLine(
                     it.getDouble("startMs"), it.getDouble("cellStart"), it.getDouble("anchor"),
                     if (it.isNull("endMs")) null else it.getDouble("endMs"), it.getDouble("lastCentre"),
+                    if (it.isNull("capMs")) null else it.getDouble("capMs"),
                 )
             }
             val n = knotLines.size
@@ -318,6 +319,21 @@ class LyricsFramePlannerTest {
         assertTrue(mid.animating)
         assertEquals(200.0 - strip.cells[last] - strip.lastGlyphCenters[last], end.rawOffset, 1e-3)
         assertEquals(end.rawOffset, after.rawOffset, 0.0)
+    }
+
+    @Test
+    fun aLineWithoutWordTimesEndsAtItsCapBeforeALongInterludeInALineTimedSong() {
+        // ADR 0041 D10: "abcd" (4 narrow graphemes, cap 2000 ms) is followed 19 s later by the next line, so its last
+        // glyph reaches the centre at 3000 ms and the interlude takes the rest; the last line keeps its estimate.
+        val s = stripState(listOf(line(1000, "abcd"), line(20_000, "efgh")))
+        val strip = s.model.strip!!
+        assertEquals(2000.0, strip.wordLines!![0].capMs!!, 0.0)
+        assertEquals(200.0 - strip.cells[0] - strip.firstGlyphCenters[0], plan(s, clock(), 1000.0).rawOffset, 1e-3)
+        assertEquals(200.0 - strip.cells[0] - strip.lastGlyphCenters[0], plan(s, clock(), 3000.0).rawOffset, 1e-3)
+        val interlude = plan(s, clock(), 11_500.0).rawOffset
+        assertTrue(interlude < 200.0 - strip.cells[0] - strip.lastGlyphCenters[0] - 1.0)
+        assertTrue(interlude > 200.0 - strip.cells[1] - strip.firstGlyphCenters[1] + 1.0)
+        assertEquals(200.0 - strip.cells[1] - strip.firstGlyphCenters[1], plan(s, clock(), 20_000.0).rawOffset, 1e-3)
     }
 
     @Test

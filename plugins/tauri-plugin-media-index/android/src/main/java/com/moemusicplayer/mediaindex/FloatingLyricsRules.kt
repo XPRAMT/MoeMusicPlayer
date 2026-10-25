@@ -16,6 +16,15 @@ object FloatingLyricsRules {
     /** ... and per any other grapheme cluster (Latin, half-width katakana, ambiguous / neutral symbols, spaces). */
     const val LYRICS_NARROW_GRAPHEME_MS = 250L
 
+    /**
+     * The continuous strip's duration cap of a line without word times that is not the last line (ADR 0041 D10,
+     * `player-lyrics-rules` `line_cap_ms`): per wide grapheme cluster (the same table and segmentation as
+     * [terminalLineEstimateMs]) ...
+     */
+    const val LINE_CAP_WIDE_GRAPHEME_MS = 1_000L
+    /** ... and per any other grapheme cluster (spaces included); an empty line counts as one. */
+    const val LINE_CAP_NARROW_GRAPHEME_MS = 500L
+
     /** "No time" for the primitive (allocation-free) overloads that otherwise take a `Long?`. */
     const val NO_TIME = Long.MIN_VALUE
 
@@ -34,18 +43,29 @@ object FloatingLyricsRules {
      * [LYRICS_NARROW_GRAPHEME_MS] per other one; an empty line counts as one narrow grapheme. Same segmentation as
      * [graphemeCount].
      */
-    fun terminalLineEstimateMs(text: String): Long {
+    fun terminalLineEstimateMs(text: String): Long =
+        graphemeDurationMs(text, LYRICS_WIDE_GRAPHEME_MS, LYRICS_NARROW_GRAPHEME_MS)
+
+    /**
+     * How long the continuous strip may glide through a line without word times that is not the last line:
+     * [LINE_CAP_WIDE_GRAPHEME_MS] per wide grapheme cluster plus [LINE_CAP_NARROW_GRAPHEME_MS] per other one; an empty
+     * line counts as one narrow grapheme (`WordLyricsRules.KnotLine.capMs`).
+     */
+    fun lineCapMs(text: String): Long = graphemeDurationMs(text, LINE_CAP_WIDE_GRAPHEME_MS, LINE_CAP_NARROW_GRAPHEME_MS)
+
+    /** `wide` per grapheme cluster whose base code point is East Asian W/F, `narrow` per other one, at least `narrow`. */
+    private fun graphemeDurationMs(text: String, wide: Long, narrow: Long): Long {
         val iterator = java.text.BreakIterator.getCharacterInstance(java.util.Locale.ROOT)
         iterator.setText(text)
         var total = 0L
         var start = iterator.first()
         var end = iterator.next()
         while (end != java.text.BreakIterator.DONE) {
-            total += if (EastAsianWidth.isWide(text.codePointAt(start))) LYRICS_WIDE_GRAPHEME_MS else LYRICS_NARROW_GRAPHEME_MS
+            total += if (EastAsianWidth.isWide(text.codePointAt(start))) wide else narrow
             start = end
             end = iterator.next()
         }
-        return maxOf(LYRICS_NARROW_GRAPHEME_MS, total)
+        return maxOf(narrow, total)
     }
 
     /** Estimate the terminal glide end from the last line's graphemes, capped at track end when known. */

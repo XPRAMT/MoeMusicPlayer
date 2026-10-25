@@ -21,6 +21,11 @@ pub const STRIP_SEPARATOR: char = '\u{3000}';
 pub const WIDE_GRAPHEME_MS: f64 = 500.0;
 /// ... and per any other grapheme cluster (Latin, half-width katakana, ambiguous / neutral symbols, spaces).
 pub const NARROW_GRAPHEME_MS: f64 = 250.0;
+/// The continuous strip's duration cap of a line without word times (not the last line, ADR 0041 D10): per wide
+/// grapheme cluster (same table and segmentation as the terminal estimate) ...
+pub const LINE_CAP_WIDE_GRAPHEME_MS: f64 = 1000.0;
+/// ... and per any other grapheme cluster (spaces included); an empty line counts as one.
+pub const LINE_CAP_NARROW_GRAPHEME_MS: f64 = 500.0;
 /// A line fades between "current" and "not current" over this long, ending when the next line starts.
 pub const FADE_MS: f64 = 200.0;
 /// The "none" mode: how long the last line is shown when the track length is unknown.
@@ -85,14 +90,26 @@ pub fn grapheme_count(text: &str) -> usize {
 /// How long the terminal line is estimated to take: [`WIDE_GRAPHEME_MS`] per wide grapheme cluster plus
 /// [`NARROW_GRAPHEME_MS`] per other one; an empty line counts as one narrow grapheme.
 pub fn terminal_line_estimate_ms(text: &str) -> f64 {
+    grapheme_duration_ms(text, WIDE_GRAPHEME_MS, NARROW_GRAPHEME_MS)
+}
+
+/// How long the continuous strip may take to glide through a line without word times that is not the last line:
+/// [`LINE_CAP_WIDE_GRAPHEME_MS`] per wide grapheme cluster plus [`LINE_CAP_NARROW_GRAPHEME_MS`] per other one; an
+/// empty line counts as one narrow grapheme (`KnotLine::cap_ms`).
+pub fn line_cap_ms(text: &str) -> f64 {
+    grapheme_duration_ms(text, LINE_CAP_WIDE_GRAPHEME_MS, LINE_CAP_NARROW_GRAPHEME_MS)
+}
+
+/// `wide` per grapheme cluster whose base code point is East Asian W/F, `narrow` per other one, at least `narrow`.
+fn grapheme_duration_ms(text: &str, wide: f64, narrow: f64) -> f64 {
     let total: f64 = text
         .graphemes(true)
         .map(|g| match g.chars().next() {
-            Some(c) if east_asian_width::is_east_asian_wide(c) => WIDE_GRAPHEME_MS,
-            _ => NARROW_GRAPHEME_MS,
+            Some(c) if east_asian_width::is_east_asian_wide(c) => wide,
+            _ => narrow,
         })
         .sum();
-    total.max(NARROW_GRAPHEME_MS)
+    total.max(narrow)
 }
 
 /// The lyrics time at which the terminal line's glide ends: the line start plus [`terminal_line_estimate_ms`],
@@ -515,6 +532,16 @@ mod tests {
             final_arrival_ms(0.0, "啦啦啦啦啦啦啦啦", Some(3000.0)),
             3000.0
         );
+    }
+
+    #[test]
+    fn the_line_cap_is_a_second_per_wide_grapheme_and_half_a_second_per_other_one() {
+        assert_eq!(line_cap_ms("重新学会做梦和期望"), 9000.0);
+        assert_eq!(line_cap_ms("Hello world"), 5500.0);
+        assert_eq!(line_cap_ms("愛してる love you"), 8500.0);
+        assert_eq!(line_cap_ms(""), 500.0);
+        assert_eq!(line_cap_ms("か\u{3099}"), 1000.0);
+        assert_eq!(line_cap_ms("ｱｲｳ"), 1500.0);
     }
 
     #[test]

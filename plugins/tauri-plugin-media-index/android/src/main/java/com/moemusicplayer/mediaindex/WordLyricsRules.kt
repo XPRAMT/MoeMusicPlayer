@@ -18,8 +18,18 @@ internal object WordLyricsRules {
     /** From lyrics time `t` up to the next piece the value is `v + s u + c u^2` (`u` = time - `t`). */
     data class GlidePiece(val t: Double, val v: Double, val s: Double, val c: Double)
 
-    /** One line of the strip: its start, cell left edge, first glyph centre and, with word times, its last word's end and last glyph centre. */
-    class KnotLine(val startMs: Double, val cellStart: Double, val anchor: Double, val endMs: Double?, val lastCentre: Double)
+    /**
+     * One line of the strip: its start, cell left edge, first glyph centre, last glyph centre and either, with word
+     * times, its last word's end, or, without them, its duration cap (`FloatingLyricsRules.lineCapMs`; null: none).
+     */
+    class KnotLine(
+        val startMs: Double,
+        val cellStart: Double,
+        val anchor: Double,
+        val endMs: Double?,
+        val lastCentre: Double,
+        val capMs: Double? = null,
+    )
 
     /** `smooth_glide`: hard knots `(t, v)`, guides between knot j and j + 1, eased (speed 0) ends or not. */
     fun smoothGlide(hard: List<Pair<Double, Double>>, guides: List<List<Pair<Double, Double>>>, easeEnds: Boolean): List<GlidePiece> {
@@ -174,10 +184,12 @@ internal object WordLyricsRules {
     }
 
     /**
-     * The continuous strip's word glide knots `(lyrics ms, strip px)` (`word_strip_knots`). Each line is judged on its
-     * own: every line has its start knot, a word-timed line (`endMs`) its last word's end (skipped for one glyph, an
-     * end not after the start, or a gap to the next start faster than the line), and when the last line has no word
-     * times `finalArrivalMs` adds the terminal knot (its last glyph centre), as the line glide does.
+     * The continuous strip's glide knots `(lyrics ms, strip px)` (`word_strip_knots`), for line- and word-timed lyrics
+     * alike. Each line is judged on its own: every line has its start knot, a word-timed line (`endMs`) its last word's
+     * end, a line without word times that is not the last line one at `startMs + capMs` (its duration cap); an end knot
+     * is skipped for one glyph, an end not after the start, a next start at or before it (a capped line then moves as
+     * before), or a gap to the next start faster than the line. When the last line has no word times `finalArrivalMs`
+     * adds the terminal knot (its last glyph centre), as the line glide does.
      */
     fun wordStripKnots(lines: List<KnotLine>, finalArrivalMs: Double? = null): List<Pair<Double, Double>> {
         val knots = ArrayList<Pair<Double, Double>>(lines.size * 2)
@@ -190,7 +202,9 @@ internal object WordLyricsRules {
         for ((i, line) in lines.withIndex()) {
             val start = startOf(line)
             push(line.startMs, start)
-            val end = line.endMs ?: continue
+            // A line without word times ends at its cap, unless it is the last line (the terminal knot below).
+            val cap = line.capMs
+            val end = line.endMs ?: (if (cap != null && cap > 0.0 && i + 1 < lines.size) line.startMs + cap else null) ?: continue
             val value = line.cellStart + maxOf(0.0, line.lastCentre)
             if (!(end > line.startMs && value > start)) continue
             // The gap to the next start is faster than the line when (next - value) / (nextMs - end) >
@@ -202,6 +216,8 @@ internal object WordLyricsRules {
             if (next != null) {
                 val gapMs = next.startMs - end
                 if (gapMs <= 0.0 || (startOf(next) - value) * (end - line.startMs) > (value - start) * gapMs) continue
+            } else if (line.endMs == null) {
+                continue // a capped line only ends before a next line
             }
             push(end, value)
         }

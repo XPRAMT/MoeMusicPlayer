@@ -1,8 +1,8 @@
 //! The smoothed glide of word-timed lyrics (ADR 0041 D10), the reference for `WordLyricsRules.kt` and the Now Playing
-//! karaoke glide `src/lib/lyrics-glide.js` (checked by the vectors `examples/generate_vectors.rs` writes). `smooth_glide` drives the karaoke colour edge; the continuous
-//! strip's word glide ignores individual words and is a plain monotone cubic through per-line knots: every line's start,
-//! a word-timed line's end and, after a last line without word times, the terminal estimate (`word_strip_knots`,
-//! `knot_cubic`).
+//! karaoke glide `src/lib/lyrics-glide.js` (checked by the vectors `examples/generate_vectors.rs` writes).
+//! `smooth_glide` drives the karaoke colour edge; the continuous strip's glide ignores individual words and is a plain
+//! monotone cubic through per-line knots: every line's start, a word-timed line's end, another line's duration cap
+//! and, after a last line without word times, the terminal estimate (`word_strip_knots`, `knot_cubic`).
 //!
 //! Hard knots (the line start and end of a karaoke line) are hit exactly. Between two hard knots the curve
 //! follows soft guides (the words) with its speed kept within `GLIDE_MIN_SPEED..GLIDE_MAX_SPEED` x the stretch's
@@ -228,8 +228,9 @@ pub fn karaoke_glide(spans: &[(f64, f64)], words: &[(f64, f64)]) -> Vec<GlidePie
 }
 
 /// One line of the continuous strip for the word glide: its start, its cell's left edge (px along the strip), its first
-/// glyph's centre (px from the cell's left edge) and, for a word-timed line, the end of its last word and its last
-/// glyph's centre (px from the cell's left edge).
+/// glyph's centre (px from the cell's left edge), its last glyph's centre (px from the cell's left edge) and either,
+/// for a word-timed line, the end of its last word, or, for a line without word times, its duration cap
+/// (`crate::line_cap_ms` of its text; `None`: no cap).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KnotLine {
     pub start_ms: f64,
@@ -237,17 +238,22 @@ pub struct KnotLine {
     pub anchor: f64,
     pub end_ms: Option<f64>,
     pub last_centre: f64,
+    pub cap_ms: Option<f64>,
 }
 
-/// The continuous strip's word glide knots `(lyrics ms, strip px on the lyric area's centre)`.
-/// Each line is judged on its own; individual word times are ignored. Every line has its start (first glyph's centre on
-/// the area's centre). A word-timed line (`end_ms`) also has its end (the last word's end, last glyph's centre), which
-/// is skipped for a one-glyph line, an end not after the start, or when the gap from the end to the next line's start
-/// would move faster than the line itself (the strip then glides from this line's start straight to the next start;
-/// the last line keeps its end). When the last line has no word times, `final_arrival_ms` (`final_arrival_ms`: 500 ms
-/// per wide grapheme, 250 ms per other one, capped at the track end) adds the terminal knot with its last glyph's centre, as the line glide
-/// (`strip_cubic`) does; a word-timed last line uses its own end instead. Times strictly increase (a later knot at or
-/// before an earlier one's time replaces it, so the later line's start wins an overlap) and values never decrease.
+/// The continuous strip's glide knots `(lyrics ms, strip px on the lyric area's centre)`, for line- and word-timed
+/// lyrics alike. Each line is judged on its own; individual word times are ignored. Every line has its start (first
+/// glyph's centre on the area's centre). A word-timed line (`end_ms`) also has its end (the last word's end, last
+/// glyph's centre); a line without word times that is not the last line has one at `start_ms + cap_ms` (its duration
+/// cap, `crate::line_cap_ms`: 1000 ms per wide grapheme, 500 ms per other one), so a long interlude after it does not
+/// drag it across the whole gap. An end knot is skipped for a one-glyph line, an end not after the start, when the
+/// next line starts at or before it (for a capped line: the next start is within the cap, so nothing changes), or when
+/// the gap from the end to the next line's start would move faster than the line itself (the strip then glides from
+/// this line's start straight to the next start; the last line keeps its end). When the last line has no word times,
+/// `final_arrival_ms` (`final_arrival_ms`: 500 ms per wide grapheme, 250 ms per other one, capped at the track end)
+/// adds the terminal knot with its last glyph's centre, as the line glide (`strip_cubic`) does; a word-timed last line
+/// uses its own end instead. Times strictly increase (a later knot at or before an earlier one's time replaces it, so
+/// the later line's start wins an overlap) and values never decrease.
 pub fn word_strip_knots(lines: &[KnotLine], final_arrival_ms: Option<f64>) -> Vec<(f64, f64)> {
     let start_of = |line: &KnotLine| line.cell_start + line.anchor.max(0.0);
     let has_start = |line: &KnotLine| line.start_ms.is_finite() && start_of(line).is_finite();
@@ -265,21 +271,28 @@ pub fn word_strip_knots(lines: &[KnotLine], final_arrival_ms: Option<f64>) -> Ve
     for (i, line) in lines.iter().enumerate() {
         let start = start_of(line);
         push(line.start_ms, start);
-        if let Some(end) = line.end_ms {
+        // A line without word times ends at its cap, unless it is the last line (the terminal knot below).
+        let end = line.end_ms.or_else(|| {
+            line.cap_ms
+                .filter(|cap| *cap > 0.0 && i + 1 < lines.len())
+                .map(|cap| line.start_ms + cap)
+        });
+        if let Some(end) = end {
             let value = line.cell_start + line.last_centre.max(0.0);
             if end > line.start_ms && value > start {
                 // The gap to the next start is faster than the line when (next - value) / (next_ms - end) >
                 // (value - start) / (end - start); cross-multiplied (both spans positive) so every language agrees.
-                let faster_gap = lines[i + 1..]
-                    .iter()
-                    .find(|l| has_start(l))
-                    .is_some_and(|next| {
+                // A capped line only ends before a next line.
+                let skip = lines[i + 1..].iter().find(|l| has_start(l)).map_or(
+                    line.end_ms.is_none(),
+                    |next| {
                         let gap_ms = next.start_ms - end;
                         gap_ms <= 0.0
                             || (start_of(next) - value) * (end - line.start_ms)
                                 > (value - start) * gap_ms
-                    });
-                if !faster_gap {
+                    },
+                );
+                if !skip {
                     push(end, value);
                 }
             }
@@ -483,7 +496,79 @@ mod tests {
             anchor,
             end_ms: end,
             last_centre: last,
+            cap_ms: None,
         }
+    }
+
+    /// A line without word times, capped at `crate::line_cap_ms(text)`.
+    fn capped(start: f64, cell: f64, anchor: f64, last: f64, text: &str) -> KnotLine {
+        KnotLine {
+            cap_ms: Some(crate::line_cap_ms(text)),
+            ..line(start, cell, anchor, None, last)
+        }
+    }
+
+    /// 十年有多长: 重新学会做梦和期望 (9 wide graphemes, 20 px each) at 03:35.19, then a 16 s interlude until
+    /// 啦啦啦啦啦啦啦啦 at 03:51.30. The cap (9 × 1000 ms) ends the line at 03:44.19 with its last glyph on the centre;
+    /// the remaining 7.11 s glide on to 啦.
+    #[test]
+    fn a_line_without_word_times_ends_at_its_cap_before_a_long_interlude() {
+        let lines = [
+            capped(215190.0, 0.0, 10.0, 170.0, "重新学会做梦和期望"),
+            capped(231300.0, 220.0, 10.0, 150.0, "啦啦啦啦啦啦啦啦"),
+        ];
+        let arrival = crate::final_arrival_ms(231300.0, "啦啦啦啦啦啦啦啦", None);
+        let knots = word_strip_knots(&lines, Some(arrival));
+        assert_eq!(
+            knots,
+            vec![
+                (215190.0, 10.0),
+                (224190.0, 170.0),
+                (231300.0, 230.0),
+                (235300.0, 370.0)
+            ]
+        );
+        // The line moves through its glyphs during the cap, then the interlude takes the rest at a gentler pace.
+        let mid = knot_value(&knots, 219690.0);
+        assert!(mid > 10.0 && mid < 170.0, "{mid}");
+        let gap = knot_value(&knots, 227745.0);
+        assert!(gap > 170.0 && gap < 230.0, "{gap}");
+        // The next line within the cap: no end knot (the former motion).
+        let soon = [
+            capped(1000.0, 0.0, 10.0, 170.0, "重新学会做梦和期望"),
+            capped(8000.0, 220.0, 10.0, 150.0, "啦啦啦啦啦啦啦啦"),
+        ];
+        assert_eq!(
+            word_strip_knots(&soon, None),
+            vec![(1000.0, 10.0), (8000.0, 230.0)]
+        );
+        // Exactly at the cap: no end knot either.
+        let at_cap = [
+            capped(1000.0, 0.0, 10.0, 170.0, "重新学会做梦和期望"),
+            capped(10000.0, 220.0, 10.0, 150.0, "啦啦啦啦啦啦啦啦"),
+        ];
+        assert_eq!(
+            word_strip_knots(&at_cap, None),
+            vec![(1000.0, 10.0), (10000.0, 230.0)]
+        );
+        // Half-width English: 11 graphemes (the space included) × 500 ms.
+        let english = [
+            capped(1000.0, 0.0, 5.0, 105.0, "Hello world"),
+            capped(20000.0, 130.0, 5.0, 60.0, "Next"),
+        ];
+        assert_eq!(
+            word_strip_knots(&english, None),
+            vec![(1000.0, 5.0), (6500.0, 105.0), (20000.0, 135.0)]
+        );
+        // The last line keeps the terminal estimate, never its cap; one glyph gets no end knot.
+        let single = [
+            capped(1000.0, 0.0, 10.0, 10.0, "啊"),
+            capped(9000.0, 60.0, 10.0, 10.0, "啊"),
+        ];
+        assert_eq!(
+            word_strip_knots(&single, None),
+            vec![(1000.0, 10.0), (9000.0, 70.0)]
+        );
     }
 
     #[test]
@@ -605,8 +690,9 @@ mod tests {
         );
     }
 
-    /// A song without word times: the knot glide with the terminal knot is the line glide (`strip_cubic`) at every
-    /// time, for several layouts (the windows still take the line path for such a song, so it stays bit-exact).
+    /// A song without word times: when no line's cap ends before the next line starts, the knot glide with the
+    /// terminal knot is the line glide (`strip_cubic`) at every time, for several layouts (the windows now take the knot
+    /// path for such a song too, so its motion only changes where a cap applies).
     #[test]
     fn without_word_times_the_knot_glide_is_the_line_glide() {
         let mut seed = 5u64;
@@ -634,15 +720,21 @@ mod tests {
                 };
             }
             let arrival = starts[n - 1] + 200.0 + rand() * 4000.0;
+            // Every cap reaches the next line's start (half the cases exactly), so no cap applies: the motion must be
+            // the line glide's, as before the cap existed.
             let lines: Vec<KnotLine> = (0..n)
                 .map(|i| {
-                    line(
-                        starts[i],
-                        layout.starts[i],
-                        layout.anchors[i],
-                        None,
-                        lasts[i],
-                    )
+                    let room = starts.get(i + 1).map_or(1000.0, |next| next - starts[i]);
+                    KnotLine {
+                        cap_ms: (case % 3 != 0).then(|| room + (case % 2) as f64 * rand() * 1000.0),
+                        ..line(
+                            starts[i],
+                            layout.starts[i],
+                            layout.anchors[i],
+                            None,
+                            lasts[i],
+                        )
+                    }
                 })
                 .collect();
             let knots = word_strip_knots(&lines, Some(arrival));

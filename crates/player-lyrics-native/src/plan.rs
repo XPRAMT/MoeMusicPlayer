@@ -177,10 +177,10 @@ pub struct StripInput<'a> {
     pub rate: f64,
     /// Lyrics time at which `rate` returns to 1 (`None` = no correction running).
     pub slew_until_ms: Option<f64>,
-    /// Lyrics with a word-timed line (ADR 0041 D10): the per-line knots `(lyrics ms, strip px)` of the word glide
-    /// (`rules::word_strip_knots`, with the terminal knot when the last line has no word times, joined by
-    /// `rules::knot_cubic`); the target is the area's centre. `None`: the line glide (the same motion for lyrics
-    /// without word times). Every cell stays at factor 1 either way (the static centre mask dims instead).
+    /// The per-line knots `(lyrics ms, strip px)` of the glide (ADR 0041 D10: `rules::word_strip_knots` with the line
+    /// caps and the terminal knot, joined by `rules::knot_cubic`); the target is the area's centre. The windows always
+    /// pass them; `None` is the line glide `rules::strip_cubic` (the same motion when no cap applies). Every cell stays
+    /// at factor 1 either way (the static centre mask dims instead).
     pub word_glide: Option<&'a [(f64, f64)]>,
 }
 
@@ -530,6 +530,7 @@ mod tests {
                 anchor: 6.0,
                 end_ms: Some(2200.0),
                 last_centre: 85.0,
+                cap_ms: None,
             },
             rules::KnotLine {
                 start_ms: 3000.0,
@@ -537,6 +538,7 @@ mod tests {
                 anchor: 7.0,
                 end_ms: None,
                 last_centre: 0.0,
+                cap_ms: None,
             },
         ];
         let knots = rules::word_strip_knots(&lines, None);
@@ -596,6 +598,7 @@ mod tests {
                 anchor: 6.0,
                 end_ms: Some(2200.0),
                 last_centre: 85.0,
+                cap_ms: None,
             },
             rules::KnotLine {
                 start_ms: 3000.0,
@@ -603,6 +606,7 @@ mod tests {
                 anchor: 10.0,
                 end_ms: None,
                 last_centre: 150.0,
+                cap_ms: None,
             },
         ];
         let arrival = rules::final_arrival_ms(3000.0, "啦啦啦啦啦啦啦啦", None);

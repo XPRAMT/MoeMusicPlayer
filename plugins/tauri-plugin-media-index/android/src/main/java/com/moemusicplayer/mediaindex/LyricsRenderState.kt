@@ -73,9 +73,9 @@ internal class StripModel(
     val lastGlyphCenters: FloatArray,
     val firstGlyphCenters: FloatArray,
     /**
-     * Lyrics with a word-timed line (ADR 0041 D10): the word glide's per-line knot inputs (the planner adds the
-     * terminal estimate, which depends on the track length); null without any word-timed line (the line glide, the
-     * same motion).
+     * The glide's per-line knot inputs (ADR 0041 D10: start, a word-timed line's last word end, a line cap; the planner
+     * adds the terminal estimate, which depends on the track length). The builder always sets them; null is the line
+     * glide (`FloatingLyricsRules.stripKnots`, the same motion when no cap applies).
      */
     val wordLines: List<WordLyricsRules.KnotLine>?,
     /** The last line's terminal glide duration estimate (`FloatingLyricsRules.terminalLineEstimateMs`), made once. */

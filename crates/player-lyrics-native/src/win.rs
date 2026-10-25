@@ -2316,15 +2316,15 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             .collect();
         let sources: Vec<&crate::LyricLine> = lines.iter().map(|l| l.1).collect();
         let lines: Vec<(f64, &str, &str)> = lines.into_iter().map(|l| l.0).collect();
-        // Word-timed lines (ADR 0041 D10), each judged on its own: every line start is a knot, a word-timed line adds
-        // its last word's end, a last line without word times the terminal estimate. Line- and word-timed alike see
-        // the static continuous mask (experimental) instead of edge fades and line fades. Translations have no word
-        // effects: they follow the main row.
+        // Every line judged on its own (ADR 0041 D10), line- and word-timed lyrics alike: every line start is a knot, a
+        // word-timed line adds its last word's end, any other line but the last its duration cap (`line_cap_ms`) when
+        // the next line starts later, a last line without word times the terminal estimate. Without a cap that
+        // applies the knots are exactly the former line glide's (`strip_cubic`, tested in
+        // `without_word_times_the_knot_glide_is_the_line_glide`). Everything sees the static continuous mask
+        // (experimental) instead of edge fades and line fades. Translations have no word effects: they follow the main
+        // row.
         let word_ranges: Vec<Option<Vec<(usize, usize)>>> =
             sources.iter().map(|l| l.word_ranges()).collect();
-        // Without any word-timed line the knots are exactly the line glide's (`strip_cubic`, tested in
-        // `without_word_times_the_knot_glide_is_the_line_glide`), so such a song keeps the line path bit for bit.
-        let any_word_line = word_ranges.iter().any(Option::is_some);
         has_translation = lines.iter().any(|l| !l.2.is_empty());
         if lines.is_empty() {
             return Ok(false);
@@ -2395,30 +2395,29 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         let last = lines.last().unwrap();
         let arrival =
             rules::final_arrival_ms(last.0, last.1, ctx.clock.duration_ms.map(|d| d + offset));
-        let knots = any_word_line.then(|| {
-            let knot_lines: Vec<rules::KnotLine> = lines
-                .iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    // Only the line's start and, with its own word times, the end of its last word: the words
-                    // themselves never shape the glide.
-                    let end_ms = word_ranges[i]
-                        .as_ref()
-                        .and_then(|_| sources[i].words.last())
-                        .map(|w| w.end_ms);
-                    rules::KnotLine {
-                        start_ms: l.0,
-                        cell_start: layout.starts[i],
-                        anchor: layout.anchors[i],
-                        end_ms,
-                        last_centre: last_centres[i],
-                    }
-                })
-                .collect();
-            rules::word_strip_knots(&knot_lines, Some(arrival))
-        });
+        let knot_lines: Vec<rules::KnotLine> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                // Only the line's start and, with its own word times, the end of its last word, or else its
+                // duration cap: the words themselves never shape the glide.
+                let end_ms = word_ranges[i]
+                    .as_ref()
+                    .and_then(|_| sources[i].words.last())
+                    .map(|w| w.end_ms);
+                rules::KnotLine {
+                    start_ms: l.0,
+                    cell_start: layout.starts[i],
+                    anchor: layout.anchors[i],
+                    end_ms,
+                    last_centre: last_centres[i],
+                    cap_ms: end_ms.is_none().then(|| rules::line_cap_ms(l.1)),
+                }
+            })
+            .collect();
+        let knots = rules::word_strip_knots(&knot_lines, Some(arrival));
         let input = plan::StripInput {
-            word_glide: knots.as_deref(),
+            word_glide: Some(&knots),
             starts: &starts,
             layout: &layout,
             view_width: area.width,

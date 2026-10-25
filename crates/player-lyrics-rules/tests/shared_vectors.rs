@@ -79,6 +79,13 @@ fn rules_match_the_shared_vectors() {
             &c.to_string(),
         );
     }
+    for c in cases(&v, "lineCap") {
+        close(
+            line_cap_ms(c["text"].as_str().unwrap()),
+            f(&c["expected"]),
+            &c.to_string(),
+        );
+    }
     for c in cases(&v, "strip") {
         let mut layout = layout_strip(&fs(&c["main"]), &fs(&c["translation"]), f(&c["gap"]));
         if c["anchors"].is_array() {
@@ -204,6 +211,7 @@ fn word_rules_match_the_shared_vectors() {
                 anchor: f(&l["anchor"]),
                 end_ms: l["endMs"].as_f64(),
                 last_centre: f(&l["lastCentre"]),
+                cap_ms: l["capMs"].as_f64(),
             })
             .collect();
         let knots = word_strip_knots(&lines, c["finalArrivalMs"].as_f64());

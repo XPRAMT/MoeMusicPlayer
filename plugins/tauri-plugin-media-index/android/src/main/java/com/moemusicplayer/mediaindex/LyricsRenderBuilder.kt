@@ -183,18 +183,16 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
         val lastCenters = FloatArray(kept.size) { main.lastGlyphCenter(texts[it]) }
         val firstCenters = FloatArray(kept.size) { main.firstGlyphCenter(texts[it]) }
         val (cells, widths) = FloatingLyricsRules.stripLayout(mainWidths, translationWidths, main.width("　"))
-        // Each line on its own (ADR 0041 D10): a word-timed line adds its last word's end, the others only their start.
-        // Without any word-timed line the knots are exactly the line glide's, so that path is kept.
-        val wordLines = if (kept.any { it.wordRanges != null }) {
-            kept.mapIndexed { index, line ->
-                val times = line.wordTimes
-                val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
-                WordLyricsRules.KnotLine(
-                    line.startMs.toDouble(), cells[index].toDouble(), firstCenters[index].toDouble(), end, lastCenters[index].toDouble(),
-                )
-            }
-        } else {
-            null
+        // Each line on its own (ADR 0041 D10), line- and word-timed lyrics alike: a word-timed line adds its last word's
+        // end, any other line its duration cap (used when the next line starts later); without a cap that applies the
+        // knots are exactly the former line glide's.
+        val wordLines = kept.mapIndexed { index, line ->
+            val times = line.wordTimes
+            val end = if (line.wordRanges != null && times != null) times.lastOrNull()?.second else null
+            WordLyricsRules.KnotLine(
+                line.startMs.toDouble(), cells[index].toDouble(), firstCenters[index].toDouble(), end, lastCenters[index].toDouble(),
+                if (end == null) FloatingLyricsRules.lineCapMs(texts[index]).toDouble() else null,
+            )
         }
         return StripModel(
             LongArray(kept.size) { kept[it].startMs }, texts, translations, cells, widths, mainWidths, translationWidths,
