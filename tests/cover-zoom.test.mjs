@@ -171,9 +171,10 @@ test('wheel steps and pinch moves are coalesced into one apply and one rect read
     assert.ok(Math.abs(zooms[0].scale - Math.exp(0.45)) < 1e-9, 'the three factors multiplied');
     assert.equal('coverGesture' in node.dataset, true);
     assert.equal('coverZoomed' in node.dataset, true);
-    // The follow-up settle frame re-pins the anchor with at most one more read and one write.
-    assert.equal(frames.length, 1);
-    frames.shift()();
+    // The layout the scale change caused is committed in a microtask of the same frame (before paint): the anchor is
+    // re-pinned there with one more read and at most one more write, not in a later frame.
+    assert.equal(frames.length, 0, 'no follow-up frame');
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(reads(), 2);
     assert.ok(zooms.length <= 2);
     action.destroy();
@@ -210,4 +211,85 @@ test('a pinch applies the latest positions of both fingers once per frame', asyn
     delete globalThis.requestAnimationFrame;
     delete globalThis.cancelAnimationFrame;
   }
+});
+
+test('FLIP: the inverse transform paints the moved cover exactly where it was', async () => {
+  const { flipTransform, coverZoomTransform } = await import('../src/lib/cover-zoom.js');
+  // Zoomed 3.2x: the painted box is 640 wide, centred at x 523.7; the restored layout box is 200 wide, centred at 412.1.
+  const from = { left: 523.7 - 320, top: 100, width: 640, height: 640 };
+  const to = { left: 412.1 - 100, top: 420, width: 200, height: 200 };
+  const flip = flipTransform(from, to);
+  assert.ok(Math.abs(flip.scale - 3.2) < 1e-9);
+  assert.ok(Math.abs(flip.x - 111.6) < 1e-9);
+  assert.ok(Math.abs(flip.y - (100 + 320 - (420 + 100))) < 1e-9);
+  // Applied around the layout centre it reproduces the old centre and size.
+  assert.ok(Math.abs(412.1 + flip.x - 523.7) < 1e-9);
+  assert.ok(Math.abs(to.width * flip.scale - from.width) < 1e-9);
+  assert.match(coverZoomTransform(flip), /^translate\(111\.60px, -100\.00px\) scale\(3\.2000\)$/);
+  assert.deepEqual(flipTransform(to, to), { scale: 1, x: 0, y: 0 });
+});
+
+test('reset commits the final layout and the compensating glide in the same task, with no uncompensated frame', async () => {
+  const { coverZoom } = await import('../src/lib/cover-zoom.js');
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const { node, listeners } = fakeCover({ left: 100, top: 100, width: 200, height: 200 });
+    // The layout box moves when the owner has committed the identity state (the lyrics column snaps back).
+    let layoutCommitted = false;
+    node.getBoundingClientRect = () => (layoutCommitted
+      ? { left: 40, top: 100, width: 200, height: 200 }
+      : { left: 100, top: 100, width: 200, height: 200 });
+    const animations = [];
+    node.animate = (keyframes, timing) => {
+      const animation = { keyframes, timing, currentTime: 0, cancel() { this.cancelled = true; }, onfinish: null };
+      animations.push(animation);
+      return animation;
+    };
+    const events = [];
+    const action = coverZoom(node, {
+      initial: { scale: 2, x: 0, y: 0 },
+      onZoom: (state) => { events.push(['zoom', state.scale]); layoutCommitted = true; },
+      settleLayout: () => { events.push(['settle']); return Promise.resolve(); },
+    });
+    assert.equal(node.style.transform, 'translate(0.00px, 0.00px) scale(2.0000)');
+    listeners.get('dblclick')();
+    // Synchronously: layout committed (owner told, transform and attribute cleared), glide not yet started.
+    assert.deepEqual(events, [['zoom', 1], ['settle']]);
+    assert.equal(node.style.transform, '');
+    assert.equal('coverZoomed' in node.dataset, false);
+    assert.equal('coverResetting' in node.dataset, true);
+    assert.equal(animations.length, 0);
+    await Promise.resolve(); await Promise.resolve();
+    // Same task, before any frame: the glide starts from the painted box (centre 200, size 200 -> layout centre 140).
+    assert.equal(frames.length, 0, 'nothing waits for a later frame');
+    assert.equal(animations.length, 1);
+    assert.equal(animations[0].keyframes[0].transform, 'translate(60.00px, 0.00px) scale(1.0000)');
+    assert.equal(animations[0].keyframes[1].transform, 'translate(0px, 0px) scale(1)');
+    assert.equal(animations[0].timing.duration, 160);
+    animations[0].onfinish();
+    assert.equal('coverResetting' in node.dataset, false);
+    action.destroy();
+    assert.equal('coverGesture' in node.dataset, false);
+  } finally {
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});
+
+test('source shape: reset has no timer or later frame between the layout commit and its compensation', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8');
+  const reset = source.slice(source.indexOf('  function reset()'), source.indexOf('  /** @param {{ left: number, top: number, width: number, height: number }} from @param {number} [elapsedMs] */'));
+  assert.doesNotMatch(reset, /setTimeout|raf\(|requestAnimationFrame/);
+  assert.ok(reset.lastIndexOf('apply({ ...COVER_ZOOM_IDENTITY }, false)') < reset.indexOf('settleLayout'));
+  assert.ok(reset.indexOf('getBoundingClientRect') < reset.lastIndexOf('apply({ ...COVER_ZOOM_IDENTITY }, false)'));
+  const glide = source.slice(source.indexOf('  function startGlide'), source.indexOf('  function endGlide'));
+  assert.doesNotMatch(glide, /setTimeout|raf\(|requestAnimationFrame/);
+  assert.match(glide, /flipTransform\(from, node\.getBoundingClientRect\(\)\)/);
+  // The per-step squeeze is re-pinned in a microtask of the same frame, never by scheduling another frame.
+  const repin = source.slice(source.indexOf('  function repin'), source.indexOf('  /** Back to the original size'));
+  assert.doesNotMatch(repin, /schedule\(|raf\(|setTimeout/);
+  assert.match(repin, /settleLayout/);
 });

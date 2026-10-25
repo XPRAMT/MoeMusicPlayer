@@ -137,6 +137,20 @@ export function anchoredZoom(geometry, u, target, nextScale) {
 }
 
 /**
+ * FLIP: the transform that makes a cover whose layout has already moved/resized to `to` (its un-transformed box) paint
+ * exactly where `from` (the box it was painted at) was. Both are client rects read in the same frame.
+ * @param {{ left: number, top: number, width: number, height: number }} from @param {{ left: number, top: number, width: number, height: number }} to
+ * @returns {CoverZoomState}
+ */
+export function flipTransform(from, to) {
+  return {
+    scale: to.width > 0 ? from.width / to.width : 1,
+    x: from.left + from.width / 2 - (to.left + to.width / 2),
+    y: from.top + from.height / 2 - (to.top + to.height / 2),
+  };
+}
+
+/**
  * An activity flag that turns on at the first `poke()` and off `idleMs` after the last one (or `end()` at once);
  * `hold()` keeps it on until `release()`. `onChange(active)` fires only on a real change.
  * @param {number} idleMs @param {(active: boolean) => void} onChange
@@ -175,9 +189,11 @@ export function createIdleGate(idleMs, onChange, timers = { set: (fn, ms) => set
  *
  * Cost per animation frame (ADR 0036): all input (wheel factors, both fingers, pan) is accumulated and applied by ONE
  * requestAnimationFrame callback, which reads the cover rect once at the very start (layout is clean there, so the read
- * forces nothing), then only writes (transform, data attributes, onZoom).
+ * forces nothing), then only writes (transform, data attributes, onZoom). A scale change moves the layout (the lyrics
+ * column is squeezed); the owner's `settleLayout()` (Svelte `tick`) resolves once that layout is committed, and the
+ * transform is re-pinned in the SAME frame, in a microtask before paint, so no frame is ever painted uncompensated.
  * @param {HTMLElement} node
- * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, onZoomingChange?: (zooming: boolean) => void, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
+ * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, onZoomingChange?: (zooming: boolean) => void, settleLayout?: () => unknown, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
  */
 export function coverZoom(node, params) {
   let options = params;
@@ -194,16 +210,18 @@ export function coverZoom(node, params) {
   let wheelPending = null;
   /** The content point under the cursor for the current wheel run; reused until the cursor really moves. @type {{ u: { x: number, y: number }, x: number, y: number } | null} */
   let wheelAnchor = null;
-  /** After a scale change the layout moved: one more frame re-pins the anchor. @type {{ u: { x: number, y: number }, x: number, y: number } | null} */
-  let settle = null;
+  let repinToken = 0;
+  let destroyed = false;
+  /** The running reset glide (Web Animation) and the observer that re-aims it if the layout moves again before paint. @type {Animation | null} */
+  let glide = null;
+  /** @type {ResizeObserver | null} */
+  let glideObserver = null;
   /** @type {{ x: number, y: number, t: number } | null} */
   let lastTap = null;
   let suppressClick = false;
   let dispatchingCancel = false;
   let resetting = false;
   let frameId = 0;
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let resetTimer = null;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const active = () => options.enabled !== false;
   const hasRaf = () => typeof requestAnimationFrame === 'function';
@@ -256,7 +274,7 @@ export function coverZoom(node, params) {
       pin = { u: wheelAnchor.u, x, y };
       next = anchoredZoom(geo, pin.u, pin, state.scale * factor);
     } else if (pinch && pointers.size >= 2) {
-      if (!pinch.dirty && !settle) return;
+      if (!pinch.dirty) return;
       const [a, b] = [...pointers.values()];
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       if (!pinch.u) pinch.u = contentOffsetAt(geo, state, pinch.startX, pinch.startY);
@@ -266,48 +284,86 @@ export function coverZoom(node, params) {
     } else if (pan && pointers.size === 1 && pan.dirty) {
       pan.dirty = false;
       next = clampCoverZoom({ scale: state.scale, x: pan.ox + (pan.cx - pan.x), y: pan.oy + (pan.cy - pan.y) }, geo.width, geo.height);
-    } else if (settle) {
-      next = anchoredZoom(geo, settle.u, settle, state.scale);
     }
     const scaleChanged = next !== null && next.scale !== state.scale;
-    settle = null;
     if (next && (scaleChanged || Math.abs(next.x - state.x) >= 0.01 || Math.abs(next.y - state.y) >= 0.01)) apply(next, false);
-    // The scale change moves the layout (squeeze) after this write: re-pin the anchor in one more frame.
-    if (scaleChanged && pin) { settle = pin; schedule(); }
+    // The scale change moves the layout (squeeze) after this write: re-pin the anchor before this frame is painted.
+    if (scaleChanged && pin) repin(pin);
   }
 
-  /** Back to the original size: the transform glides first, the layout (and onZoom) follows when it ends, and the cover is
-   *  carried from where it was to where the new layout puts it. */
+  /** Once the owner has committed the layout this scale change caused (a microtask, still before paint), measure the
+   *  cover again and put the anchor point back under the cursor/fingers: the squeeze never shows for a frame.
+   *  @param {{ u: { x: number, y: number }, x: number, y: number }} pin */
+  function repin(pin) {
+    const token = ++repinToken;
+    Promise.resolve(options.settleLayout?.()).then(() => {
+      if (destroyed || token !== repinToken || resetting || !active()) return;
+      const geo = coverGeometry(node.getBoundingClientRect(), state);
+      size = { width: geo.width, height: geo.height };
+      const next = anchoredZoom(geo, pin.u, pin, state.scale);
+      if (Math.abs(next.x - state.x) >= 0.01 || Math.abs(next.y - state.y) >= 0.01) apply(next, false);
+    }, () => {});
+  }
+
+  /** Back to the original size (FLIP): the final layout is committed at once (the lyrics column and the squeeze snap at
+   *  frame 0 together with the glide), and in the same task, before paint, the cover is put back where it was painted
+   *  (inverse transform) and glides to identity. Never an uncompensated frame. */
   function reset() {
     if (state.scale === COVER_ZOOM_REST || resetting) return;
-    wheelPending = null; wheelAnchor = null; settle = null;
-    if (reduced() || !hasRaf()) {
+    wheelPending = null; wheelAnchor = null; repinToken += 1;
+    if (reduced() || !hasRaf() || typeof node.animate !== 'function') {
       apply({ ...COVER_ZOOM_IDENTITY }, false);
       return;
     }
     resetting = true;
     layerGate.hold();
-    node.style.transition = `transform ${COVER_RESET_MS}ms ease`;
-    node.style.transform = '';
-    resetTimer = setTimeout(() => {
-      resetTimer = null;
-      const before = node.getBoundingClientRect(); // identity transform: the old layout centre (the one forced read)
-      zoomGate.poke();
-      apply({ ...COVER_ZOOM_IDENTITY }, false);
-      raf(() => {
-        const after = node.getBoundingClientRect(); // the new layout centre, after the owner's update
-        const dx = (before.left + before.width / 2) - (after.left + after.width / 2);
-        const dy = (before.top + before.height / 2) - (after.top + after.height / 2);
-        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) { resetting = false; layerGate.release(); return; }
-        node.style.transition = 'none';
-        node.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
-        raf(() => {
-          node.style.transition = `transform ${COVER_RESET_MS}ms ease`;
-          node.style.transform = '';
-          resetTimer = setTimeout(() => { resetTimer = null; resetting = false; layerGate.release(); }, COVER_RESET_MS + 20);
-        });
+    zoomGate.hold();
+    const from = node.getBoundingClientRect(); // where the cover is painted now (zoomed layout, current transform)
+    node.dataset.coverResetting = '';
+    apply({ ...COVER_ZOOM_IDENTITY }, false); // final layout: transform cleared, attributes dropped, owner told
+    Promise.resolve(options.settleLayout?.()).then(() => beginGlide(from), () => beginGlide(from));
+  }
+
+  /** @param {{ left: number, top: number, width: number, height: number }} from @param {number} [elapsedMs] */
+  function startGlide(from, elapsedMs = 0) {
+    glide?.cancel();
+    glide = null;
+    const start = flipTransform(from, node.getBoundingClientRect()); // animation cancelled: the un-transformed layout box
+    const animation = node.animate(
+      [{ transform: `translate(${start.x.toFixed(2)}px, ${start.y.toFixed(2)}px) scale(${start.scale.toFixed(4)})` }, { transform: 'translate(0px, 0px) scale(1)' }],
+      { duration: COVER_RESET_MS, easing: 'ease' },
+    );
+    animation.currentTime = elapsedMs;
+    animation.onfinish = endGlide;
+    glide = animation;
+  }
+
+  /** @param {{ left: number, top: number, width: number, height: number }} from */
+  function beginGlide(from) {
+    if (destroyed || !resetting) return;
+    startGlide(from);
+    if (typeof ResizeObserver === 'function') {
+      const started = performance.now();
+      let first = true;
+      // The owner can still resize the cover/pane in this frame's rendering step (e.g. its own ResizeObserver): re-aim
+      // the glide from the same starting box before anything is painted.
+      glideObserver = new ResizeObserver(() => {
+        if (first) { first = false; return; }
+        if (glide) startGlide(from, performance.now() - started);
       });
-    }, COVER_RESET_MS + 20);
+      glideObserver.observe(node);
+      if (node.parentElement) glideObserver.observe(node.parentElement);
+    }
+  }
+
+  function endGlide() {
+    glideObserver?.disconnect();
+    glideObserver = null;
+    glide = null;
+    delete node.dataset.coverResetting;
+    resetting = false;
+    zoomGate.release();
+    layerGate.release();
   }
 
   /** @param {WheelEvent} event */
@@ -432,7 +488,7 @@ export function coverZoom(node, params) {
       // The owner can drop the zoom from outside (an enlarged cover is reset when the track changes): when it says
       // the scale is back at 1 while this element is still zoomed, follow it.
       if (next.syncScale === COVER_ZOOM_REST && state.scale !== COVER_ZOOM_REST && !resetting) {
-        pointers.clear(); pinch = null; pan = null; lastTap = null; wheelPending = null; wheelAnchor = null; settle = null;
+        pointers.clear(); pinch = null; pan = null; lastTap = null; wheelPending = null; wheelAnchor = null; repinToken += 1;
         apply({ ...COVER_ZOOM_IDENTITY }, false, false);
         layerGate.end();
       }
@@ -441,7 +497,10 @@ export function coverZoom(node, params) {
     },
     destroy() {
       if (frameId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
-      if (resetTimer) clearTimeout(resetTimer);
+      destroyed = true;
+      glide?.cancel();
+      glideObserver?.disconnect();
+      delete node.dataset.coverResetting;
       zoomGate.end();
       layerGate.end();
       node.removeEventListener('wheel', wheel);
