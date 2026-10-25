@@ -474,13 +474,16 @@
     node.style.animationTimingFunction = animation.easing;
   }
 
-  function observeLyricRow(node: HTMLElement, index: number) {
-    const update = (nextIndex: number) => {
-      node.dataset.layoutIndex = String(nextIndex);
-      node.dataset.layoutGeneration = String((isTimed ? timedLayout : plainLayout).generation);
+  // Rows are keyed by their line index only (not by layout generation): a re-wrap (the cover zoom settles, the column
+  // width changes) updates the existing row elements in place, so the browser keeps their layers and nothing blanks
+  // while new rows would be rasterised. The generation is passed in so the row is re-tagged and measured again.
+  function observeLyricRow(node: HTMLElement, row: { index: number; generation: number }) {
+    const update = (next: { index: number; generation: number }) => {
+      node.dataset.layoutIndex = String(next.index);
+      node.dataset.layoutGeneration = String(next.generation);
       rowObserver?.observe(node, { box: 'border-box' });
     };
-    update(index);
+    update(row);
     return {
       update,
       destroy() { rowObserver?.unobserve(node); },
@@ -905,7 +908,7 @@
       >
         <div class="lyrics-spacer lyrics-edge-spacer" data-edge-spacer="head" style={`height:${timedEdgePadding}px`} aria-hidden="true"></div>
         <div class="lyrics-spacer" data-virtual-spacer="before" style={`height:${timedWindow.beforeHeight}px`} aria-hidden="true"></div>
-        {#each timedRenderedRows as timelineIndex (`${timelineIndex}:${timedLayout.generation}`)}
+        {#each timedRenderedRows as timelineIndex (timelineIndex)}
           {@const row = timedLines[timelineIndex]}
           <div
             class="lyric-line"
@@ -913,7 +916,7 @@
             class:active={timelineIndex === visibleActiveTimedIndex}
             data-lyric-index={row.index}
             data-timeline-index={timelineIndex}
-            use:observeLyricRow={timelineIndex}
+            use:observeLyricRow={{ index: timelineIndex, generation: timedLayout.generation }}
             style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.mainOpacityPercent, preferences.secondaryOpacityPercent)};--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
             aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
@@ -953,9 +956,9 @@
         data-total-height={plainTotalHeight}
       >
         <div class="lyrics-spacer" style={`height:${plainWindow.beforeHeight}px`} aria-hidden="true"></div>
-        {#each plainRenderedRows as rowIndex (`${rowIndex}:${plainLayout.generation}`)}
+        {#each plainRenderedRows as rowIndex (rowIndex)}
           {@const line = lines[rowIndex]}
-          <div class="lyric-line plain-lyric-line" class:empty={plainLayout.heights[rowIndex] === 0} data-lyric-index={rowIndex} use:observeLyricRow={rowIndex} style={`--lyric-gap-after:${plainLayout.gaps[rowIndex]}px`}>
+          <div class="lyric-line plain-lyric-line" class:empty={plainLayout.heights[rowIndex] === 0} data-lyric-index={rowIndex} use:observeLyricRow={{ index: rowIndex, generation: plainLayout.generation }} style={`--lyric-gap-after:${plainLayout.gaps[rowIndex]}px`}>
             {#if line.text?.trim()}<p class="lyric-primary">{line.text}</p>{/if}
             {#if preferences.showRomanization && line.romanization?.trim()}<p class="lyric-romanization">{line.romanization}</p>{/if}
             {#if preferences.showTranslation && line.translation?.trim()}<p class="lyric-translation">{line.translation}</p>{/if}
@@ -1090,7 +1093,10 @@
     min-height: 168px;
     max-height: min(56vh, 620px);
     flex: 1 1 auto;
-    overflow: auto;
+    /* Never scrolls sideways (rows wrap to the width). Hidden at all times, not only while frozen, so the freeze ending
+       changes no scroller property (the scroll layer stays as it is; ADR 0036). */
+    overflow-x: hidden;
+    overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 24%, #000 76%, transparent 100%);
     mask-image: linear-gradient(to bottom, transparent 0%, #000 24%, #000 76%, transparent 100%);
@@ -1098,11 +1104,8 @@
     scrollbar-width: thin;
   }
 
-  /* The cover is being zoomed: the rows keep the text layout of the last settled width and the narrowing column clips them. */
-  .lyrics-lines-viewport[data-layout-frozen] {
-    overflow-x: hidden;
-  }
-
+  /* The cover is being zoomed: the rows keep the text layout of the last settled width and the narrowing column clips them
+     (layout only; the viewport already clips sideways). */
   .lyrics-lines-viewport[data-layout-frozen] .lyric-line {
     width: var(--lyrics-frozen-width, 100%);
     max-width: none;

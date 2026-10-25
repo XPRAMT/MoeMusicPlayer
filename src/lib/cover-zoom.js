@@ -3,6 +3,8 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-reserve in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
+import { coverDrawPlan, coverOverlayWanted, intersectRects, snapRectToDevicePixels } from './cover-overlay.js';
+
 export const COVER_ZOOM_MIN = 0.5;
 export const COVER_ZOOM_REST = 1;
 export const COVER_ZOOM_MAX = 10;
@@ -11,11 +13,14 @@ export const COVER_DOUBLE_TAP_MS = 300;
 export const COVER_DOUBLE_TAP_SLOP_PX = 24;
 export const COVER_PAN_SLOP_PX = 6;
 /** No zoom input for this long = the zoom gesture is over: the lyrics re-wrap and re-centre once. */
-export const COVER_ZOOM_SETTLE_MS = 150;
-/** The cover keeps its own compositor layer (will-change) this long after the last input, then is re-rasterised. */
+export const COVER_ZOOM_SETTLE_MS = 50;
+/** No input for this long = the cover has settled: the overlay canvas draws the visible part sharp (ADR 0036). */
 export const COVER_LAYER_IDLE_MS = 200;
-const COVER_RESET_MS = 160;
+/** The double-click / double-tap reset glide. */
+export const COVER_RESET_MS = 200;
 const COVER_WHEEL_ANCHOR_SLOP_PX = 2;
+/** The cover image bleeds this far past the stage edges (app.css `.cover-stage.has-artwork .cover-stage-image`). */
+const COVER_IMAGE_BLEED_PX = 1;
 
 /** @typedef {{ scale: number, x: number, y: number }} CoverZoomState */
 /** @type {CoverZoomState} */
@@ -192,6 +197,16 @@ export function createIdleGate(idleMs, onChange, timers = { set: (fn, ms) => set
  * forces nothing), then only writes (transform, data attributes, onZoom). A scale change moves the layout (the lyrics
  * column is squeezed); the owner's `settleLayout()` (Svelte `tick`) resolves once that layout is committed, and the
  * transform is re-pinned in the SAME frame, in a microtask before paint, so no frame is ever painted uncompensated.
+ *
+ * Layers (ADR 0036): the stage is a compositor layer for its whole life (app.css: permanent `will-change: transform`
+ * and `z-index`), so no gesture or animation ever creates or tears down a layer. A will-change layer keeps the raster
+ * scale it was promoted at, so the action adds one persistent overlay <canvas> next to the stage (in the artwork pane):
+ * after the cover settles at a scale other than the promote-time one, the visible part is drawn into it at device
+ * resolution from the source-resolution image; the reset glide animates a copy drawn into the same canvas at the
+ * screen-resolution thumbnail size instead of animating the stage (a running transform animation makes Chromium pick
+ * the raster scale from the animation's largest scale, which on a phone is a ~3000 px tiled layer that is not ready in
+ * time; a canvas is a texture, never tiled). The overlay is only shown/hidden (opacity) and the stage's image only
+ * hidden (visibility) under the reset copy: paint-only changes.
  * @param {HTMLElement} node
  * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, onZoomingChange?: (zooming: boolean) => void, settleLayout?: () => unknown, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
  */
@@ -222,16 +237,21 @@ export function coverZoom(node, params) {
   let dispatchingCancel = false;
   let resetting = false;
   let frameId = 0;
+  /** The scale the stage's layer was promoted (first rasterised) at: when the action starts and each time the page opens. */
+  let promotedScale = 1;
+  let wasActive = params.enabled !== false;
   const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const active = () => options.enabled !== false;
   const hasRaf = () => typeof requestAnimationFrame === 'function';
   const raf = (/** @type {() => void} */ fn) => (hasRaf() ? requestAnimationFrame(fn) : (fn(), 0));
 
-  // will-change: transform only while a gesture runs. Left on, Chromium keeps the raster scale it had when the
-  // layer was promoted, so a cover zoomed in afterwards stays blurry; dropping it re-rasters at the settled scale.
+  const overlay = createOverlayCanvas(node);
+
+  // Input activity: on at the first input of a gesture (the overlay is hidden, the transformed stage is what moves),
+  // off COVER_LAYER_IDLE_MS after the last one (the settled cover is drawn sharp into the overlay).
   const layerGate = createIdleGate(COVER_LAYER_IDLE_MS, (on) => {
-    if (on) node.dataset.coverGesture = '';
-    else delete node.dataset.coverGesture;
+    if (on) hideOverlay();
+    else drawSettled();
   });
   const zoomGate = createIdleGate(COVER_ZOOM_SETTLE_MS, (on) => {
     if (!on) wheelAnchor = null;
@@ -249,6 +269,57 @@ export function coverZoom(node, params) {
     else delete node.dataset.coverZoomed;
     if (notify) options.onZoom?.(state, size);
   }
+
+  /** The decoded cover image, or null (no artwork: the fallback art is not drawn into the overlay). */
+  function coverImage() {
+    const image = /** @type {HTMLImageElement | null} */ (node.querySelector?.('img') ?? null);
+    return image && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null;
+  }
+
+  function hideOverlay() {
+    if (!overlay) return;
+    if (overlay.shown) overlay.hide();
+    delete node.dataset.coverOverlay;
+  }
+
+  /**
+   * Draw the cover into the overlay and show it (same task: it is never shown before it has been drawn). `visual` is the
+   * stage's painted rect at `scale`, `visible` the client rect to cover. `hideStage` hides the stage's own image in the
+   * same commit (the reset copy, which does not cover where the stage now is); the sharp view leaves it painted under
+   * the overlay so its tiles stay ready for the next gesture.
+   * @param {Rect} visual @param {number} scale @param {Rect} visible @param {boolean} hideStage
+   */
+  function drawOverlay(visual, scale, visible, hideStage) {
+    const image = coverImage();
+    if (!overlay || !image) return false;
+    const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1;
+    const snapped = snapRectToDevicePixels(visible, dpr);
+    if (!snapped) return false;
+    const plan = coverDrawPlan({ visual, scale, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight, bleed: COVER_IMAGE_BLEED_PX, visible: snapped, dpr });
+    if (!plan) return false;
+    const radius = parseFloat(getComputedStyle(node).borderTopLeftRadius) || 0;
+    if (!overlay.draw(image, plan, snapped, radius * scale * dpr)) return false;
+    if (hideStage) node.dataset.coverOverlay = '';
+    else delete node.dataset.coverOverlay;
+    return true;
+  }
+
+  /** The settled cover (no input for COVER_LAYER_IDLE_MS): draw only its visible part, sharp. */
+  function drawSettled() {
+    if (destroyed || resetting || layerGate.active || !active() || !coverOverlayWanted(state.scale, promotedScale)) return;
+    const visual = node.getBoundingClientRect();
+    const visible = visual.width > 0 ? clipToAncestors(node, visual) : null;
+    if (!visible || !drawOverlay(visual, state.scale, visible, false)) hideOverlay();
+  }
+
+  /** Something outside the gesture moved or resized the cover (window resize, swipe feedback, new image): fall back to
+   *  the stage at once (same frame) and draw again once it has been quiet. */
+  function invalidateOverlay() {
+    if (destroyed || resetting) return;
+    hideOverlay();
+    if (coverOverlayWanted(state.scale, promotedScale)) layerGate.poke();
+  }
+  const overlayObservers = observeCoverChanges(node, invalidateOverlay);
 
   function schedule() {
     if (frameId) return;
@@ -312,7 +383,9 @@ export function coverZoom(node, params) {
     if (state.scale === COVER_ZOOM_REST || resetting) return;
     wheelPending = null; wheelAnchor = null; repinToken += 1;
     if (reduced() || !hasRaf() || typeof node.animate !== 'function') {
+      hideOverlay();
       apply({ ...COVER_ZOOM_IDENTITY }, false);
+      layerGate.poke();
       return;
     }
     resetting = true;
@@ -328,8 +401,12 @@ export function coverZoom(node, params) {
   function startGlide(from, elapsedMs = 0) {
     glide?.cancel();
     glide = null;
-    const start = flipTransform(from, node.getBoundingClientRect()); // animation cancelled: the un-transformed layout box
-    const animation = node.animate(
+    const to = node.getBoundingClientRect(); // animation cancelled: the un-transformed layout box
+    const start = flipTransform(from, to);
+    // The copy at the screen-resolution thumbnail size glides, not the stage (see the action's doc comment). Without a
+    // decoded image (fallback art) the stage itself glides.
+    const target = overlay && drawOverlay(to, 1, to, true) ? overlay.element : node;
+    const animation = target.animate(
       [{ transform: `translate(${start.x.toFixed(2)}px, ${start.y.toFixed(2)}px) scale(${start.scale.toFixed(4)})` }, { transform: 'translate(0px, 0px) scale(1)' }],
       { duration: COVER_RESET_MS, easing: 'ease' },
     );
@@ -341,6 +418,7 @@ export function coverZoom(node, params) {
   /** @param {{ left: number, top: number, width: number, height: number }} from */
   function beginGlide(from) {
     if (destroyed || !resetting) return;
+    hideOverlay(); // a sharp overlay from before the tap is replaced by the copy in this same task
     startGlide(from);
     if (typeof ResizeObserver === 'function') {
       const started = performance.now();
@@ -360,6 +438,8 @@ export function coverZoom(node, params) {
     glideObserver?.disconnect();
     glideObserver = null;
     glide = null;
+    // Same task: the copy goes and the stage's image (already at its final scale) comes back in one commit.
+    hideOverlay();
     delete node.dataset.coverResetting;
     resetting = false;
     zoomGate.release();
@@ -382,13 +462,14 @@ export function coverZoom(node, params) {
   function down(event) {
     if (!active() || resetting) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    // Any finger or button on the cover may move it (pinch, pan, swipe feedback): the stage shows until all are up.
+    layerGate.hold();
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = { distance: Math.max(1, pointerDistance(a, b)), scale: state.scale, startX: (a.x + b.x) / 2, startY: (a.y + b.y) / 2, u: null, dirty: false };
       pan = null;
       lastTap = null;
       zoomGate.hold();
-      layerGate.hold();
       // Let the swipe-to-skip gesture on the same element drop the first finger (it ignores pointercancel dismissals).
       const [firstId] = [...pointers.keys()];
       // Our own up() listens for pointercancel too, so mark this one as synthetic and ignore it there.
@@ -422,7 +503,6 @@ export function coverZoom(node, params) {
       pan.cy = event.clientY;
       pan.dirty = true;
       suppressClick = true;
-      layerGate.poke();
       if (event.cancelable) event.preventDefault();
       schedule();
     }
@@ -434,8 +514,8 @@ export function coverZoom(node, params) {
     const wasPinching = pinch !== null;
     const moved = pan?.moved === true;
     pointers.delete(event.pointerId);
-    if (pointers.size < 2 && pinch) { pinch = null; zoomGate.release(); layerGate.release(); }
-    if (pointers.size === 0) pan = null;
+    if (pointers.size < 2 && pinch) { pinch = null; zoomGate.release(); }
+    if (pointers.size === 0) { pan = null; layerGate.release(); }
 
     if (wasPinching || moved) {
       setTimeout(() => { suppressClick = false; }, 0);
@@ -472,6 +552,8 @@ export function coverZoom(node, params) {
     size = { width: node.offsetWidth, height: node.offsetHeight };
     apply({ ...initial }, false, false);
   }
+  promotedScale = state.scale;
+  if (coverOverlayWanted(state.scale, promotedScale)) layerGate.poke();
 
   node.addEventListener('wheel', wheel, { passive: false });
   node.addEventListener('pointerdown', down);
@@ -489,9 +571,18 @@ export function coverZoom(node, params) {
       // the scale is back at 1 while this element is still zoomed, follow it.
       if (next.syncScale === COVER_ZOOM_REST && state.scale !== COVER_ZOOM_REST && !resetting) {
         pointers.clear(); pinch = null; pan = null; lastTap = null; wheelPending = null; wheelAnchor = null; repinToken += 1;
+        hideOverlay();
         apply({ ...COVER_ZOOM_IDENTITY }, false, false);
-        layerGate.end();
+        if (coverOverlayWanted(state.scale, promotedScale)) layerGate.poke();
+        else layerGate.end();
       }
+      // The page (re)opened: its layers are created now, at the current scale.
+      if (active() && !wasActive) {
+        promotedScale = state.scale;
+        hideOverlay();
+        if (coverOverlayWanted(state.scale, promotedScale)) layerGate.poke();
+      }
+      wasActive = active();
       // A disabled cover (the Now Playing page is closed) keeps its zoom: only a double click restores it.
       if (!active()) { pointers.clear(); pinch = null; pan = null; wheelPending = null; zoomGate.release(); layerGate.release(); }
     },
@@ -500,9 +591,12 @@ export function coverZoom(node, params) {
       destroyed = true;
       glide?.cancel();
       glideObserver?.disconnect();
+      overlayObservers.disconnect();
+      overlay?.remove();
       delete node.dataset.coverResetting;
+      delete node.dataset.coverOverlay;
       zoomGate.end();
-      layerGate.end();
+      layerGate.dispose();
       node.removeEventListener('wheel', wheel);
       node.removeEventListener('pointerdown', down);
       node.removeEventListener('pointermove', move);
@@ -514,5 +608,113 @@ export function coverZoom(node, params) {
       node.style.transform = '';
       delete node.dataset.coverZoomed;
     }
+  };
+}
+
+/** @typedef {{ left: number, top: number, width: number, height: number }} Rect */
+
+/**
+ * The client rect of `rect` that is actually on screen: clipped by every ancestor that clips its overflow and by the
+ * window. Read once when the cover settles, never per frame. @param {HTMLElement} node @param {Rect} rect
+ */
+function clipToAncestors(node, rect) {
+  /** @type {Rect | null} */
+  let visible = typeof innerWidth === 'number' ? intersectRects(rect, { left: 0, top: 0, width: innerWidth, height: innerHeight }) : rect;
+  for (let element = node.parentElement; element && visible && typeof getComputedStyle === 'function'; element = element.parentElement) {
+    const style = getComputedStyle(element);
+    if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+    const box = element.getBoundingClientRect();
+    visible = intersectRects(visible, { left: box.left + element.clientLeft, top: box.top + element.clientTop, width: element.clientWidth, height: element.clientHeight });
+  }
+  return visible;
+}
+
+/**
+ * Watch for changes the gesture did not make (the owner's size/style writes, swipe feedback classes, a new image source,
+ * a window resize) and report them; MutationObserver and ResizeObserver callbacks run before the next paint.
+ * @param {HTMLElement} node @param {() => void} onChange
+ */
+function observeCoverChanges(node, onChange) {
+  /** @type {Array<() => void>} */
+  const stops = [];
+  if (typeof MutationObserver === 'function') {
+    const mutations = new MutationObserver(onChange);
+    mutations.observe(node, { attributes: true, attributeFilter: ['style', 'class', 'src'], subtree: true });
+    stops.push(() => mutations.disconnect());
+  }
+  if (typeof ResizeObserver === 'function') {
+    let first = true;
+    const sizes = new ResizeObserver(() => { if (first) { first = false; return; } onChange(); });
+    sizes.observe(node);
+    if (node.parentElement) sizes.observe(node.parentElement);
+    stops.push(() => sizes.disconnect());
+  }
+  if (typeof addEventListener === 'function') {
+    addEventListener('resize', onChange);
+    stops.push(() => removeEventListener('resize', onChange));
+  }
+  if (typeof node.addEventListener === 'function') {
+    node.addEventListener('load', onChange, true); // the <img> got its (new) pixels
+    stops.push(() => node.removeEventListener('load', onChange, true));
+  }
+  return { disconnect() { for (const stop of stops) stop(); } };
+}
+
+/**
+ * The persistent overlay canvas, appended to the stage's parent (the artwork pane, `position: relative` in app.css).
+ * It keeps its compositor layer for the stage's life (app.css `.cover-stage-overlay`); showing and hiding only changes
+ * its opacity, and its backing store shrinks to 1x1 while hidden.
+ * @param {HTMLElement} node
+ */
+function createOverlayCanvas(node) {
+  const parent = node.parentElement;
+  if (!parent || typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+  const canvas = /** @type {HTMLCanvasElement} */ (document.createElement('canvas'));
+  if (typeof canvas.getContext !== 'function') return null;
+  canvas.className = 'cover-stage-overlay';
+  canvas.setAttribute('aria-hidden', 'true');
+  canvas.width = 1;
+  canvas.height = 1;
+  parent.appendChild(canvas);
+  let shown = false;
+  return {
+    element: canvas,
+    get shown() { return shown; },
+    /**
+     * @param {HTMLImageElement} image @param {NonNullable<ReturnType<typeof coverDrawPlan>>} plan @param {Rect} visible
+     * @param {number} radius the rounded clip radius in canvas px
+     */
+    draw(image, plan, visible, radius) {
+      const context = canvas.getContext('2d');
+      if (!context) return false;
+      const paneBox = parent.getBoundingClientRect();
+      canvas.width = plan.canvas.width;
+      canvas.height = plan.canvas.height;
+      canvas.style.left = `${visible.left - paneBox.left - parent.clientLeft + parent.scrollLeft}px`;
+      canvas.style.top = `${visible.top - paneBox.top - parent.clientTop + parent.scrollTop}px`;
+      canvas.style.width = `${visible.width}px`;
+      canvas.style.height = `${visible.height}px`;
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.save();
+      if (radius > 0) {
+        context.beginPath();
+        if (typeof context.roundRect === 'function') context.roundRect(plan.clip.x, plan.clip.y, plan.clip.width, plan.clip.height, radius);
+        else context.rect(plan.clip.x, plan.clip.y, plan.clip.width, plan.clip.height);
+        context.clip();
+      }
+      context.drawImage(image, plan.source.x, plan.source.y, plan.source.width, plan.source.height, plan.dest.x, plan.dest.y, plan.dest.width, plan.dest.height);
+      context.restore();
+      canvas.style.opacity = '1';
+      shown = true;
+      return true;
+    },
+    hide() {
+      canvas.style.opacity = '0';
+      canvas.width = 1;
+      canvas.height = 1;
+      shown = false;
+    },
+    remove() { canvas.remove(); },
   };
 }

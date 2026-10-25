@@ -2190,24 +2190,42 @@ input:focus-visible {
   container-type: inline-size;
 }
 
-/* The reset glide paints the already-restored layout from the zoomed box: it stays above the lyrics until it lands. */
-.now-playing-view .cover-stage[data-cover-resetting] {
+/* Layer structure of the cover is fixed for the stage's whole life (ADR 0036): the stage is always its own compositor
+   layer above the lyrics, so no zoom, pan, reset or settle ever creates, drops or re-stacks a layer (that re-rasterised
+   the cover and the lyrics from scratch on Android: blank frames). The data-cover-* attributes below change paint or
+   layout only. Sharpness at other scales comes from the overlay canvas (.cover-stage-overlay). */
+.now-playing-view .cover-stage {
   z-index: 1;
+  will-change: transform;
 }
 
 .now-playing-view .cover-stage[data-cover-zoomed] {
-  position: relative;
-  z-index: 1;
   /* The pane is resized by the zoom; max-width/height: 100% would clamp one side and crop the cover. */
   max-width: none;
   max-height: none;
   flex: none;
 }
 
-/* A compositor layer only while a zoom gesture runs (set by cover-zoom.js, dropped shortly after the last input): a
-   layer kept with will-change keeps the raster scale it was promoted at, which leaves a cover zoomed in later blurry.
-   Dropping it makes Chromium re-raster the cover at the settled scale. */
-.now-playing-view .cover-stage[data-cover-gesture] {
+/* The reset glide's copy (overlay canvas) shows the cover: the stage's own image, already at its final size, is not
+   painted meanwhile (paint-only; the stage keeps its layer). Under the sharp zoomed view it stays painted. */
+.now-playing-view .cover-stage[data-cover-overlay] .cover-stage-image {
+  visibility: hidden;
+}
+
+/* The overlay canvas (cover-zoom.js): persistent, its own layer, shown and hidden by opacity only. */
+.now-playing-artwork {
+  position: relative;
+}
+
+.cover-stage-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
   will-change: transform;
 }
 
