@@ -250,7 +250,7 @@
   }
 
   .column-sort-button:focus-visible {
-    outline: 2px solid var(--accent-text);
+    outline: var(--focus-ring);
     outline-offset: 2px;
     border-radius: 4px;
   }

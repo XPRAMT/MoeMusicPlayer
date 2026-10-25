@@ -30,6 +30,8 @@
   --accent-rgb: 169, 195, 254;
   --accent-bright: #b8cefe;
   --accent-text: #a9c3fe;
+  /* The one keyboard focus ring: every :focus-visible outline uses it (only outline-offset differs). */
+  --focus-ring: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
   --accent-foreground: #000000;
   --status-danger: #a61b1b;
   --status-success: #1f6b4f;
@@ -115,21 +117,21 @@ html {
   outline: none;
 }
 
-/* Default keyboard focus ring for anything without its own: 1px accent at 70% opacity. Zero
-   specificity, so every component focus style (buttons, inputs, rows below) still wins. */
+/* Default keyboard focus ring (--focus-ring: 1px accent at 70% opacity). Zero specificity;
+   component rules use the same ring and only choose their own outline-offset. */
 :where(:focus-visible) {
-  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: var(--focus-ring);
 }
 
 button:focus-visible,
 input:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-ring);
   outline-offset: 3px;
 }
 
 /* List rows clip their overflow and fill the viewport width: draw the ring inside the row. */
 .paged-virtual-row:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: var(--focus-ring);
   outline-offset: -1px;
 }
 
@@ -244,7 +246,7 @@ input:focus-visible {
 }
 
 .window-titlebar-button:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -1188,7 +1190,7 @@ input:focus-visible {
 }
 
 .artist-page-back:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-ring);
   outline-offset: 3px;
   border-radius: 3px;
 }
@@ -1613,7 +1615,7 @@ input:focus-visible {
 }
 
 .soft-button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -2675,7 +2677,7 @@ input:focus-visible {
 .about-details dd { margin: 0; overflow-wrap: anywhere; }
 .about-link { display: inline-flex; align-items: center; gap: 6px; color: var(--text); text-decoration: none; }
 .about-link:hover { color: var(--accent-text); text-decoration: underline; }
-.about-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.about-link:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
 .about-credits ul { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 8px; }
 .about-credits li { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(60px, .45fr) minmax(100px, 1fr); gap: 12px; align-items: start; overflow-wrap: anywhere; }
 .about-credits li > span { color: var(--muted); }
@@ -2913,7 +2915,7 @@ input:focus-visible {
 }
 
 .track-column-setting-row:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -4025,7 +4027,7 @@ input:focus-visible {
 }
 
 .dock-now-playing-dismiss:focus-visible {
-  outline: 2px solid rgba(var(--accent-rgb), 0.72);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -4444,7 +4446,7 @@ input:focus-visible {
 }
 
 .volume-toggle:focus-visible {
-  outline: 2px solid rgba(var(--accent-rgb), 0.72);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -5180,7 +5182,7 @@ input:focus-visible {
 }
 
 .locate-fab:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 

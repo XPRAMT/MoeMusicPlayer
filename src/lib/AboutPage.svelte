@@ -306,5 +306,5 @@
     min-width: 0; width: 100%; box-sizing: border-box; font: inherit; padding: 7px 10px; border-radius: 8px;
     border: 1px solid rgb(127 127 127 / 0.4); background: rgb(127 127 127 / 0.1); color: inherit;
   }
-  .backup-dialog input.secret-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .backup-dialog input.secret-input:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
 </style>

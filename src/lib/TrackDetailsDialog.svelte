@@ -592,11 +592,11 @@
   .track-details-field > span { opacity: 0.75; }
   .track-details-field input, .track-details-field textarea { font: inherit; font-size: 0.95rem; padding: 5px 8px; border-radius: 6px; border: 1px solid rgb(127 127 127 / 0.35); background: rgb(127 127 127 / 0.08); color: inherit; }
   .track-details-field textarea { resize: vertical; font-family: inherit; }
-  /* app.css gives button/input a single 2px accent outline on :focus-visible; textarea was not
+  /* app.css gives button/input the shared --focus-ring on :focus-visible; textarea was not
      covered, so the WebView's default focus ring was drawn against the field border (double
      outline). Give it the same ring as the inputs. */
   .track-details-field textarea:focus { outline: none; }
-  .track-details-field textarea:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+  .track-details-field textarea:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
   .track-details-field.is-dirty input, .track-details-field.is-dirty textarea { border-color: var(--accent, #6aa7ff); }
   .track-details-reset { position: absolute; right: 6px; top: 22px; border: 0; background: none; color: inherit; cursor: pointer; opacity: 0.7; }
   .track-details-lyrics-label { display: flex; align-items: center; gap: 8px; opacity: 1 !important; }

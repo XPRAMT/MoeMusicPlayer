@@ -127,7 +127,7 @@
   }
 
   .source-scope-stop:focus-visible {
-    outline: 2px solid var(--accent-text);
+    outline: var(--focus-ring);
     outline-offset: 1px;
   }
 

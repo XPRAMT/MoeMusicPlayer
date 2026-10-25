@@ -996,7 +996,7 @@
   }
 
   .paged-virtual-viewport:focus-visible {
-    outline: 2px solid var(--accent-text);
+    outline: var(--focus-ring);
     outline-offset: 2px;
   }
 
@@ -1101,7 +1101,7 @@
   }
 
   .paged-virtual-group-button:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: var(--focus-ring);
     outline-offset: -2px;
   }
 

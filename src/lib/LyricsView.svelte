@@ -1370,7 +1370,7 @@
    */
   .lyrics-candidates-search-input:focus-visible {
     border-color: var(--accent);
-    outline: 2px solid var(--accent);
+    outline: var(--focus-ring);
     outline-offset: -2px;
   }
 

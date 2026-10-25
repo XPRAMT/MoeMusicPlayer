@@ -119,7 +119,7 @@
     background: rgba(var(--text-rgb), 0.05);
   }
   .playlist-tree-open:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: var(--focus-ring);
     outline-offset: 1px;
   }
 
