@@ -119,11 +119,11 @@ object FloatingLyricsRules {
     /** The continuous strip draws a line from its cell's LEFT edge and anchors it by its first glyph's centre (`firstGlyphCenters`, ADR 0041 D10) ... */
     const val STRIP_ALIGN = "left"
 
-    /** ... on the lyric area's horizontal CENTRE (`LYRICS_STRIP_TARGET`), whatever the alignment setting and panel width. */
+    /** ... on the lyric area's horizontal CENTRE (Rust `STRIP_TARGET`), whatever the alignment setting and panel width. */
     const val STRIP_TARGET = "center"
 
     /**
-     * Continuous animation (ADR 0032, port of lyrics-strip.js): cells of the strip, each as wide as the wider of its
+     * Continuous animation (ADR 0032, same rules as `player-lyrics-rules`): cells of the strip, each as wide as the wider of its
      * main text and translation, `gapPx` (one U+3000 of the main line) apart. Returns the cells' left edges and widths.
      */
     fun stripLayout(mainWidths: FloatArray, translationWidths: FloatArray, gapPx: Float): Pair<FloatArray, FloatArray> {

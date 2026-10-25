@@ -1,8 +1,8 @@
 package com.moemusicplayer.mediaindex
 
 /**
- * Word-timed lyrics in the floating window (ADR 0041 D10), the same rules as `player-lyrics-rules/src/glide.rs`,
- * `words.rs` and `src/lib/lyrics-glide.js` / `lyrics-word-strip.js` (checked against the shared vectors): the smoothed
+ * Word-timed lyrics in the floating window (ADR 0041 D10), the same rules as `player-lyrics-rules/src/glide.rs` and
+ * `words.rs` (the reference; checked against the vectors it generates): the smoothed
  * glide (hard knots exact, soft guides followed within 0.5x-1.5x of each stretch's average speed, monotone, C1) for the
  * karaoke edge, the strip's word glide (a monotone C1 cubic through per-line knots only: line starts, a word-timed
  * line's last-word end, the terminal estimate after a last line without word times), and the

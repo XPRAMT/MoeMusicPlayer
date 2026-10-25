@@ -1,6 +1,6 @@
 // Regenerates the East Asian Width "wide" table (code points whose East_Asian_Width is W or F) used by the terminal
-// line estimate of the continuous lyric strip (ADR 0041 D10): one range list, written out for Rust, JS and Kotlin so
-// the three implementations cannot drift (tests/east-asian-width.test.mjs checks they are identical).
+// line estimate and the line cap of the continuous lyric strip (ADR 0041 D10): one range list, written out for Rust and
+// Kotlin so the two implementations cannot drift (tests/east-asian-width.test.mjs checks they are identical).
 // Usage: node scripts/generate-east-asian-width.mjs <path to EastAsianWidth-<version>.txt>
 // Source: https://www.unicode.org/Public/<version>/ucd/EastAsianWidth.txt (Unicode data, Unicode License v3).
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -76,27 +76,6 @@ pub fn is_east_asian_wide(c: char) -> bool {
 }
 `;
 
-const js = `${header('//').join('\n')}
-
-/** Inclusive code point ranges (flat pairs: from, to) whose East Asian Width is W or F, sorted and disjoint. */
-export const EAST_ASIAN_WIDE_RANGES = Object.freeze([
-${rows('  ', 4, ([a, b]) => `${hex(a)}, ${hex(b)},`)}
-]);
-
-/** Whether the code point \`cp\` is East Asian Wide (W) or Fullwidth (F). @param {number} cp */
-export function isEastAsianWide(cp) {
-  let lo = 0;
-  let hi = EAST_ASIAN_WIDE_RANGES.length / 2 - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (EAST_ASIAN_WIDE_RANGES[mid * 2 + 1] < cp) lo = mid + 1;
-    else if (EAST_ASIAN_WIDE_RANGES[mid * 2] > cp) hi = mid - 1;
-    else return true;
-  }
-  return false;
-}
-`;
-
 const kotlin = `${header('//').join('\n')}
 package com.moemusicplayer.mediaindex
 
@@ -124,7 +103,6 @@ ${rows('        ', 4, ([a, b]) => `${hex(a)}, ${hex(b)},`)}
 `;
 
 writeFileSync(new URL('../crates/player-lyrics-rules/src/east_asian_width.rs', import.meta.url), rust);
-writeFileSync(new URL('../src/lib/east-asian-width.js', import.meta.url), js);
 writeFileSync(
   new URL('../plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/EastAsianWidth.kt', import.meta.url),
   kotlin,

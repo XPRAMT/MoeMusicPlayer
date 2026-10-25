@@ -1,5 +1,5 @@
-//! The smoothed glide of word-timed lyrics (ADR 0041 D10), port of `src/lib/lyrics-glide.js` (the reference) and
-//! `WordLyricsRules.kt`, checked by the shared vectors. `smooth_glide` drives the karaoke colour edge; the continuous
+//! The smoothed glide of word-timed lyrics (ADR 0041 D10), the reference for `WordLyricsRules.kt` and the Now Playing
+//! karaoke glide `src/lib/lyrics-glide.js` (checked by the vectors `examples/generate_vectors.rs` writes). `smooth_glide` drives the karaoke colour edge; the continuous
 //! strip's word glide ignores individual words and is a plain monotone cubic through per-line knots: every line's start,
 //! a word-timed line's end and, after a last line without word times, the terminal estimate (`word_strip_knots`,
 //! `knot_cubic`).
@@ -239,7 +239,7 @@ pub struct KnotLine {
     pub last_centre: f64,
 }
 
-/// The continuous strip's word glide knots `(lyrics ms, strip px on the lyric area's centre)` (`wordStripKnots` in JS).
+/// The continuous strip's word glide knots `(lyrics ms, strip px on the lyric area's centre)`.
 /// Each line is judged on its own; individual word times are ignored. Every line has its start (first glyph's centre on
 /// the area's centre). A word-timed line (`end_ms`) also has its end (the last word's end, last glyph's centre), which
 /// is skipped for a one-glyph line, an end not after the start, or when the gap from the end to the next line's start

@@ -1,7 +1,12 @@
 // Settings of the lyrics drawn on the Windows taskbar (ADR 0018). The backend (settings.rs `TaskbarLyricsSettings`)
 // enforces the same ranges.
-import { normalizeLyricsAnimation } from './lyrics-strip.js';
 import { normalizeLyricsFontWeight, LYRICS_FONT_WEIGHT } from './lyrics-preferences.js';
+
+/** The lyric windows' animation: `continuous` (the strip, ADR 0032) or `none`; anything else falls back to `none`.
+ * @param {unknown} value @returns {'none' | 'continuous'} */
+export function normalizeLyricsAnimation(value) {
+  return value === 'continuous' ? 'continuous' : 'none';
+}
 
 export const TASKBAR_LYRICS_FONT_SIZE_PX = Object.freeze({ min: 1, max: 50, default: 20 });
 /** The translation line as a percentage of the main line (100 = the same size). */

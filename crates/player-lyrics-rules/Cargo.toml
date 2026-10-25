@@ -3,7 +3,7 @@ name = "player-lyrics-rules"
 version = "0.1.0"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
-description = "Pure rules of the taskbar / floating lyrics (line choice, continuous strip, fades, scroll timing), shared by the native renderer and checked against the JS and Kotlin versions"
+description = "Pure rules of the taskbar / floating lyrics (line choice, continuous strip, fades, scroll timing), shared by the native renderer; the reference that generates the vectors the Kotlin and JS versions are checked against"
 
 [dependencies]
 unicode-segmentation = "1.13"

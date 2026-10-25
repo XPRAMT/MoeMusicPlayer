@@ -1,6 +1,22 @@
-//! The Rust rules match `tests/fixtures/lyrics-rules-vectors.json` (generated from the JS rules; Kotlin checks it too).
+//! The Rust rules match `tests/fixtures/lyrics-rules-vectors.json`, which `examples/generate_vectors.rs` generates from
+//! them (Kotlin and the JS rules the app still runs check the same file).
 use player_lyrics_rules::*;
 use serde_json::Value;
+
+#[path = "../examples/generate_vectors.rs"]
+mod generate_vectors;
+
+/// The committed file is exactly what the generator writes (rerun it after changing a rule or a case).
+#[test]
+fn the_committed_vectors_are_the_generated_ones() {
+    let committed = std::fs::read_to_string(generate_vectors::vectors_path())
+        .unwrap()
+        .replace("\r\n", "\n");
+    assert!(
+        committed == generate_vectors::render(),
+        "tests/fixtures/lyrics-rules-vectors.json is stale: run `cargo run -p player-lyrics-rules --example generate_vectors`"
+    );
+}
 
 fn vectors() -> Value {
     let path = concat!(

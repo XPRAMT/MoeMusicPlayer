@@ -1,9 +1,10 @@
 //! Pure rules of the Windows taskbar / floating lyrics (ADR 0018, 0031, 0032, 0034).
 //!
-//! Rust port of `src/lib/lyrics-strip.js`, `findActiveLyricIndex` (`lyrics-window.js`), `lyricsDisplayOffsetMs`
-//! (`lyrics-timing-offset.js`) and the long-line scroll timing of `TaskbarLyricsView.svelte`
-//! (`getLyricScrollProgress`). The JS, this crate and the Android `FloatingLyricsRules.kt` are all checked against
-//! `tests/fixtures/lyrics-rules-vectors.json`, so the three cannot drift apart.
+//! The reference implementation: `examples/generate_vectors.rs` writes `tests/fixtures/lyrics-rules-vectors.json`
+//! from these rules (`cargo run -p player-lyrics-rules --example generate_vectors`), and the Android
+//! `FloatingLyricsRules.kt` / `WordLyricsRules.kt` and the JS rules the main window still runs (`findActiveLyricIndex`
+//! in `lyrics-window.js`, `lyricsDisplayOffsetMs` in `lyrics-timing-offset.js`, `getLyricScrollProgress` and the Now
+//! Playing karaoke glide in `lyrics-glide.js`) are checked against it, so they cannot drift apart.
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -294,6 +295,24 @@ pub fn strip_window(
     view_width_px: f64,
     margin_px: f64,
 ) -> Option<(usize, usize)> {
+    let (first, end) = strip_window_span(
+        layout,
+        from_offset_px,
+        to_offset_px,
+        view_width_px,
+        margin_px,
+    );
+    (end > first).then(|| (first, end - 1))
+}
+
+/// `strip_window` as `(first, end)` with `end` exclusive (`end == first` when there is nothing to draw).
+pub fn strip_window_span(
+    layout: &StripLayout,
+    from_offset_px: f64,
+    to_offset_px: f64,
+    view_width_px: f64,
+    margin_px: f64,
+) -> (usize, usize) {
     let count = layout.starts.len();
     let left = -from_offset_px.max(to_offset_px) - margin_px.max(0.0);
     let right = -from_offset_px.min(to_offset_px) + view_width_px.max(0.0) + margin_px.max(0.0);
@@ -301,11 +320,11 @@ pub fn strip_window(
     while first < count && layout.starts[first] + layout.widths[first] < left {
         first += 1;
     }
-    let mut last = first;
-    while last < count && layout.starts[last] <= right {
-        last += 1;
+    let mut end = first;
+    while end < count && layout.starts[end] <= right {
+        end += 1;
     }
-    (last > first).then(|| (first, last - 1))
+    (first, end)
 }
 
 /// The next lyrics time at which the glide changes (`nextLyricsStripBreak`).

@@ -184,7 +184,7 @@ class FloatingLyricsRulesTest {
         val at = { ms: Long -> FloatingLyricsRules.stripOffset(times, cells, widths, "left", ms, 300f, "center", 11_000, mainWidths, lastGlyphCenters) }
 
         assertEquals(150f - 180f, at(5_000), 0.001f)
-        // C1 curve (same value as lyrics-strip.js): ahead of the old linear 35 px, still short of the end.
+        // C1 curve (same value as the Rust `strip_cubic`): ahead of the old linear 35 px, still short of the end.
         assertEquals(-79.4643f, at(8_000), 0.001f)
         // Monotone, never backwards, with no speed jump at the line start (5000 ms).
         var previous = at(0)

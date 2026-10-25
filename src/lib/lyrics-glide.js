@@ -1,8 +1,7 @@
-// The glides of word-timed lyrics (ADR 0041 D10): `smoothGlide` drives the karaoke colour edge (Now Playing, 「無」 mode on
-// Windows and Android); the continuous strip's word glide ignores individual words and is a plain monotone cubic
-// through per-line knots (`wordStripKnots`, `knotCubic`). Reference implementation of
-// `crates/player-lyrics-rules/src/glide.rs` and `LyricsGlide` in
-// `WordLyricsRules.kt`; checked by the shared vectors (scripts/generate-lyrics-rules-vectors.mjs).
+// The smoothed karaoke glide (ADR 0041 D10) of the Now Playing page (`lyrics-word-highlight.js`): the same curve as
+// `smooth_glide` / `karaoke_glide` in `crates/player-lyrics-rules/src/glide.rs` (the reference, which also drives the
+// Windows 「無」 mode; Kotlin `WordLyricsRules` drives Android's) and checked against the vectors the Rust rules generate
+// (`tests/lyrics-rules-vectors.test.mjs`). The continuous strip of the lyric windows is native only.
 //
 // Hard knots (the line start and end of a karaoke line) are hit exactly. Between two hard knots the curve
 // follows soft guides (the words) but its speed stays within GLIDE_MIN_SPEED..GLIDE_MAX_SPEED x the stretch's average
@@ -140,43 +139,6 @@ export function glideAt(pieces, time) {
   return [v + u * (s + c * u), s + 2 * c * u, c];
 }
 
-/** The glide's value at `time`. @param {GlidePiece[]} pieces @param {number} time */
-export function glideValue(pieces, time) {
-  return glideAt(pieces, time)[0];
-}
-
-/** The next lyrics time after `time` at which the glide's piece changes, or null. @param {GlidePiece[]} pieces @param {number} time */
-export function nextGlideBreak(pieces, time) {
-  const i = pieceIndex(pieces, time) + 1;
-  return i < pieces.length ? pieces[i][0] : null;
-}
-
-/**
- * The first lyrics time at which the glide reaches `value` (it is monotone): the first piece's time when it starts
- * there or beyond, null when it never gets there.
- * @param {GlidePiece[]} pieces @param {number} value
- */
-export function glideTimeAt(pieces, value) {
-  if (pieces.length === 0) return null;
-  if (pieces[0][1] >= value) return pieces[0][0];
-  for (let i = 0; i + 1 < pieces.length; i += 1) {
-    const [t, v, s, c] = pieces[i];
-    const h = pieces[i + 1][0] - t;
-    const end = v + h * (s + c * h);
-    if (end < value) continue;
-    const d = value - v;
-    let u;
-    if (Math.abs(c) < 1e-15) u = s > 0 ? d / s : 0;
-    else {
-      const disc = Math.max(0, s * s + 4 * c * d);
-      u = (2 * d) / (s + Math.sqrt(disc));
-      if (!Number.isFinite(u)) u = 0;
-    }
-    return t + clamp(u, 0, h);
-  }
-  return pieces[pieces.length - 1][1] >= value ? pieces[pieces.length - 1][0] : null;
-}
-
 /**
  * The karaoke edge of one line (「無」 mode, Now Playing): the x (in the row's own px, or any word-width coordinate)
  * up to which the line is lit. Hard at the first word's start (its left edge) and the last word's end (its right edge,
@@ -197,99 +159,4 @@ export function karaokeGlide(spans, words) {
     if (i < n - 1 && words[i][1] < words[i + 1][0]) guides.push([words[i][1], spans[i][1]]);
   }
   return smoothGlide([[start, spans[0][0]], [end, spans[n - 1][1]]], [guides], false);
-}
-
-/**
- * The continuous strip's word glide knots `[lyrics ms, strip px on the lyric area's centre]`. Each line is judged on
- * its own; individual word times are ignored. Every line has its start (first glyph's centre `cellStart + anchor` on
- * the centre). A word-timed line (`endMs`) also has its end (the last word's end; last glyph's centre
- * `cellStart + lastCentre`), skipped for a one-glyph line, an end not after the start, or when the gap from the end to
- * the next line's start would move faster than the line itself (the strip then glides from this line's start straight
- * to the next start; the last line keeps its end). When the last line has no word times, `finalArrivalMs`
- * (`lyricsStripFinalArrivalMs`: 500 ms per wide grapheme, 250 ms per other one, capped at the track end) adds the
- * terminal knot with its last glyph's centre, as the line glide does; a word-timed last line uses its own end instead. Times strictly increase (a
- * later knot at or before an earlier one's time replaces it, so the later line's start wins an overlap) and values
- * never decrease.
- * @param {{ startMs: number, cellStart: number, anchor?: number, endMs?: number | null, lastCentre?: number }[]} lines
- * @param {number | null} [finalArrivalMs]
- * @returns {[number, number][]}
- */
-export function wordStripKnots(lines, finalArrivalMs = null) {
-  /** @type {[number, number][]} */
-  const knots = [];
-  const push = (/** @type {number} */ t, /** @type {number} */ v) => {
-    if (!Number.isFinite(t) || !Number.isFinite(v)) return;
-    while (knots.length > 0 && knots[knots.length - 1][0] >= t) knots.pop();
-    knots.push([t, knots.length > 0 ? Math.max(v, knots[knots.length - 1][1]) : v]);
-  };
-  const startOf = (/** @type {typeof lines[number]} */ line) => line.cellStart + Math.max(0, line.anchor ?? 0);
-  lines.forEach((line, i) => {
-    const start = startOf(line);
-    push(line.startMs, start);
-    if (line.endMs == null) return;
-    const end = line.endMs;
-    const value = line.cellStart + Math.max(0, line.lastCentre ?? 0);
-    if (!(end > line.startMs && value > start)) return;
-    // The gap to the next start is faster than the line when (next - value) / (nextMs - end) >
-    // (value - start) / (end - start); cross-multiplied (both spans positive) so every language agrees.
-    const next = lines.slice(i + 1).find((l) => Number.isFinite(l.startMs) && Number.isFinite(startOf(l)));
-    if (next) {
-      const gapMs = next.startMs - end;
-      if (gapMs <= 0 || (startOf(next) - value) * (end - line.startMs) > (value - start) * gapMs) return;
-    }
-    push(end, value);
-  });
-  const last = lines[lines.length - 1];
-  if (last && last.endMs == null && finalArrivalMs != null && finalArrivalMs > last.startMs) {
-    push(finalArrivalMs, Math.max(startOf(last), last.cellStart + Math.max(0, last.lastCentre ?? 0)));
-  }
-  return knots;
-}
-
-/**
- * The word glide at lyrics time `time` as `[value, speed, c2, c3]`: the monotone C1 cubic Hermite through `knots`
- * (tangents 0 at the first and last knot, inside the weighted harmonic mean of the neighbouring slopes, Fritsch-Butland;
- * 0 when a slope is not positive). The value at `time + u` is `value + speed u + c2 u^2 + c3 u^3` up to the next knot;
- * before the first and after the last knot it rests.
- * @param {[number, number][]} knots @param {number} time @returns {[number, number, number, number]}
- */
-export function knotCubic(knots, time) {
-  const count = knots.length;
-  if (count === 0) return [0, 0, 0, 0];
-  const tangent = (/** @type {number} */ k) => {
-    if (k === 0 || k >= count - 1) return 0;
-    const h0 = knots[k][0] - knots[k - 1][0];
-    const h1 = knots[k + 1][0] - knots[k][0];
-    if (h0 <= 0 || h1 <= 0) return 0;
-    const d0 = (knots[k][1] - knots[k - 1][1]) / h0;
-    const d1 = (knots[k + 1][1] - knots[k][1]) / h1;
-    if (d0 <= 0 || d1 <= 0) return 0;
-    const w0 = 2 * h1 + h0;
-    const w1 = h1 + 2 * h0;
-    return (w0 + w1) / (w0 / d0 + w1 / d1);
-  };
-  let index = -1;
-  while (index + 1 < count && knots[index + 1][0] <= time) index += 1;
-  if (index < 0) return [knots[0][1], 0, 0, 0];
-  if (index >= count - 1) return [knots[count - 1][1], 0, 0, 0];
-  const [t0, v0] = knots[index];
-  const h = knots[index + 1][0] - t0;
-  const m0 = tangent(index);
-  const m1 = tangent(index + 1);
-  const d = (knots[index + 1][1] - v0) / h;
-  const c2 = (3 * d - 2 * m0 - m1) / h;
-  const c3 = (m0 + m1 - 2 * d) / (h * h);
-  const u = time - t0;
-  return [v0 + u * (m0 + u * (c2 + u * c3)), m0 + u * (2 * c2 + 3 * c3 * u), c2 + 3 * c3 * u, c3];
-}
-
-/** The word glide's value at `time`. @param {[number, number][]} knots @param {number} time */
-export function knotValue(knots, time) {
-  return knotCubic(knots, time)[0];
-}
-
-/** The next lyrics time after `time` at which the word glide has a knot, or null. @param {[number, number][]} knots @param {number} time */
-export function nextKnotBreak(knots, time) {
-  for (const knot of knots) if (knot[0] > time) return knot[0];
-  return null;
 }

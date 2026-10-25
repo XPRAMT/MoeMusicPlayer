@@ -164,7 +164,7 @@ mod win {
     }
 
     /// Strip offset at time t: the current line's left edge starts at the centre and slides linearly so the next
-    /// line's left edge reaches the centre when it starts (same rule as lyrics-strip.js).
+    /// line's left edge reaches the centre when it starts (the first version of the strip rule).
     fn strip_offset(tl: &Timeline, lefts: &[f32], widths: &[f32], centre: f32, t: f64) -> f32 {
         let t = t.rem_euclid(tl.total);
         let i = tl.starts.iter().rposition(|s| *s <= t).unwrap_or(0);
