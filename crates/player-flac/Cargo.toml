@@ -1,0 +1,10 @@
+[package]
+name = "player-flac"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "FLAC decoding to float PCM for the Android data source, over Symphonia's pure-Rust FLAC decoder (MPL-2.0)"
+
+[dependencies]
+# Pure Rust, MPL-2.0 (used unmodified as a library); the same version the rest of the workspace pins.
+symphonia = { version = "=0.5.5", default-features = false, features = ["flac"] }

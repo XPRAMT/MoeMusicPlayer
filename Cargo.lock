@@ -4107,6 +4107,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-flac"
+version = "0.1.0"
+dependencies = [
+ "symphonia",
+]
+
+[[package]]
 name = "player-fonts"
 version = "0.1.0"
 dependencies = [
