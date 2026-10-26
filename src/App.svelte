@@ -15,6 +15,7 @@
   import FolderBrowserDialog from './lib/FolderBrowserDialog.svelte';
   import RemoteSourcesSettings from './lib/RemoteSourcesSettings.svelte';
   import { getPopoverHorizontalShiftPx, getVolumePopoverLeftShiftPx } from './lib/volume-popover-position.js';
+  import { readSafeInsets } from './lib/safe-viewport.js';
   import {
     IconAlertCircle,
     IconArrowLeft,
@@ -451,7 +452,7 @@
     const updateAlignment = (): void => {
       if (!active || !sleepTimerAnchor || !sleepTimerPopover) return;
       const anchor = sleepTimerAnchor.getBoundingClientRect();
-      sleepTimerPopoverShiftX = getPopoverHorizontalShiftPx(anchor.left + anchor.width / 2, sleepTimerPopover.getBoundingClientRect().width, window.innerWidth);
+      sleepTimerPopoverShiftX = getPopoverHorizontalShiftPx(anchor.left + anchor.width / 2, sleepTimerPopover.getBoundingClientRect().width, window.innerWidth, undefined, readSafeInsets());
     };
     window.addEventListener('resize', updateAlignment);
     void tick().then(updateAlignment);
@@ -4080,6 +4081,8 @@
       anchorRect.left + anchorRect.width / 2,
       popover.getBoundingClientRect().width,
       window.innerWidth,
+      undefined,
+      readSafeInsets(),
     );
   }
 

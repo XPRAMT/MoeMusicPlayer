@@ -1,3 +1,5 @@
+import { NO_SAFE_INSETS, readSafeInsets } from './safe-viewport.js';
+
 const APP_TOOLTIP_ID = 'moe-app-tooltip';
 const APP_TOOLTIP_DELAY_MS = 500;
 const APP_TOOLTIP_VIEWPORT_GAP = 8;
@@ -14,21 +16,26 @@ let activeTarget = null;
  * @param {number} tooltipHeight
  * @param {number} viewportWidth
  * @param {number} viewportHeight
+ * @param {import('./safe-viewport.js').SafeInsets} [safeInsets] system-bar insets kept clear (Android)
  */
-export function getAppTooltipPosition(anchor, tooltipWidth, tooltipHeight, viewportWidth, viewportHeight) {
+export function getAppTooltipPosition(anchor, tooltipWidth, tooltipHeight, viewportWidth, viewportHeight, safeInsets = NO_SAFE_INSETS) {
   const gap = APP_TOOLTIP_VIEWPORT_GAP;
+  const minLeft = safeInsets.left + gap;
+  const maxRight = viewportWidth - safeInsets.right - gap;
+  const minTop = safeInsets.top + gap;
+  const maxBottom = viewportHeight - safeInsets.bottom - gap;
   const centeredLeft = (anchor.left + anchor.right - tooltipWidth) / 2;
-  const left = Math.min(Math.max(centeredLeft, gap), Math.max(gap, viewportWidth - tooltipWidth - gap));
+  const left = Math.min(Math.max(centeredLeft, minLeft), Math.max(minLeft, maxRight - tooltipWidth));
   const above = anchor.top - tooltipHeight - gap;
   const below = anchor.bottom + gap;
-  const maxTop = Math.max(gap, viewportHeight - tooltipHeight - gap);
-  const aboveFits = above >= gap;
-  const belowFits = below + tooltipHeight <= viewportHeight - gap;
+  const maxTop = Math.max(minTop, maxBottom - tooltipHeight);
+  const aboveFits = above >= minTop;
+  const belowFits = below + tooltipHeight <= maxBottom;
   const top = aboveFits
     ? above
     : belowFits
       ? below
-      : Math.min(Math.max(anchor.top - (viewportHeight - anchor.bottom), gap), maxTop);
+      : Math.min(Math.max(anchor.top - (viewportHeight - anchor.bottom), minTop), maxTop);
   return { left, top };
 }
 
@@ -66,7 +73,7 @@ function hideTooltip() {
 function repositionTooltip() {
   if (!activeTarget || !tooltipElement) return;
   const rect = activeTarget.getBoundingClientRect();
-  const position = getAppTooltipPosition(rect, tooltipElement.offsetWidth, tooltipElement.offsetHeight, window.innerWidth, window.innerHeight);
+  const position = getAppTooltipPosition(rect, tooltipElement.offsetWidth, tooltipElement.offsetHeight, window.innerWidth, window.innerHeight, readSafeInsets());
   tooltipElement.style.left = `${position.left}px`;
   tooltipElement.style.top = `${position.top}px`;
 }

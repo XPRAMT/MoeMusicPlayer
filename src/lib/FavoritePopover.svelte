@@ -4,6 +4,7 @@
   import { IconHeart, IconHeartCheck, IconPlus } from '@tabler/icons-svelte-runes';
   import { invokeCommand, type FavoritePlaylist, type FavoritePlaylists } from './ipc';
   import { getPopoverHorizontalShiftPx } from './volume-popover-position.js';
+  import { readSafeInsets } from './safe-viewport.js';
   import { appTooltip } from './app-tooltip.js';
 
   interface Props {
@@ -73,6 +74,8 @@
         anchor.left + anchor.width / 2,
         favoritePopoverElement.getBoundingClientRect().width,
         window.innerWidth,
+        undefined,
+        readSafeInsets(),
       );
     };
 

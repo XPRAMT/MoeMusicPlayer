@@ -559,11 +559,13 @@ input:focus-visible {
   overflow: hidden;
 }
 
+/* The tools never shrink below their buttons (the title column wraps instead). Shrinking let the
+   buttons overflow the bar and get clipped at the safe-area edge, under a side navigation bar. */
 .now-playing-topbar-tools {
   --now-playing-tool-gap: 5px;
   display: flex;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--now-playing-tool-gap);
 }
@@ -4384,10 +4386,11 @@ input:focus-visible {
 .playback-notice {
   position: fixed;
   bottom: calc(var(--dock-height) + var(--android-safe-bottom, 0px) + 14px);
-  left: 50%;
+  /* Fixed to the window, so it centres in and stays inside the safe area itself (side navigation bar). */
+  left: calc(50% + (var(--android-safe-left, 0px) - var(--android-safe-right, 0px)) / 2);
   z-index: 60;
   box-sizing: border-box;
-  max-width: calc(100% - 32px);
+  max-width: calc(100% - 32px - var(--android-safe-left, 0px) - var(--android-safe-right, 0px));
   padding: 9px 16px;
   transform: translateX(-50%);
   color: var(--status-danger);

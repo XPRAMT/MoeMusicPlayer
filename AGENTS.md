@@ -131,6 +131,8 @@ Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 proce
 
 播放服務與通知（ADR 0006、0039）：播放在外掛的 Media3 `PlaybackService`，佇列在 Rust；音訊生命週期不得依賴 Activity 存活，`MainActivity.onStart` 每次回前景 `ensurePlaybackService`；`onCreate` 必須 `addSession(session)` 才有 MediaStyle 通知。回前景畫面只剩底色的修正在 `MainActivity.onWindowFocusChanged(true)`（WebView `onPause`＋`onResume`）；再出現時的追查方式見 ADR 0039。
 
+系統列安全區：貼邊內容四邊都用 `--android-safe-*`（`AndroidInsetsPolicy`→`moe:android-insets`→`.app-shell` 內距；fixed 元件與 JS 夾限用 `readSafeInsets()`），規則見 `src/lib/AGENTS.md`。待實機驗收：Android 9 橫向三鍵導覽（側邊導覽列）下播放頁頂欄與快速設定抽屜。
+
 權限說明面板（ADR 0039）：所有檔案存取權、系統桌布需要的 `READ_MEDIA_IMAGES`、Android 17 的 `ACCESS_LOCAL_NETWORK`（targetSdk 37）都先顯示說明面板，按「前往授權」才請求；區域網路被拒時不呼叫遠端 IPC。API 37 系統提示的實機驗收待具備該版本的裝置。多個 SMB App 同時連不上時，NAS 445 埠、防火牆、Wi-Fi／VLAN 隔離也要列入調查。
 
 ### 曲庫同步與資料
