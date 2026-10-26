@@ -173,7 +173,8 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       const result = await api.getTrack({ trackId });
       if (!isCurrent(trackId, requestGeneration)) return;
       update(stateFromResult(trackId, result, 'load'));
-      // Cleared means the user removed lyrics; do not auto-search or auto-apply again.
+      // Cleared means the user removed lyrics and the file has none of its own (a cleared track
+      // with embedded or sidecar lyrics comes back ready); do not auto-search or auto-apply.
       if (!result.lyrics && result.status !== 'error' && result.status !== 'cleared') {
         await startSearch(trackId, requestGeneration);
       }
@@ -353,10 +354,12 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       try {
         const result = await api.clearTrack({ trackId });
         if (!isCurrent(trackId, requestGeneration)) return;
-        // Do not auto-search after an explicit remove; backend persists a cleared sentinel.
+        // Do not auto-search after an explicit remove; backend persists a cleared sentinel. The
+        // song's own embedded or sidecar lyrics still come back (ready) and show normally;
+        // only without them is the lyrics pane removed.
         update({
           ...stateFromResult(trackId, result, null, { selectionMode: false }),
-          lyricsRemoved: true,
+          lyricsRemoved: !result.lyrics,
           selectionMode: false,
           selectingCandidateId: null,
           isSearching: false,

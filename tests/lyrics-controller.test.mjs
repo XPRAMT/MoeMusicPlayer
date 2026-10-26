@@ -734,6 +734,62 @@ test('removeLyrics clears persisted lyrics, dismisses picker, and skips auto-sea
   controller.dispose();
 });
 
+test('removeLyrics on a song with its own lyrics shows them normally and still skips auto-search', async () => {
+  let searchCalls = 0;
+  const online = lyric('t-remove-local', 'manual');
+  const embedded = lyric('t-remove-local', 'embedded');
+  const controller = createLyricsController({
+    api: {
+      getTrack: async () => ({ lyrics: online, candidates: [], status: 'ready', error: null }),
+      search: async () => {
+        searchCalls += 1;
+        return emptyResult();
+      },
+      selectCandidate: async () => online,
+      cancelSearch: async () => {},
+      // The backend keeps only the automatic search off: the file's embedded lyrics come back ready.
+      clearTrack: async () => ({ lyrics: embedded, candidates: [], status: 'ready', error: null }),
+    },
+    onChange: () => {},
+  });
+
+  await controller.setTrack('t-remove-local');
+  await controller.removeLyrics();
+  const state = controller.getState();
+  assert.equal(state.phase, 'ready');
+  assert.equal(state.lyrics, embedded);
+  assert.equal(state.lyricsRemoved, false, 'the lyrics pane stays when the file has lyrics');
+  assert.equal(state.pickerClosed, true);
+  assert.equal(searchCalls, 0, 'explicit remove must not auto-search');
+  controller.dispose();
+});
+
+test('a cleared track whose file has lyrics loads them as ready without an automatic search', async () => {
+  const calls = [];
+  const embedded = lyric('track-cleared-local', 'embedded');
+  const controller = createLyricsController({
+    api: {
+      getTrack: async (args) => {
+        calls.push(['get', args]);
+        return { lyrics: embedded, candidates: [], status: 'ready', error: null };
+      },
+      search: async (args) => {
+        calls.push(['search', args]);
+        return emptyResult();
+      },
+      selectCandidate: async () => { throw new Error('unexpected candidate selection'); },
+      cancelSearch: async () => {},
+    },
+    onChange() {},
+  });
+
+  await controller.setTrack('track-cleared-local');
+  assert.deepEqual(calls, [['get', { trackId: 'track-cleared-local' }]]);
+  assert.equal(controller.getState().phase, 'ready');
+  assert.equal(controller.getState().lyricsRemoved, false);
+  controller.dispose();
+});
+
 test('load more appends the next lyric page until the source is exhausted', async () => {
   const candidate = (id) => ({
     id,

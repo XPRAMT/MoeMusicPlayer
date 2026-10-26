@@ -45,8 +45,8 @@ use player_platform_windows::{find_all_lyrics, find_lyrics, LyricsLookup};
 
 const LOCAL_SIDECAR_CANDIDATE_ID: &str = "local:sidecar";
 const LOCAL_EMBEDDED_CANDIDATE_ID: &str = "local:embedded";
-/// Persisted after 「移除歌詞」: blocks local rediscovery and automatic provider search until
-/// the user manually picks lyrics again.
+/// Persisted after 「移除歌詞」: blocks the automatic provider search until the user manually picks
+/// lyrics again. The file's own embedded and sidecar lyrics are still read and shown (ADR 0041).
 const CLEARED_LYRICS_CANDIDATE_ID: &str = "cleared:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -120,7 +120,8 @@ pub struct TrackLyricsDto {
 pub enum LyricsResultStatusDto {
     Ready,
     Empty,
-    /// User cleared lyrics for this track; do not auto-load local or auto-search providers.
+    /// User cleared lyrics for this track and it has no local lyrics: show nothing and do not
+    /// auto-search providers.
     Cleared,
     Candidates,
     Error,
@@ -1029,7 +1030,10 @@ fn provider_error_message(_error: &ProviderError) -> String {
     "線上歌詞來源目前無法使用，請稍後再試。".to_owned()
 }
 
-fn candidate_dto(_metadata: &LyricsTrackMetadata, candidate: &LyricCandidate) -> LyricsCandidateDto {
+fn candidate_dto(
+    _metadata: &LyricsTrackMetadata,
+    candidate: &LyricCandidate,
+) -> LyricsCandidateDto {
     let confidence = if candidate.score >= HIGH_CONFIDENCE_SCORE {
         LyricsConfidenceDto::High
     } else if candidate.score >= 0.72 {
@@ -1211,7 +1215,10 @@ pub async fn lyrics_get_track(
         &settings.sources,
     )
     .await;
-    eprintln!("[lyrics] lyrics_get_track took {} ms", started.elapsed().as_millis());
+    eprintln!(
+        "[lyrics] lyrics_get_track took {} ms",
+        started.elapsed().as_millis()
+    );
     result
 }
 
@@ -1277,25 +1284,48 @@ async fn lyrics_search_body(
     token_slot: &Mutex<Option<CancellationToken>>,
 ) -> Result<LyricsTrackResultDto, String> {
     let database = super::lyrics_database_for_track(state, track_id)?;
-
-    let (cancellation, _guard) = state.lyrics_service.begin_search(request_id)?;
-    *token_slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation.clone());
     let settings = state
         .settings
         .snapshot()
         .map_err(|error| error.to_string())?;
-    let initial = load_track_result_with_context(
+    search_loaded_track(
+        &state.lyrics_service,
         database.as_database(),
-        track_id,
         Some(app),
         &settings.sources,
+        track_id,
+        request_id,
+        manual,
+        query,
+        token_slot,
     )
-    .await?;
+    .await
+}
+
+/// Load the track's lyrics as `lyrics_get_track` does, then search the providers when that is
+/// called for: always for a manual search, for an automatic one only when nothing was found and
+/// the user has not removed the lyrics (「移除歌詞」, ADR 0041).
+#[allow(clippy::too_many_arguments)]
+async fn search_loaded_track<T: crate::lyrics_provider::HttpTransport + 'static>(
+    service: &LyricsService<T>,
+    database: &Database,
+    app: Option<&AppHandle>,
+    sources: &[super::settings::SourceEntry],
+    track_id: TrackId,
+    request_id: &str,
+    manual: bool,
+    query: Option<String>,
+    token_slot: &Mutex<Option<CancellationToken>>,
+) -> Result<LyricsTrackResultDto, String> {
+    let (cancellation, _guard) = service.begin_search(request_id)?;
+    *token_slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation.clone());
+    let initial = load_track_result_with_context(database, track_id, app, sources).await?;
     // Automatic follow-up after an empty get may rediscover local/embedded lyrics.
     // Explicit manual selection must continue to provider candidates even when lyrics exist.
-    // Cleared tracks skip automatic provider search until the user searches manually.
+    // Cleared tracks (no local lyrics either) skip automatic provider search until the user
+    // searches manually.
     if !manual
         && (initial.lyrics.is_some() || matches!(initial.status, LyricsResultStatusDto::Cleared))
     {
@@ -1305,7 +1335,6 @@ async fn lyrics_search_body(
         return Ok(LyricsTrackResultDto::empty(None));
     }
     let track = database
-        .as_database()
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這首曲目。".to_owned())?;
@@ -1315,22 +1344,14 @@ async fn lyrics_search_body(
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
     let local_candidates = if manual {
-        local_source_candidates(database.as_database(), track_id, &track)
+        local_source_candidates(database, track_id, &track)
             .await
             .unwrap_or_default()
     } else {
         Vec::new()
     };
-    let searched = state
-        .lyrics_service
-        .search_track(
-            database.as_database(),
-            track_id,
-            &track,
-            cancellation,
-            !manual,
-            query,
-        )
+    let searched = service
+        .search_track(database, track_id, &track, cancellation, !manual, query)
         .await;
     let mut result = match searched {
         Ok(result) => result,
@@ -1383,26 +1404,42 @@ pub async fn lyrics_clear_track(
     let _database_work = super::enter_database_work(&state)?;
     let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
     let database = super::lyrics_database_for_track(&state, track_id)?;
-    let _ = app;
     let now = super::now_utc_epoch_ms()?;
-    // Persist an empty manual sentinel so local sidecar/embedded lyrics and automatic provider
-    // search stay suppressed until the user manually picks lyrics again.
+    save_cleared_sentinel(database.as_database(), track_id, now)?;
+    // The file's own lyrics still show after 「移除歌詞」; only the automatic search stays off.
+    let settings = state
+        .settings
+        .snapshot()
+        .map_err(|error| error.to_string())?;
+    load_track_result_with_context(
+        database.as_database(),
+        track_id,
+        Some(&app),
+        &settings.sources,
+    )
+    .await
+}
+
+/// 「移除歌詞」: drop the stored lyrics and persist an empty manual sentinel, which keeps the
+/// automatic provider search off until the user manually picks lyrics again (ADR 0041).
+fn save_cleared_sentinel(
+    database: &Database,
+    track_id: TrackId,
+    now_utc_ms: i64,
+) -> Result<(), String> {
     database
-        .as_database()
         .clear_track_lyrics(track_id)
         .map_err(|error| error.to_string())?;
     database
-        .as_database()
         .save_manual_track_lyrics(&TrackLyrics {
             track_id,
             provider: LyricProvider::Sidecar,
             candidate_id: Some(CLEARED_LYRICS_CANDIDATE_ID.to_owned()),
             lyrics: empty_parsed_lyrics(),
             manually_selected: true,
-            updated_at_utc_ms: now,
+            updated_at_utc_ms: now_utc_ms,
         })
-        .map_err(|error| error.to_string())?;
-    Ok(LyricsTrackResultDto::cleared())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1482,23 +1519,37 @@ async fn load_track_result_with_context(
 
     // Resolution order: a lyric candidate the user explicitly picked is linked to this TrackId in
     // the library database and wins over local sidecar/embedded lyrics until it is cleared or
-    // re-picked. A cleared sentinel (empty manual row) suppresses local rediscovery and auto
-    // search. Without a manual link, local lyrics beat the automatic provider cache.
+    // re-picked. A cleared sentinel (empty manual row, 「移除歌詞」) only turns off the automatic
+    // online search (ADR 0041): the file's embedded lyrics and sidecar are still read and shown,
+    // and with none the result is `Cleared` (nothing shown, no automatic search).
+    // Without a manual link, local lyrics beat the automatic provider cache.
     // A pick of the song's own `.lrc` or embedded lyrics is a reference, read live (ADR 0013 lyrics
     // note, 2026-10-22): when that source is empty now, the normal order below applies, and the
     // row's stored text (rows from before this rule kept a snapshot) is never used.
     let mut cached = cached;
+    let mut cleared = false;
     if let Some(selected) = cached.as_ref().filter(|cached| cached.manually_selected) {
         if is_cleared_lyrics(selected) {
-            return Ok(LyricsTrackResultDto::cleared());
-        }
-        match manual_lyrics_dto(app, database, &track, selected).await? {
-            Some(lyrics) => return Ok(LyricsTrackResultDto::ready(lyrics)),
-            None => cached = None,
+            cleared = true;
+            cached = None;
+        } else {
+            match manual_lyrics_dto(app, database, &track, selected).await? {
+                Some(lyrics) => return Ok(LyricsTrackResultDto::ready(lyrics)),
+                None => cached = None,
+            }
         }
     }
 
-    match local_lyrics_for_track(app, sources, database, track_id, &track).await? {
+    let local = local_lyrics_for_track(app, sources, database, track_id, &track).await?;
+    if cleared {
+        return Ok(match local {
+            LocalLyricsLookup::Found(lyrics) => LyricsTrackResultDto::ready(lyrics),
+            LocalLyricsLookup::Missing | LocalLyricsLookup::Oversized => {
+                LyricsTrackResultDto::cleared()
+            }
+        });
+    }
+    match local {
         LocalLyricsLookup::Found(lyrics) => Ok(LyricsTrackResultDto::ready(lyrics)),
         LocalLyricsLookup::Oversized => match cached {
             Some(cached) => Ok(LyricsTrackResultDto::ready(persisted_lyrics_dto(
@@ -3361,25 +3412,18 @@ mod tests {
             LyricsSourceDto::Local
         );
 
-        // 「移除歌詞」persists an empty manual sentinel so local/auto search stay off.
-        database
-            .save_manual_track_lyrics(&player_core::TrackLyrics {
-                track_id,
-                provider: LyricProvider::Sidecar,
-                candidate_id: Some(super::CLEARED_LYRICS_CANDIDATE_ID.to_owned()),
-                lyrics: super::empty_parsed_lyrics(),
-                manually_selected: true,
-                updated_at_utc_ms: 1_800_000_000_002,
-            })
+        // 「移除歌詞」persists an empty manual sentinel that only turns off the automatic search:
+        // the sidecar still shows.
+        super::save_cleared_sentinel(&database, track_id, 1_800_000_000_002)
             .expect("save cleared sentinel");
         let result = super::load_track_result(&database, track_id)
             .await
             .expect("load after cleared sentinel");
-        assert!(result.lyrics.is_none());
-        assert!(matches!(
-            result.status,
-            super::LyricsResultStatusDto::Cleared
-        ));
+        assert!(matches!(result.status, super::LyricsResultStatusDto::Ready));
+        assert_eq!(
+            result.lyrics.expect("sidecar shown after clearing").source,
+            LyricsSourceDto::Local
+        );
 
         let track = database
             .get_track_summary(track_id)
@@ -3611,9 +3655,18 @@ mod tests {
             .expect("manual row saved");
         assert!(row.manually_selected);
         assert_eq!(row.provider, LyricProvider::Embedded);
-        assert_eq!(row.candidate_id.as_deref(), Some(super::LOCAL_EMBEDDED_CANDIDATE_ID));
-        assert!(row.lyrics.lines.is_empty() && row.lyrics.raw_text.is_empty(), "no text snapshot");
-        assert_eq!(fixture.shown().await, Some((LyricsSourceDto::Manual, "舊的內嵌".to_owned())));
+        assert_eq!(
+            row.candidate_id.as_deref(),
+            Some(super::LOCAL_EMBEDDED_CANDIDATE_ID)
+        );
+        assert!(
+            row.lyrics.lines.is_empty() && row.lyrics.raw_text.is_empty(),
+            "no text snapshot"
+        );
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Manual, "舊的內嵌".to_owned()))
+        );
 
         // The tags were edited: the next load shows the new embedded lyrics, no re-pick needed.
         fixture.edit_embedded(Some("[00:01.00]新的內嵌"));
@@ -3700,7 +3753,11 @@ mod tests {
     #[tokio::test]
     async fn saving_details_links_embedded_lyrics_over_a_same_name_lrc() {
         let fixture = EmbeddedFixture::new(Some("[00:01.00]寫入的內嵌"));
-        fs::write(fixture.directory.0.join("track.lrc"), "[00:01.00]旁邊的 LRC").expect("write sidecar");
+        fs::write(
+            fixture.directory.0.join("track.lrc"),
+            "[00:01.00]旁邊的 LRC",
+        )
+        .expect("write sidecar");
         assert_eq!(
             fixture.shown().await,
             Some((LyricsSourceDto::Embedded, "寫入的內嵌".to_owned())),
@@ -3711,6 +3768,164 @@ mod tests {
         assert_eq!(
             fixture.shown().await,
             Some((LyricsSourceDto::Manual, "寫入的內嵌".to_owned()))
+        );
+    }
+
+    /// An automatic search (what the page runs after an empty load) through the same path as `lyrics_search`.
+    async fn automatic_search(
+        service: &LyricsService<FixtureTransport>,
+        database: &Database,
+        track_id: TrackId,
+        manual: bool,
+    ) -> super::LyricsTrackResultDto {
+        super::search_loaded_track(
+            service,
+            database,
+            None,
+            &[],
+            track_id,
+            if manual {
+                "manual-request"
+            } else {
+                "auto-request"
+            },
+            manual,
+            None,
+            &Mutex::new(None),
+        )
+        .await
+        .expect("search")
+    }
+
+    fn fixture_service() -> (LyricsService<FixtureTransport>, FixtureTransport) {
+        let transport = FixtureTransport::default();
+        (
+            LyricsService::new(LyricsProviderClient::new(transport.clone())),
+            transport,
+        )
+    }
+
+    fn request_count(transport: &FixtureTransport) -> usize {
+        transport
+            .requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// The bug: a song cleared earlier later gained embedded lyrics, which never showed.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn a_cleared_track_shows_its_embedded_lyrics_without_searching_online() {
+        let fixture = EmbeddedFixture::new(None);
+        super::save_cleared_sentinel(&fixture.database, fixture.track_id, 1_800_000_000_100)
+            .expect("remove lyrics");
+        fixture.edit_embedded(Some("[00:01.00]後來寫入的內嵌"));
+        let (service, transport) = fixture_service();
+        let result = automatic_search(&service, &fixture.database, fixture.track_id, false).await;
+        assert!(matches!(result.status, super::LyricsResultStatusDto::Ready));
+        let lyrics = result.lyrics.expect("embedded lyrics shown");
+        assert_eq!(lyrics.source, LyricsSourceDto::Embedded);
+        assert_eq!(lyrics.lines[0].text, "後來寫入的內嵌");
+        assert_eq!(request_count(&transport), 0, "no online request");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Embedded, "後來寫入的內嵌".to_owned()))
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn a_cleared_track_shows_its_sidecar() {
+        let mut fixture = EmbeddedFixture::new(None);
+        fs::write(
+            fixture.directory.0.join("track.lrc"),
+            "[00:01.00]旁邊的 LRC",
+        )
+        .expect("write sidecar");
+        fixture
+            .database
+            .save_lyric_sidecars(
+                fixture.record.identity.source_id,
+                &[player_core::LyricSidecarWrite {
+                    sidecar: player_core::LyricSidecar {
+                        track_item_id: fixture.record.identity.source_item_id.clone(),
+                        name: "track.lrc".to_owned(),
+                    },
+                    unchanged: false,
+                }],
+                true,
+            )
+            .expect("record the sidecar");
+        super::save_cleared_sentinel(&fixture.database, fixture.track_id, 1_800_000_000_100)
+            .expect("remove lyrics");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Local, "旁邊的 LRC".to_owned()))
+        );
+        let (service, transport) = fixture_service();
+        let result = automatic_search(&service, &fixture.database, fixture.track_id, false).await;
+        assert_eq!(
+            result.lyrics.expect("sidecar shown").source,
+            LyricsSourceDto::Local
+        );
+        assert_eq!(request_count(&transport), 0, "no online request");
+    }
+
+    /// With no local lyrics a cleared track shows nothing and is not searched online (the fixture would auto-apply a
+    /// match for this title); a manual search still works and its pick replaces the cleared state.
+    #[tokio::test]
+    async fn a_cleared_track_without_local_lyrics_is_not_searched_until_the_user_searches() {
+        let (database, _directory, track) = seeded_test_database("Song", "Artist", "Album");
+        super::save_cleared_sentinel(&database, track.id, 1_800_000_000_100)
+            .expect("remove lyrics");
+        let (service, transport) = fixture_service();
+
+        let result = automatic_search(&service, &database, track.id, false).await;
+        assert!(result.lyrics.is_none());
+        assert!(matches!(
+            result.status,
+            super::LyricsResultStatusDto::Cleared
+        ));
+        assert_eq!(request_count(&transport), 0, "no online request");
+        let loaded = super::load_track_result(&database, track.id)
+            .await
+            .expect("load");
+        assert!(loaded.lyrics.is_none());
+        assert!(matches!(
+            loaded.status,
+            super::LyricsResultStatusDto::Cleared
+        ));
+
+        let searched = automatic_search(&service, &database, track.id, true).await;
+        assert!(
+            request_count(&transport) > 0,
+            "the manual search goes online"
+        );
+        assert!(
+            searched.lyrics.is_none(),
+            "a manual search never auto-applies"
+        );
+        let candidate = searched
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id.starts_with("netease:"))
+            .expect("an online candidate");
+        let picked = super::select_candidate_from_database(
+            &database,
+            track.id,
+            &candidate.id,
+            1_800_000_000_200,
+        )
+        .expect("pick the candidate");
+        assert_eq!(picked.source, LyricsSourceDto::Manual);
+        let loaded = super::load_track_result(&database, track.id)
+            .await
+            .expect("load after the pick");
+        assert!(matches!(loaded.status, super::LyricsResultStatusDto::Ready));
+        assert_eq!(
+            loaded.lyrics.expect("the pick is shown").source,
+            LyricsSourceDto::Manual
         );
     }
 
@@ -3735,7 +3950,10 @@ mod tests {
     fn album_index_key_follows_an_edited_album_tag() {
         let fixture = EmbeddedFixture::new(None);
         assert_eq!(
-            fixture.database.album_index_key_for_track(fixture.track_id).expect("album key"),
+            fixture
+                .database
+                .album_index_key_for_track(fixture.track_id)
+                .expect("album key"),
             Some(("album:unmarked".to_owned(), 1))
         );
         let mut metadata = fixture.record.metadata.clone().expect("fixture metadata");
@@ -3749,7 +3967,10 @@ mod tests {
             .album_index_key_for_track(fixture.track_id)
             .expect("album key")
             .expect("track in the library");
-        assert!(key.starts_with("album:") && key != "album:unmarked", "{key}");
+        assert!(
+            key.starts_with("album:") && key != "album:unmarked",
+            "{key}"
+        );
         assert_eq!(count, 1);
     }
 
@@ -3820,11 +4041,17 @@ mod tests {
         let yrc = candidate_dto(&metadata, &worded);
         assert!(yrc.has_synced_lyrics);
         assert!(yrc.has_word_synced_lyrics);
-        assert!(!candidate_dto(&metadata, &make_candidate(LyricFormat::Yrc, true, None)).has_word_synced_lyrics);
+        assert!(
+            !candidate_dto(&metadata, &make_candidate(LyricFormat::Yrc, true, None))
+                .has_word_synced_lyrics
+        );
 
         let qrc = candidate_dto(&metadata, &make_candidate(LyricFormat::Qrc, false, None));
         assert!(!qrc.has_synced_lyrics);
-        assert!(!qrc.has_word_synced_lyrics, "encrypted QRC is never decoded");
+        assert!(
+            !qrc.has_word_synced_lyrics,
+            "encrypted QRC is never decoded"
+        );
 
         let yrc_preserved = candidate_dto(
             &metadata,
@@ -3911,8 +4138,15 @@ mod tests {
         };
         let (first, second, _) = tokio::join!(first, second, released);
         assert!(first.is_ok() && second.is_ok());
-        assert_eq!(runs.load(AtomicOrdering::SeqCst), 1, "the second window waited for the first search");
-        assert!(service.auto_flights.lock().unwrap().is_empty(), "finished searches are forgotten");
+        assert_eq!(
+            runs.load(AtomicOrdering::SeqCst),
+            1,
+            "the second window waited for the first search"
+        );
+        assert!(
+            service.auto_flights.lock().unwrap().is_empty(),
+            "finished searches are forgotten"
+        );
     }
 
     #[tokio::test]
@@ -3933,7 +4167,10 @@ mod tests {
                         // The first search is cancelled: it found nothing out.
                         (Ok(super::LyricsTrackResultDto::empty(None)), true)
                     } else {
-                        (Ok(super::LyricsTrackResultDto::empty(Some("second".into()))), false)
+                        (
+                            Ok(super::LyricsTrackResultDto::empty(Some("second".into()))),
+                            false,
+                        )
                     }
                 }
             }
@@ -3946,7 +4183,11 @@ mod tests {
             release.notify_waiters();
         };
         let (_first, second, _) = tokio::join!(first, second, released);
-        assert_eq!(runs.load(AtomicOrdering::SeqCst), 2, "the waiting window ran its own search");
+        assert_eq!(
+            runs.load(AtomicOrdering::SeqCst),
+            2,
+            "the waiting window ran its own search"
+        );
         assert_eq!(second.unwrap().error.as_deref(), Some("second"));
     }
 }
