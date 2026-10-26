@@ -4807,8 +4807,10 @@ mod tests {
         assert_eq!(taskbar.font_weight, 100);
         let floating = lenient_floating_lyrics(Some(serde_json::json!({"fontWeight": 99999})));
         assert_eq!(floating.font_weight, 1000);
-        let mut preferences = LyricsPreferences::default();
-        preferences.font_weight = 99;
+        let mut preferences = LyricsPreferences {
+            font_weight: 99,
+            ..Default::default()
+        };
         assert!(preferences.validate().is_err());
         preferences.font_weight = 1000;
         preferences.validate().expect("1000 is allowed");
