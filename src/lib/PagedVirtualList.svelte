@@ -681,7 +681,10 @@
 
   $effect(() => {
     if (!quickIndexOpen) return;
-    quickIndexDialog?.querySelector<HTMLButtonElement>('.quick-index-label:not(:disabled)')?.focus();
+    // preventScroll: this runs before placeQuickIndex, while the popover still sits at viewport coordinates; inside the
+    // quick-settings drawer (overflow: hidden, but still scrollable by focus) a scrolling focus would shift the whole
+    // drawer content out of view to reveal the not-yet-placed popover.
+    quickIndexDialog?.querySelector<HTMLButtonElement>('.quick-index-label:not(:disabled)')?.focus({ preventScroll: true });
   });
 
   $effect(() => {
@@ -1143,6 +1146,19 @@
     padding: 0;
     border: 0;
     background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  /* Inside another floating surface (the font pickers in the quick-settings drawer) the popover must not have its own
+     backdrop-filter: the drawer's backdrop-filter makes it the popover's backdrop root, and Chromium/WebView2 then
+     blurs and washes out the whole drawer instead of only the popover's box. The drawer already blurs what is behind
+     it, so the nested popover only needs an opaque-enough tint to keep its labels readable over the list rows. */
+  :global(.floating-surface) .quick-index-popover.floating-surface {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: color-mix(in srgb, var(--text-inverse) 90%, transparent);
   }
 
   .quick-index-popover {
