@@ -12,6 +12,7 @@ mod parse;
 mod region;
 mod scripts;
 mod sfnt;
+mod subset;
 
 pub use catalog::{build_catalog, visible_families, FamilyFace, FontFamily};
 pub use diff::{diff_files, FileDiff, FileStamp};
@@ -22,3 +23,4 @@ pub use region::{font_group, group_order, system_region, FontGroup, FontRegion};
 pub use scripts::{
     assess_coverage, detect_scripts, is_cjk_mark, legacy_encoding_scripts, Coverage, Scripts,
 };
+pub use subset::{name_subset, read_standalone_face, stable_hash, SUBSET_VERSION};

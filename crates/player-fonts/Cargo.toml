@@ -8,6 +8,8 @@ description = "Installed font discovery for the font pickers (ADR 0042): face na
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
+# MIT OR Apache-2.0; without `variable-fonts` (no skrifa / write-fonts): CFF2 fonts get no name subset.
+subsetter = { version = "0.2.6", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.6.1"
