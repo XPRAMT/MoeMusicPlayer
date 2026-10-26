@@ -1006,8 +1006,8 @@
           />
           <div class="lyrics-candidates-actions">
             <button type="submit" class="soft-button">{tr("搜尋")}</button>
-            <button type="button" class="soft-button" data-testid="lyrics-dismiss" onclick={dismissSelection}>{tr("關閉")}</button>
             <button type="button" class="soft-button" data-testid="lyrics-remove" onclick={removeLyrics}>{tr("不再搜尋")}</button>
+            <button type="button" class="soft-button" data-testid="lyrics-dismiss" onclick={dismissSelection}>{tr("關閉")}</button>
           </div>
         </form>
         <ul>

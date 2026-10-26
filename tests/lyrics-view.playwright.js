@@ -237,7 +237,7 @@
       besideOrBelowInput: inputRect ? actionsRect.left >= inputRect.left - 1 : false,
     };
   });
-  assert.deepEqual(emptyActions.labels, ['搜尋', '關閉', '不再搜尋'], 'picker chrome is search, close, and stop searching');
+  assert.deepEqual(emptyActions.labels, ['搜尋', '不再搜尋', '關閉'], 'picker chrome is search, stop searching, and close');
   assert.equal(emptyActions.flushRight, true, 'picker chrome sits on the right edge');
   assert.equal(emptyActions.besideOrBelowInput, true, 'picker chrome stays with the search field');
   assert.match(await page.locator('.lyrics-candidate-empty').innerText(), /找不到符合的歌詞/);
