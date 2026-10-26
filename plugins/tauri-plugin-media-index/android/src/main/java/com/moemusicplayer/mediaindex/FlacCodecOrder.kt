@@ -30,12 +30,21 @@ fun isSoftwareDecoder(codec: CodecTraits): Boolean {
 /** [MediaCodecSelector.DEFAULT] with FLAC reordered by [orderDecodersForMime]. */
 @UnstableApi
 object SoftwareFirstFlacCodecSelector : MediaCodecSelector {
+    /** Queries made by [FlacCodecDiagnostics] itself are not logged as selector calls. */
+    internal val quiet = ThreadLocal<Boolean>()
+
     override fun getDecoderInfos(
         mimeType: String,
         requiresSecureDecoder: Boolean,
         requiresTunnelingDecoder: Boolean,
-    ): List<MediaCodecInfo> = orderDecodersForMime(
-        mimeType,
-        MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder),
-    ) { CodecTraits(it.name, it.softwareOnly, it.hardwareAccelerated) }
+    ): List<MediaCodecInfo> {
+        val defaults = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+        val ordered = orderDecodersForMime(mimeType, defaults) {
+            CodecTraits(it.name, it.softwareOnly, it.hardwareAccelerated)
+        }
+        if (mimeType == MimeTypes.AUDIO_FLAC && quiet.get() != true) {
+            FlacCodecDiagnostics.logSelector(requiresSecureDecoder, requiresTunnelingDecoder, defaults, ordered)
+        }
+        return ordered
+    }
 }

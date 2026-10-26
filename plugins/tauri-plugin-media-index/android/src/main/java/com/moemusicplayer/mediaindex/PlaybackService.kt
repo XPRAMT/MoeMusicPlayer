@@ -208,6 +208,8 @@ class PlaybackService : MediaSessionService() {
             }
         })
         player.addListener(clockListener)
+        // Diagnostic: logs how the FLAC decoder is chosen (tag MoeMediaIndex, prefix flacdiag).
+        player.addAnalyticsListener(FlacCodecDiagnostics.listener(this))
         exoPlayer = player
         val forwarding = QueueAwarePlayer(player)
         sessionPlayer = forwarding
