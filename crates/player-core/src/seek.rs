@@ -38,10 +38,17 @@ pub fn clamp_seek_ms(position_ms: u64, duration_ms: Option<u64>) -> u64 {
         .map_or(position_ms, |duration| position_ms.min(duration))
 }
 
-/// Decide what a seek to `position` does for a track of `duration`.
+/// The end as the front end sees it: snapshots report the duration in whole milliseconds, rounded down, while a
+/// decoder's duration is usually a fraction of a millisecond longer. A seek to the reported duration is the end.
+fn reported_end(duration: Duration) -> Duration {
+    Duration::from_millis(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Decide what a seek to `position` does for a track of `duration`. A target at or after the duration in whole
+/// milliseconds ends the track.
 pub fn plan_seek(position: Duration, duration: Option<Duration>) -> SeekPlan {
     match known(duration) {
-        Some(duration) if position >= duration => SeekPlan::EndOfTrack,
+        Some(duration) if position >= reported_end(duration) => SeekPlan::EndOfTrack,
         _ => SeekPlan::To(clamp_seek(position, duration)),
     }
 }
@@ -87,6 +94,15 @@ mod tests {
         assert_eq!(plan_seek(ms(300_000), duration), SeekPlan::EndOfTrack);
         assert_eq!(plan_seek_ms(247_199, Some(247_199)), SeekPlan::EndOfTrack);
         assert_eq!(plan_seek_ms(u64::MAX, Some(247_199)), SeekPlan::EndOfTrack);
+    }
+
+    #[test]
+    fn a_seek_to_the_reported_duration_ends_a_track_a_fraction_of_a_millisecond_longer() {
+        // A FLAC file of 276,333.4 ms is reported as 276,333 ms; seeking there is the end, 1 ms before is not.
+        let duration = Some(Duration::from_micros(276_333_400));
+        assert_eq!(plan_seek(ms(276_333), duration), SeekPlan::EndOfTrack);
+        assert_eq!(plan_seek_ms(276_333, Some(276_333)), SeekPlan::EndOfTrack);
+        assert_eq!(plan_seek(ms(276_332), duration), SeekPlan::To(ms(276_332)));
     }
 
     #[test]

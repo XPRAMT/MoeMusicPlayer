@@ -15757,7 +15757,8 @@ mod windows_library_integration_tests {
             }
             self.loaded = true;
             self.ended.store(false, Ordering::SeqCst);
-            Ok(Some(Duration::from_secs(60)))
+            // Like a real decoder, a fraction of a millisecond more than the whole milliseconds the snapshot reports.
+            Ok(Some(Duration::from_micros(60_000_400)))
         }
         fn play(&mut self) -> Result<(), AudioError> {
             Ok(())
@@ -16030,6 +16031,76 @@ mod windows_library_integration_tests {
             .unwrap();
         fixture.end_the_track();
         assert!(!fixture.service.player.snapshot().ended_while_paused);
+    }
+
+    /// What the IPC test did: pause, then `playback_seek` to the duration the snapshot reports (whole milliseconds,
+    /// a fraction short of the decoder's), then the walk `playback_seek` runs.
+    #[test]
+    fn a_paused_seek_to_the_reported_duration_moves_to_the_next_entry_paused() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.pause();
+        let reported = fixture
+            .service
+            .snapshot()
+            .duration_ms
+            .expect("the duration is known");
+        assert_eq!(reported, 60_000);
+        super::seek_playback(&fixture.service, reported)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .expect("a seek to the end is not an error");
+        fixture.walk();
+        assert_eq!(fixture.cursor(), 1);
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "paused");
+        assert_eq!(snapshot.position_ms, 0);
+        assert_eq!(
+            snapshot.current_track.map(|track| track.id),
+            Some(fixture.order[1])
+        );
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    }
+
+    /// A paused seek just short of the end is an ordinary seek; Play then plays the rest, and the end that follows
+    /// moves on through the queue.
+    #[test]
+    fn play_after_a_paused_seek_just_before_the_end_plays_out_and_moves_on() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.pause();
+        super::seek_playback(&fixture.service, 59_999)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap();
+        fixture.walk();
+        assert_eq!(fixture.cursor(), 0);
+        assert_eq!(
+            fixture.service.player.snapshot().state,
+            AudioPlaybackState::Paused
+        );
+        let change = play_track_from_database(
+            &fixture.database,
+            &fixture.service,
+            &fixture.order[0].to_string(),
+            None,
+        )
+        .unwrap();
+        change.ticket.wait(Duration::from_secs(2)).unwrap();
+        commit_track_change(
+            &fixture.database,
+            &fixture.service,
+            change.track,
+            change.replacement_queue,
+            change.target_cursor,
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.service.player.snapshot().state,
+            AudioPlaybackState::Playing
+        );
+        fixture.end_the_track();
+        fixture.walk();
+        assert_eq!(fixture.cursor(), 1);
+        assert_eq!(fixture.service.snapshot().state, "playing");
     }
 
     #[test]
