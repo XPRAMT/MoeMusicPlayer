@@ -28,8 +28,10 @@ fn main() {
     }
     let families = visible_families(&build_catalog(faces, region, |a, b| a.cmp(b)));
     let started = Instant::now();
-    // OUT_DIR/index.txt: which file is which family (to check the subsets in a browser).
+    // OUT_DIR/index.txt: which file is which family; OUT_DIR/fonts.json: the list as `fonts_list` sends it, with
+    // each subset's file (to check the subsets and the picker in a browser).
     let mut listing = String::new();
+    let mut listed = Vec::new();
     let (mut made, mut missing, mut total, mut largest) =
         (0usize, Vec::new(), 0usize, (0usize, String::new()));
     for (index, family) in families.iter().enumerate() {
@@ -37,8 +39,13 @@ fn main() {
         let subset = read_standalone_face(std::path::Path::new(&face.path), face.face_index)
             .ok()
             .and_then(|data| name_subset(&data, 0, &family.display_name));
+        let mut entry = serde_json::to_value(family).expect("json");
         match subset {
             Some(bytes) => {
+                entry["subset"] = out
+                    .join(format!("{index:04}.font"))
+                    .to_string_lossy()
+                    .into();
                 made += 1;
                 total += bytes.len();
                 if bytes.len() > largest.0 {
@@ -52,7 +59,13 @@ fn main() {
             }
             None => missing.push(family.display_name.clone()),
         }
+        listed.push(entry);
     }
+    std::fs::write(
+        out.join("fonts.json"),
+        serde_json::to_string(&listed).expect("json"),
+    )
+    .expect("fonts.json");
     std::fs::write(out.join("index.txt"), listing).expect("index.txt");
     println!(
         "{} families: {made} subsets, {} KB in all ({} B on average, largest {} B: {}), {} without ({missing:?}); {:?}",
