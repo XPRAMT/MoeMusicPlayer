@@ -1341,6 +1341,12 @@ interface IpcContract {
     args: Record<string, never>;
     result: PlaybackSnapshot;
   };
+  /** A track started: check its file in the background (returns at once); a changed file is announced with
+   * `track-file-refreshed`. */
+  playback_check_track_file: {
+    args: { trackId: string };
+    result: null;
+  };
   playback_get_snapshot: {
     args: Record<string, never>;
     result: PlaybackSnapshot;

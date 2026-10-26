@@ -64,6 +64,7 @@ mod floating_lyrics;
 #[cfg(target_os = "windows")]
 mod native_lyrics;
 mod track_details;
+mod track_freshness;
 pub mod updater;
 mod volume_sync;
 use settings::{
@@ -264,7 +265,6 @@ mod album_artwork_responsiveness_tests {
                 created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
-                embedded_lyrics: None,
                 title: Some("Synthetic Track".to_owned()),
                 artist: Some("Synthetic Artist".to_owned()),
                 album: Some("Synthetic Album".to_owned()),
@@ -9736,9 +9736,18 @@ async fn playback_refresh_current_track(
     state: State<'_, AppState>,
 ) -> Result<PlaybackSnapshot, String> {
     let _database_work = enter_database_work(&state)?;
+    refresh_current_track(&app, &state).await
+}
+
+/// What [`playback_refresh_current_track`] does: the playing track's summary is read again from the library (the audio
+/// that plays is not touched), and every window hears of it.
+async fn refresh_current_track(
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<PlaybackSnapshot, String> {
     #[cfg(target_os = "windows")]
     let snapshot = {
-        let service = windows_playback_service(&state)?;
+        let service = windows_playback_service(state)?;
         let current = service
             .current_track
             .lock()
@@ -9770,12 +9779,12 @@ async fn playback_refresh_current_track(
         service.snapshot()
     };
     #[cfg(target_os = "android")]
-    let snapshot = android_playback_service(&state)?
+    let snapshot = android_playback_service(state)?
         .execute(android_playback::PlaybackAction::RefreshCurrentTrack)
         .await?;
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     let snapshot = {
-        let _ = &state;
+        let _ = (app, state);
         return Err("此平台尚未提供本機音訊播放服務。".to_owned());
     };
     let _ = app.emit(
@@ -9786,6 +9795,84 @@ async fn playback_refresh_current_track(
             .map(|track| track.id.to_string()),
     );
     Ok(snapshot)
+}
+
+/// Event sent with the id of a track whose file was found changed when it started and whose tags were read again: the
+/// page refreshes its lists, and its cover and lyrics when it is the playing track.
+const TRACK_FILE_REFRESHED_EVENT: &str = "track-file-refreshed";
+
+/// A track started playing: check its file against the library in the background (ADR 0040). Returns at once; playback
+/// is never waited on, reopened or sought. A changed file has its tags, its album's covers, the recorded size and time
+/// and the playing track's summary refreshed, and the windows reload its cover and lyrics.
+#[tauri::command]
+fn playback_check_track_file(app: AppHandle, track_id: String) -> Result<(), String> {
+    let track_id = TrackId::parse(&track_id).map_err(|_| "曲目識別碼無效。".to_owned())?;
+    let started = std::thread::Builder::new()
+        .name("moe-track-check".to_owned())
+        .spawn(move || check_started_track_file(&app, track_id));
+    started.map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn check_started_track_file(app: &AppHandle, track_id: TrackId) {
+    let state = app.state::<AppState>();
+    let Ok(_database_work) = enter_database_work(&state) else {
+        return;
+    };
+    // Library tracks only: a file opened from outside the library is read anew every time it is opened.
+    let Some(database) = state.database.as_ref() else {
+        return;
+    };
+    let album_before = database.album_index_key_for_track(track_id).ok().flatten();
+    let remote = player_core::remote_content();
+    let outcome =
+        track_freshness::check_track_file(database, track_id, remote.as_deref(), |locator| {
+            read_current_track_metadata(app, &state, locator)
+        });
+    if outcome != track_freshness::FileCheck::Refreshed {
+        return;
+    }
+    eprintln!("[track-check] the playing song's file changed; its tags were read again");
+    let album_after = database.album_index_key_for_track(track_id).ok().flatten();
+    track_details::forget_saved_album_covers(app, &state, album_before, album_after);
+    let _ = tauri::async_runtime::block_on(refresh_current_track(app, &state));
+    let _ = app.emit(TRACK_FILE_REFRESHED_EVENT, track_id.to_string());
+}
+
+/// The tags of a library file, read with the reader its source is synced with.
+fn read_current_track_metadata(
+    app: &AppHandle,
+    state: &AppState,
+    locator: &player_core::MediaLocator,
+) -> Result<player_core::TrackMetadata, String> {
+    use player_core::{FileFingerprint, MediaTrackRecord, MetadataReader, SourceId, TrackIdentity};
+    let record = MediaTrackRecord {
+        identity: TrackIdentity {
+            source_id: SourceId::new(),
+            source_item_id: String::new(),
+            locator_key: None,
+        },
+        locator: locator.clone(),
+        fingerprint: FileFingerprint {
+            size_bytes: 0,
+            modified_at_utc_ms: None,
+            created_at_utc_ms: None,
+        },
+        metadata: None,
+    };
+    match locator {
+        player_core::MediaLocator::Remote { .. } => {
+            let data_dir = user_data_directory(state)?;
+            let settings = state
+                .settings
+                .snapshot()
+                .map_err(|error| error.to_string())?;
+            let resolver = state.remote_connections.resolver(data_dir, &settings);
+            player_remote::index::RemoteMediaIndex::new(resolver)
+                .read(&record)
+                .map_err(|error| error.message)
+        }
+        _ => track_details::read_track_record_metadata(app, &record),
+    }
 }
 
 #[tauri::command]
@@ -11012,7 +11099,6 @@ fn open_external_audio_path(
                 },
                 metadata: Some(TrackMetadata {
                     // A track opened from outside the library keeps no lyrics of its own here.
-                    embedded_lyrics: None,
                     title: summary.title.clone(),
                     artist: summary.artist.clone(),
                     album: summary.album.clone(),
@@ -12728,6 +12814,7 @@ pub fn run() {
             library_sync,
             playback_get_snapshot,
             playback_refresh_current_track,
+            playback_check_track_file,
             playback_get_queue_page,
             playback_get_queue_quick_index_groupings,
             library_get_track_artwork,

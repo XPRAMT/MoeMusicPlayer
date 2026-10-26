@@ -10,9 +10,10 @@ use lofty::{
     probe::Probe, tag::ItemKey,
 };
 use player_core::{
-    is_remote_network_error, read_remote_file_capped_checked, remote_content,
-    remote_sibling, remote_with_extension, RemoteStream, SourceId, MAX_ARTWORK_BYTES,
-    MAX_LYRIC_PAYLOAD_BYTES,
+    is_remote_network_error, read_remote_file_capped_checked, read_remote_sidecar_checked,
+    remember_remote_tag_lyrics, remembered_remote_tag_lyrics, remote_content, remote_sibling,
+    remote_with_extension, LyricSidecarLookup, MediaLocator, RemoteStream, SourceId,
+    MAX_ARTWORK_BYTES, MAX_LYRIC_PAYLOAD_BYTES,
 };
 
 const SIDECAR_COVERS: [&str; 2] = ["cover.jpg", "folder.jpg"];
@@ -79,7 +80,12 @@ pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<
         Ok(handle) => {
             let len = handle.len;
             let read_started = std::time::Instant::now();
-            let found = embedded_cover(handle.reader, path);
+            // The lyrics lookup of the song that starts needs the same tags: it finds them here.
+            let mut lyrics = None;
+            let found = embedded_cover(handle.reader, path, &mut lyrics);
+            if let Some(texts) = lyrics {
+                remember_remote_tag_lyrics(source_id, path, len, texts);
+            }
             eprintln!(
                 "[remote] cover stages: open {opened_in} ms, tags of {len} bytes {} ms (embedded: {})",
                 read_started.elapsed().as_millis(),
@@ -118,7 +124,13 @@ pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<
     None
 }
 
-fn embedded_cover(reader: Box<dyn RemoteStream>, path: &str) -> Option<Vec<u8>> {
+/// The cover in a remote track's tags; `lyrics` gets the lyric texts of the same tags when they were read the way the
+/// lyrics lookup reads them (lofty's generic tags).
+fn embedded_cover(
+    reader: Box<dyn RemoteStream>,
+    path: &str,
+    lyrics: &mut Option<Vec<String>>,
+) -> Option<Vec<u8>> {
     let name = Path::new(path);
     // DSF keeps its cover in the ID3v2 tag at the end of the file, which lofty cannot read as a DSF.
     let dsd_tags;
@@ -148,6 +160,7 @@ fn embedded_cover(reader: Box<dyn RemoteStream>, path: &str) -> Option<Vec<u8>> 
                 .options(ParseOptions::new().read_properties(false))
                 .read()
                 .ok()?;
+            *lyrics = Some(lyric_texts_in_tags(tagged.tags()));
             tagged.tags()
         };
     let front = tags
@@ -161,59 +174,81 @@ fn embedded_cover(reader: Box<dyn RemoteStream>, path: &str) -> Option<Vec<u8>> 
         .filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_ARTWORK_BYTES)
 }
 
-/// The lyric texts of a remote track: the sidecars beside it (preferred first), and the lyrics embedded in its tags (each raw, not yet
-/// parsed). Texts larger than the lyric limit are dropped and reported through the second value.
+/// Every lyric text in the tags (`Lyrics`, then `UnsyncLyrics`), raw, in that order.
+fn lyric_texts_in_tags(tags: &[lofty::tag::Tag]) -> Vec<String> {
+    [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
+        .into_iter()
+        .flat_map(|key| tags.iter().filter_map(move |tag| tag.get_string(key)))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The lyric texts of a remote track, read now (ADR 0040): the ones embedded in its tags (shared with a cover lookup of
+/// the same file that just read them), and its sidecar (each raw, not yet parsed). `sidecar` is what the library knows of
+/// the sidecar: the file it names is read, `Absent` reads none, `NotScanned` tries `.lrc`, `.qrc`, `.ass`, `.srt`; sidecars
+/// are read through the disk cache, so a song that plays without its server has its sidecar too. After a network error
+/// nothing else on the server is tried. Texts larger than the lyric limit are dropped and reported through the last value.
 pub(crate) fn remote_lyric_texts(
     source_id: SourceId,
     path: &str,
-    with_sidecar: bool,
+    sidecar: &LyricSidecarLookup,
 ) -> (Vec<String>, Vec<String>, bool) {
     let mut oversized = false;
-    // Every sidecar there is, in the preferred order (`.lrc`, `.ass`, `.srt`; ADR 0041).
-    let mut sidecars = Vec::new();
     let mut unreachable = false;
-    for extension in player_core::LYRIC_SIDECAR_EXTENSIONS.iter().filter(|_| with_sidecar) {
-        let sidecar_path = remote_with_extension(path, extension);
-        match read_remote_file_capped_checked(source_id, &sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64) {
+    let mut embedded = Vec::new();
+    match remote_content().map(|content| content.open(source_id, path)) {
+        Some(Ok(handle)) => {
+            let len = handle.len;
+            let texts = remembered_remote_tag_lyrics(source_id, path, len).unwrap_or_else(|| {
+                let texts = Probe::new(BufReader::new(handle.reader))
+                    .options(ParseOptions::new().read_properties(false))
+                    .guess_file_type()
+                    .ok()
+                    .and_then(|probe| probe.read().ok())
+                    .map(|tagged| lyric_texts_in_tags(tagged.tags()))
+                    .unwrap_or_default();
+                remember_remote_tag_lyrics(source_id, path, len, texts.clone());
+                texts
+            });
+            for raw in texts {
+                if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
+                    oversized = true;
+                } else {
+                    embedded.push(raw);
+                }
+            }
+        }
+        Some(Err(error)) => unreachable = is_remote_network_error(&error),
+        None => {}
+    }
+    let candidates: Vec<String> = match sidecar {
+        LyricSidecarLookup::Absent => Vec::new(),
+        LyricSidecarLookup::Present { .. } => match sidecar.sidecar_locator() {
+            Some(MediaLocator::Remote { path, .. }) => vec![path],
+            _ => Vec::new(),
+        },
+        LyricSidecarLookup::NotScanned => player_core::LYRIC_SIDECAR_EXTENSIONS
+            .iter()
+            .map(|extension| remote_with_extension(path, extension))
+            .collect(),
+    };
+    let mut sidecars = Vec::new();
+    for sidecar_path in candidates.iter().filter(|_| !unreachable) {
+        match read_remote_sidecar_checked(source_id, sidecar_path, MAX_LYRIC_PAYLOAD_BYTES as u64) {
             Ok(Some(bytes)) => sidecars.push(
                 String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
                     .into_owned(),
             ),
             Ok(None) => {
                 if let Some(handle) =
-                    remote_content().and_then(|c| c.open(source_id, &sidecar_path).ok())
+                    remote_content().and_then(|c| c.open(source_id, sidecar_path).ok())
                 {
                     oversized |= handle.len > MAX_LYRIC_PAYLOAD_BYTES as u64;
                 }
             }
             // The server cannot be reached: the other files fail the same way.
-            Err(error) if is_remote_network_error(&error) => {
-                unreachable = true;
-                break;
-            }
+            Err(error) if is_remote_network_error(&error) => break,
             Err(_) => {}
-        }
-    }
-    let mut embedded = Vec::new();
-    if let Some(handle) = remote_content()
-        .filter(|_| !unreachable)
-        .and_then(|content| content.open(source_id, path).ok())
-    {
-        let tagged = Probe::new(BufReader::new(handle.reader))
-            .options(ParseOptions::new().read_properties(false))
-            .guess_file_type()
-            .ok()
-            .and_then(|probe| probe.read().ok());
-        if let Some(tagged) = tagged {
-            for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
-                for raw in tagged.tags().iter().filter_map(|tag| tag.get_string(key)) {
-                    if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
-                        oversized = true;
-                    } else {
-                        embedded.push(raw.to_owned());
-                    }
-                }
-            }
         }
     }
     (sidecars, embedded, oversized)
@@ -255,7 +290,8 @@ mod tests {
         let source = SourceId::new();
         player_core::set_remote_content(Arc::new(Folder(root.clone(), source)));
 
-        let (sidecar, embedded, oversized) = remote_lyric_texts(source, "a/song.wv", true);
+        let search = LyricSidecarLookup::NotScanned;
+        let (sidecar, embedded, oversized) = remote_lyric_texts(source, "a/song.wv", &search);
         assert_eq!(
             sidecar.first().map(String::as_str),
             Some("[00:01.00]line\n"),
@@ -272,9 +308,28 @@ mod tests {
             remote_cover_bytes(source, "a/missing.wv"),
             Some(b"not really a jpeg".to_vec())
         );
-        let (none, empty, _) = remote_lyric_texts(source, "a/missing.wv", true);
+        let (none, empty, _) = remote_lyric_texts(source, "a/missing.wv", &search);
         assert!(none.is_empty());
         assert!(empty.is_empty());
+        // The sidecar the sync found is read by its name, with its current content; a known absence reads none.
+        std::fs::write(
+            root.join("a/other.srt"),
+            "1\n00:00:01,000 --> 00:00:02,000\nsrt\n",
+        )
+        .unwrap();
+        let known = LyricSidecarLookup::Present {
+            audio: MediaLocator::Remote {
+                source_id: source,
+                path: "a/song.wv".to_owned(),
+            },
+            name: "other.srt".to_owned(),
+        };
+        let (sidecar, _, _) = remote_lyric_texts(source, "a/song.wv", &known);
+        assert_eq!(sidecar, ["1\n00:00:01,000 --> 00:00:02,000\nsrt\n"]);
+        let (sidecar, embedded, _) =
+            remote_lyric_texts(source, "a/song.wv", &LyricSidecarLookup::Absent);
+        assert!(sidecar.is_empty());
+        assert!(!embedded.is_empty());
         let _ = std::fs::remove_dir_all(root);
 
         // A server that cannot be reached: the lookups stop after the first network error instead of trying every file.
@@ -283,7 +338,8 @@ mod tests {
         assert_eq!(remote_cover_bytes(source, "a/song.wv"), None);
         assert_eq!(down.0.load(std::sync::atomic::Ordering::SeqCst), 1);
         down.0.store(0, std::sync::atomic::Ordering::SeqCst);
-        let (sidecars, embedded, _) = remote_lyric_texts(source, "a/song.wv", true);
+        let (sidecars, embedded, _) =
+            remote_lyric_texts(source, "a/song.wv", &LyricSidecarLookup::NotScanned);
         assert!(sidecars.is_empty() && embedded.is_empty());
         assert_eq!(down.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     }

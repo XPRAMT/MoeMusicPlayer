@@ -105,18 +105,12 @@ fn pair_sidecars(
         else {
             continue;
         };
-        let Ok(metadata) = fs::metadata(lyric_path) else {
-            continue;
-        };
         found.push(player_core::LyricSidecar {
             track_item_id: track.identity.source_item_id.clone(),
-            locator: MediaLocator::FileSystem(lyric_path.clone()),
             name: lyric_path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            size_bytes: metadata.len(),
-            modified_at_utc_ms: metadata.modified().ok().and_then(utc_ms),
         });
     }
     found

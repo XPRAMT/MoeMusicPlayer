@@ -1172,6 +1172,34 @@
     }
   });
 
+  // The file is the truth, the library only its index (ADR 0040): each track that starts is checked against its file
+  // in the background; playback never waits for it. A changed file comes back as `track-file-refreshed`.
+  let lastCheckedTrackId: string | null = null;
+  $effect(() => {
+    const trackId = currentTrackId;
+    if (trackId === null || trackId === lastCheckedTrackId) return;
+    lastCheckedTrackId = trackId;
+    void invokeCommand('playback_check_track_file', { trackId }).catch(() => {});
+  });
+
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen<string>('track-file-refreshed', (event) => {
+      trackDetailsListRefreshes += 1;
+      libraryListRevision += 1;
+      if (libraryReady) void loadPlaylists(undefined, true);
+      if (event.payload === playback?.currentTrack?.id) {
+        artworkController.reload();
+        void lyricsController.reload();
+      }
+      void loadPlaybackSnapshot(false);
+    })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  });
+
   function applyActiveTheme(): void {
     const pageBackgroundHex = themePreferences.colorMode === 'autoBackgroundOpacity'
       ? (themePreferences.backgroundOpacityTextColor === 'white' ? '#000000' : '#FFFFFF')

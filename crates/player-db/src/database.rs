@@ -19,14 +19,14 @@ use unicode_normalization::UnicodeNormalization;
 
 use player_core::{
     FileFingerprint, LibraryRepository, LibraryRoot, ListTracksQuery, LyricCandidate,
-    LyricProvider, LyricSidecarState, LyricSidecarWrite, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, Page,
-    PlaybackCheckpoint, PlaybackQueueContext, PlaybackQueueEntry, PlaybackQueueSnapshot,
-    PlaybackStatistics, Playlist, PlaylistEntry, PlaylistEntrySummary, PlaylistId,
-    PlaylistListSort, PlaylistPage, PlaylistSortDirection, PlaylistSortField, PlaylistSummary,
-    QueueRepeatMode, SourceId, SourceScanState, SyncApplyOutcome, SyncApplyRequest, SyncApplyStats,
-    SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
-    TrackLyrics, TrackMetadata, TrackSortDirection, TrackSortField, TrackSummary, TrackSyncState,
-    UserMetadataField, TRACK_METADATA_VERSION,
+    LyricProvider, LyricSidecarWrite, MediaLocator, MediaSourceError, MediaSourceKind,
+    MediaTrackRecord, Page, PlaybackCheckpoint, PlaybackQueueContext, PlaybackQueueEntry,
+    PlaybackQueueSnapshot, PlaybackStatistics, Playlist, PlaylistEntry, PlaylistEntrySummary,
+    PlaylistId, PlaylistListSort, PlaylistPage, PlaylistSortDirection, PlaylistSortField,
+    PlaylistSummary, QueueRepeatMode, SourceId, SourceScanState, SyncApplyOutcome,
+    SyncApplyRequest, SyncApplyStats, SyncCancellation, TrackField, TrackFieldFilter, TrackId,
+    TrackIdentity, TrackListSort, TrackLyrics, TrackMetadata, TrackSortDirection, TrackSortField,
+    TrackSummary, TrackSyncState, UserMetadataField, TRACK_METADATA_VERSION,
 };
 use rusqlite::{
     functions::FunctionFlags, params, Connection, OpenFlags, OptionalExtension, Transaction,
@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -642,15 +642,26 @@ CREATE TABLE music_collation_metadata (
 );
 "#;
 
-/// A short name for the place a source is (the name of a remote server); sources without one are "本地".
-/// What reading the lyrics beside and inside a track on a remote server found (the `.lrc` next to it, the lyrics in its tags),
-/// kept with the size and modified time of the file it was read for: while the scan still sees the same file, the next play
-/// does not go back to the server for them.
-/// The `.lrc` files beside the songs of a source, found by the sync and stored with their fingerprint (name, size, modified
-/// time) and text, so lyrics are never searched for in a folder (or on a server) at play time. `lyric_sidecar_sources` marks
-/// the sources whose sidecars were scanned completely: for them a song without a row has no sidecar.
-/// The lyrics written in each song's own tags, kept from the moment the sync read the tags: a row means "the tags were read",
-/// with the text or without it (no lyrics). A song with no row has not been read since this existed.
+/// The library keeps no lyric text (ADR 0040): the embedded lyrics (v19) and what was read beside and inside remote tracks
+/// (v17) are dropped, and the sidecars of a source (v18) keep only where they are, the sidecar's file name beside the
+/// audio file of each mapping. `lyric_sidecar_sources` still marks the sources scanned for sidecars: for them a song without
+/// a row has none. Every other table is untouched; the copy-and-rename runs in the migration's transaction.
+const SCHEMA_V21: &str = r#"
+DROP TABLE IF EXISTS track_embedded_lyrics;
+DROP TABLE IF EXISTS remote_lyric_cache;
+DROP TABLE IF EXISTS track_lyric_sidecars_v21;
+CREATE TABLE track_lyric_sidecars_v21 (
+    source_id TEXT NOT NULL,
+    source_item_id TEXT NOT NULL,
+    sidecar_name TEXT NOT NULL,
+    PRIMARY KEY (source_id, source_item_id)
+);
+INSERT INTO track_lyric_sidecars_v21 (source_id, source_item_id, sidecar_name)
+    SELECT source_id, source_item_id, sidecar_name FROM track_lyric_sidecars;
+DROP TABLE track_lyric_sidecars;
+ALTER TABLE track_lyric_sidecars_v21 RENAME TO track_lyric_sidecars;
+"#;
+
 /// A mapping whose file is gone (deleted or moved while its drive was reachable) is kept but hidden from every list
 /// until a later sync finds the file again (ADR 0033). NULL: present.
 const SCHEMA_V20: &str = r#"
@@ -690,6 +701,7 @@ CREATE TABLE remote_lyric_cache (
 );
 "#;
 
+/// A short name for the place a source is (the name of a remote server); sources without one are "本地".
 const SCHEMA_V16: &str = r#"
 CREATE TABLE source_labels (
     source_id TEXT PRIMARY KEY NOT NULL,
@@ -1422,13 +1434,8 @@ fn parse_repeat_mode(value: &str) -> Option<QueueRepeatMode> {
     }
 }
 
-/// What the library holds about the `.lrc` sidecar of a track (see [`Database::track_lyric_sidecar`]).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LyricSidecarLookup {
-    NotScanned,
-    Absent,
-    Present { text: Option<String>, oversized: bool },
-}
+/// What the library holds about the lyric sidecar of a track (see [`Database::track_lyric_sidecar`]).
+pub use player_core::LyricSidecarLookup;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlaylistFileSyncState {
@@ -2143,6 +2150,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V20)?;
             tx.pragma_update(None, "user_version", 20)?;
+            tx.commit()?;
+            version = 20;
+        }
+        if version == 20 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V21)?;
+            tx.pragma_update(None, "user_version", 21)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -4979,6 +4993,77 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// The file a track plays from and its size and times as the last scan (or refresh) recorded them: the first enabled
+    /// mapping, a filesystem one first (the order of [`Self::track_locators`]). `None` when the track has no enabled one.
+    pub fn track_file_mapping(
+        &self,
+        track_id: TrackId,
+    ) -> Result<Option<(SourceId, String, MediaLocator, FileFingerprint)>, DatabaseError> {
+        let connection = self.lock()?;
+        let row = connection
+            .query_row(
+                "SELECT m.source_id, m.source_item_id, m.locator_kind, m.locator_encoding, m.locator_data,
+                        m.size_bytes, m.modified_at_utc_ms, m.created_at_utc_ms
+                 FROM source_mappings m
+                 JOIN library_roots r ON r.source_id=m.source_id
+                 WHERE m.track_id=?1 AND r.enabled=1
+                 ORDER BY CASE WHEN m.locator_kind='filesystem_path' THEN 0 ELSE 1 END,
+                          r.source_id, m.source_item_id
+                 LIMIT 1",
+                [track_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((source, item, kind, encoding, data, size, modified, created)) = row else {
+            return Ok(None);
+        };
+        let source_id = SourceId::parse(&source)
+            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
+        Ok(Some((
+            source_id,
+            item,
+            locator::decode(&kind, &encoding, &data)?,
+            FileFingerprint {
+                size_bytes: size.max(0) as u64,
+                modified_at_utc_ms: modified,
+                created_at_utc_ms: created,
+            },
+        )))
+    }
+
+    /// Record the size and modified time a mapping's file has now, after its tags were read again for it (a song found
+    /// changed when it started playing): the next sync then sees it as it is and does not read it once more.
+    pub fn update_mapping_fingerprint(
+        &self,
+        source_id: SourceId,
+        source_item_id: &str,
+        size_bytes: u64,
+        modified_at_utc_ms: Option<i64>,
+    ) -> Result<(), DatabaseError> {
+        self.lock()?.execute(
+            "UPDATE source_mappings SET size_bytes=?3, modified_at_utc_ms=?4
+             WHERE source_id=?1 AND source_item_id=?2",
+            params![
+                source_id.to_string(),
+                source_item_id,
+                to_sql_i64(size_bytes, "size_bytes")?,
+                modified_at_utc_ms
+            ],
+        )?;
+        Ok(())
+    }
+
     /// The album a track is grouped under in the album index (its `identity_key`: `album:unmarked` or
     /// `album:<identity key>`, user album override first) and how many tracks of the library that album has, as the
     /// album list counts them. `None` for a track that is not in the library.
@@ -5027,27 +5112,17 @@ impl Database {
         Ok(())
     }
 
-    /// The lyrics the sync read from the song's tags: `None` when the tags were never read since this was kept (the caller
-    /// opens the file as before), `Some(None)` when they were read and hold no lyrics.
-    pub fn track_embedded_lyrics(&self, track_id: TrackId) -> Result<Option<Option<String>>, DatabaseError> {
-        let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT lyrics_text FROM track_embedded_lyrics WHERE track_id=?1",
-                [track_id.to_string()],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    /// The `.lrc` the sync stored for a track: `NotScanned` when no source holding the track has been scanned for lyric
-    /// sidecars yet (the caller looks in the folder, as before), `Absent` when a source holding it was scanned and none
-    /// has one, `Present` with its text otherwise.
-    pub fn track_lyric_sidecar(&self, track_id: TrackId) -> Result<LyricSidecarLookup, DatabaseError> {
+    /// Where the sidecar of a track is, as the sync found it: `NotScanned` when no source holding the track has been
+    /// scanned for lyric sidecars yet (the caller looks in the folder), `Absent` when a source holding it was scanned and
+    /// none has one, `Present` with the audio file it is beside and its name otherwise. No lyric text is kept (ADR 0040).
+    pub fn track_lyric_sidecar(
+        &self,
+        track_id: TrackId,
+    ) -> Result<LyricSidecarLookup, DatabaseError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare_cached(
-            "SELECT ls.source_item_id IS NOT NULL, ls.lyrics_text, COALESCE(ls.oversized, 0), sc.source_id IS NOT NULL
+            "SELECT ls.sidecar_name, sc.source_id IS NOT NULL,
+                    m.locator_kind, m.locator_encoding, m.locator_data
              FROM source_mappings m
              JOIN library_roots r ON r.source_id=m.source_id AND r.enabled=1
              LEFT JOIN track_lyric_sidecars ls
@@ -5058,19 +5133,21 @@ impl Database {
         )?;
         let rows = statement.query_map([track_id.to_string()], |row| {
             Ok((
-                row.get::<_, bool>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, bool>(2)?,
-                row.get::<_, bool>(3)?,
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, bool>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
             ))
         })?;
         // One source that was scanned for sidecars and has none for the song settles it: a playlist source (which never
         // looks beside the files) holding the same song does not say otherwise.
         let mut any_source_scanned = false;
         for row in rows {
-            let (present, text, oversized, scanned) = row?;
-            if present {
-                return Ok(LyricSidecarLookup::Present { text, oversized });
+            let (name, scanned, kind, encoding, data) = row?;
+            if let Some(name) = name {
+                let audio = locator::decode(&kind, &encoding, &data)?;
+                return Ok(LyricSidecarLookup::Present { audio, name });
             }
             any_source_scanned |= scanned;
         }
@@ -5079,52 +5156,6 @@ impl Database {
         } else {
             LyricSidecarLookup::NotScanned
         })
-    }
-
-    /// What was found beside and inside a remote track, when it was read for a file of this size and modified time.
-    pub fn get_remote_lyric_cache(
-        &self,
-        track_id: TrackId,
-        size_bytes: u64,
-        modified_at_utc_ms: Option<i64>,
-    ) -> Result<Option<String>, DatabaseError> {
-        let connection = self.lock()?;
-        connection
-            .query_row(
-                "SELECT result_json FROM remote_lyric_cache
-                 WHERE track_id=?1 AND size_bytes=?2 AND modified_at_utc_ms IS ?3",
-                params![track_id.to_string(), size_bytes as i64, modified_at_utc_ms],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    pub fn save_remote_lyric_cache(
-        &self,
-        track_id: TrackId,
-        size_bytes: u64,
-        modified_at_utc_ms: Option<i64>,
-        result_json: &str,
-    ) -> Result<(), DatabaseError> {
-        let connection = self.lock()?;
-        connection.execute(
-            "INSERT INTO remote_lyric_cache (track_id, size_bytes, modified_at_utc_ms, result_json)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(track_id) DO UPDATE SET size_bytes=excluded.size_bytes,
-                 modified_at_utc_ms=excluded.modified_at_utc_ms, result_json=excluded.result_json",
-            params![track_id.to_string(), size_bytes as i64, modified_at_utc_ms, result_json],
-        )?;
-        Ok(())
-    }
-
-    /// Forget what was read for a remote track (a re-read is wanted).
-    pub fn clear_remote_lyric_cache(&self, track_id: TrackId) -> Result<(), DatabaseError> {
-        self.lock()?.execute(
-            "DELETE FROM remote_lyric_cache WHERE track_id=?1",
-            [track_id.to_string()],
-        )?;
-        Ok(())
     }
 
     pub fn track_locators(&self, track_id: TrackId) -> Result<Vec<MediaLocator>, DatabaseError> {
@@ -6027,22 +6058,13 @@ impl LibraryRepository for Database {
     fn lyric_sidecar_states(
         &self,
         source_id: SourceId,
-    ) -> Result<HashMap<String, LyricSidecarState>, Self::Error> {
+    ) -> Result<HashMap<String, String>, Self::Error> {
         let connection = self.lock()?;
         let mut statement = connection.prepare_cached(
-            "SELECT source_item_id, sidecar_name, size_bytes, modified_at_utc_ms, lyrics_text IS NOT NULL
-             FROM track_lyric_sidecars WHERE source_id=?1",
+            "SELECT source_item_id, sidecar_name FROM track_lyric_sidecars WHERE source_id=?1",
         )?;
         let rows = statement.query_map([source_id.to_string()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                LyricSidecarState {
-                    name: row.get(1)?,
-                    size_bytes: row.get::<_, i64>(2)? as u64,
-                    modified_at_utc_ms: row.get(3)?,
-                    has_text: row.get(4)?,
-                },
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
         rows.collect::<Result<HashMap<_, _>, _>>().map_err(Into::into)
     }
@@ -6058,22 +6080,11 @@ impl LibraryRepository for Database {
         let source = source_id.to_string();
         for write in writes.iter().filter(|write| !write.unchanged) {
             tx.execute(
-                "INSERT INTO track_lyric_sidecars
-                    (source_id, source_item_id, sidecar_name, size_bytes, modified_at_utc_ms, lyrics_text, oversized)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO track_lyric_sidecars (source_id, source_item_id, sidecar_name)
+                 VALUES (?1, ?2, ?3)
                  ON CONFLICT(source_id, source_item_id) DO UPDATE SET
-                    sidecar_name=excluded.sidecar_name, size_bytes=excluded.size_bytes,
-                    modified_at_utc_ms=excluded.modified_at_utc_ms, lyrics_text=excluded.lyrics_text,
-                    oversized=excluded.oversized",
-                params![
-                    source,
-                    write.sidecar.track_item_id,
-                    write.sidecar.name,
-                    write.sidecar.size_bytes as i64,
-                    write.sidecar.modified_at_utc_ms,
-                    write.text,
-                    write.oversized,
-                ],
+                    sidecar_name=excluded.sidecar_name",
+                params![source, write.sidecar.track_item_id, write.sidecar.name],
             )?;
         }
         if complete {
@@ -7103,8 +7114,6 @@ fn merge_tracks(tx: &Transaction<'_>, loser: &str, survivor: &str) -> Result<(),
     for table in [
         "track_overrides",
         "lyric_candidates",
-        "remote_lyric_cache",
-        "track_embedded_lyrics",
         "playback_statistics_checkpoints",
     ] {
         tx.execute(
@@ -7265,12 +7274,6 @@ fn persist_metadata(
             metadata.bit_depth.map(i64::from),
             i64::from(TRACK_METADATA_VERSION),
         ])?;
-    // The lyrics in the file's tags were read together with the rest: keep them (or the fact that there are none).
-    tx.prepare_cached(
-        "INSERT INTO track_embedded_lyrics (track_id, lyrics_text) VALUES (?1, ?2)
-         ON CONFLICT(track_id) DO UPDATE SET lyrics_text=excluded.lyrics_text",
-    )?
-    .execute(params![track_id.to_string(), metadata.embedded_lyrics])?;
     Ok(())
 }
 
@@ -7835,7 +7838,6 @@ mod tests {
                 created_at_utc_ms: None,
             },
             metadata: Some(TrackMetadata {
-                embedded_lyrics: None,
                 title: Some(title.to_owned()),
                 artist: Some("artist".to_owned()),
                 album: Some("album".to_owned()),
@@ -11091,22 +11093,164 @@ mod tests {
         );
     }
 
+    /// A library from before v21 kept lyric text: the migration drops it and keeps the sidecar pointers and the rest.
     #[test]
-    fn remote_lyric_cache_is_valid_only_for_the_file_it_was_read_for() {
-        let db = Database::open_in_memory().expect("database");
-        let track = TrackId::new();
-        assert_eq!(db.get_remote_lyric_cache(track, 10, Some(5)).unwrap(), None);
-        db.save_remote_lyric_cache(track, 10, Some(5), "{\"state\":\"missing\"}").unwrap();
-        assert!(db.get_remote_lyric_cache(track, 10, Some(5)).unwrap().is_some());
-        // A different size or time is another file.
-        assert_eq!(db.get_remote_lyric_cache(track, 11, Some(5)).unwrap(), None);
-        assert_eq!(db.get_remote_lyric_cache(track, 10, Some(6)).unwrap(), None);
-        assert_eq!(db.get_remote_lyric_cache(track, 10, None).unwrap(), None);
-        // A file without a modified time matches itself.
-        db.save_remote_lyric_cache(track, 10, None, "{}").unwrap();
-        assert!(db.get_remote_lyric_cache(track, 10, None).unwrap().is_some());
-        db.clear_remote_lyric_cache(track).unwrap();
-        assert_eq!(db.get_remote_lyric_cache(track, 10, None).unwrap(), None);
+    fn migrating_a_v20_library_drops_every_stored_lyric_text_and_keeps_the_sidecar_pointers() {
+        use super::{LyricSidecarLookup, SCHEMA_V17, SCHEMA_V18, SCHEMA_V19, SCHEMA_VERSION};
+        let dir = std::env::temp_dir().join(format!(
+            "moe-db-v21-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.sqlite3");
+        let (root, track_id) = {
+            let mut db = Database::open(&path).expect("database");
+            let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "lyrics");
+            let track = record(&root, "song-item", "song-path", "Song", 10, 1);
+            apply(
+                &mut db,
+                &root,
+                SourceScanState::Complete,
+                std::slice::from_ref(&track),
+                std::slice::from_ref(&track),
+                1,
+            );
+            (root, track_id_for_query(&db, "Song"))
+        };
+        {
+            // Back to the v20 shape, with the texts a v20 sync stored.
+            let connection = rusqlite::Connection::open(&path).expect("raw connection");
+            connection
+                .execute_batch(&format!(
+                    "DROP TABLE track_lyric_sidecars; DROP TABLE lyric_sidecar_sources;
+                     {SCHEMA_V17} {SCHEMA_V18} {SCHEMA_V19}"
+                ))
+                .expect("v20 lyric tables");
+            connection
+                .execute(
+                    "INSERT INTO track_lyric_sidecars
+                        (source_id, source_item_id, sidecar_name, size_bytes, modified_at_utc_ms, lyrics_text, oversized)
+                     VALUES (?1, 'song-item', 'song.lrc', 20, 5, '[00:01.00]stored', 0)",
+                    [root.id.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO track_embedded_lyrics (track_id, lyrics_text) VALUES (?1, '[00:01.00]old')",
+                    [track_id.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO remote_lyric_cache (track_id, size_bytes, modified_at_utc_ms, result_json)
+                     VALUES (?1, 1, 1, '{}')",
+                    [track_id.to_string()],
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 20).unwrap();
+        }
+
+        let db = Database::open(&path).expect("migrate v20");
+        {
+            let connection = db.lock().expect("connection");
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+            let tables: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type='table' AND name IN ('track_embedded_lyrics', 'remote_lyric_cache')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(tables, 0, "no table of lyric text is left");
+            let columns: Vec<String> = connection
+                .prepare("SELECT name FROM pragma_table_info('track_lyric_sidecars') ORDER BY cid")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(columns, ["source_id", "source_item_id", "sidecar_name"]);
+        }
+        // The pointer and the track are still there.
+        match db.track_lyric_sidecar(track_id).unwrap() {
+            LyricSidecarLookup::Present { name, audio } => {
+                assert_eq!(name, "song.lrc");
+                assert_eq!(db.track_locators(track_id).unwrap(), vec![audio]);
+            }
+            other => panic!("the pointer is kept: {other:?}"),
+        }
+        assert!(db.get_track_summary(track_id).unwrap().is_some());
+        drop(db);
+        // Opening again is a no-op (the migration ran once).
+        let again = Database::open(&path).expect("reopen");
+        assert!(matches!(
+            again.track_lyric_sidecar(track_id).unwrap(),
+            LyricSidecarLookup::Present { .. }
+        ));
+        drop(again);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_sync_keeps_only_where_each_sidecar_is() {
+        use super::LyricSidecarLookup;
+        use player_core::LyricSidecarWrite;
+        let mut db = Database::open_in_memory().expect("database");
+        let root = add_root(&db, MediaSourceKind::WindowsFilesystem, "sidecars");
+        let track = record(&root, "item", "path", "Song", 10, 1);
+        apply(
+            &mut db,
+            &root,
+            SourceScanState::Complete,
+            std::slice::from_ref(&track),
+            std::slice::from_ref(&track),
+            1,
+        );
+        let track_id = track_id_for_query(&db, "Song");
+        assert_eq!(
+            db.track_lyric_sidecar(track_id).unwrap(),
+            LyricSidecarLookup::NotScanned
+        );
+        let write = |name: &str, unchanged: bool| LyricSidecarWrite {
+            sidecar: player_core::LyricSidecar {
+                track_item_id: "item".to_owned(),
+                name: name.to_owned(),
+            },
+            unchanged,
+        };
+        db.save_lyric_sidecars(root.id, &[write("Song.lrc", false)], true)
+            .unwrap();
+        assert_eq!(
+            db.lyric_sidecar_states(root.id)
+                .unwrap()
+                .get("item")
+                .map(String::as_str),
+            Some("Song.lrc")
+        );
+        assert!(matches!(
+            db.track_lyric_sidecar(track_id).unwrap(),
+            LyricSidecarLookup::Present { name, .. } if name == "Song.lrc"
+        ));
+        db.save_lyric_sidecars(root.id, &[write("Song.srt", false)], true)
+            .unwrap();
+        assert!(matches!(
+            db.track_lyric_sidecar(track_id).unwrap(),
+            LyricSidecarLookup::Present { name, .. } if name == "Song.srt"
+        ));
+        // A complete scan that no longer sees it forgets it; the source stays scanned.
+        db.save_lyric_sidecars(root.id, &[], true).unwrap();
+        assert_eq!(
+            db.track_lyric_sidecar(track_id).unwrap(),
+            LyricSidecarLookup::Absent
+        );
     }
 
     #[test]

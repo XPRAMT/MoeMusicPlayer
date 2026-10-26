@@ -171,7 +171,6 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
             .or_else(|| properties.sample_rate()),
         release_date,
         year,
-        embedded_lyrics: embedded_lyrics_text(tagged_file.tags()),
         bit_depth: if file_type == FileType::Wav {
             source
                 .open()
@@ -311,18 +310,6 @@ fn decode_id3_text(frame: &[u8]) -> Result<String, ()> {
     }
 }
 
-/// The lyrics written in a file's tags (the first non-empty, not larger than the lyric limit), as the tag holds them.
-fn embedded_lyrics_text(tags: &[lofty::tag::Tag]) -> Option<String> {
-    for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
-        for raw in tags.iter().filter_map(|tag| tag.get_string(key)) {
-            if !raw.trim().is_empty() && raw.len() <= player_core::MAX_LYRIC_PAYLOAD_BYTES {
-                return Some(raw.to_owned());
-            }
-        }
-    }
-    None
-}
-
 pub fn mpeg_codec_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Layer1 => "MP1",
@@ -451,7 +438,6 @@ fn read_dsf_audio_metadata_from(
         .as_deref()
         .and_then(player_core::recording_date_year);
     Ok(TrackMetadata {
-        embedded_lyrics: None,
         title: tag
             .and_then(|tag| text(tag.title()))
             .filter(|value| !value.trim().is_empty()),
@@ -636,7 +622,6 @@ fn read_matroska_audio_metadata(
         .and_then(player_core::recording_date_year);
 
     Ok(TrackMetadata {
-        embedded_lyrics: None,
         title: matroska_tag_text(&["TITLE"])
             .or_else(|| info.as_ref().and_then(|info| info.title.clone()))
             .or_else(|| {

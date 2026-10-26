@@ -10,10 +10,12 @@ use std::{
 };
 
 use player_core::{
-    auto_lyric_candidate, merge_lrc_auxiliary, merge_lrc_auxiliary_nearest, merge_same_timestamp_lines, parse_any_lyrics, parse_lrc, parse_yrc,
-    restore_words_from_raw_karaoke, traditional_word_texts, yrc_matches_lrc, LyricsContent,
-    parse_qrc, preserve_qrc, rank_lyric_candidates, with_raw_karaoke, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine, LyricProvider,
-    LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics, TrackSummary,
+    auto_lyric_candidate, merge_lrc_auxiliary, merge_lrc_auxiliary_nearest,
+    merge_same_timestamp_lines, parse_lrc, parse_qrc, parse_yrc, preserve_qrc,
+    rank_lyric_candidates, restore_words_from_raw_karaoke, traditional_word_texts,
+    with_raw_karaoke, yrc_matches_lrc, LyricAuxiliaryKind, LyricCandidate, LyricFormat, LyricLine,
+    LyricProvider, LyricSidecarLookup, LyricsTrackMetadata, ParsedLyrics, TrackId, TrackLyrics,
+    TrackSummary,
 };
 use player_db::Database;
 use serde::Serialize;
@@ -39,7 +41,7 @@ const MAX_PROVIDER_SEARCH_DURATION: Duration = Duration::from_secs(20);
 const QQ_MISSING_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 #[cfg(target_os = "windows")]
-use player_platform_windows::{find_all_lyrics, find_embedded_lyrics, find_lyrics, LyricsLookup};
+use player_platform_windows::{find_all_lyrics, find_lyrics, LyricsLookup};
 
 const LOCAL_SIDECAR_CANDIDATE_ID: &str = "local:sidecar";
 const LOCAL_EMBEDDED_CANDIDATE_ID: &str = "local:embedded";
@@ -429,7 +431,9 @@ impl<T: crate::lyrics_provider::HttpTransport + 'static> LyricsService<T> {
                     .get_track_lyrics(track_id)
                     .map_err(|error| error.to_string())?
                 {
-                    if let Some(lyrics) = manual_lyrics_dto(database, track, &selected)? {
+                    if let Some(lyrics) =
+                        manual_lyrics_dto(None, database, track, &selected).await?
+                    {
                         return Ok(LyricsTrackResultDto::ready(lyrics));
                     }
                 }
@@ -1488,7 +1492,7 @@ async fn load_track_result_with_context(
         if is_cleared_lyrics(selected) {
             return Ok(LyricsTrackResultDto::cleared());
         }
-        match manual_lyrics_dto(database, &track, selected)? {
+        match manual_lyrics_dto(app, database, &track, selected).await? {
             Some(lyrics) => return Ok(LyricsTrackResultDto::ready(lyrics)),
             None => cached = None,
         }
@@ -1519,57 +1523,111 @@ enum LocalLyricsLookup {
     Oversized,
 }
 
-/// What the lookup of the local lyrics (beside and inside the audio file) found, before it becomes a DTO.
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(tag = "state", rename_all = "camelCase")]
-enum RawLocalLyrics {
-    Found {
-        provider: LyricProvider,
-        lyrics: ParsedLyrics,
-    },
-    Missing,
-    Oversized,
+/// One local lyric source of a track as its file holds it now.
+struct FoundLocalLyrics {
+    provider: LyricProvider,
+    lyrics: ParsedLyrics,
 }
 
-#[cfg(target_os = "windows")]
-async fn raw_local_lyrics(
-    _app: Option<&AppHandle>,
+/// Where the track's files are and what the library knows of its sidecar: all that is taken from the database (ADR 0040).
+fn local_lyric_files(
     database: &Database,
     track_id: TrackId,
-    embedded_only: bool,
-) -> Result<RawLocalLyrics, String> {
+) -> Result<(Vec<player_core::MediaLocator>, LyricSidecarLookup), String> {
     let locators = database
         .track_locators(track_id)
         .map_err(|error| error.to_string())?;
-    if locators.is_empty() {
-        return Ok(RawLocalLyrics::Missing);
-    }
-    let lookup = tauri::async_runtime::spawn_blocking(move || {
-        if embedded_only {
-            find_embedded_lyrics(&locators)
-        } else {
-            find_lyrics(&locators)
-        }
-    })
-        .await
-        .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
-    Ok(match lookup {
-        LyricsLookup::Found(found) => RawLocalLyrics::Found {
-            provider: found.provider,
-            lyrics: found.lyrics,
-        },
-        LyricsLookup::Missing => RawLocalLyrics::Missing,
-        LyricsLookup::Oversized => RawLocalLyrics::Oversized,
-    })
+    let sidecar = database
+        .track_lyric_sidecar(track_id)
+        .map_err(|error| error.to_string())?;
+    Ok((locators, sidecar))
 }
 
-/// The lyrics beside and inside the track's file.
+/// The local lyrics of a track, read from its files now (ADR 0040, 0041): the lyrics in its tags, then the sidecar the
+/// sync found beside it (only `NotScanned` looks for one). `first_only` stops at the first (the playback order). The
+/// second value says a lyric text was skipped for being larger than the limit. Blocking file (or server) I/O.
+#[cfg(target_os = "windows")]
+fn read_local_lyrics(
+    _app: Option<&AppHandle>,
+    locators: &[player_core::MediaLocator],
+    sidecar: &LyricSidecarLookup,
+    first_only: bool,
+) -> (Vec<FoundLocalLyrics>, bool) {
+    let found = |item: player_platform_windows::FoundLyrics| FoundLocalLyrics {
+        provider: item.provider,
+        lyrics: item.lyrics,
+    };
+    if first_only {
+        match find_lyrics(locators, sidecar) {
+            LyricsLookup::Found(item) => (vec![found(item)], false),
+            LyricsLookup::Missing => (Vec::new(), false),
+            LyricsLookup::Oversized => (Vec::new(), true),
+        }
+    } else {
+        (
+            find_all_lyrics(locators, sidecar)
+                .into_iter()
+                .map(found)
+                .collect(),
+            false,
+        )
+    }
+}
+
+#[cfg(target_os = "android")]
+fn read_local_lyrics(
+    app: Option<&AppHandle>,
+    locators: &[player_core::MediaLocator],
+    sidecar: &LyricSidecarLookup,
+    first_only: bool,
+) -> (Vec<FoundLocalLyrics>, bool) {
+    android_find_all_lyrics(app, locators, first_only, sidecar)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+fn read_local_lyrics(
+    _app: Option<&AppHandle>,
+    _locators: &[player_core::MediaLocator],
+    _sidecar: &LyricSidecarLookup,
+    _first_only: bool,
+) -> (Vec<FoundLocalLyrics>, bool) {
+    (Vec::new(), false)
+}
+
+/// [`read_local_lyrics`] for a track of the library, on a blocking worker.
+async fn read_local_lyrics_of_track(
+    app: Option<&AppHandle>,
+    database: &Database,
+    track_id: TrackId,
+    first_only: bool,
+) -> Result<(Vec<FoundLocalLyrics>, bool), String> {
+    let (locators, sidecar) = local_lyric_files(database, track_id)?;
+    if locators.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    // Only Android reads through the app (a legacy content:// track); elsewhere no handle is moved to the worker.
+    #[cfg(target_os = "android")]
+    let work = {
+        let app = app.cloned();
+        move || read_local_lyrics(app.as_ref(), &locators, &sidecar, first_only)
+    };
+    #[cfg(not(target_os = "android"))]
+    let work = {
+        let _ = app;
+        move || read_local_lyrics(None, &locators, &sidecar, first_only)
+    };
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))
+}
+
+/// The lyrics beside and inside the track's file, as the files hold them now.
 ///
-/// The `.lrc` beside a track is a library fact the sync keeps (found while the source is scanned, stored with its
-/// fingerprint and text), so playing a track never looks for it in a folder or on a server. Only a source that was never
-/// scanned for sidecars (a library from before this existed, until its next sync) is still searched. What the file itself
-/// holds (embedded lyrics) is read from the file; for a track on a remote server that is a network round trip or several, so
-/// what was found is kept in the database next to the size and modified time of the file it was read for.
+/// Nothing of the lyrics' content is kept in the library (ADR 0040): the tags are read every time (for a remote track
+/// the cover lookup of the same song shares its tag read), and the sidecar is the file the sync found beside the song
+/// (read through the disk cache for a remote track), so an edit made anywhere shows without a sync. Only a source that
+/// was never scanned for sidecars is searched beside the file. A server that cannot be reached fails at once
+/// (`GuardedFs` backoff); local tracks never wait on one.
 async fn local_lyrics_for_track(
     app: Option<&AppHandle>,
     _sources: &[super::settings::SourceEntry],
@@ -1577,133 +1635,25 @@ async fn local_lyrics_for_track(
     track_id: TrackId,
     track: &TrackSummary,
 ) -> Result<LocalLyricsLookup, String> {
-    // Order (ADR 0041): the song's own embedded lyrics, then the sidecar beside it (`.lrc`, `.ass`,
-    // `.srt`, whichever the sync kept), then nothing here (the caller searches online). Content
-    // that looks like a subtitle but does not parse counts as absent.
     let started = std::time::Instant::now();
-    let embedded_known = match database
-        .track_embedded_lyrics(track_id)
-        .map_err(|error| error.to_string())?
-    {
-        Some(stored) => {
-            if let Some(lyrics) = stored.as_deref().and_then(parse_stored_lyrics) {
-                return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
-                    track.id,
-                    track,
-                    LyricProvider::Embedded,
-                    false,
-                    &lyrics,
-                )));
-            }
-            true
-        }
-        // Tags not read since this existed: look in the file below.
-        None => false,
-    };
-    let mut embedded_only = false;
-    let mut sidecar_oversized = false;
-    match database
-        .track_lyric_sidecar(track_id)
-        .map_err(|error| error.to_string())?
-    {
-        player_db::LyricSidecarLookup::Present { text: Some(text), .. } => {
-            if let Some(lyrics) = parse_stored_lyrics(&text) {
-                return Ok(LocalLyricsLookup::Found(track_lyrics_dto(
-                    track.id,
-                    track,
-                    LyricProvider::Sidecar,
-                    false,
-                    &lyrics,
-                )));
-            }
-            embedded_only = true;
-        }
-        player_db::LyricSidecarLookup::Present { text: None, oversized: true } => {
-            embedded_only = true;
-            sidecar_oversized = true;
-        }
-        // Remembered without its text (it could not be read at the sync): look for it the old way.
-        player_db::LyricSidecarLookup::Present { text: None, oversized: false } => {}
-        player_db::LyricSidecarLookup::Absent => embedded_only = true,
-        player_db::LyricSidecarLookup::NotScanned => {}
-    }
-    if embedded_known && embedded_only {
-        return Ok(if sidecar_oversized {
-            LocalLyricsLookup::Oversized
-        } else {
-            LocalLyricsLookup::Missing
-        });
-    }
-
-    let fingerprint = database
-        .remote_file_fingerprint(track_id)
-        .map_err(|error| error.to_string())?;
-    let cached = match fingerprint {
-        Some((size, modified)) => database
-            .get_remote_lyric_cache(track_id, size, modified)
-            .map_err(|error| error.to_string())?
-            .and_then(|json| serde_json::from_str::<RawLocalLyrics>(&json).ok())
-            // A result from before the sync knew the sidecars may name a `.lrc` that is gone.
-            .filter(|raw| {
-                !(embedded_only
-                    && matches!(raw, RawLocalLyrics::Found { provider: LyricProvider::Sidecar, .. }))
-            }),
-        None => None,
-    };
-    let from_database = cached.is_some();
-    let raw = match cached {
-        Some(raw) => raw,
-        None => {
-            let raw = raw_local_lyrics(app, database, track_id, embedded_only).await?;
-            if let (Some((size, modified)), Ok(json)) = (fingerprint, serde_json::to_string(&raw)) {
-                if remote_lookup_is_definitive(database, track_id, &raw).await {
-                    let _ = database.save_remote_lyric_cache(track_id, size, modified, &json);
-                }
-            }
-            raw
-        }
-    };
-    if fingerprint.is_some() {
+    let (found, oversized) = read_local_lyrics_of_track(app, database, track_id, true).await?;
+    if started.elapsed() > std::time::Duration::from_millis(200) {
         eprintln!(
-            "[remote] lyrics lookup took {} ms (from the database: {})",
-            started.elapsed().as_millis(),
-            from_database
+            "[lyrics] local lyrics read took {} ms",
+            started.elapsed().as_millis()
         );
     }
-    Ok(match raw {
-        RawLocalLyrics::Found { provider, lyrics } => {
-            LocalLyricsLookup::Found(track_lyrics_dto(track.id, track, provider, false, &lyrics))
-        }
-        RawLocalLyrics::Missing if sidecar_oversized => LocalLyricsLookup::Oversized,
-        RawLocalLyrics::Missing => LocalLyricsLookup::Missing,
-        RawLocalLyrics::Oversized => LocalLyricsLookup::Oversized,
+    Ok(match found.into_iter().next() {
+        Some(item) => LocalLyricsLookup::Found(track_lyrics_dto(
+            track.id,
+            track,
+            item.provider,
+            false,
+            &item.lyrics,
+        )),
+        None if oversized => LocalLyricsLookup::Oversized,
+        None => LocalLyricsLookup::Missing,
     })
-}
-
-/// Whether a lookup result may be remembered. A found result always may. "Missing" is the answer of a server that could not
-/// be reached just as much as of a file without lyrics, so it is remembered only when the audio file itself can be opened
-/// right now (the server is there, and the lyrics really are not).
-async fn remote_lookup_is_definitive(database: &Database, track_id: TrackId, raw: &RawLocalLyrics) -> bool {
-    if !matches!(raw, RawLocalLyrics::Missing) {
-        return true;
-    }
-    let Some((source_id, path)) = database.track_locators(track_id).ok().and_then(|locators| {
-        locators.into_iter().find_map(|locator| match locator {
-            player_core::MediaLocator::Remote { source_id, path } => Some((source_id, path)),
-            _ => None,
-        })
-    }) else {
-        return false;
-    };
-    tauri::async_runtime::spawn_blocking(move || {
-        player_core::remote_content().is_some_and(|content| {
-            content.open(source_id, &path).is_ok()
-                // A song played from the disk cache while the server is away: its sidecars were not readable.
-                && !player_core::served_from_cache_only(content.as_ref(), source_id, &path)
-        })
-    })
-    .await
-    .unwrap_or(false)
 }
 
 async fn local_source_candidates(
@@ -1711,39 +1661,11 @@ async fn local_source_candidates(
     track_id: TrackId,
     track: &TrackSummary,
 ) -> Result<Vec<LyricsCandidateDto>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        let locators = database
-            .track_locators(track_id)
-            .map_err(|error| error.to_string())?;
-        let found = tauri::async_runtime::spawn_blocking(move || find_all_lyrics(&locators))
-            .await
-            .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
-        Ok(found
-            .iter()
-            .filter_map(|item| local_source_candidate_dto(track, item.provider, &item.lyrics))
-            .collect())
-    }
-    #[cfg(target_os = "android")]
-    {
-        let locators = database
-            .track_locators(track_id)
-            .map_err(|error| error.to_string())?;
-        let (found, _) = tauri::async_runtime::spawn_blocking(move || {
-            android_find_all_lyrics(None, &locators, false, true)
-        })
-        .await
-        .map_err(|error| format!("讀取本機歌詞工作失敗：{error}"))?;
-        Ok(found
-            .iter()
-            .filter_map(|item| local_source_candidate_dto(track, item.provider, &item.lyrics))
-            .collect())
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    {
-        let _ = (database, track_id, track);
-        Ok(Vec::new())
-    }
+    let (found, _) = read_local_lyrics_of_track(None, database, track_id, false).await?;
+    Ok(found
+        .iter()
+        .filter_map(|item| local_source_candidate_dto(track, item.provider, &item.lyrics))
+        .collect())
 }
 
 fn local_source_candidate_dto(
@@ -1824,7 +1746,8 @@ pub(crate) fn link_embedded_lyrics(
 
 /// What a manual row shows: an online pick is its stored text; a local pick is the source's current
 /// lyrics, or `None` when that source is empty now.
-fn manual_lyrics_dto(
+async fn manual_lyrics_dto(
+    app: Option<&AppHandle>,
     database: &Database,
     track: &TrackSummary,
     selected: &TrackLyrics,
@@ -1834,51 +1757,24 @@ fn manual_lyrics_dto(
         .as_deref()
         .and_then(local_candidate_provider)
     {
-        Some(provider) => Ok(live_local_pick(database, track.id, provider)?
-            .map(|lyrics| track_lyrics_dto(track.id, track, provider, true, &lyrics))),
+        Some(provider) => {
+            let (found, _) = read_local_lyrics_of_track(app, database, track.id, false).await?;
+            Ok(found
+                .into_iter()
+                .find(|item| item.provider == provider)
+                .map(|item| track_lyrics_dto(track.id, track, provider, true, &item.lyrics)))
+        }
         None => Ok(Some(persisted_lyrics_dto(track, selected.clone()))),
     }
 }
 
 /// A local lyric text (embedded or sidecar) read by its content (ADR 0041): LRC, yrc, SRT, ASS or
 /// plain text. A broken subtitle is `None`, like no lyrics, so the next source is tried.
-pub(crate) fn parse_stored_lyrics(raw: &str) -> Option<ParsedLyrics> {
-    parse_any_lyrics(raw).ok().and_then(LyricsContent::usable)
-}
-
-/// The current lyrics of a local source: the embedded lyrics and the `.lrc` the last sync stored
-/// for the track, or the file itself when the sync has nothing for it.
-fn live_local_pick(
-    database: &Database,
-    track_id: TrackId,
-    provider: LyricProvider,
-) -> Result<Option<ParsedLyrics>, String> {
-    match provider {
-        LyricProvider::Embedded => {
-            if let Some(stored) = database
-                .track_embedded_lyrics(track_id)
-                .map_err(|error| error.to_string())?
-            {
-                return Ok(stored.as_deref().and_then(parse_stored_lyrics));
-            }
-        }
-        LyricProvider::Sidecar => match database
-            .track_lyric_sidecar(track_id)
-            .map_err(|error| error.to_string())?
-        {
-            player_db::LyricSidecarLookup::Present { text: Some(text), .. } => {
-                return Ok(parse_stored_lyrics(&text));
-            }
-            player_db::LyricSidecarLookup::Present { text: None, oversized: true }
-            | player_db::LyricSidecarLookup::Absent => return Ok(None),
-            player_db::LyricSidecarLookup::Present { text: None, oversized: false }
-            | player_db::LyricSidecarLookup::NotScanned => {}
-        },
-        LyricProvider::NetEase | LyricProvider::Qq => return Ok(None),
-    }
-    Ok(read_local_lyric_source(database, track_id, provider)
+#[cfg(target_os = "android")]
+fn parse_local_lyric_text(raw: &str) -> Option<ParsedLyrics> {
+    player_core::parse_any_lyrics(raw)
         .ok()
-        .filter(|lyrics| !lyrics.lines.is_empty()))
+        .and_then(player_core::LyricsContent::usable)
 }
 
 fn select_local_lyric_candidate(
@@ -1892,10 +1788,13 @@ fn select_local_lyric_candidate(
         .get_track_summary(track_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這首曲目。".to_owned())?;
-    let lyrics = match live_local_pick(database, track_id, provider)? {
-        Some(lyrics) => lyrics,
-        None => read_local_lyric_source(database, track_id, provider)?,
-    };
+    let (locators, sidecar) = local_lyric_files(database, track_id)?;
+    let lyrics = read_local_lyrics(None, &locators, &sidecar, false)
+        .0
+        .into_iter()
+        .find(|item| item.provider == provider)
+        .map(|item| item.lyrics)
+        .ok_or_else(|| "找不到這份本機歌詞。".to_owned())?;
     // Only the reference (provider + candidate id) is kept; the text is read live on every load.
     database
         .save_manual_track_lyrics(&local_pick_reference(
@@ -1908,109 +1807,18 @@ fn select_local_lyric_candidate(
     Ok(track_lyrics_dto(track.id, &track, provider, true, &lyrics))
 }
 
-#[cfg(target_os = "windows")]
-fn read_local_lyric_source(
-    database: &Database,
-    track_id: TrackId,
-    provider: LyricProvider,
-) -> Result<ParsedLyrics, String> {
-    let locators = database
-        .track_locators(track_id)
-        .map_err(|error| error.to_string())?;
-    find_all_lyrics(&locators)
-        .into_iter()
-        .find(|item| item.provider == provider)
-        .map(|item| item.lyrics)
-        .ok_or_else(|| "找不到這份本機歌詞。".to_owned())
-}
-
-#[cfg(target_os = "android")]
-fn read_local_lyric_source(
-    database: &Database,
-    track_id: TrackId,
-    provider: LyricProvider,
-) -> Result<ParsedLyrics, String> {
-    let locators = database
-        .track_locators(track_id)
-        .map_err(|error| error.to_string())?;
-    android_find_all_lyrics(None, &locators, false, true)
-        .0
-        .into_iter()
-        .find(|item| item.provider == provider)
-        .map(|item| item.lyrics)
-        .ok_or_else(|| "找不到這份本機歌詞。".to_owned())
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "android")))]
-fn read_local_lyric_source(
-    database: &Database,
-    track_id: TrackId,
-    provider: LyricProvider,
-) -> Result<ParsedLyrics, String> {
-    let _ = (database, track_id, provider);
-    Err("這個平台還不能從候選清單套用本機歌詞。".to_owned())
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "android")))]
-async fn raw_local_lyrics(
-    _app: Option<&AppHandle>,
-    _database: &Database,
-    _track_id: TrackId,
-    _embedded_only: bool,
-) -> Result<RawLocalLyrics, String> {
-    Ok(RawLocalLyrics::Missing)
-}
-
-#[cfg(target_os = "android")]
-async fn raw_local_lyrics(
-    app: Option<&AppHandle>,
-    database: &Database,
-    track_id: TrackId,
-    embedded_only: bool,
-) -> Result<RawLocalLyrics, String> {
-    let Some(app) = app else {
-        return Ok(RawLocalLyrics::Missing);
-    };
-    let locators = database
-        .track_locators(track_id)
-        .map_err(|error| error.to_string())?;
-    if locators.is_empty() {
-        return Ok(RawLocalLyrics::Missing);
-    }
-    let app = app.clone();
-    let (found, oversized) = tauri::async_runtime::spawn_blocking(move || {
-        android_find_all_lyrics(Some(&app), &locators, true, !embedded_only)
-    })
-    .await
-    .map_err(|error| format!("讀取 Android 本機歌詞工作失敗：{error}"))?;
-    // Same precedence as Windows `find_lyrics`: embedded lyrics, then the sidecar.
-    Ok(match found.into_iter().next() {
-        Some(item) => RawLocalLyrics::Found {
-            provider: item.provider,
-            lyrics: item.lyrics,
-        },
-        None if oversized => RawLocalLyrics::Oversized,
-        None => RawLocalLyrics::Missing,
-    })
-}
-
-#[cfg(target_os = "android")]
-struct AndroidFoundLyrics {
-    provider: LyricProvider,
-    lyrics: ParsedLyrics,
-}
-
 /// Android counterpart of Windows `find_all_lyrics`, in the same order (ADR 0041): the lyrics
-/// embedded in the track's tags first, then the sidecar beside a real-path or remote track
-/// (`.lrc`, `.ass`, `.srt`). `first_only` stops after the first hit (playback lookup). A legacy
-/// content:// locator is read for embedded tags only when `app` is given.
+/// embedded in the track's tags first, then the sidecar beside a real-path or remote track, as
+/// `sidecar` says (the file the sync found, none, or a search when never scanned). `first_only`
+/// stops after the first hit (playback lookup). A legacy content:// locator is read for embedded
+/// tags only when `app` is given.
 #[cfg(target_os = "android")]
 fn android_find_all_lyrics(
     app: Option<&AppHandle>,
     locators: &[player_core::MediaLocator],
     first_only: bool,
-    with_sidecar: bool,
-) -> (Vec<AndroidFoundLyrics>, bool) {
+    sidecar: &LyricSidecarLookup,
+) -> (Vec<FoundLocalLyrics>, bool) {
     use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
     use player_core::MAX_LYRIC_PAYLOAD_BYTES;
     use tauri_plugin_media_index::MediaIndexExt;
@@ -2025,7 +1833,7 @@ fn android_find_all_lyrics(
     });
     let mut found = Vec::new();
     let mut oversized = false;
-    let first = |texts: &[String]| texts.iter().find_map(|text| parse_stored_lyrics(text));
+    let first = |texts: &[String]| texts.iter().find_map(|text| parse_local_lyric_text(text));
 
     // A remote track (ADR 0026): its embedded lyrics, then the sidecar beside it, both read through the remote reader.
     if let Some((source_id, remote_path)) = locators.iter().find_map(|locator| match locator {
@@ -2033,16 +1841,22 @@ fn android_find_all_lyrics(
         _ => None,
     }) {
         let (sidecars, embedded, remote_oversized) =
-            crate::remote_media::remote_lyric_texts(source_id, &remote_path, with_sidecar);
+            crate::remote_media::remote_lyric_texts(source_id, &remote_path, sidecar);
         oversized |= remote_oversized;
         if let Some(lyrics) = first(&embedded) {
-            found.push(AndroidFoundLyrics { provider: LyricProvider::Embedded, lyrics });
+            found.push(FoundLocalLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
             if first_only {
                 return (found, oversized);
             }
         }
         if let Some(lyrics) = first(&sidecars) {
-            found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });
+            found.push(FoundLocalLyrics {
+                provider: LyricProvider::Sidecar,
+                lyrics,
+            });
         }
         return (found, oversized);
     }
@@ -2075,32 +1889,57 @@ fn android_find_all_lyrics(
             }
         }
         if let Some(lyrics) = first(&texts) {
-            found.push(AndroidFoundLyrics { provider: LyricProvider::Embedded, lyrics });
+            found.push(FoundLocalLyrics {
+                provider: LyricProvider::Embedded,
+                lyrics,
+            });
             if first_only {
                 return (found, oversized);
             }
         }
     }
 
-    if let Some(path) = audio_path.as_deref().filter(|_| with_sidecar) {
+    if let Some(path) = audio_path.as_deref() {
+        // The file the sync found beside the song, or (never scanned) every kind of sidecar with its name.
+        let candidates: Vec<std::path::PathBuf> = match sidecar {
+            LyricSidecarLookup::Absent => Vec::new(),
+            LyricSidecarLookup::Present { .. } => match sidecar.sidecar_locator() {
+                Some(player_core::MediaLocator::FileSystem(sidecar_path))
+                    if sidecar_path.parent() == path.parent() =>
+                {
+                    vec![sidecar_path]
+                }
+                _ => Vec::new(),
+            },
+            LyricSidecarLookup::NotScanned => player_core::LYRIC_SIDECAR_EXTENSIONS
+                .iter()
+                .filter_map(|extension| {
+                    tauri_plugin_media_index::fs_scan::sibling_with_extension(path, extension)
+                })
+                .collect(),
+        };
         let mut texts = Vec::new();
-        for extension in player_core::LYRIC_SIDECAR_EXTENSIONS {
-            let Some(sidecar) =
-                tauri_plugin_media_index::fs_scan::sibling_with_extension(path, extension)
-            else {
-                continue;
-            };
-            match std::fs::read(sidecar) {
-                Ok(bytes) if bytes.len() > MAX_LYRIC_PAYLOAD_BYTES => oversized = true,
-                Ok(bytes) => texts.push(
+        for sidecar_path in candidates {
+            match std::fs::metadata(&sidecar_path) {
+                Ok(metadata) if metadata.len() > MAX_LYRIC_PAYLOAD_BYTES as u64 => {
+                    oversized = true;
+                    continue;
+                }
+                Ok(_) => {}
+                Err(_) => continue,
+            }
+            if let Ok(bytes) = std::fs::read(&sidecar_path) {
+                texts.push(
                     String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
                         .into_owned(),
-                ),
-                Err(_) => {}
+                );
             }
         }
         if let Some(lyrics) = first(&texts) {
-            found.push(AndroidFoundLyrics { provider: LyricProvider::Sidecar, lyrics });
+            found.push(FoundLocalLyrics {
+                provider: LyricProvider::Sidecar,
+                lyrics,
+            });
         }
     }
     (found, oversized)
@@ -3574,11 +3413,42 @@ mod tests {
         );
     }
 
-    /// A track whose embedded lyrics (from the sync) can be rewritten by applying the scan again.
+    /// An MP3 whose ID3v2 tag holds `lyrics` as an unsynchronised-lyrics frame (none: no tag), with a few
+    /// silent-looking frame headers after it so the file type is recognised.
+    fn write_mp3_with_embedded_lyrics(path: &std::path::Path, lyrics: Option<&str>) {
+        let mut file = Vec::new();
+        if let Some(lyrics) = lyrics {
+            let mut content = vec![3, b'e', b'n', b'g', 0];
+            content.extend(lyrics.as_bytes());
+            content.push(0);
+            let syncsafe = |size: usize| {
+                let size = u32::try_from(size).expect("small fixture");
+                [
+                    ((size >> 21) & 0x7f) as u8,
+                    ((size >> 14) & 0x7f) as u8,
+                    ((size >> 7) & 0x7f) as u8,
+                    (size & 0x7f) as u8,
+                ]
+            };
+            let mut frame = b"USLT".to_vec();
+            frame.extend(syncsafe(content.len()));
+            frame.extend([0, 0]);
+            frame.extend(content);
+            file.extend(b"ID3\x04\0\0");
+            file.extend(syncsafe(frame.len()));
+            file.extend(frame);
+        }
+        for _ in 0..3 {
+            file.extend([0xff, 0xfb, 0x90, 0x64]);
+            file.resize(file.len() + 413, 0);
+        }
+        fs::write(path, file).expect("write MP3 fixture");
+    }
+
+    /// A track of a scanned folder source whose file's embedded lyrics can be rewritten without a sync.
     struct EmbeddedFixture {
         database: Database,
         directory: TestDirectory,
-        root: LibraryRoot,
         record: MediaTrackRecord,
         track_id: TrackId,
     }
@@ -3587,7 +3457,7 @@ mod tests {
         fn new(embedded: Option<&str>) -> Self {
             let directory = TestDirectory::new();
             let audio_path = directory.0.join("track.mp3");
-            fs::write(&audio_path, b"lyrics reference test media").expect("write media placeholder");
+            write_mp3_with_embedded_lyrics(&audio_path, embedded);
             let source_id = SourceId::new();
             let root = LibraryRoot {
                 id: source_id,
@@ -3596,7 +3466,7 @@ mod tests {
                 locator: MediaLocator::FileSystem(directory.0.clone()),
                 enabled: true,
             };
-            let database = Database::open_in_memory().expect("open isolated test database");
+            let mut database = Database::open_in_memory().expect("open isolated test database");
             database.save_library_root(&root).expect("save test source");
             let record = MediaTrackRecord {
                 identity: TrackIdentity {
@@ -3617,31 +3487,35 @@ mod tests {
                     ..TrackMetadata::default()
                 }),
             };
-            let mut fixture = Self { database, directory, root, record, track_id: TrackId::new() };
-            fixture.rescan(embedded);
-            fixture.track_id = fixture
-                .database
-                .resolve_track_id_for_locator(&MediaLocator::FileSystem(audio_path))
-                .expect("resolve indexed track")
-                .expect("track mapping exists");
-            fixture
-        }
-
-        /// What the next sync would store after the file's embedded lyrics changed.
-        fn rescan(&mut self, embedded: Option<&str>) {
-            if let Some(metadata) = self.record.metadata.as_mut() {
-                metadata.embedded_lyrics = embedded.map(str::to_owned);
-            }
-            self.database
+            database
                 .apply_source_scan(
-                    &self.root,
+                    &root,
                     &SourceScanState::Complete,
-                    std::slice::from_ref(&self.record),
-                    std::slice::from_ref(&self.record),
+                    std::slice::from_ref(&record),
+                    std::slice::from_ref(&record),
                     &[],
                     1_800_000_000_000,
                 )
                 .expect("apply scan");
+            // The source was looked through for sidecars and this song has none (as a folder sync records it).
+            database
+                .save_lyric_sidecars(source_id, &[], true)
+                .expect("record the sidecar scan");
+            let track_id = database
+                .resolve_track_id_for_locator(&MediaLocator::FileSystem(audio_path))
+                .expect("resolve indexed track")
+                .expect("track mapping exists");
+            Self {
+                database,
+                directory,
+                record,
+                track_id,
+            }
+        }
+
+        /// The file's embedded lyrics were edited (on another device, say); no sync runs.
+        fn edit_embedded(&self, embedded: Option<&str>) {
+            write_mp3_with_embedded_lyrics(&self.directory.0.join("track.mp3"), embedded);
         }
 
         async fn shown(&self) -> Option<(LyricsSourceDto, String)> {
@@ -3653,9 +3527,75 @@ mod tests {
         }
     }
 
+    /// The bug this rule fixes: the library said "no embedded lyrics" (synced before the edit), so the song went online.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn embedded_lyrics_written_after_the_last_sync_are_shown_without_a_sync() {
+        let fixture = EmbeddedFixture::new(None);
+        assert_eq!(fixture.shown().await, None);
+        fixture.edit_embedded(Some("[00:01.00]後來寫入的內嵌"));
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Embedded, "後來寫入的內嵌".to_owned()))
+        );
+        fixture.edit_embedded(Some("[00:01.00]再改一次"));
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Embedded, "再改一次".to_owned()))
+        );
+        fixture.edit_embedded(None);
+        assert_eq!(fixture.shown().await, None);
+    }
+
+    /// A sidecar the sync recorded is read by its name with its current content; one added after a scan that found none
+    /// waits for the next sync (where it is, is a library fact), while the tags are always read.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn the_recorded_sidecar_is_read_live_and_an_unrecorded_one_waits_for_the_sync() {
+        let mut fixture = EmbeddedFixture::new(None);
+        fs::write(
+            fixture.directory.0.join("track.lrc"),
+            "[00:01.00]還沒同步的 LRC",
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.shown().await,
+            None,
+            "the scan found no sidecar for this song"
+        );
+        fixture
+            .database
+            .save_lyric_sidecars(
+                fixture.record.identity.source_id,
+                &[player_core::LyricSidecarWrite {
+                    sidecar: player_core::LyricSidecar {
+                        track_item_id: fixture.record.identity.source_item_id.clone(),
+                        name: "track.lrc".to_owned(),
+                    },
+                    unchanged: false,
+                }],
+                true,
+            )
+            .expect("record the sidecar");
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Local, "還沒同步的 LRC".to_owned()))
+        );
+        fs::write(
+            fixture.directory.0.join("track.lrc"),
+            "[00:01.00]改過的 LRC",
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Local, "改過的 LRC".to_owned()))
+        );
+    }
+
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn picked_embedded_lyrics_are_a_reference_that_follows_the_file() {
-        let mut fixture = EmbeddedFixture::new(Some("[00:01.00]舊的內嵌"));
+        let fixture = EmbeddedFixture::new(Some("[00:01.00]舊的內嵌"));
         let selected = super::select_candidate_from_database(
             &fixture.database,
             fixture.track_id,
@@ -3676,14 +3616,18 @@ mod tests {
         assert_eq!(fixture.shown().await, Some((LyricsSourceDto::Manual, "舊的內嵌".to_owned())));
 
         // The tags were edited: the next load shows the new embedded lyrics, no re-pick needed.
-        fixture.rescan(Some("[00:01.00]新的內嵌"));
-        assert_eq!(fixture.shown().await, Some((LyricsSourceDto::Manual, "新的內嵌".to_owned())));
+        fixture.edit_embedded(Some("[00:01.00]新的內嵌"));
+        assert_eq!(
+            fixture.shown().await,
+            Some((LyricsSourceDto::Manual, "新的內嵌".to_owned()))
+        );
 
         // The embedded lyrics were removed: the normal order applies (no .lrc, no cache here).
-        fixture.rescan(None);
+        fixture.edit_embedded(None);
         assert_eq!(fixture.shown().await, None);
     }
 
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn legacy_local_pick_rows_ignore_their_stored_snapshot() {
         let fixture = EmbeddedFixture::new(Some("[00:01.00]檔案裡的內嵌"));
@@ -3720,6 +3664,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn embedded_subtitles_are_parsed_and_broken_ones_fall_through_to_the_sidecar() {
         let fixture = EmbeddedFixture::new(Some("1\n00:00:01,000 --> 00:00:02,000\n內嵌字幕\n"));
@@ -3727,8 +3672,23 @@ mod tests {
             fixture.shown().await,
             Some((LyricsSourceDto::Embedded, "內嵌字幕".to_owned()))
         );
-        let broken = EmbeddedFixture::new(Some("[Events]\nDialogue: broken"));
-        fs::write(broken.directory.0.join("track.lrc"), "[00:01.00]旁邊的 LRC").expect("write sidecar");
+        let mut broken = EmbeddedFixture::new(Some("[Events]\nDialogue: broken"));
+        fs::write(broken.directory.0.join("track.lrc"), "[00:01.00]旁邊的 LRC")
+            .expect("write sidecar");
+        broken
+            .database
+            .save_lyric_sidecars(
+                broken.record.identity.source_id,
+                &[player_core::LyricSidecarWrite {
+                    sidecar: player_core::LyricSidecar {
+                        track_item_id: broken.record.identity.source_item_id.clone(),
+                        name: "track.lrc".to_owned(),
+                    },
+                    unchanged: false,
+                }],
+                true,
+            )
+            .expect("record the sidecar");
         assert_eq!(
             broken.shown().await,
             Some((LyricsSourceDto::Local, "旁邊的 LRC".to_owned())),
@@ -3736,6 +3696,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn saving_details_links_embedded_lyrics_over_a_same_name_lrc() {
         let fixture = EmbeddedFixture::new(Some("[00:01.00]寫入的內嵌"));
@@ -3754,11 +3715,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refreshing_one_track_stores_its_new_tags_and_embedded_lyrics() {
+    async fn refreshing_one_track_stores_its_new_tags() {
         let fixture = EmbeddedFixture::new(Some("[00:01.00]舊的內嵌"));
         let mut metadata = fixture.record.metadata.clone().expect("fixture metadata");
         metadata.title = Some("改過的曲名".to_owned());
-        metadata.embedded_lyrics = Some("[00:01.00]剛寫入的內嵌".to_owned());
         fixture
             .database
             .refresh_track_metadata(fixture.track_id, &metadata, &fixture.record.locator)
@@ -3769,10 +3729,6 @@ mod tests {
             .expect("read track")
             .expect("track exists");
         assert_eq!(summary.title.as_deref(), Some("改過的曲名"));
-        assert_eq!(
-            fixture.database.track_embedded_lyrics(fixture.track_id).expect("embedded lyrics"),
-            Some(Some("[00:01.00]剛寫入的內嵌".to_owned()))
-        );
     }
 
     #[test]

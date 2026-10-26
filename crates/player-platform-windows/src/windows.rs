@@ -505,7 +505,7 @@ impl MediaIndex for WindowsMediaIndex {
             }
         }
 
-        // The lyrics beside the songs: a `.lrc` with the song's name in the song's folder, with the fingerprint the sync keeps.
+        // The lyrics beside the songs: a sidecar with the song's name in the song's folder (only its name is kept).
         if !lyric_files.is_empty() {
             for track in &scan.tracks {
                 let MediaLocator::FileSystem(path) = &track.locator else {
@@ -517,18 +517,12 @@ impl MediaIndex for WindowsMediaIndex {
                 let Some(lyric_path) = lyric_files.get(&(parent.to_path_buf(), stem.to_string_lossy().to_lowercase())) else {
                     continue;
                 };
-                let Ok(metadata) = fs::metadata(lyric_path) else {
-                    continue;
-                };
                 self.sidecars.push(player_core::LyricSidecar {
                     track_item_id: track.identity.source_item_id.clone(),
-                    locator: MediaLocator::FileSystem(lyric_path.clone()),
                     name: lyric_path
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_default(),
-                    size_bytes: metadata.len(),
-                    modified_at_utc_ms: metadata.modified().ok().and_then(system_time_to_utc_ms),
                 });
             }
         }
@@ -1102,8 +1096,6 @@ mod tests {
         let sidecars = index.take_lyric_sidecars();
         assert_eq!(sidecars.len(), 1);
         assert_eq!(sidecars[0].name, "track.LRC");
-        assert_eq!(sidecars[0].size_bytes, 13);
-        assert!(sidecars[0].modified_at_utc_ms.is_some());
         let song = scan
             .tracks
             .iter()

@@ -182,6 +182,13 @@ pub trait RemoteContent: Send + Sync {
     /// protocol. `NotFound` when the file or the source does not exist.
     fn open(&self, source_id: SourceId, path: &str) -> io::Result<RemoteFileHandle>;
 
+    /// As [`open`](Self::open), for a small file that belongs with a song the way its audio does (a lyrics sidecar): what is
+    /// read is kept in the disk cache like the audio of a played song, so once it was read whole it is there without its
+    /// server. Defaults to `open`.
+    fn open_cached(&self, source_id: SourceId, path: &str) -> io::Result<RemoteFileHandle> {
+        self.open(source_id, path)
+    }
+
     /// As [`open`](Self::open), for a reader that plays the file from start to end (the audio engine): the provider
     /// keeps reading ahead in the background so the player never waits for the network. Defaults to `open`.
     fn open_streaming(&self, source_id: SourceId, path: &str) -> io::Result<RemoteFileHandle> {
@@ -218,6 +225,13 @@ pub trait RemoteContent: Send + Sync {
     fn available_offline(&self, source_id: SourceId, path: &str) -> bool {
         let _ = (source_id, path);
         false
+    }
+
+    /// The file was found changed on its server (a song checked when it started playing): what the disk cache holds of
+    /// it is not served for it from now on (the next play fetches the new version), while a stream that is open keeps
+    /// reading what it opened. Defaults to nothing.
+    fn file_changed(&self, source_id: SourceId, path: &str, now: RemoteStamp) {
+        let _ = (source_id, path, now);
     }
 
     /// Stop every reader that has this file open (the player's handle and read-ahead): the file is about to be replaced.
@@ -310,6 +324,96 @@ pub fn read_remote_file_capped_checked(
     Ok((bytes.len() as u64 <= limit).then_some(bytes))
 }
 
+/// As [`read_remote_file_capped_checked`], through [`RemoteContent::open_cached`]: a lyrics sidecar, kept in the disk
+/// cache with the songs so a song that plays without its server has its sidecar too.
+pub fn read_remote_sidecar_checked(
+    source_id: SourceId,
+    path: &str,
+    limit: u64,
+) -> io::Result<Option<Vec<u8>>> {
+    let Some(content) = remote_content() else {
+        return Ok(None);
+    };
+    let handle = content.open_cached(source_id, path)?;
+    if handle.len == 0 || handle.len > limit {
+        return Ok(None);
+    }
+    let mut bytes = Vec::with_capacity(handle.len as usize);
+    if let Err(error) = handle.reader.take(limit + 1).read_to_end(&mut bytes) {
+        return if is_remote_network_error(&error) {
+            Err(error)
+        } else {
+            Ok(None)
+        };
+    }
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
+}
+
+/// How long the lyric texts seen in a remote file's tags are kept for the next lookup of the same file.
+const TAG_LYRICS_KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+/// How many files' tag lyrics are kept at once.
+const TAG_LYRICS_KEPT: usize = 8;
+
+struct TagLyrics {
+    source_id: SourceId,
+    path: String,
+    len: u64,
+    read_at: std::time::Instant,
+    texts: Vec<String>,
+}
+
+static TAG_LYRICS: std::sync::Mutex<Vec<TagLyrics>> = std::sync::Mutex::new(Vec::new());
+
+/// Keep the lyric texts (raw, as the tags hold them; empty when there are none) that a read of a remote file's tags found.
+/// A song that starts has its cover and its lyrics looked up at once, and both need the same tags: the one that reads
+/// them first leaves the lyrics here, so the other does not read the tags over the network again. Kept briefly, for the
+/// file of this size only; nothing of it is stored.
+pub fn remember_remote_tag_lyrics(source_id: SourceId, path: &str, len: u64, texts: Vec<String>) {
+    let mut kept = TAG_LYRICS.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.retain(|item| {
+        !(item.source_id == source_id && item.path == path)
+            && item.read_at.elapsed() < TAG_LYRICS_KEPT_FOR
+    });
+    if kept.len() >= TAG_LYRICS_KEPT {
+        kept.remove(0);
+    }
+    kept.push(TagLyrics {
+        source_id,
+        path: path.to_owned(),
+        len,
+        read_at: std::time::Instant::now(),
+        texts,
+    });
+}
+
+/// Forget what a read of this remote file's tags found (the file changed).
+pub fn forget_remote_tag_lyrics(source_id: SourceId, path: &str) {
+    TAG_LYRICS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|item| !(item.source_id == source_id && item.path == path));
+}
+
+/// The lyric texts a recent read of this remote file's tags found ([`remember_remote_tag_lyrics`]), when the file still
+/// has the size it had then.
+pub fn remembered_remote_tag_lyrics(
+    source_id: SourceId,
+    path: &str,
+    len: u64,
+) -> Option<Vec<String>> {
+    TAG_LYRICS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .find(|item| {
+            item.source_id == source_id
+                && item.path == path
+                && item.len == len
+                && item.read_at.elapsed() < TAG_LYRICS_KEPT_FOR
+        })
+        .map(|item| item.texts.clone())
+}
+
 /// `a/b/c.flac` + `cover.jpg` → `a/b/cover.jpg`: a file beside a remote track.
 pub fn remote_sibling(path: &str, name: &str) -> String {
     match path.rsplit_once('/') {
@@ -334,6 +438,36 @@ pub fn remote_with_extension(path: &str, extension: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tag_lyrics_are_kept_briefly_for_the_same_file_only() {
+        let source = SourceId::new();
+        remember_remote_tag_lyrics(source, "a/b.flac", 10, vec!["[00:01.00]x".to_owned()]);
+        assert_eq!(
+            remembered_remote_tag_lyrics(source, "a/b.flac", 10),
+            Some(vec!["[00:01.00]x".to_owned()])
+        );
+        assert_eq!(
+            remembered_remote_tag_lyrics(source, "a/b.flac", 11),
+            None,
+            "another size"
+        );
+        assert_eq!(remembered_remote_tag_lyrics(source, "a/c.flac", 10), None);
+        assert_eq!(
+            remembered_remote_tag_lyrics(SourceId::new(), "a/b.flac", 10),
+            None
+        );
+        remember_remote_tag_lyrics(source, "a/b.flac", 12, Vec::new());
+        assert_eq!(
+            remembered_remote_tag_lyrics(source, "a/b.flac", 12),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            remembered_remote_tag_lyrics(source, "a/b.flac", 10),
+            None,
+            "replaced"
+        );
+    }
 
     #[test]
     fn siblings_and_extensions_stay_in_the_same_remote_folder() {

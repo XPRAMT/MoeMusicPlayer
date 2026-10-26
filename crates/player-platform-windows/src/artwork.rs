@@ -74,9 +74,19 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
         for (source_id, path) in &remote {
             match content.open(*source_id, path) {
                 Ok(handle) => {
-                    if let Some(image) =
-                        embedded_artwork_from(handle.reader, Path::new(path), &mut oversized)
-                    {
+                    let len = handle.len;
+                    // The lyrics lookup of the song that starts needs the same tags: it finds them here.
+                    let mut lyrics = None;
+                    let image = embedded_artwork_from(
+                        handle.reader,
+                        Path::new(path),
+                        &mut oversized,
+                        Some(&mut lyrics),
+                    );
+                    if let Some(texts) = lyrics {
+                        player_core::remember_remote_tag_lyrics(*source_id, path, len, texts);
+                    }
+                    if let Some(image) = image {
                         return ArtworkLookup::Found(image);
                     }
                 }
@@ -126,14 +136,16 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
 fn embedded_artwork(path: &Path, oversized: &mut bool) -> Option<ArtworkImage> {
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
-    embedded_artwork_from(file, path, oversized)
+    embedded_artwork_from(file, path, oversized, None)
 }
 
-/// The cover embedded in a track's tags, read from any stream; `path` only names the file (its extension).
+/// The cover embedded in a track's tags, read from any stream; `path` only names the file (its extension). With `lyrics`,
+/// the lyric texts of the same tags are handed out too when the tags were read the way the lyrics lookup reads them.
 fn embedded_artwork_from<R: Read + std::io::Seek + Send>(
     file: R,
     path: &Path,
     oversized: &mut bool,
+    lyrics: Option<&mut Option<Vec<String>>>,
 ) -> Option<ArtworkImage> {
     use std::io::Seek;
     // DSF is not a lofty format: its cover lives in the ID3v2 tag at the end of the file.
@@ -165,6 +177,9 @@ fn embedded_artwork_from<R: Read + std::io::Seek + Send>(
                 .options(options)
                 .read()
                 .ok()?;
+            if let Some(lyrics) = lyrics {
+                *lyrics = Some(crate::lyrics::lyric_texts_in_tags(tagged_file.tags()));
+            }
             tagged_file.tags()
         };
 

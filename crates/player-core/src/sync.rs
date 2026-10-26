@@ -8,10 +8,10 @@ use std::{
 use serde::Serialize;
 
 use crate::library::{
-    read_lyric_sidecar, FileFingerprint, LibraryRoot, LyricSidecar, LyricSidecarRead,
-    LyricSidecarState, LyricSidecarWrite, MediaIndex, MediaScanProgress, MediaScanProgressUnit,
-    MediaSourceError, MediaTrackRecord, MetadataReader, SourceId, SourceScanState,
-    SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError, TRACK_METADATA_VERSION,
+    FileFingerprint, LibraryRoot, LyricSidecar, LyricSidecarWrite, MediaIndex, MediaScanProgress,
+    MediaScanProgressUnit, MediaSourceError, MediaTrackRecord, MetadataReader, SourceId,
+    SourceScanState, SyncCancellation, TrackIdentity, TrackMetadata, TrackMetadataError,
+    TRACK_METADATA_VERSION,
 };
 
 const METADATA_BACKFILL_BATCH_SIZE: usize = 128;
@@ -117,11 +117,11 @@ pub trait LibraryRepository {
         tracks: &[MediaTrackRecord],
     ) -> Result<(), Self::Error>;
 
-    /// The fingerprints the database holds for the `.lrc` sidecars of a source, by the audio file's `source_item_id`.
+    /// The sidecar names the database holds for a source, by the audio file's `source_item_id`.
     fn lyric_sidecar_states(
         &self,
         _source_id: SourceId,
-    ) -> Result<HashMap<String, LyricSidecarState>, Self::Error> {
+    ) -> Result<HashMap<String, String>, Self::Error> {
         Ok(HashMap::new())
     }
 
@@ -362,7 +362,6 @@ impl SyncEngine {
         }
         let lyric_sidecars = index.take_lyric_sidecars();
         let scans_lyric_sidecars = index.scans_lyric_sidecars();
-        let lyric_threads = index.metadata_read_threads().max(1);
         if scan.source_id != root.id {
             return Err(SyncError::SourceMismatch {
                 expected: root.id,
@@ -755,15 +754,14 @@ impl SyncEngine {
                 SourceScanState::Complete | SourceScanState::Incomplete { .. }
             )
         {
-            // The lyrics beside the songs are part of the library: read when new or changed, never searched for at play
-            // time. A failure here costs the lyrics, not the sync.
+            // Where the lyrics beside the songs are is part of the library, so playing a song never searches its folder;
+            // their content is read when the song plays. A failure here costs the pointers, not the sync.
             let lyrics_started = std::time::Instant::now();
             let sidecar_count = lyric_sidecars.len();
             let _ = sync_lyric_sidecars(
                 root,
                 repository,
                 lyric_sidecars,
-                lyric_threads,
                 matches!(effective_state, SourceScanState::Complete),
                 cancellation,
             );
@@ -795,77 +793,26 @@ impl SyncEngine {
     }
 }
 
-/// Bring the stored `.lrc` sidecars of a source up to date with what the scan found: a sidecar whose name, size and
-/// modified time are what the database holds is left alone, a new or changed one is read (on several threads: for a remote
-/// source each read is a round trip) and stored with its fingerprint.
+/// Bring the stored sidecar pointers of a source up to date with what the scan found: a sidecar whose name the database
+/// already holds for the track is only marked as still there, a new or renamed one is written. Nothing is read.
 fn sync_lyric_sidecars<R: LibraryRepository>(
     root: &LibraryRoot,
     repository: &mut R,
     found: Vec<LyricSidecar>,
-    threads: usize,
     complete: bool,
     cancellation: &SyncCancellation,
 ) -> Result<(), R::Error> {
-    let stored = repository.lyric_sidecar_states(root.id)?;
-    let mut writes: Vec<Option<LyricSidecarWrite>> = (0..found.len()).map(|_| None).collect();
-    let mut todo = Vec::new();
-    for (index, sidecar) in found.iter().enumerate() {
-        let unchanged = stored.get(&sidecar.track_item_id).is_some_and(|state| {
-            state.name == sidecar.name
-                && state.size_bytes == sidecar.size_bytes
-                && state.modified_at_utc_ms == sidecar.modified_at_utc_ms
-                && state.has_text
-        });
-        if unchanged {
-            writes[index] = Some(LyricSidecarWrite {
-                sidecar: sidecar.clone(),
-                text: None,
-                oversized: false,
-                unchanged: true,
-            });
-        } else {
-            todo.push(index);
-        }
-    }
-    let next = AtomicUsize::new(0);
-    let reads: std::sync::Mutex<Vec<(usize, LyricSidecarRead)>> = std::sync::Mutex::new(Vec::new());
-    std::thread::scope(|scope| {
-        for _ in 0..threads.min(todo.len().max(1)) {
-            scope.spawn(|| loop {
-                if cancellation.is_cancelled() {
-                    break;
-                }
-                let n = next.fetch_add(1, Ordering::Relaxed);
-                let Some(&index) = todo.get(n) else { break };
-                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    read_lyric_sidecar(&found[index])
-                }))
-                .unwrap_or(LyricSidecarRead::Unreadable);
-                reads
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push((index, read));
-            });
-        }
-    });
     if cancellation.is_cancelled() {
         return Ok(());
     }
-    for (index, read) in reads.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner) {
-        let (text, oversized) = match read {
-            LyricSidecarRead::Text(text) => (Some(text), false),
-            LyricSidecarRead::Oversized => (None, true),
-            // Remembered without text and read again at the next sync.
-            LyricSidecarRead::Unreadable => (None, false),
-        };
-        writes[index] = Some(LyricSidecarWrite {
-            sidecar: found[index].clone(),
-            text,
-            oversized,
-            unchanged: false,
-        });
-    }
-    let writes: Vec<LyricSidecarWrite> = writes.into_iter().flatten().collect();
+    let stored = repository.lyric_sidecar_states(root.id)?;
+    let writes: Vec<LyricSidecarWrite> = found
+        .into_iter()
+        .map(|sidecar| LyricSidecarWrite {
+            unchanged: stored.get(&sidecar.track_item_id) == Some(&sidecar.name),
+            sidecar,
+        })
+        .collect();
     repository.save_lyric_sidecars(root.id, &writes, complete)
 }
 

@@ -208,9 +208,6 @@ pub struct TrackMetadata {
     pub year: Option<u16>,
     /// Source bits per sample, populated only for codecs known to be lossless.
     pub bit_depth: Option<u8>,
-    /// The lyrics embedded in the file's tags, as they are written there (not yet parsed), when the reader looked for them.
-    /// The sync keeps them with the file's fingerprint so playing a song never has to open the file for its lyrics.
-    pub embedded_lyrics: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -383,69 +380,51 @@ pub struct TrackMetadataError {
 }
 
 /// Platform boundary: enumerate stable source records, then parse metadata on demand.
-/// A `.lrc` file found beside an audio file while a source was scanned (a local folder or a remote server alike).
+/// A lyric sidecar (`.lrc`, `.qrc`, `.ass`, `.srt`) found beside an audio file while a source was scanned (a local folder
+/// or a remote server alike). Only where it is is kept; its content is read from the file when the song plays.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LyricSidecar {
     /// The `source_item_id` of the audio file it belongs to.
     pub track_item_id: String,
-    /// Where the `.lrc` itself is.
-    pub locator: MediaLocator,
-    /// Its file name, as the folder lists it.
+    /// Its file name, as the folder lists it (beside the audio file).
     pub name: String,
-    /// Its fingerprint: the lyrics are read again only when one of these changes.
-    pub size_bytes: u64,
-    pub modified_at_utc_ms: Option<i64>,
 }
 
-/// What the library database remembers of a sidecar: the fingerprint it was read at.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LyricSidecarState {
-    pub name: String,
-    pub size_bytes: u64,
-    pub modified_at_utc_ms: Option<i64>,
-    /// Whether the text was stored (an unreadable file is remembered without it, and tried again when it changes).
-    pub has_text: bool,
-}
-
-/// One sidecar to write into the database: its fingerprint and, when it was read, its text.
+/// One sidecar to write into the database.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LyricSidecarWrite {
     pub sidecar: LyricSidecar,
-    /// The text read now. `None` with `unchanged` set keeps the stored text.
-    pub text: Option<String>,
-    /// The file is larger than the lyric limit.
-    pub oversized: bool,
-    /// The database already holds this fingerprint (and its text): only "still there" is recorded.
+    /// The database already holds this name for the track: only "still there" is recorded.
     pub unchanged: bool,
 }
 
-/// The outcome of reading one sidecar.
+/// What the library knows about the lyric sidecar of a track: only where it is (ADR 0040).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LyricSidecarRead {
-    Text(String),
-    Oversized,
-    Unreadable,
+pub enum LyricSidecarLookup {
+    /// No source holding the track was scanned for sidecars yet: look beside the file.
+    NotScanned,
+    /// A source holding the track was scanned and the track has none.
+    Absent,
+    /// The sidecar `name` beside the audio file `audio` (the mapping the sync found it next to).
+    Present { audio: MediaLocator, name: String },
 }
 
-/// Read a sidecar (at most [`crate::MAX_LYRIC_PAYLOAD_BYTES`]); a UTF-8 byte order mark is dropped.
-pub fn read_lyric_sidecar(sidecar: &LyricSidecar) -> LyricSidecarRead {
-    let limit = crate::MAX_LYRIC_PAYLOAD_BYTES as u64;
-    if sidecar.size_bytes > limit {
-        return LyricSidecarRead::Oversized;
-    }
-    let bytes = match &sidecar.locator {
-        MediaLocator::FileSystem(path) => std::fs::read(path).ok(),
-        MediaLocator::Remote { source_id, path } => {
-            crate::remote::read_remote_file_capped(*source_id, path, limit)
+impl LyricSidecarLookup {
+    /// Where the sidecar file is: beside a local file, or beside a remote one on the same server.
+    pub fn sidecar_locator(&self) -> Option<MediaLocator> {
+        let Self::Present { audio, name } = self else {
+            return None;
+        };
+        match audio {
+            MediaLocator::FileSystem(path) => {
+                Some(MediaLocator::FileSystem(path.parent()?.join(name)))
+            }
+            MediaLocator::Remote { source_id, path } => Some(MediaLocator::Remote {
+                source_id: *source_id,
+                path: crate::remote::remote_sibling(path, name),
+            }),
+            MediaLocator::ContentUri(_) => None,
         }
-        MediaLocator::ContentUri(_) => None,
-    };
-    match bytes {
-        Some(bytes) if bytes.len() as u64 > limit => LyricSidecarRead::Oversized,
-        Some(bytes) => LyricSidecarRead::Text(
-            String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).into_owned(),
-        ),
-        None => LyricSidecarRead::Unreadable,
     }
 }
 

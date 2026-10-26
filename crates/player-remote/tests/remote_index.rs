@@ -389,7 +389,7 @@ impl player_core::RemoteContent for FolderContent {
 }
 
 #[test]
-fn the_sync_stores_the_lrc_beside_a_song_with_its_fingerprint_and_follows_changes() {
+fn the_sync_stores_only_where_the_lrc_beside_a_song_is_and_follows_changes() {
     use player_db::LyricSidecarLookup;
 
     let tree = make_tree("lrc");
@@ -414,41 +414,36 @@ fn the_sync_stores_the_lrc_beside_a_song_with_its_fingerprint_and_follows_change
             .expect("the track is in the library");
         db.track_lyric_sidecar(id).expect("lookup")
     };
+    let sidecar_path = |lookup: LyricSidecarLookup| match lookup.sidecar_locator() {
+        Some(MediaLocator::Remote { path, .. }) => Some(path),
+        _ => None,
+    };
     assert_eq!(
-        lookup(&db, "Artist/Album One/01 s16.wv"),
-        LyricSidecarLookup::Present { text: Some("[00:01.00]hello\n".to_owned()), oversized: false },
-        "the BOM is dropped"
+        sidecar_path(lookup(&db, "Artist/Album One/01 s16.wv")).as_deref(),
+        Some("Artist/Album One/01 s16.lrc")
     );
-    assert!(matches!(lookup(&db, "Other/f32.wv"), LyricSidecarLookup::Present { text: Some(_), .. }));
+    assert_eq!(
+        sidecar_path(lookup(&db, "Other/f32.wv")).as_deref(),
+        Some("Other/F32.LRC")
+    );
     // A song of a source that was scanned and has no `.lrc` is known to have none.
     assert_eq!(lookup(&db, "Artist/Album One/02 s24.wv"), LyricSidecarLookup::Absent);
 
-    // An edited `.lrc` is read again (its size changed); an unchanged one is not touched.
-    fs::write(tree.join("Artist/Album One/01 s16.lrc"), "[00:01.00]hello again\n").unwrap();
+    // A sidecar of another kind replacing it is followed by the next sync.
+    fs::remove_file(tree.join("Artist/Album One/01 s16.lrc")).unwrap();
+    fs::write(
+        tree.join("Artist/Album One/01 s16.srt"),
+        "1\n00:00:01,000 --> 00:00:02,000\nhello\n",
+    )
+    .unwrap();
     SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_100_000).expect("sync again");
     assert_eq!(
-        lookup(&db, "Artist/Album One/01 s16.wv"),
-        LyricSidecarLookup::Present { text: Some("[00:01.00]hello again\n".to_owned()), oversized: false }
+        sidecar_path(lookup(&db, "Artist/Album One/01 s16.wv")).as_deref(),
+        Some("Artist/Album One/01 s16.srt")
     );
-    // The lyrics in a song's own tags are kept from the sync that read the tags (or the fact that there are none).
-    let embedded = |db: &Database, path: &str| {
-        let id = db
-            .resolve_track_id_for_locator(&MediaLocator::Remote {
-                source_id: root.id,
-                path: path.to_owned(),
-            })
-            .expect("resolve")
-            .expect("the track is in the library");
-        db.track_embedded_lyrics(id).expect("embedded lookup")
-    };
-    assert!(
-        matches!(embedded(&db, "Artist/Album Two/03 lyrics.wv"), Some(Some(text)) if !text.trim().is_empty()),
-        "the APEv2 lyrics of the WavPack file"
-    );
-    assert_eq!(embedded(&db, "Artist/Album One/01 s16.wv"), Some(None), "read, and holds no lyrics");
 
-    // A removed `.lrc` is forgotten at the next complete scan.
-    fs::remove_file(tree.join("Artist/Album One/01 s16.lrc")).unwrap();
+    // A removed sidecar is forgotten at the next complete scan.
+    fs::remove_file(tree.join("Artist/Album One/01 s16.srt")).unwrap();
     SyncEngine::sync(&root, &mut index, &mut db, 1_800_000_200_000).expect("sync a third time");
     assert_eq!(lookup(&db, "Artist/Album One/01 s16.wv"), LyricSidecarLookup::Absent);
     let _ = fs::remove_dir_all(tree);

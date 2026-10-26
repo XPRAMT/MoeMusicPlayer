@@ -296,17 +296,7 @@ impl RemoteMediaIndex {
                 };
                 found.push(LyricSidecar {
                     track_item_id: track.identity.source_item_id.clone(),
-                    locator: MediaLocator::Remote {
-                        source_id,
-                        path: if folder.is_empty() {
-                            entry.name.clone()
-                        } else {
-                            format!("{folder}/{}", entry.name)
-                        },
-                    },
                     name: entry.name.clone(),
-                    size_bytes: entry.size,
-                    modified_at_utc_ms: entry.modified_ms,
                 });
             }
         }
@@ -637,8 +627,7 @@ fn handle_entries(
     let mut folders = Vec::new();
     let mut files = Vec::new();
     // `.lrc` files of this folder by the lower-cased name without the extension, and the audio files by the same key.
-    let mut lyrics: std::collections::HashMap<String, (String, u64, Option<i64>)> =
-        std::collections::HashMap::new();
+    let mut lyrics: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut sidecar_ranks: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut audio: Vec<(String, String)> = Vec::new();
@@ -661,7 +650,7 @@ fn handle_entries(
             let better = sidecar_ranks.get(&stem).is_none_or(|kept| *kept > rank);
             if better {
                 sidecar_ranks.insert(stem.clone(), rank);
-                lyrics.insert(stem, (entry.name.clone(), entry.size, entry.modified_ms));
+                lyrics.insert(stem, entry.name.clone());
             }
         } else if is_remote_library_audio(&entry.name) {
             let stem = entry
@@ -698,20 +687,12 @@ fn handle_entries(
     if !lyrics.is_empty() {
         let mut found = Vec::new();
         for (stem, track_item_id) in audio {
-            let Some((name, size, modified)) = lyrics.get(&stem) else {
+            let Some(name) = lyrics.get(&stem) else {
                 continue;
-            };
-            let path = if directory.is_empty() {
-                name.clone()
-            } else {
-                format!("{directory}/{name}")
             };
             found.push(LyricSidecar {
                 track_item_id,
-                locator: MediaLocator::Remote { source_id, path },
                 name: name.clone(),
-                size_bytes: *size,
-                modified_at_utc_ms: *modified,
             });
         }
         if !found.is_empty() {

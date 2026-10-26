@@ -623,6 +623,21 @@ impl player_core::RemoteContent for RemoteFiles {
         })
     }
 
+    fn open_cached(
+        &self,
+        source_id: SourceId,
+        path: &str,
+    ) -> std::io::Result<player_core::RemoteFileHandle> {
+        // A lyrics sidecar: kept in the disk cache like the audio of a played song (cache first, the server asked in the
+        // background), so a song that plays without its server has its sidecar too. No read-ahead: it is small.
+        let reader = player_remote::fs::RangeReader::new(self.cached_file(source_id, path, true)?);
+        let len = reader.len();
+        Ok(player_core::RemoteFileHandle {
+            reader: Box::new(reader),
+            len,
+        })
+    }
+
     fn open_streaming(
         &self,
         source_id: SourceId,
@@ -661,6 +676,25 @@ impl player_core::RemoteContent for RemoteFiles {
 
     fn release(&self, source_id: SourceId, path: &str) {
         self.release_streams(source_id, path);
+    }
+
+    fn file_changed(&self, source_id: SourceId, path: &str, now: player_core::RemoteStamp) {
+        // As the background check of a played song does (`validate_in_background`): the remembered size and time are
+        // replaced, so the cache key of the next open names the new version; an open stream keeps its own key.
+        let (Some(cache), Ok(located)) = (self.cache.as_ref(), self.plan(source_id, path)) else {
+            return;
+        };
+        let account_key = source_id.to_string();
+        let now = player_remote::cache::FileMeta {
+            len: now.len,
+            modified_ms: now.modified_ms,
+        };
+        if cache
+            .meta(&account_key, &located.full)
+            .is_some_and(|known| known != now)
+        {
+            cache.put_meta(&account_key, &located.full, now);
+        }
     }
 
     fn available_offline(&self, source_id: SourceId, path: &str) -> bool {
@@ -1547,6 +1581,33 @@ mod offline_cache_tests {
         // Nothing but the background check (one refused connection attempt) asked the off server.
         std::thread::sleep(Duration::from_millis(100));
         assert!(off.calls.load(Ordering::SeqCst) <= 1, "{}", off.calls.load(Ordering::SeqCst));
+        let _ = std::fs::remove_dir_all(&second.dir);
+    }
+
+    #[test]
+    fn a_lyrics_sidecar_read_once_is_kept_in_the_disk_cache_and_read_with_the_server_off() {
+        let dir = temp("sidecar");
+        let online = Server::new(true);
+        let first = fixture(&dir, &online, Duration::ZERO);
+        let mut handle = first.files.open_cached(first.source, "a.lrc").unwrap();
+        let mut all = Vec::new();
+        handle.reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all, bytes());
+        assert!(first.files.available_offline(first.source, "a.lrc"));
+        drop(first);
+
+        let off = Server::new(false);
+        let second = fixture(&dir, &off, Duration::from_secs(3));
+        let started = Instant::now();
+        let mut handle = second.files.open_cached(second.source, "a.lrc").unwrap();
+        let mut all = Vec::new();
+        handle.reader.read_to_end(&mut all).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(all, bytes(), "the sidecar comes from the disk cache");
         let _ = std::fs::remove_dir_all(&second.dir);
     }
 

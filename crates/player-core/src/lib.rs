@@ -20,13 +20,13 @@ pub use filesystem_key::{file_uri_for_path, unix_path_key};
 pub mod remote;
 pub use library::{
     display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
-    read_lyric_sidecar, recording_date_year, remote_locator_uri, volume_root, FileFingerprint,
-    LibraryRoot, ListTracksQuery, LyricSidecar, LyricSidecarRead, LyricSidecarState,
-    LyricSidecarWrite, MediaIndex, MediaLocator, MediaScanProgress, MediaScanProgressUnit,
-    MediaSourceError, MediaSourceErrorKind, MediaSourceKind, MediaTrackRecord, MetadataReader,
-    Page, SourceId, SourceScan, SourceScanState, SyncCancellation, TrackField, TrackFieldFilter,
-    TrackId, TrackIdentity, TrackListSort, TrackMetadata, TrackMetadataError, TrackSortDirection,
-    TrackSortField, TrackSummary, UserMetadataField, TRACK_METADATA_VERSION,
+    recording_date_year, remote_locator_uri, volume_root, FileFingerprint, LibraryRoot,
+    ListTracksQuery, LyricSidecar, LyricSidecarLookup, LyricSidecarWrite, MediaIndex, MediaLocator,
+    MediaScanProgress, MediaScanProgressUnit, MediaSourceError, MediaSourceErrorKind,
+    MediaSourceKind, MediaTrackRecord, MetadataReader, Page, SourceId, SourceScan, SourceScanState,
+    SyncCancellation, TrackField, TrackFieldFilter, TrackId, TrackIdentity, TrackListSort,
+    TrackMetadata, TrackMetadataError, TrackSortDirection, TrackSortField, TrackSummary,
+    UserMetadataField, TRACK_METADATA_VERSION,
 };
 pub use lyric_formats::{
     detect_lyric_format, lyric_sidecar_rank, parse_any_lyrics, parse_ass, parse_qrc, parse_srt,
@@ -59,10 +59,12 @@ pub use sync::{
 pub use windows_locator::windows_locator_key;
 
 pub use remote::{
-    begin_load, begin_load_abandonable, end_load, is_remote_link_lost, is_remote_network_error, is_remote_unreachable,
-    load_cancel, read_remote_file_capped, read_remote_file_capped_checked, remote_content,
-    remote_sibling, remote_with_extension, running_load_superseded, set_remote_content,
-    served_from_cache_only, walk_server_key, LoadCancel, LoadCounter, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream,
+    begin_load, begin_load_abandonable, end_load, forget_remote_tag_lyrics, is_remote_link_lost,
+    is_remote_network_error, is_remote_unreachable, load_cancel, read_remote_file_capped,
+    read_remote_file_capped_checked, read_remote_sidecar_checked, remember_remote_tag_lyrics,
+    remembered_remote_tag_lyrics, remote_content, remote_sibling, remote_with_extension,
+    running_load_superseded, served_from_cache_only, set_remote_content, walk_server_key,
+    LoadCancel, LoadCounter, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream,
     LOAD_SUPERSEDED, REMOTE_LINK_LOST, REMOTE_UNREACHABLE,
 };
 

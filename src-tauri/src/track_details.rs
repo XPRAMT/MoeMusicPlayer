@@ -803,7 +803,7 @@ fn album_index_key(state: &AppState, id: player_core::TrackId) -> Option<(String
 
 /// Only the saved track's album (before and after the save, when its album tag changed) loses its chosen covers, in
 /// the backend selection cache and, through the event, the page's album card memory cache; other albums keep theirs.
-fn forget_saved_album_covers(
+pub(crate) fn forget_saved_album_covers(
     app: &AppHandle,
     state: &AppState,
     before: Option<(String, u64)>,
@@ -867,7 +867,7 @@ async fn reread_saved_track(
 }
 
 #[cfg(target_os = "windows")]
-fn read_track_record_metadata(
+pub(crate) fn read_track_record_metadata(
     _app: &AppHandle,
     record: &player_core::MediaTrackRecord,
 ) -> Result<player_core::TrackMetadata, String> {
@@ -879,7 +879,7 @@ fn read_track_record_metadata(
 }
 
 #[cfg(target_os = "android")]
-fn read_track_record_metadata(
+pub(crate) fn read_track_record_metadata(
     app: &AppHandle,
     record: &player_core::MediaTrackRecord,
 ) -> Result<player_core::TrackMetadata, String> {
@@ -890,7 +890,7 @@ fn read_track_record_metadata(
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "android")))]
-fn read_track_record_metadata(
+pub(crate) fn read_track_record_metadata(
     _app: &AppHandle,
     _record: &player_core::MediaTrackRecord,
 ) -> Result<player_core::TrackMetadata, String> {
