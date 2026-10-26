@@ -37,6 +37,19 @@ test('the play button shows on the centre row only while browsing and never on t
   assert.equal(browseButtonIndex({ browsing: true, centreIndex: 0, currentIndex: -1 }), 0);
 });
 
+test('a line whose seek target is at or past the end of the track gets no play button', () => {
+  const base = { browsing: true, centreIndex: 5, currentIndex: 2 };
+  // The reported case: the last line starts at 3:49 in a 228 250 ms track.
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000, durationMs: 228_250 }), -1);
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 228_250, durationMs: 228_250 }), -1, 'exactly the end');
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 228_249, durationMs: 228_250 }), 5);
+  // Unknown or zero duration: not limited.
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000, durationMs: null }), 5);
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000, durationMs: 0 }), 5);
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000, durationMs: Number.NaN }), 5);
+  assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000 }), 5);
+});
+
 test('a seek lands where the line becomes current: its start shifted by the display offset, never before it', () => {
   assert.equal(browseSeekPositionMs(161_000, 0), 161_000);
   // findActiveLyricIndex: current when position + offset >= start.

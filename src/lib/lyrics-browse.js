@@ -18,11 +18,15 @@ export function findBrowseCentreRow(layout, scrollTop, clientHeight, edgePadding
 }
 
 /**
- * The row that shows the play button: the centre row while browsing, unless it is the current line.
- * @param {{ browsing: boolean, centreIndex: number, currentIndex: number }} input
+ * The row that shows the play button: the centre row while browsing, unless it is the current line or its seek
+ * target (`seekPositionMs`) is at or past the end of the track (a seek there fails); an unknown or zero duration
+ * does not hide it.
+ * @param {{ browsing: boolean, centreIndex: number, currentIndex: number, seekPositionMs?: number, durationMs?: number | null }} input
  */
-export function browseButtonIndex({ browsing, centreIndex, currentIndex }) {
+export function browseButtonIndex({ browsing, centreIndex, currentIndex, seekPositionMs, durationMs }) {
   if (!browsing || !Number.isInteger(centreIndex) || centreIndex < 0) return -1;
+  if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
+    && typeof seekPositionMs === 'number' && seekPositionMs >= durationMs) return -1;
   return centreIndex === currentIndex ? -1 : centreIndex;
 }
 

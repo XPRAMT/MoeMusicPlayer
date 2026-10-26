@@ -40,7 +40,9 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
   reflow; it fades in over 200 ms (no fade with reduced motion).
 - The button seeks to the moment the line becomes current: `ceil(startMs - display offset)`, clamped at 0
   (`browseSeekPositionMs`); no `LYRIC_CUE_LEAD_MS`. The seek goes through the shell (`onSeek` →
-  `commitPlaybackSeek` → `seekPlayback`), browsing ends at once, and the jump lands instantly as any seek.
+  `commitPlaybackSeek` → `seekPlayback`), browsing ends at once, and the jump lands instantly as any seek. A line
+  whose seek target is at or past the track's known duration gets no button, since a seek to the end fails in the
+  backend (an unknown or zero duration does not limit it).
 - No timeout. Browsing ends when the drawn current line changes (`browseReturnAction`): if the user is idle the
   normal cue scroll returns to it; if a pointer or finger is down, the wheel guard is running, or a scroll (or its
   momentum) has not reached `scrollend`, the return waits and runs when that ends, with the cue scroll length.

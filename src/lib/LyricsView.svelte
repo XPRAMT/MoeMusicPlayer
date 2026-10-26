@@ -126,6 +126,8 @@
     /** Seeks for the browse-and-seek play button (the shell's own seek, which goes through `seekPlayback`); alone the
      *  view calls `seekPlayback` itself. */
     onSeek?: (positionMs: number) => Promise<unknown>;
+    /** The track's length: a line whose seek target is at or past it gets no play button. Unknown: not limited. */
+    durationMs?: number | null;
   }
 
   let {
@@ -143,6 +145,7 @@
     sharedState,
     layoutFrozen = false,
     onSeek = (positionMs: number) => seekPlayback(positionMs),
+    durationMs = null,
   }: Props = $props();
 
   let ownState = $state<LyricsViewState>({
@@ -345,7 +348,13 @@
       : -1,
   );
   /** The row showing the browse-and-seek play button, or -1. */
-  let browseButtonRow = $derived(browseButtonIndex({ browsing, centreIndex: browseCentreIndex, currentIndex: visibleActiveTimedIndex }));
+  let browseButtonRow = $derived(browseButtonIndex({
+    browsing,
+    centreIndex: browseCentreIndex,
+    currentIndex: visibleActiveTimedIndex,
+    seekPositionMs: timedLines[browseCentreIndex] ? browseSeekPositionMs(timedLines[browseCentreIndex].startMs, timedOffsetMs) : undefined,
+    durationMs,
+  }));
   let plainLayout = $derived(buildLyricsLayout(lines, layoutPreferences, preferences.lineGapPx, layoutWidth));
   // Word highlight (ADR 0041 D10): only the current line with word timing (or its own end time) is split into words, and one CSS
   // animation moves a single accent edge over it (`karaokeLine`). Recomputed only on a line change, seek, play/pause

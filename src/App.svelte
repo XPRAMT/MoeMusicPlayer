@@ -5658,6 +5658,7 @@
                   sharedState={lyricsState}
                   layoutFrozen={coverZooming}
                   onSeek={commitPlaybackSeek}
+                  durationMs={playback?.durationMs ?? null}
                 />
               {/snippet}
             </NowPlayingArrangement>
