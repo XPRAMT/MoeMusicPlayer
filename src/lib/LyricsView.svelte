@@ -6,6 +6,7 @@
   import { defaultLyricsApi, type LyricsApi } from './lyrics-api';
   import { seekPlayback } from './ipc';
   import { formatDuration } from './format';
+  import { appTooltip } from './app-tooltip.js';
   import { browseButtonIndex, browseReturnAction, browseSeekPositionMs, findBrowseCentreRow } from './lyrics-browse.js';
   import type {
     LyricLine,
@@ -1054,10 +1055,10 @@
                 data-swipe-ignore
                 data-testid="lyric-browse-seek"
                 aria-label={tr('從這句開始播放（{0}）', [seekLabel])}
+                use:appTooltip={tr('從這句開始播放（{0}）', [seekLabel])}
                 onclick={() => seekToBrowsedLine(timelineIndex)}
               >
                 <IconPlayerPlay size={14} stroke={2} aria-hidden="true" />
-                <span class="lyric-browse-time">{seekLabel}</span>
               </button>
             {/if}
             {#if row.line.text?.trim()}
@@ -1294,28 +1295,37 @@
     background: transparent;
   }
 
-  /* Browse and seek (ADR 0029): the play button of the centre line while browsing. Absolutely placed at the row's left
-     edge, so the row's height and the centred text never move. */
+  /* Browse and seek (ADR 0029): the play button of the centre line while browsing sits in a gutter that every timed
+     row always reserves on BOTH sides (symmetric, so centred text stays centred), so the button never covers text and
+     rows never reflow when it appears. The rows are border-box, so their measured heights, the karaoke word widths and
+     the cover-zoom frozen width all include the gutter as they are. */
+  .timed-lyrics-viewport {
+    --lyric-browse-button: 20px;
+    --lyric-browse-inset: 3px;
+    --lyric-browse-gutter: calc(var(--lyric-browse-inset) + var(--lyric-browse-button) + 4px);
+  }
+
   .timed-lyrics-viewport .lyric-line {
     position: relative;
+    padding-inline: var(--lyric-browse-gutter);
   }
 
   .lyric-browse-seek {
     position: absolute;
     z-index: 1;
     top: 50%;
-    left: 0;
+    left: var(--lyric-browse-inset);
     display: inline-flex;
+    box-sizing: border-box;
+    width: var(--lyric-browse-button);
+    height: var(--lyric-browse-button);
     align-items: center;
-    gap: 3px;
-    padding: 2px 4px;
+    justify-content: center;
+    padding: 0;
     border: 0;
     border-radius: 6px;
     color: var(--accent);
     background: transparent;
-    font: inherit;
-    font-size: var(--font-caption);
-    font-variant-numeric: tabular-nums;
     line-height: 1;
     cursor: pointer;
     transform: translateY(-50%);
