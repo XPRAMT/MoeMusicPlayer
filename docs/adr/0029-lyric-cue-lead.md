@@ -37,10 +37,14 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
   browsing. While browsing, the row under the viewport centre (`findBrowseCentreRow`, a search over the same layout
   the virtual window uses, run in the existing scroll handler) shows an icon-only play button, unless it is the
   current line (`browseButtonIndex`); the seek time is in its tooltip (`appTooltip`) and aria-label. Every timed row
-  always reserves a symmetric 24 px gutter on both sides (`--lyric-browse-gutter`) and the 22 px button (a 22 px
-  icon, `--lyric-browse-button`) sits in the left one, 1 px from the row edge (`--lyric-browse-inset`) and 1 px from
-  the text, so it never covers text, centred text stays centred and rows never reflow when it appears; rows are border-box, so the row measurements, karaoke widths and the cover-zoom frozen width include the
-  gutter unchanged. It fades in over 200 ms (no fade with reduced motion).
+  always reserves a symmetric gutter on both sides (`--lyric-browse-gutter`) and the button sits in the left one.
+  The button (and its icon, whose stroke scales with it) is one primary text line square: the rows' primary font size
+  times their primary line height (`--lyric-primary-font-size` x `--lyric-primary-line-height`, CSS only, no
+  measuring), so it follows the original-text size setting; it is placed on the row's first text line (below the
+  row's top padding), not the middle of a row with translation or romanization. The gutter is the button plus a 1 px
+  inset from the row edge and 1 px before the text, so the button never covers text, centred text stays centred and
+  rows never reflow when it appears; rows are border-box, so the row measurements, karaoke widths and the cover-zoom
+  frozen width include the gutter unchanged. It fades in over 200 ms (no fade with reduced motion).
 - The button seeks to the moment the line becomes current: `ceil(startMs - display offset)`, clamped at 0
   (`browseSeekPositionMs`); no `LYRIC_CUE_LEAD_MS`. The seek goes through the shell (`onSeek` →
   `commitPlaybackSeek` → `seekPlayback`), browsing ends at once, and the jump lands instantly as any seek. A line

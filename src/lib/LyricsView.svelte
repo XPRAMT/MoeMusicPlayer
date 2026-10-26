@@ -1044,7 +1044,7 @@
                 use:appTooltip={tr('從這句開始播放（{0}）', [seekLabel])}
                 onclick={() => seekToBrowsedLine(timelineIndex)}
               >
-                <IconPlayerPlay size={22} stroke={2} aria-hidden="true" />
+                <IconPlayerPlay stroke={2} aria-hidden="true" />
               </button>
             {/if}
             {#if row.line.text?.trim()}
@@ -1284,11 +1284,13 @@
   /* Browse and seek (ADR 0029): the play button of the centre line while browsing sits in a gutter that every timed
      row always reserves on BOTH sides (symmetric, so centred text stays centred), so the button never covers text and
      rows never reflow when it appears. The rows are border-box, so their measured heights, the karaoke word widths and
-     the cover-zoom frozen width all include the gutter as they are. */
+     the cover-zoom frozen width all include the gutter as they are. The button is as tall and wide as one primary text
+     line (the rows' own primary font size x line height, so it follows the 原文 size setting) and sits on the row's
+     first line; the gutter is the button plus 1px on each side of it. */
   .timed-lyrics-viewport {
-    --lyric-browse-button: 22px;
+    --lyric-browse-button: calc(var(--lyric-primary-font-size, 14px) * var(--lyric-primary-line-height, 1.35));
     --lyric-browse-inset: 1px;
-    --lyric-browse-gutter: 24px;
+    --lyric-browse-gutter: calc(var(--lyric-browse-button) + 2 * var(--lyric-browse-inset));
   }
 
   .timed-lyrics-viewport .lyric-line {
@@ -1299,7 +1301,8 @@
   .lyric-browse-seek {
     position: absolute;
     z-index: 1;
-    top: 50%;
+    /* The first text line starts below the row's top padding (the shadow blur). */
+    top: var(--lyric-shadow-blur);
     left: var(--lyric-browse-inset);
     display: inline-flex;
     box-sizing: border-box;
@@ -1314,8 +1317,13 @@
     background: transparent;
     line-height: 1;
     cursor: pointer;
-    transform: translateY(-50%);
     animation: lyric-browse-seek-in 200ms ease-out;
+  }
+
+  /* The icon fills the button; its stroke is in the icon's own units, so it scales with the size. */
+  .lyric-browse-seek :global(svg) {
+    width: 100%;
+    height: 100%;
   }
 
   .lyric-browse-seek:hover {
