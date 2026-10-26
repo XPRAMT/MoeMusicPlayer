@@ -1,4 +1,4 @@
-//! DSD, WavPack and FLAC playback on Android (ADR 0016, ADR 0025, ADR 0042).
+//! DSD, WavPack and FLAC playback on Android (ADR 0016, ADR 0025, ADR 0043).
 //!
 //! Media3 has neither a DSD nor a WavPack decoder, and some devices offer only a vendor FLAC decoder that fails on
 //! 24-bit files, so these formats are decoded here. Which formats go through a converter is decided by

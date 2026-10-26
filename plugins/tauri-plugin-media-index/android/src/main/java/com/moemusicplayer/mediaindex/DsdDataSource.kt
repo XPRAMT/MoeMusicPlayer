@@ -12,7 +12,7 @@ import androidx.media3.datasource.TransferListener
 import java.io.IOException
 
 /**
- * Natives of the Rust DSD, WavPack and FLAC converters (ADR 0016, ADR 0025, ADR 0042), exported from
+ * Natives of the Rust DSD, WavPack and FLAC converters (ADR 0016, ADR 0025, ADR 0043), exported from
  * `moemusicplayer_lib` (`src-tauri/src/android_dsd.rs`). A handle is a DSF, WavPack or FLAC file served as a WAV file
  * of 32-bit float PCM, converted on demand; the Rust side picks the converter (`player_formats::android_converter`).
  */
@@ -63,7 +63,7 @@ fun remoteLinkLostMessage(error: Throwable?): String? {
 const val WAVPACK_URI_SCHEME = "moewv"
 
 /**
- * Scheme of a FLAC (`.flac`) track: `moeflac:///path/to/file.flac`, served by the same data source as DSD (ADR 0042:
+ * Scheme of a FLAC (`.flac`) track: `moeflac:///path/to/file.flac`, served by the same data source as DSD (ADR 0043:
  * some devices offer only a vendor FLAC decoder that fails on 24-bit files).
  */
 const val FLAC_URI_SCHEME = "moeflac"

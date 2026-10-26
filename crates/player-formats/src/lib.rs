@@ -50,7 +50,7 @@ pub enum DecodeEngine {
 }
 
 /// A format Android does not leave to Media3's own decoders: Rust decodes it and serves Media3 a 32-bit float WAV
-/// stream through the app's data source (ADR 0016, ADR 0025, ADR 0042).
+/// stream through the app's data source (ADR 0016, ADR 0025, ADR 0043).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AndroidConverter {
     /// The DSD→PCM converter (Media3 has no DSD decoder).

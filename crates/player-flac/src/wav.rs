@@ -1,5 +1,5 @@
 //! A FLAC file as a byte-addressable WAV file of 32-bit float PCM, decoded on demand (the Android data source:
-//! ExoPlayer reads "WAV" ranges and seeks by byte position; ADR 0042). Same layout as the WavPack stream (ADR 0025):
+//! ExoPlayer reads "WAV" ranges and seeks by byte position; ADR 0043). Same layout as the WavPack stream (ADR 0025):
 //! a 44-byte header (`RIFF`, `fmt ` with format tag 3 = IEEE float, `data`) followed by the interleaved
 //! little-endian `f32` frames at the file's own sample rate and channel count. The total length is known up front
 //! (`header + total_frames × channels × 4`), so the player knows the duration and can request any position.

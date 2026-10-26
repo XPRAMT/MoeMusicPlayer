@@ -141,7 +141,7 @@ class PlaybackService : MediaSessionService() {
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
         // DSD (.dsf), WavPack (.wv) and FLAC (.flac) tracks arrive as moedsd://, moewv:// and moeflac:// URIs (remote
         // ones as moeremote://); they are served as 32-bit float WAV by the Rust converters (ADR 0016, ADR 0025,
-        // ADR 0042), so float PCM output is enabled for them.
+        // ADR 0043), so float PCM output is enabled for them.
         val dataSources = DsdAwareDataSourceFactory(DefaultDataSource.Factory(this))
         mediaPreflight = MediaPreflight(dataSources, extractors)
         // Media3 keeps its existing native float path for 24/32-bit integer and float PCM. The chain converter

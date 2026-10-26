@@ -1,4 +1,4 @@
-//! FLAC decoding to interleaved `f32` for the Android data source (ADR 0042).
+//! FLAC decoding to interleaved `f32` for the Android data source (ADR 0043).
 //!
 //! Some Android devices expose only a vendor FLAC `MediaCodec` that cannot decode 24-bit files, so on Android the
 //! player decodes FLAC itself and hands Media3 a float WAV stream (`wav::FlacWavStream`), the way DSD and WavPack
