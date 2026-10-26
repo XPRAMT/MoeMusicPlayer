@@ -390,13 +390,23 @@ fn set_offset(visual: &Visual, x: f64, y: f64) -> Result<()> {
 }
 
 fn segoe_metrics(dwrite: &IDWriteFactory2) -> Result<(f32, f32)> {
+    family_metrics(dwrite, w!("Segoe UI"), false)
+}
+
+/// Ascent and descent in em of `family`'s medium upright face in the system collection (which has the per-user
+/// fonts too); an error when the system has no such family. `check_for_updates` also sees fonts installed since.
+fn family_metrics(
+    dwrite: &IDWriteFactory2,
+    family: PCWSTR,
+    check_for_updates: bool,
+) -> Result<(f32, f32)> {
     unsafe {
         let mut collection = None;
-        dwrite.GetSystemFontCollection(&mut collection, false)?;
+        dwrite.GetSystemFontCollection(&mut collection, check_for_updates)?;
         let collection = collection.ok_or_else(|| windows::core::Error::from(E_FAIL))?;
         let mut index = 0;
         let mut exists = FALSE;
-        collection.FindFamilyName(w!("Segoe UI"), &mut index, &mut exists)?;
+        collection.FindFamilyName(family, &mut index, &mut exists)?;
         if !exists.as_bool() {
             return Err(E_FAIL.into());
         }
@@ -545,6 +555,78 @@ struct TextStyle {
     effect_from: [u8; 3],
     /// Weight of the original text; translation rows carry `translation_weight` of it in their row.
     weight: u16,
+    /// The font family (`family_id`; 0 is the default Segoe UI).
+    family: u16,
+}
+
+/// A chosen lyrics font family (ADR 0042) as DirectWrite draws it, with its own line metrics (CSS lays a line box out
+/// from the primary font's ascent and descent).
+struct Family {
+    name: HSTRING,
+    ascent_em: f32,
+    descent_em: f32,
+}
+
+#[derive(Default)]
+struct Families {
+    /// Setting value -> id (0 when the system has no such family: the default font).
+    requested: Vec<(String, u16)>,
+    /// Family `id` at index `id - 1`.
+    resolved: Vec<Family>,
+}
+
+thread_local! {
+    /// Families resolved on the renderer thread; the ids are stable for the thread's life, so they key the shared
+    /// raster cache (`SHARED`) and the measurements.
+    static FAMILIES: RefCell<Families> = RefCell::new(Families::default());
+}
+
+/// The family id of the setting `requested`: 0 (Segoe UI) for none or a family the system does not have.
+fn family_id(gfx: &Gfx, requested: Option<&str>) -> u16 {
+    let Some(requested) = requested.map(str::trim).filter(|name| !name.is_empty()) else {
+        return 0;
+    };
+    FAMILIES.with(|families| {
+        let mut families = families.borrow_mut();
+        if let Some((_, id)) = families
+            .requested
+            .iter()
+            .find(|(name, _)| name == requested)
+        {
+            return *id;
+        }
+        let name = HSTRING::from(requested);
+        let id = match family_metrics(&gfx.dwrite, PCWSTR(name.as_ptr()), true) {
+            Ok((ascent_em, descent_em)) if families.resolved.len() < u16::MAX as usize - 1 => {
+                families.resolved.push(Family {
+                    name,
+                    ascent_em,
+                    descent_em,
+                });
+                families.resolved.len() as u16
+            }
+            _ => 0,
+        };
+        families.requested.push((requested.to_owned(), id));
+        id
+    })
+}
+
+/// The name DirectWrite draws family `id` with and its ascent / descent in em.
+fn family_face(gfx: &Gfx, id: u16) -> (HSTRING, f32, f32) {
+    if id > 0 {
+        let found = FAMILIES.with(|families| {
+            families
+                .borrow()
+                .resolved
+                .get(usize::from(id) - 1)
+                .map(|family| (family.name.clone(), family.ascent_em, family.descent_em))
+        });
+        if let Some(found) = found {
+            return found;
+        }
+    }
+    (HSTRING::from("Segoe UI"), gfx.ascent_em, gfx.descent_em)
 }
 
 fn rgba(c: [u8; 3], a: f32) -> D2D1_COLOR_F {
@@ -561,11 +643,13 @@ fn text_layout(
     text: &str,
     size: f32,
     weight: u16,
+    family: u16,
     line_height: f32,
 ) -> Result<IDWriteTextLayout> {
+    let (family_name, ascent_em, descent_em) = family_face(gfx, family);
     unsafe {
         let format = gfx.dwrite.CreateTextFormat(
-            w!("Segoe UI"),
+            &family_name,
             None,
             DWRITE_FONT_WEIGHT(dwrite_weight(weight)),
             DWRITE_FONT_STYLE_NORMAL,
@@ -576,8 +660,7 @@ fn text_layout(
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         // CSS line box: the content box (ascent + descent) centred in line-height x font size.
         let box_h = line_height * size;
-        let baseline =
-            (box_h - (gfx.ascent_em + gfx.descent_em) * size) / 2.0 + gfx.ascent_em * size;
+        let baseline = (box_h - (ascent_em + descent_em) * size) / 2.0 + ascent_em * size;
         format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, box_h, baseline)?;
         let f1: IDWriteTextFormat1 = format.cast()?;
         f1.SetFontFallback(&gfx.fallback)?;
@@ -658,7 +741,14 @@ fn rasterise(gfx: &Gfx, request: &RasterRequest) -> Result<Raster> {
             .rows
             .iter()
             .map(|(text, px, weight)| {
-                text_layout(gfx, text, *px, *weight, request.style.line_height)
+                text_layout(
+                    gfx,
+                    text,
+                    *px,
+                    *weight,
+                    request.style.family,
+                    request.style.line_height,
+                )
             })
             .collect::<Result<_>>()?;
         let row_widths: Vec<f32> = layouts.iter().map(text_width).collect();
@@ -1229,8 +1319,8 @@ const DEFAULT_ACCENT: [u8; 3] = [0xA9, 0xC3, 0xFE];
 /// word centres (px from the text's left edge; empty for a line without words).
 /// Per lyrics, size and look: main and translation widths, the last glyph centre of the last line, each line's first
 /// glyph centre and each line's word centres.
-/// Measurement key: main px, translation px, line count, weight.
-type MeasureKey = (u32, u32, usize, u16);
+/// Measurement key: main px, translation px, line count, weight, family.
+type MeasureKey = (u32, u32, usize, u16, u16);
 type MeasuredLines = (MeasureKey, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
 /// Owned raster rows: `(text, font px, weight)`.
@@ -2461,6 +2551,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         line_height: line_height as f32,
         effect_from: look.color,
         weight: look.font_weight,
+        family: family_id(gfx, look.font_family.as_deref()),
     };
     let trans_weight = translation_weight(look.font_weight);
     let clip_room = match look.effect {
@@ -2522,6 +2613,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             trans_font.to_bits(),
             lines.len(),
             look.font_weight,
+            style.family,
         );
         if win.measured.as_ref().is_none_or(|m| m.0 != key) {
             let mut main_widths = Vec::new();
@@ -2529,7 +2621,14 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
             let mut last_centres = Vec::new();
             let mut first_centres = Vec::new();
             for (_, text, tr) in lines.iter() {
-                let main = text_layout(gfx, text, font, style.weight, style.line_height)?;
+                let main = text_layout(
+                    gfx,
+                    text,
+                    font,
+                    style.weight,
+                    style.family,
+                    style.line_height,
+                )?;
                 main_widths.push(if text.is_empty() {
                     0.0
                 } else {
@@ -2553,6 +2652,7 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
                         tr,
                         trans_font,
                         trans_weight,
+                        style.family,
                         style.line_height,
                     )?) as f64
                 });
@@ -2845,7 +2945,15 @@ fn refresh(gfx: &Gfx, win: &mut Win, ctx: &Context) -> Result<bool> {
         // one word spanning the line (`karaoke_words`).
         let karaoke = line.karaoke_words();
         let spans = karaoke.as_ref().and_then(|(ranges, _)| {
-            let layout = text_layout(gfx, text, font, style.weight, style.line_height).ok()?;
+            let layout = text_layout(
+                gfx,
+                text,
+                font,
+                style.weight,
+                style.family,
+                style.line_height,
+            )
+            .ok()?;
             Some(word_spans(&layout, ranges))
         });
         let accent_style = TextStyle {
@@ -3139,8 +3247,21 @@ fn content_host(
 }
 
 fn raster_key<T: std::fmt::Debug>(rows: &[(T, f32, u16)], style: TextStyle) -> String {
+    let family = if style.family == 0 {
+        String::new()
+    } else {
+        FAMILIES.with(|families| {
+            families
+                .borrow()
+                .resolved
+                .get(usize::from(style.family) - 1)
+                .map(|family| family.name.to_string())
+                .unwrap_or_default()
+        })
+    };
     plan::raster_key(
         rows,
+        &family,
         style.color,
         style.effect_from,
         style.effect as u8,

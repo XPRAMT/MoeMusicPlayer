@@ -147,6 +147,7 @@ fn main() {
         main_opacity_percent: 100.0,
         secondary_opacity_percent: 50.0,
         font_weight: 500,
+        font_family: None,
         animation,
         hide_when_paused: false,
     };

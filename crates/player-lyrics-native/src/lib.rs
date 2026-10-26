@@ -142,6 +142,8 @@ pub struct Look {
     pub secondary_opacity_percent: f64,
     /// Weight of the original text (100-1000); translation rows are `translation_weight` of it.
     pub font_weight: u16,
+    /// Font family (ADR 0042); `None`, or a family DirectWrite does not have, draws in the default Segoe UI.
+    pub font_family: Option<String>,
     pub animation: Animation,
     /// 「暫停時隱藏」: the window fades out while playback is paused or stopped (`pause_hide`).
     pub hide_when_paused: bool,

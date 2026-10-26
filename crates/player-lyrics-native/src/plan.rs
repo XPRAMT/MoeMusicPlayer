@@ -13,15 +13,17 @@ pub type Keys = Vec<(f64, f64)>;
 pub type Cubics = Vec<(f64, [f64; 4])>;
 
 /// The key of one rasterised line (shared between windows, ADR 0034): the rows with their font px and weight (a
-/// window with another weight must not reuse the bitmap), the colours, the effect and the line box.
+/// window with another weight must not reuse the bitmap), the font family drawn (ADR 0042), the colours, the effect
+/// and the line box.
 pub fn raster_key<T: std::fmt::Debug>(
     rows: &[(T, f32, u16)],
+    family: &str,
     color: [u8; 3],
     effect_from: [u8; 3],
     effect: u8,
     line_height: f32,
 ) -> String {
-    format!("{rows:?}|{color:?}|{effect_from:?}|{effect}|{line_height}")
+    format!("{rows:?}|{family:?}|{color:?}|{effect_from:?}|{effect}|{line_height}")
 }
 
 /// Playback samples within this of the running clock are ignored (about 1 device px of glide).
@@ -454,7 +456,7 @@ mod tests {
     #[test]
     fn the_raster_key_includes_each_rows_weight() {
         let white = [255, 255, 255];
-        let key = |rows: &[(&str, f32, u16)]| raster_key(rows, white, white, 1, 1.4);
+        let key = |rows: &[(&str, f32, u16)]| raster_key(rows, "Segoe UI", white, white, 1, 1.4);
         let regular = key(&[("night", 40.0, 550), ("tr", 32.0, 500)]);
         assert_eq!(regular, key(&[("night", 40.0, 550), ("tr", 32.0, 500)]));
         assert_ne!(regular, key(&[("night", 40.0, 700), ("tr", 32.0, 650)]));
@@ -463,6 +465,15 @@ mod tests {
             key(&[("night", 40.0, 550), ("tr", 32.0, 550)]),
             "the translation weight is part of the key"
         );
+    }
+
+    #[test]
+    fn the_raster_key_includes_the_font_family() {
+        let white = [255, 255, 255];
+        let rows: &[(&str, f32, u16)] = &[("night", 40.0, 500)];
+        let default = raster_key(rows, "Segoe UI", white, white, 1, 1.4);
+        assert_eq!(default, raster_key(rows, "Segoe UI", white, white, 1, 1.4));
+        assert_ne!(default, raster_key(rows, "Yu Gothic", white, white, 1, 1.4));
     }
 
     fn input<'a>(
