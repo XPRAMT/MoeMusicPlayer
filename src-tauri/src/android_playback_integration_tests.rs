@@ -381,6 +381,7 @@ fn playlist_source(
     PlaybackQueueSource::Playlist {
         playlist_id: playlist_id.to_string(),
         entry_position,
+        sort: Default::default(),
     }
 }
 
@@ -423,6 +424,7 @@ fn select_commits_duplicate_entry_queue_only_after_native_load_ack() {
     let action = PlaybackAction::SelectTrack {
         track_id: fixture.first.to_string(),
         source: Some(playlist_source(fixture.playlist_id, 1)),
+        scope: player_db::LibrarySourceScope::All,
     };
     let handle = perform_on_thread(actor, move |actor| {
         actor.handle_action("load-duplicate", action)
@@ -468,6 +470,132 @@ fn select_commits_duplicate_entry_queue_only_after_native_load_ack() {
     assert_eq!(saved.queue.entries[0].track_id, fixture.first);
     assert_eq!(saved.queue.entries[1].track_id, fixture.first);
     assert_eq!(saved.queue.entries[1].source_position, Some(1));
+}
+
+/// Adds a remote source with one song beside the local fixture songs; returns that song.
+fn seed_remote_song(database: &mut Database) -> TrackId {
+    let root = database
+        .add_library_root(
+            MediaSourceKind::Remote,
+            "fake NAS",
+            MediaLocator::Remote {
+                source_id: player_core::SourceId::new(),
+                path: String::new(),
+            },
+        )
+        .expect("add remote root");
+    let locator = MediaLocator::Remote {
+        source_id: root.id,
+        path: "Music/cloud.flac".to_owned(),
+    };
+    let record = MediaTrackRecord {
+        identity: TrackIdentity {
+            source_id: root.id,
+            source_item_id: "cloud".to_owned(),
+            locator_key: Some("remote-acct:fake:Music/cloud.flac".to_owned()),
+        },
+        locator: locator.clone(),
+        fingerprint: FileFingerprint {
+            size_bytes: 128,
+            modified_at_utc_ms: Some(1_800_000_000_000),
+            created_at_utc_ms: None,
+        },
+        metadata: Some(TrackMetadata {
+            title: Some("Cloud Track".to_owned()),
+            artist: Some("Actor Test".to_owned()),
+            duration_ms: Some(8_000),
+            ..TrackMetadata::default()
+        }),
+    };
+    database
+        .apply_source_scan(
+            &root,
+            &SourceScanState::Complete,
+            std::slice::from_ref(&record),
+            std::slice::from_ref(&record),
+            &[],
+            1,
+        )
+        .expect("persist remote song");
+    database
+        .resolve_track_id_for_locator(&locator)
+        .expect("resolve remote song")
+        .expect("remote song ID")
+}
+
+fn library_source() -> PlaybackQueueSource {
+    PlaybackQueueSource::Library {
+        query: None,
+        query_alternates: Vec::new(),
+        field_filter: None,
+        sort: Default::default(),
+    }
+}
+
+/// The user's report: in local mode a song picked on Android started a queue holding cloud songs. The actor reads the
+/// library through its own database handle, whose scope never followed the switch (the app's handle had it).
+#[test]
+fn the_actor_builds_a_list_queue_under_the_scope_the_lists_show() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    let cloud = seed_remote_song(&mut seed_db);
+    // The app's own handle is switched to local mode; another handle on the same file keeps showing everything.
+    seed_db.set_source_scope(player_db::LibrarySourceScope::Local);
+    let actor_db = temporary.open();
+    let before_fix = super::queue_for_track(&actor_db, fixture.first, Some(library_source()))
+        .expect("queue on the actor's handle");
+    assert!(before_fix
+        .snapshot()
+        .entries
+        .iter()
+        .any(|entry| entry.track_id == cloud));
+    let page: Vec<_> = seed_db
+        .list_tracks_page(player_core::ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        })
+        .expect("local page")
+        .items
+        .into_iter()
+        .map(|track| track.id)
+        .collect();
+    assert!(!page.contains(&cloud));
+    drop(seed_db);
+
+    let mut harness = ActorFixture::new(actor_db);
+    let actor = harness.take_actor();
+    let action = PlaybackAction::SelectTrack {
+        track_id: fixture.first.to_string(),
+        source: Some(library_source()),
+        scope: player_db::LibrarySourceScope::Local,
+    };
+    let handle = perform_on_thread(actor, move |actor| {
+        actor.handle_action("local-pick", action)
+    });
+    let load = harness.fake.next_command();
+    assert_eq!(load.op, "load");
+    harness.fake.ack(&load);
+    let capabilities = harness.fake.next_command();
+    let published = harness
+        .shared
+        .queue
+        .read()
+        .expect("queue lock")
+        .clone()
+        .expect("queue commits after the load");
+    let queued: Vec<_> = published
+        .entries
+        .iter()
+        .map(|entry| entry.track_id)
+        .collect();
+    assert_eq!(queued, page, "the queue holds exactly the local page");
+    harness.fake.ack(&capabilities);
+    let (_actor, result) = handle.join().expect("actor action thread");
+    assert!(result.is_ok(), "selection result: {:?}", result.err());
 }
 
 #[test]
@@ -571,6 +699,7 @@ fn failed_load_keeps_queue_cursor_and_saved_position_then_play_reloads_logical_c
             PlaybackAction::SelectTrack {
                 track_id: selected_track,
                 source: Some(source),
+                scope: player_db::LibrarySourceScope::All,
             },
         )
     });
@@ -819,7 +948,10 @@ fn a_newer_choice_of_track_takes_over_from_a_load_that_is_still_awaited() {
     // The first track is a slow remote one: its load is sent and never acknowledged.
     let first = fixture.first.to_string();
     let handle = perform_on_thread(actor, move |actor| {
-        actor.handle_action("slow", PlaybackAction::select_track(first, None))
+        actor.handle_action(
+            "slow",
+            PlaybackAction::select_track(first, None, player_db::LibrarySourceScope::All),
+        )
     });
     let stale_load = harness.fake.next_command();
     assert_eq!(stale_load.op, "load");
@@ -831,7 +963,11 @@ fn a_newer_choice_of_track_takes_over_from_a_load_that_is_still_awaited() {
         .requests
         .try_send(ActorRequest::Command {
             request_id: "local".to_owned(),
-            action: PlaybackAction::select_track(fixture.second.to_string(), None),
+            action: PlaybackAction::select_track(
+                fixture.second.to_string(),
+                None,
+                player_db::LibrarySourceScope::All,
+            ),
             response,
         })
         .expect("queue the newer choice");
@@ -880,7 +1016,10 @@ fn a_pause_during_a_load_does_not_cancel_it() {
     let actor = harness.take_actor();
     let first = fixture.first.to_string();
     let handle = perform_on_thread(actor, move |actor| {
-        actor.handle_action("slow", PlaybackAction::select_track(first, None))
+        actor.handle_action(
+            "slow",
+            PlaybackAction::select_track(first, None, player_db::LibrarySourceScope::All),
+        )
     });
     let load = harness.fake.next_command();
     let (response, _answer) = mpsc::sync_channel(1);
@@ -976,6 +1115,7 @@ fn a_load_the_service_refuses_leaves_the_playing_track_the_queue_and_the_session
             PlaybackAction::SelectTrack {
                 track_id: selected,
                 source: Some(source),
+                scope: player_db::LibrarySourceScope::All,
             },
         )
     });
@@ -1381,7 +1521,11 @@ fn a_choice_of_the_user_ends_the_walk_before_its_next_entry() {
         .requests
         .try_send(ActorRequest::Command {
             request_id: "tap".to_owned(),
-            action: PlaybackAction::select_track(fixture.second.to_string(), None),
+            action: PlaybackAction::select_track(
+                fixture.second.to_string(),
+                None,
+                player_db::LibrarySourceScope::All,
+            ),
             response,
         })
         .expect("queue the user's choice");

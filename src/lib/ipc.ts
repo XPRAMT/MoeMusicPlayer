@@ -631,7 +631,10 @@ export type RepeatMode = 'off' | 'one' | 'all';
 export type PlaybackQueueSource =
   // queryAlternates: only in queue sources saved before ADR 0030; the backend now derives 繁簡 terms itself.
   | { kind: 'library'; query: string | null; queryAlternates?: string[]; fieldFilter?: TrackFieldFilter | null; sort?: LibraryListSort | null }
-  | { kind: 'playlist'; playlistId: string; entryPosition: number }
+  /** Playlist page: `sort` is the page's own sort, so the queue follows the order the page shows. */
+  | { kind: 'playlist'; playlistId: string; entryPosition: number; sort: PlaylistListSort }
+  /** Artist detail page: the same arguments as `library_get_artist_page`, so the queue holds exactly its rows. */
+  | { kind: 'artist'; artistNames: string[]; query: string | null; sort: LibraryListSort | null }
   /** Album detail page: the same arguments as `library_get_album_page`, so the queue follows the page order. */
   | { kind: 'album'; albumNames: string[]; sort: LibraryListSort | null; indexSort: LibrarySortDirection | null }
   | { kind: 'queue'; traversalPosition: number };

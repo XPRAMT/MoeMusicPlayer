@@ -77,7 +77,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 專輯詳情捲動（ADR 0012）：曲目捲動視窗固定從「封面收合後的標題高度＋欄標題高度」開始，位置與大小不變；內容前有等於收合行程的空白，收合量恆為 `min(scrollTop, 收合行程)`（尺寸見 ADR 0012）。收合是純合成器 transform，由列表原生 scroll timeline 驅動（封面以左上角 `scale()`，摘要與欄標題 `translate()`，timeline 動畫明確指定 `1s`，`animation-duration:auto` 在 WebView2 會停在最小封面）；不支援 scroll timeline 時才由 scroll 事件寫 `--album-detail-collapse-progress`。規則：封面／標題／排序表頭的收合只能動 `transform`，不得動畫 `width`、`height`、`top`、`flex-basis`，也不得每次 scroll 寫 inline style；不做逐列 clip-path、不攔截滾輪。改 transform 後尚未在真實 WebView2 搭配連續歌詞重驗。
 
-專輯詳情資料（ADR 0037）：`AlbumDetail.svelte` 的 `loadDetailData` 讓 facets 與 artists 各自取得、不等封面；封面先用卡片的第一張，再背景換成拼貼（`album_artwork_selection_ensure` 的 `representative`）。「依專輯曲目編號排序」：有碟號 ≥ 2 才分碟（`list_album_tracks_page_with_index_sort` 與 `album_detail_facets` 同一規則）。專輯頁點歌用 `PlaybackQueueSource` 的 `album` 來源，佇列與畫面只有一個排序來源（Rust `queue_for_track`、`Database::list_album_track_ids`，Windows 與 Android 相同）。測試 `album_queue_*`。
+專輯詳情資料（ADR 0037）：`AlbumDetail.svelte` 的 `loadDetailData` 讓 facets 與 artists 各自取得、不等封面；封面先用卡片的第一張，再背景換成拼貼（`album_artwork_selection_ensure` 的 `representative`）。「依專輯曲目編號排序」：有碟號 ≥ 2 才分碟（`list_album_tracks_page_with_index_sort` 與 `album_detail_facets` 同一規則）。專輯頁點歌用 `PlaybackQueueSource` 的 `album` 來源、演出者頁用 `artist`、播放清單帶頁面 `sort`，佇列與畫面只有一個查詢與排序來源（Rust `queue_for_track`、`Database::list_album_track_ids`／`list_artist_track_ids`／`playlist_track_ids`，Windows 與 Android 相同）。測試 `album_queue_*`。
 
 專輯首頁（ADR 0037）：卡片依 `trackListColumns.albumCardMaxWidthPx` 填滿整列（`album-index-layout.js` 的 `getAlbumCardGrid`）。封面預載目前視窗前後各一頁（`album-cover-prefetch.js` 的 `getAlbumPrefetchIndices`、`album-card-cover.ts` 的 `createAlbumCoverPrefetcher`），與卡片共用 `loadAlbumCardCover`；限流器 `withAlbumCoverLookupSlot`／`withAlbumArtworkSlot` 讓可見卡片永遠先於預載，避免大量第一次封面查詢佔住唯一的資料庫連線鎖。測試 `tests/album-cover-prefetch.test.mjs`、`tests/album-cover-lookup-slot.test.mjs`。診斷：命令 `db_slow_locks`（`player-db` 的 `TimedConnection`）。Release／手機捲動與多視窗寬度驗收待做。
 
@@ -85,7 +85,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 曲目欄位（ADR 0037）：十欄（標題、演出者、專輯、發行時間、新增時間、修改時間、長度、音訊格式、播放次數、來源）。預設可見度依平台（Windows 勾「新增時間」、Android 勾「修改時間」）：Rust `default_created_column_visible`／`default_modified_column_visible` 與前端 `defaultColumnVisible` 必須一致。「來源」本機為「本地」、遠端為伺服器名稱（`source_labels` 表、`TRACK_SOURCE_NAME_SQL`），預設隱藏。所有 `TrackSummary` 由 `attach_file_names` 一併補上檔名、來源名稱與修改時間。曲庫預設依新增時間排序。
 
-歌曲來源篩選開關（ADR 0037）：頂欄三段開關（`SourceScopeSwitch.svelte`、`source-scope.js`），只有同時有已啟用本地與遠端來源時顯示，選擇存 `librarySourceScope`。`player-db` 的 SQL 函式 `moe_in_scope(source_kind, locator_kind)` 套在所有可見性判斷，播放解析、歌詞與指紋查詢不套用；播放佇列保留完整順序、只篩頁面（`build_playback_queue_page`、`queue_rows_to_positions`）。測試 `the_source_scope_*`、`tests/source-scope.test.mjs`。
+歌曲來源篩選開關（ADR 0037）：頂欄三段開關（`SourceScopeSwitch.svelte`、`source-scope.js`），只有同時有已啟用本地與遠端來源時顯示，選擇存 `librarySourceScope`。`player-db` 的 SQL 函式 `moe_in_scope(source_kind, locator_kind)` 套在所有可見性判斷，播放解析、歌詞與指紋查詢不套用；範圍屬於每個 `Database` 連線，Android 播放 actor 的連線由 `SelectTrack` 帶入的範圍設定。切換範圍不動目前的播放佇列，佇列頁照原樣列出全部項目。**硬性規則：從任何列表建立的播放佇列必須正好是該列表頁面顯示的列與順序（範圍、搜尋、篩選、遺失檔案、停用來源都相同），佇列共用頁面查詢、不另寫 SQL；唯一例外是點的那首一定播放（列表已不顯示時放第一個）**（ADR 0037）。測試 `the_source_scope_*`、`every_list_queue_*`、`tests/source-scope.test.mjs`。
 
 同步結果顯示（設定 → 音樂來源頂部橫幅）：每個來源一行「來源名　同步完成；新增 n 個項目，移除 n 個項目。」，有項目錯誤才加「，n 個項目錯誤」（`sync-result-line.js` 的 `formatSyncResultLine`，n 取自 `library-sync-finished` 的 `addedOrUpdated`／`removedMappings`）；進度條只在有已知總數的階段出現；只有失敗或沒有可同步來源時才顯示說明。
 

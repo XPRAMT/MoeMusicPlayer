@@ -2450,11 +2450,24 @@ enum PlaybackQueueSource {
         #[serde(default)]
         sort: TrackListSort,
     },
+    /// A playlist page: `sort` is the page's own sort, so the queue follows the order the page shows.
     Playlist {
         #[serde(rename = "playlistId")]
         playlist_id: String,
         #[serde(rename = "entryPosition")]
         entry_position: u64,
+        #[serde(default)]
+        sort: PlaylistListSort,
+    },
+    /// The artist detail page. Same arguments as `library_get_artist_page`, so the queue is built by the very
+    /// membership, search and ordering the page displays.
+    Artist {
+        #[serde(rename = "artistNames")]
+        artist_names: Vec<String>,
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        sort: TrackListSort,
     },
     /// The album detail page. Same arguments as `library_get_album_page`, so the queue is
     /// built by the very query and ordering the page displays. `album_names` is a list (not a
@@ -2623,8 +2636,35 @@ mod playback_queue_ipc_tests {
             source,
             PlaybackQueueSource::Playlist {
                 playlist_id,
-                entry_position: 7
-            } if playlist_id == "test-playlist-id"
+                entry_position: 7,
+                sort,
+            } if playlist_id == "test-playlist-id" && sort == player_core::PlaylistListSort::default()
+        ));
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "playlist",
+            "playlistId": "test-playlist-id",
+            "entryPosition": 7,
+            "sort": { "field": "title", "direction": "desc" }
+        }))
+        .expect("deserialize a sorted playlist queue source");
+        assert!(matches!(
+            source,
+            PlaybackQueueSource::Playlist { sort, .. } if sort == player_core::PlaylistListSort {
+                field: player_core::PlaylistSortField::Title,
+                direction: player_core::PlaylistSortDirection::Desc,
+            }
+        ));
+        let source: PlaybackQueueSource = serde_json::from_value(serde_json::json!({
+            "kind": "artist",
+            "artistNames": ["A", "a"],
+            "query": "needle",
+            "sort": { "field": "title", "direction": "asc" }
+        }))
+        .expect("deserialize an artist queue source");
+        assert!(matches!(
+            source,
+            PlaybackQueueSource::Artist { artist_names, query: Some(query), .. }
+                if artist_names == ["A", "a"] && query == "needle"
         ));
     }
 
@@ -4599,55 +4639,35 @@ fn queue_for_merged_library_search(
         field_filter,
         sort,
     } = search;
-    let query_request = ListTracksQuery {
-        query: query.clone(),
-        field_filter: field_filter.clone(),
-        sort,
-        ..ListTracksQuery::default()
-    };
-    let mut summaries = database
-        .list_tracks_all_with_alternates(&query_request, &query_alternates)
-        .map_err(|error| error.to_string())?;
-    let temporary_tracks = if let Some(temporary_database) = temporary_database {
-        temporary_database
-            .list_tracks_all_with_alternates(&query_request, &query_alternates)
-            .map_err(|error| error.to_string())?
-    } else {
-        Vec::new()
-    };
-    let mut temporary_paths = HashSet::new();
-    if let Some(temporary_database) = temporary_database {
-        for (_, path) in temporary_database
-            .filesystem_locators_for_tracks(
-                &temporary_tracks
-                    .iter()
-                    .map(|track| track.id)
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|error| error.to_string())?
-        {
-            temporary_paths.insert(normalized_filesystem_path_key(&path));
-        }
-    }
-    let duplicate_ids = database
-        .filesystem_locators_for_tracks(&summaries.iter().map(|track| track.id).collect::<Vec<_>>())
-        .map_err(|error| error.to_string())?
+    // The whole merged page the library list shows (the same function the page reads), so the queue holds exactly its
+    // rows in its order.
+    let tracks = match temporary_database {
+        Some(temporary_database) => merged_library_page(
+            database,
+            temporary_database,
+            ListTracksQuery {
+                query: query.clone(),
+                field_filter: field_filter.clone(),
+                sort,
+                offset: 0,
+                limit: u32::MAX,
+            },
+            &query_alternates,
+        )?
+        .items
         .into_iter()
-        .filter_map(|(track_id, path)| {
-            temporary_paths
-                .contains(&normalized_filesystem_path_key(&path))
-                .then_some(track_id)
-        })
-        .collect::<HashSet<_>>();
-    summaries.retain(|track| !duplicate_ids.contains(&track.id));
-    summaries.extend(temporary_tracks);
-    summaries = sort_track_summaries_sql(database, summaries, sort)?;
-    let tracks = summaries.iter().map(|track| track.id).collect::<Vec<_>>();
-    let selected_index = tracks
-        .iter()
-        .position(|track_id| *track_id == selected_track_id)
-        .ok_or_else(|| "所選曲目已不在目前搜尋結果中。".to_owned())?;
-    let mut queue = PlaybackQueue::with_entries(
+        .map(|track| track.id)
+        .collect::<Vec<_>>(),
+        None => database
+            .list_track_ids_filtered_with_alternates(
+                query.as_deref(),
+                &query_alternates,
+                field_filter.as_ref(),
+                sort,
+            )
+            .map_err(|error| error.to_string())?,
+    };
+    let (entries, selected_index) = place_selected_entry(
         tracks
             .into_iter()
             .map(|track_id| PlaybackQueueEntry {
@@ -4655,6 +4675,13 @@ fn queue_for_merged_library_search(
                 source_position: None,
             })
             .collect(),
+        PlaybackQueueEntry {
+            track_id: selected_track_id,
+            source_position: None,
+        },
+    );
+    let mut queue = PlaybackQueue::with_entries(
+        entries,
         PlaybackQueueContext::Library {
             query,
             field_filter,
@@ -7292,7 +7319,8 @@ fn settings_get_library_source_scope(
 }
 
 /// Switch the library lists between all songs, only local songs and only remote songs. Every list, count and grouping
-/// follows at once (the page reloads its lists); playback is not affected.
+/// follows at once (the page reloads its lists), and so does the next queue built from a list; the current queue and
+/// playback are not affected.
 #[tauri::command]
 fn settings_set_library_source_scope(
     state: State<'_, AppState>,
@@ -7307,6 +7335,17 @@ fn settings_set_library_source_scope(
         .map_err(|error| error.to_string())?;
     if let Some(database) = state.database.as_ref() {
         database.set_source_scope(saved.library_source_scope);
+    }
+    // The Explorer-opened songs (local files) are listed under the same scope as the library.
+    #[cfg(target_os = "windows")]
+    if let Some(temporary_database) = state.playback.as_ref().and_then(|playback| {
+        playback
+            .temporary_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }) {
+        temporary_database.set_source_scope(saved.library_source_scope);
     }
     Ok(saved.library_source_scope)
 }
@@ -9437,17 +9476,10 @@ fn playback_get_queue_quick_index_groupings(
                 .or_insert_with(|| external.summary.clone());
         }
     }
-    let visible_positions = queue_visible_positions(Some(database), &queue)?;
     let keys = queue
         .play_order
         .iter()
-        .enumerate()
-        .filter(|(position, _)| {
-            visible_positions
-                .as_ref()
-                .is_none_or(|positions| positions.binary_search(position).is_ok())
-        })
-        .filter_map(|(_, entry_index)| queue.entries.get(*entry_index))
+        .filter_map(|entry_index| queue.entries.get(*entry_index))
         .map(|entry| {
             quick_index_key(field, summaries.get(&entry.track_id))
                 .map(|(_, key)| key)
@@ -9742,10 +9774,18 @@ async fn playback_play(
     }
     #[cfg(target_os = "android")]
     {
+        // The actor reads the library through its own database handle: it builds the queue under the scope the lists
+        // show now, so the queue holds exactly the rows of the page the track was picked from.
+        let scope = state
+            .settings
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .library_source_scope;
         android_playback_service(&state)?
             .execute(android_playback::PlaybackAction::select_track(
                 track_id,
                 queue_source,
+                scope,
             ))
             .await
     }
@@ -10136,13 +10176,11 @@ async fn playback_reorder_queue(
             let Some(queue) = queue.as_mut() else {
                 return Err("目前沒有播放佇列可調整順序。".to_owned());
             };
-            let before = queue.snapshot();
-            let (from_index, to_index) =
-                queue_rows_to_positions(state.database.as_ref(), &before, from_index, to_index)?;
             let length = queue.len();
             if from_index >= length || to_index >= length {
                 return Err("播放佇列位置超出範圍。".to_owned());
             }
+            let before = queue.snapshot();
             queue
                 .move_traversal(from_index, to_index)
                 .map_err(|_| "播放佇列位置超出範圍。".to_owned())?;
@@ -10158,17 +10196,13 @@ async fn playback_reorder_queue(
     }
     #[cfg(target_os = "android")]
     {
-        let (from_index, to_index) =
-            if let Some((_, queue)) = android_playback_service(&state)?.queue_snapshot()? {
-                let (from_index, to_index) =
-                    queue_rows_to_positions(state.database.as_ref(), &queue, from_index, to_index)?;
-                if from_index >= queue.play_order.len() || to_index >= queue.play_order.len() {
-                    return Err("播放佇列位置超出範圍。".to_owned());
-                }
-                (from_index, to_index)
-            } else {
-                return Err("目前沒有播放佇列可調整順序。".to_owned());
-            };
+        if let Some((_, queue)) = android_playback_service(&state)?.queue_snapshot()? {
+            if from_index >= queue.play_order.len() || to_index >= queue.play_order.len() {
+                return Err("播放佇列位置超出範圍。".to_owned());
+            }
+        } else {
+            return Err("目前沒有播放佇列可調整順序。".to_owned());
+        }
         let snapshot = android_playback_service(&state)?
             .execute(android_playback::PlaybackAction::ReorderQueue {
                 from: from_index,
@@ -10558,59 +10592,9 @@ fn sort_queue_entry_order_sql(
         .map_err(|error| error.to_string())
 }
 
-/// The traversal positions the source scope shows, or `None` when it shows everything. The queue keeps its full
-/// order; the page only lists the visible rows, each carrying its real traversal position.
-fn queue_visible_positions(
-    database: Option<&Database>,
-    queue: &PlaybackQueueSnapshot,
-) -> Result<Option<Vec<usize>>, String> {
-    let Some(database) = database else {
-        return Ok(None);
-    };
-    if database.source_scope() == player_db::LibrarySourceScope::All {
-        return Ok(None);
-    }
-    let track_ids = queue
-        .entries
-        .iter()
-        .map(|entry| entry.track_id)
-        .collect::<Vec<_>>();
-    let visible = database
-        .track_ids_in_source_scope(&track_ids)
-        .map_err(|error| error.to_string())?;
-    Ok(Some(
-        queue
-            .play_order
-            .iter()
-            .enumerate()
-            .filter(|(_, entry_index)| {
-                queue
-                    .entries
-                    .get(**entry_index)
-                    .is_some_and(|entry| visible.contains(&entry.track_id))
-            })
-            .map(|(position, _)| position)
-            .collect(),
-    ))
-}
-
-/// Rows of a queue list narrowed by the source scope are not traversal positions: this turns the row numbers a drag
-/// reports into the real positions (identical when the scope shows everything).
-fn queue_rows_to_positions(
-    database: Option<&Database>,
-    queue: &PlaybackQueueSnapshot,
-    from_row: usize,
-    to_row: usize,
-) -> Result<(usize, usize), String> {
-    match queue_visible_positions(database, queue)? {
-        None => Ok((from_row, to_row)),
-        Some(positions) => match (positions.get(from_row), positions.get(to_row)) {
-            (Some(from), Some(to)) => Ok((*from, *to)),
-            _ => Err("播放佇列位置超出範圍。".to_owned()),
-        },
-    }
-}
-
+/// One page of the play queue as it is: every entry in traversal order. The source scope does not narrow it — the
+/// queue was built from a list under the scope of its time and a later switch leaves it alone (ADR 0037), so its rows
+/// are its traversal positions.
 fn build_playback_queue_page(
     database: Option<&Database>,
     revision: u64,
@@ -10629,13 +10613,8 @@ fn build_playback_queue_page(
         });
     };
 
-    let visible_positions = queue_visible_positions(database, &queue)?;
-    let total = u64::try_from(
-        visible_positions
-            .as_ref()
-            .map_or(queue.play_order.len(), Vec::len),
-    )
-    .map_err(|_| "播放佇列項目數量超出支援範圍。".to_owned())?;
+    let total = u64::try_from(queue.play_order.len())
+        .map_err(|_| "播放佇列項目數量超出支援範圍。".to_owned())?;
     let queue_cursor =
         u64::try_from(queue.cursor).map_err(|_| "播放佇列游標超出支援範圍。".to_owned())?;
     let current_entry_position = queue
@@ -10651,28 +10630,10 @@ fn build_playback_queue_page(
         .position(|entry_index| Some(*entry_index as u64) == current_entry_position)
         .map(|index| index as u64)
         .unwrap_or(queue_cursor);
-    // The row the list shows the current song on: its place among the visible rows when a scope narrows the queue
-    // (None while the current song is outside the scope).
-    let cursor_row = match visible_positions.as_ref() {
-        None => Some(cursor),
-        Some(positions) => positions
-            .iter()
-            .position(|position| *position as u64 == cursor)
-            .map(|row| row as u64),
-    };
     let offset_index = usize::try_from(offset.min(total)).unwrap_or(usize::MAX);
     let limit = requested_limit.clamp(1, PLAYBACK_QUEUE_PAGE_MAX_LIMIT) as usize;
-    let page_positions: Vec<usize> = match visible_positions.as_ref() {
-        None => (offset_index..queue.play_order.len()).take(limit).collect(),
-        Some(positions) => positions
-            .iter()
-            .copied()
-            .skip(offset_index)
-            .take(limit)
-            .collect(),
-    };
-    let page_entries = page_positions
-        .into_iter()
+    let page_entries = (offset_index..queue.play_order.len())
+        .take(limit)
         .map(|position| {
             let entry_index = queue
                 .play_order
@@ -10719,7 +10680,7 @@ fn build_playback_queue_page(
         revision,
         total,
         offset,
-        cursor: cursor_row,
+        cursor: Some(cursor),
         current_entry_position,
         items,
     })
@@ -10863,12 +10824,24 @@ fn windows_open_default_apps_settings() -> Result<(), String> {
     }
 }
 
+/// The queue a click on a list builds: exactly the rows that list's page shows (the same query, filters, source scope
+/// and order, see ADR 0037), with the clicked track current. A clicked track the list no longer shows (it changed
+/// between the page load and the click) still plays: it is put first, ahead of the list.
 fn queue_for_track(
     database: &Database,
     track_id: TrackId,
     source: Option<PlaybackQueueSource>,
 ) -> Result<PlaybackQueue, String> {
-    let (entries, context, selected_index) = match source {
+    let library_entries = |track_ids: Vec<TrackId>| -> Vec<PlaybackQueueEntry> {
+        track_ids
+            .into_iter()
+            .map(|track_id| PlaybackQueueEntry {
+                track_id,
+                source_position: None,
+            })
+            .collect()
+    };
+    let (entries, context, selected) = match source {
         Some(PlaybackQueueSource::Library {
             query,
             query_alternates,
@@ -10883,25 +10856,32 @@ fn queue_for_track(
                     sort,
                 )
                 .map_err(|error| error.to_string())?;
-            let selected = track_ids
-                .iter()
-                .position(|candidate| *candidate == track_id)
-                .ok_or_else(|| "所選曲目已不在目前的曲庫查詢結果中。".to_owned())?;
-            let entries = track_ids
-                .into_iter()
-                .map(|track_id| PlaybackQueueEntry {
-                    track_id,
-                    source_position: None,
-                })
-                .collect();
             (
-                entries,
+                library_entries(track_ids),
                 PlaybackQueueContext::Library {
                     query,
                     field_filter,
                     sort,
                 },
-                selected,
+                None,
+            )
+        }
+        Some(PlaybackQueueSource::Artist {
+            artist_names,
+            query,
+            sort,
+        }) => {
+            let track_ids = database
+                .list_artist_track_ids(query.as_deref(), &[], &artist_names, sort)
+                .map_err(|error| error.to_string())?;
+            (
+                library_entries(track_ids),
+                PlaybackQueueContext::Library {
+                    query,
+                    field_filter: None,
+                    sort,
+                },
+                None,
             )
         }
         Some(PlaybackQueueSource::Album {
@@ -10912,46 +10892,29 @@ fn queue_for_track(
             let track_ids = database
                 .list_album_track_ids(&album_names, sort, index_sort)
                 .map_err(|error| error.to_string())?;
-            let selected = track_ids
-                .iter()
-                .position(|candidate| *candidate == track_id)
-                .ok_or_else(|| "所選曲目已不在這張專輯中。".to_owned())?;
-            let entries = track_ids
-                .into_iter()
-                .map(|track_id| PlaybackQueueEntry {
-                    track_id,
-                    source_position: None,
-                })
-                .collect();
             // Persisted like a library queue: the session stores the ordered entries
             // themselves, so restoring never re-queries or re-sorts.
             (
-                entries,
+                library_entries(track_ids),
                 PlaybackQueueContext::Library {
                     query: None,
                     field_filter: None,
                     sort: sort.unwrap_or_default(),
                 },
-                selected,
+                None,
             )
         }
         Some(PlaybackQueueSource::Playlist {
             playlist_id,
             entry_position,
+            sort,
         }) => {
             let playlist_id = PlaylistId::parse(&playlist_id)
                 .map_err(|error| format!("播放清單 ID 無效：{error}"))?;
             let entries = database
-                .playlist_track_ids(playlist_id)
+                .playlist_track_ids(playlist_id, sort)
                 .map_err(|error| error.to_string())?
-                .ok_or_else(|| "播放清單已不存在，請重新整理。".to_owned())?;
-            let selected = entries
-                .iter()
-                .position(|(position, candidate)| {
-                    *position == entry_position && *candidate == track_id
-                })
-                .ok_or_else(|| "所選播放清單項目已無法播放。".to_owned())?;
-            let entries = entries
+                .ok_or_else(|| "播放清單已不存在，請重新整理。".to_owned())?
                 .into_iter()
                 .map(|(position, track_id)| PlaybackQueueEntry {
                     track_id,
@@ -10963,7 +10926,10 @@ fn queue_for_track(
                 PlaybackQueueContext::Playlist {
                     playlist_id: playlist_id.to_string(),
                 },
-                selected,
+                Some(PlaybackQueueEntry {
+                    track_id,
+                    source_position: Some(entry_position),
+                }),
             )
         }
         Some(PlaybackQueueSource::Queue { .. }) => {
@@ -10973,30 +10939,45 @@ fn queue_for_track(
             let track_ids = database
                 .list_track_ids(None)
                 .map_err(|error| error.to_string())?;
-            let selected = track_ids
-                .iter()
-                .position(|candidate| *candidate == track_id)
-                .ok_or_else(|| "所選曲目已不在曲庫中。".to_owned())?;
-            let entries = track_ids
-                .into_iter()
-                .map(|track_id| PlaybackQueueEntry {
-                    track_id,
-                    source_position: None,
-                })
-                .collect();
             (
-                entries,
+                library_entries(track_ids),
                 PlaybackQueueContext::Library {
                     query: None,
                     field_filter: None,
                     sort: Default::default(),
                 },
-                selected,
+                None,
             )
         }
     };
+    let selected = selected.unwrap_or(PlaybackQueueEntry {
+        track_id,
+        source_position: None,
+    });
+    let (entries, selected_index) = place_selected_entry(entries, selected);
     PlaybackQueue::with_entries(entries, context, selected_index)
         .ok_or_else(|| "播放清單沒有可播放的曲目。".to_owned())
+}
+
+/// Where the clicked entry is in the list's entries (a playlist entry matches by its position and track, so the right
+/// one of duplicate slots plays). The list may no longer show it (it changed after the page was read, or the click
+/// came from somewhere the list does not cover): the clicked track always plays, so it is put first then.
+fn place_selected_entry(
+    mut entries: Vec<PlaybackQueueEntry>,
+    selected: PlaybackQueueEntry,
+) -> (Vec<PlaybackQueueEntry>, usize) {
+    let found = entries.iter().position(|entry| {
+        entry.track_id == selected.track_id
+            && (selected.source_position.is_none()
+                || entry.source_position == selected.source_position)
+    });
+    match found {
+        Some(index) => (entries, index),
+        None => {
+            entries.insert(0, selected);
+            (entries, 0)
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -11175,6 +11156,9 @@ fn open_external_audio_path(
     } else {
         let mut temporary_database =
             Database::open_in_memory().map_err(|error| format!("建立暫存曲庫失敗：{error}"))?;
+        if let Some(database) = database {
+            temporary_database.set_source_scope(database.source_scope());
+        }
         let parent = selected_path
             .parent()
             .ok_or_else(|| "無法判斷音樂檔案所在資料夾。".to_owned())?;
@@ -14223,6 +14207,217 @@ mod windows_library_integration_tests {
         );
     }
 
+    /// The hard rule (ADR 0037): the queue a click builds holds exactly the rows the clicked list shows. Here the
+    /// lists hide a remote song (local mode), a song the search does not match, a missing file and a switched-off
+    /// source; every list's queue is its page, and a clicked song the list does not show still plays.
+    #[test]
+    fn every_list_queue_is_its_page_and_a_hidden_click_still_plays() {
+        let mut database = Database::open_in_memory().expect("isolated database");
+        let add = |database: &Database, kind: MediaSourceKind, name: &str| {
+            database
+                .add_library_root(
+                    kind,
+                    name,
+                    MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{name}"))),
+                )
+                .expect("add fixture root")
+        };
+        let local = add(&database, MediaSourceKind::WindowsFilesystem, "local");
+        let nas = add(&database, MediaSourceKind::Remote, "nas");
+        let off = add(&database, MediaSourceKind::WindowsFilesystem, "off");
+        let song = |root: &player_core::LibraryRoot, item: &str, title: &str| MediaTrackRecord {
+            identity: TrackIdentity {
+                source_id: root.id,
+                source_item_id: item.to_owned(),
+                locator_key: Some(format!("fixture:{item}")),
+            },
+            locator: MediaLocator::FileSystem(PathBuf::from(format!(r"C:\Music\{item}.flac"))),
+            fingerprint: FileFingerprint {
+                size_bytes: 1,
+                modified_at_utc_ms: Some(1),
+                created_at_utc_ms: None,
+            },
+            metadata: Some(TrackMetadata {
+                title: Some(title.to_owned()),
+                artist: Some("Singer".to_owned()),
+                album: Some("Album".to_owned()),
+                ..TrackMetadata::default()
+            }),
+        };
+        let local_songs = vec![
+            song(&local, "l1", "Needle Local"),
+            song(&local, "l2", "Plain Local"),
+            song(&local, "l3", "Needle Gone"),
+        ];
+        let remote_songs = vec![song(&nas, "n1", "Needle Cloud")];
+        let off_songs = vec![song(&off, "d1", "Needle Off")];
+        for (root, songs) in [(&local, &local_songs), (&nas, &remote_songs), (&off, &off_songs)] {
+            database
+                .apply_source_scan(root, &SourceScanState::Complete, songs, songs, &[], 1)
+                .expect("persist fixture songs");
+        }
+        let id_of = |database: &Database, record: &MediaTrackRecord| {
+            database
+                .resolve_track_id_for_locator(&record.locator)
+                .expect("resolve")
+                .expect("track id")
+        };
+        let cloud = id_of(&database, &remote_songs[0]);
+        let mut playlist = Playlist::new("everything");
+        playlist.entries = local_songs
+            .iter()
+            .chain(&remote_songs)
+            .chain(&off_songs)
+            .map(|record| PlaylistEntry {
+                track_id: Some(id_of(&database, record)),
+                locator: record.locator.clone(),
+                title: None,
+                duration_ms: None,
+            })
+            .collect();
+        database.save_playlist(&playlist).expect("save playlist");
+        // "Needle Gone" disappears from disk; the "off" source is switched off; the lists show local songs only.
+        let kept = [local_songs[0].clone(), local_songs[1].clone()];
+        database
+            .apply_source_scan(&local, &SourceScanState::Complete, &kept, &[], &[], 2)
+            .expect("rescan without the missing file");
+        let mut off_state = off.clone();
+        off_state.enabled = false;
+        database.save_library_root(&off_state).expect("disable source");
+        database.set_source_scope(player_db::LibrarySourceScope::Local);
+
+        let sort = TrackListSort {
+            field: player_core::TrackSortField::Title,
+            direction: TrackSortDirection::Desc,
+        };
+        let library_page = |query: Option<&str>| {
+            database
+                .list_tracks_page(ListTracksQuery {
+                    query: query.map(str::to_owned),
+                    field_filter: None,
+                    offset: 0,
+                    limit: 100,
+                    sort,
+                })
+                .expect("library page")
+                .items
+                .into_iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
+        };
+        let needle_page = library_page(Some("needle"));
+        assert_eq!(needle_page, vec![id_of(&database, &local_songs[0])]);
+        let library_queue = queue_for_track(
+            &database,
+            needle_page[0],
+            Some(PlaybackQueueSource::Library {
+                query: Some("needle".to_owned()),
+                query_alternates: Vec::new(),
+                field_filter: None,
+                sort,
+            }),
+        )
+        .expect("library queue");
+        assert_eq!(queue_ids(&library_queue), needle_page);
+
+        let artist_page = database
+            .list_tracks_page_for_artists(
+                ListTracksQuery {
+                    query: None,
+                    field_filter: None,
+                    offset: 0,
+                    limit: 100,
+                    sort,
+                },
+                &[],
+                &["singer".to_owned()],
+            )
+            .expect("artist page")
+            .items
+            .into_iter()
+            .map(|track| track.id)
+            .collect::<Vec<_>>();
+        assert_eq!(artist_page, library_page(None));
+        let artist_queue = queue_for_track(
+            &database,
+            artist_page[1],
+            Some(PlaybackQueueSource::Artist {
+                artist_names: vec!["singer".to_owned()],
+                query: None,
+                sort,
+            }),
+        )
+        .expect("artist queue");
+        assert_eq!(queue_ids(&artist_queue), artist_page);
+        assert_eq!(artist_queue.current(), artist_page[1]);
+
+        let album_page = album_page_ids(&database, &["Album".to_owned()], None, None);
+        let album_queue = queue_for_track(
+            &database,
+            album_page[0],
+            Some(PlaybackQueueSource::Album {
+                album_names: vec!["Album".to_owned()],
+                sort: None,
+                index_sort: None,
+            }),
+        )
+        .expect("album queue");
+        assert_eq!(queue_ids(&album_queue), album_page);
+
+        let playlist_sort = player_core::PlaylistListSort {
+            field: player_core::PlaylistSortField::Title,
+            direction: player_core::PlaylistSortDirection::Desc,
+        };
+        let playlist_page = database
+            .get_playlist_page_sorted(playlist.id, 0, 100, playlist_sort)
+            .expect("playlist page")
+            .expect("playlist")
+            .items
+            .into_iter()
+            .filter(|item| item.has_enabled_mapping)
+            .map(|item| (item.position, item.track_id.expect("matched")))
+            .collect::<Vec<_>>();
+        let (position, picked) = playlist_page[1];
+        let playlist_queue = queue_for_track(
+            &database,
+            picked,
+            Some(PlaybackQueueSource::Playlist {
+                playlist_id: playlist.id.to_string(),
+                entry_position: position,
+                sort: playlist_sort,
+            }),
+        )
+        .expect("playlist queue");
+        let snapshot = playlist_queue.snapshot();
+        assert_eq!(
+            snapshot
+                .entries
+                .iter()
+                .map(|entry| (entry.source_position.expect("position"), entry.track_id))
+                .collect::<Vec<_>>(),
+            playlist_page
+        );
+        assert_eq!(snapshot.cursor, 1);
+
+        // A song the list does not show (a cloud song in local mode) that is clicked anyway still plays: it is put
+        // first, ahead of the list's rows.
+        let hidden_click = queue_for_track(
+            &database,
+            cloud,
+            Some(PlaybackQueueSource::Library {
+                query: None,
+                query_alternates: Vec::new(),
+                field_filter: None,
+                sort,
+            }),
+        )
+        .expect("a hidden click still builds a queue");
+        assert_eq!(hidden_click.current(), cloud);
+        let mut expected = vec![cloud];
+        expected.extend(library_page(None));
+        assert_eq!(queue_ids(&hidden_click), expected);
+    }
+
     #[test]
     fn explorer_catalog_search_merges_naturally_paginates_and_deduplicates_paths() {
         let directory = TestDirectory::new();
@@ -15128,6 +15323,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
                 entry_position: 1,
+                sort: Default::default(),
             }),
         )
         .expect("select repeated playlist entry while paused");
@@ -15404,6 +15600,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
                 entry_position: 0,
+                sort: Default::default(),
             }),
         )
         .expect("resolve first duplicate entry by position");
@@ -15414,6 +15611,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
                 entry_position: 1,
+                sort: Default::default(),
             }),
         )
         .expect("resolve second duplicate entry by position");
@@ -15427,6 +15625,7 @@ mod windows_library_integration_tests {
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
                 entry_position: 0,
+                sort: Default::default(),
             }),
         )
         .expect("start exact duplicate playlist queue");

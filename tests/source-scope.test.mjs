@@ -43,3 +43,21 @@ test('the top bar shows the switch only when it applies and every list reloads o
   assert.match(app, /\{#if showSourceScopeSwitch\}[\s\S]*<SourceScopeSwitch/);
   assert.match(app, /settings_set_library_source_scope[\s\S]{0,200}libraryListRevision \+= 1/);
 });
+
+test('a scope switch reloads the lists but leaves the play queue as it is', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const change = app.match(/async function changeLibrarySourceScope[\s\S]*?\n  \}\n/)?.[0] ?? '';
+  assert.match(change, /playlistListRevision \+= 1/);
+  assert.doesNotMatch(change, /playbackQueueResetKey/);
+});
+
+test('every list builds its queue from its own page query, so the queue holds exactly the rows it shows', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const artist = app.match(/async function playArtistTrack[\s\S]*?\n  \}\n/)?.[0] ?? '';
+  assert.match(artist, /kind: 'artist'/);
+  assert.match(artist, /artistNames: \[\.\.\.selectedArtist\.artistNames\]/);
+  const playlist = app.match(/async function playPlaylistEntry[\s\S]*?\n  \}\n/)?.[0] ?? '';
+  assert.match(playlist, /kind: 'playlist'[\s\S]*sort,/);
+  const entries = readFileSync(new URL('../src/lib/PlaylistEntryList.svelte', import.meta.url), 'utf8');
+  assert.match(entries, /onPlay\(entry, playlistId, sort\)/);
+});

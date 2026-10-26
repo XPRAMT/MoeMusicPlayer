@@ -58,7 +58,7 @@ import { PagedListController } from './track-list-data.js';
     resetKey: number;
     playbackReady: boolean;
     isSendingPlaybackCommand: boolean;
-    onPlay: (entry: PlaylistEntrySummary, playlistId: string) => void;
+    onPlay: (entry: PlaylistEntrySummary, playlistId: string, sort: PlaylistListSort) => void;
     onTotalCount?: (count: number | null) => void;
     fetchPage?: (request: { playlistId: string; sort: PlaylistListSort; offset: number; limit: number }) => Promise<PlaylistPage>;
     columns?: TrackListColumnPreference[];
@@ -249,7 +249,7 @@ import { PagedListController } from './track-list-data.js';
 
   function playEntry(entry: PlaylistEntrySummary): void {
     if (!entry.trackId || !entry.hasEnabledMapping || !playbackReady) return;
-    onPlay(entry, playlistId);
+    onPlay(entry, playlistId, sort);
   }
 </script>
 

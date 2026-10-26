@@ -1952,36 +1952,9 @@ impl Database {
         Ok(())
     }
 
-    /// Which of these tracks the current source scope shows. A track that no source maps at all (an opened external
-    /// file) counts as local.
-    pub fn track_ids_in_source_scope(
-        &self,
-        track_ids: &[TrackId],
-    ) -> Result<std::collections::HashSet<TrackId>, DatabaseError> {
-        if track_ids.is_empty() {
-            return Ok(std::collections::HashSet::new());
-        }
-        let ids = track_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let ids_json = serde_json::to_string(&ids)
-            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
-        let connection = self.lock()?;
-        let mut statement = connection.prepare(
-            "SELECT j.value FROM json_each(?1) j
-             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) AND m.missing_since_utc_ms IS NULL
-                           WHERE m.track_id=j.value)
-                OR (NOT EXISTS (SELECT 1 FROM source_mappings m WHERE m.track_id=j.value)
-                    AND moe_in_scope('local', 'local'))",
-        )?;
-        let rows = statement.query_map([ids_json], |row| row.get::<_, String>(0))?;
-        let mut visible = std::collections::HashSet::new();
-        for row in rows {
-            visible.insert(parse_track_id(&row?)?);
-        }
-        Ok(visible)
-    }
-
-    /// Narrow every list, count and grouping to local or remote sources (or both). Playback still resolves all sources.
+    /// Narrow every list, count and grouping to local or remote sources (or both), and with them every playback queue
+    /// built from a list (it holds exactly the list's rows). Playback still resolves all sources. The scope belongs to
+    /// this handle: another `Database` opened on the same file keeps its own.
     pub fn set_source_scope(&self, scope: LibrarySourceScope) {
         self.source_scope.store(scope as u8, std::sync::atomic::Ordering::Relaxed);
     }
@@ -4387,13 +4360,7 @@ impl Database {
         let (title_filter, artist_filter, album_filter) =
             field_filter_values(request.field_filter.as_ref())?;
         let order_by = tracks_order_by_sql(request.sort);
-        // Everything after the select list (FROM and the filters) is shared with the page query.
-        let from_where = TRACKS_PAGE_SELECT_SQL
-            .find("\n FROM tracks t")
-            .map(|start| &TRACKS_PAGE_SELECT_SQL[start..])
-            .ok_or_else(|| {
-                DatabaseError::CorruptData("track page query changed shape".to_owned())
-            })?;
+        let from_where = tracks_page_from_where()?;
         let sql = format!(
             "SELECT position FROM (
                  SELECT t.track_id AS id, ROW_NUMBER() OVER (ORDER BY {order_by}) - 1 AS position{from_where}
@@ -4473,23 +4440,17 @@ impl Database {
         query_alternates: &[String],
         artist_names: &[String],
     ) -> Result<Page<TrackSummary>, DatabaseError> {
-        let artist_names = artist_names
-            .iter()
-            .map(|name| name.trim())
-            .collect::<Vec<_>>();
-        if artist_names.is_empty() {
+        let Some(artist_json) = artist_names_json(artist_names)? else {
             return Ok(Page {
                 items: Vec::new(),
                 offset: request.offset,
                 limit: query_limit(request.limit),
                 total_count: 0,
             });
-        }
+        };
         let connection = self.lock()?;
         let search = request.query.filter(|text| !text.trim().is_empty());
         let query_json = search_terms_json(search.as_deref(), query_alternates)?;
-        let artist_json = serde_json::to_string(&artist_names)
-            .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let total_count: i64 = connection.query_row(
             &format!("SELECT COUNT(*) FROM ({ARTIST_TRACKS_PREFIX_SQL})"),
             params![query_json, artist_json],
@@ -4599,7 +4560,8 @@ impl Database {
         self.list_track_ids_filtered_with_alternates(query, &[], field_filter, sort)
     }
 
-    /// Return stable IDs using the same union of query terms, field filter, and sort as library pages.
+    /// Return stable IDs using the same union of query terms, field filter, and sort as library pages: the FROM and
+    /// WHERE of `list_tracks_page` itself, so the playback queue holds exactly the rows the page shows.
     pub fn list_track_ids_filtered_with_alternates(
         &self,
         query: Option<&str>,
@@ -4612,28 +4574,21 @@ impl Database {
         let query_json = search_terms_json(query, query_alternates)?;
         let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter)?;
         let sql = format!(
-            "SELECT t.track_id
-             FROM tracks t
-             WHERE EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) AND m.missing_since_utc_ms IS NULL WHERE m.track_id=t.track_id)
-               AND (?1 IS NULL OR EXISTS (
-                    SELECT 1 FROM json_each(?1) term
-                    WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) LIKE '%' || term.value || '%' COLLATE NOCASE
-                       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) LIKE '%' || term.value || '%' COLLATE NOCASE
-                       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) LIKE '%' || term.value || '%' COLLATE NOCASE
-                       OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album_artist'), t.album_artist) LIKE '%' || term.value || '%' COLLATE NOCASE
-               ))
-               AND (?2 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title) = ?2 COLLATE BINARY)
-               AND (?3 IS NULL OR EXISTS (SELECT 1 FROM json_each(?3) requested_artist
-                   WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, '') = requested_artist.value COLLATE BINARY
-                      OR instr('|' || replace(replace(replace(replace(replace(replace(replace(replace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist, ''), char(92), '|'), '/', '|'), ';', '|'), ',', '|'), '&', '|'), ' | ', '|'), '| ', '|'), ' |', '|') || '|', '|' || requested_artist.value || '|') > 0))
-               AND (?4 IS NULL OR COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album) IN (SELECT value FROM json_each(?4)))
-             ORDER BY {}",
-            tracks_order_by_sql(sort)
+            "SELECT t.track_id{from_where} ORDER BY {order_by}",
+            from_where = tracks_page_from_where()?,
+            order_by = tracks_order_by_sql(sort)
         );
         let mut statement = connection.prepare(&sql)?;
+        // ?2 and ?3 (limit and offset of the page query) are not used here.
         let rows = statement.query_map(
-            params![query_json, title_filter, artist_filter, album_filter],
+            params![
+                query_json,
+                0_i64,
+                0_i64,
+                title_filter,
+                artist_filter,
+                album_filter
+            ],
             |row| row.get::<_, String>(0),
         )?;
         let ids = rows
@@ -4645,60 +4600,60 @@ impl Database {
         Ok(ids)
     }
 
-    /// Return playable playlist Track IDs with their original entry positions.
-    /// Duplicate Track IDs remain separate queue entries; unmatched and disabled
-    /// entries are omitted while the rest of the playlist remains ordered.
+    /// Every track id of an artist detail list, in exactly the order its page shows: the same membership, search and
+    /// ordering as `list_tracks_page_for_artists`.
+    pub fn list_artist_track_ids(
+        &self,
+        query: Option<&str>,
+        query_alternates: &[String],
+        artist_names: &[String],
+        sort: TrackListSort,
+    ) -> Result<Vec<TrackId>, DatabaseError> {
+        let Some(artist_json) = artist_names_json(artist_names)? else {
+            return Ok(Vec::new());
+        };
+        let connection = self.lock()?;
+        let query = query.filter(|text| !text.trim().is_empty());
+        let query_json = search_terms_json(query, query_alternates)?;
+        let sql = format!(
+            "{ARTIST_TRACKS_PREFIX_SQL} ORDER BY {}",
+            tracks_order_by_sql(sort)
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![query_json, artist_json], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.map(|row| parse_track_id(&row?)).collect()
+    }
+
+    /// The playable entries of a playlist page, in the order that page shows them with `sort`: the rows of
+    /// `get_playlist_page_sorted` (the same entry resolution, source scope and missing-file rule) that have a track with
+    /// an enabled mapping, each with its original entry position. Duplicate Track IDs remain separate queue entries.
     pub fn playlist_track_ids(
         &self,
         playlist_id: PlaylistId,
+        sort: PlaylistListSort,
     ) -> Result<Option<Vec<(u64, TrackId)>>, DatabaseError> {
-        let mut connection = self.lock()?;
-        let exists: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM playlists WHERE playlist_id=?1)",
-            [playlist_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Ok(None);
+        let mut entries = Vec::new();
+        let mut offset = 0_u64;
+        loop {
+            let Some(page) =
+                self.get_playlist_page_sorted(playlist_id, offset, MAX_PAGE_SIZE, sort)?
+            else {
+                return Ok(None);
+            };
+            let fetched = page.items.len() as u64;
+            entries.extend(page.items.into_iter().filter_map(|item| {
+                item.track_id
+                    .filter(|_| item.has_enabled_mapping)
+                    .map(|track_id| (item.position, track_id))
+            }));
+            offset += fetched;
+            if fetched == 0 || offset >= page.total_count {
+                break;
+            }
         }
-        reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
-        let mut statement = connection.prepare(
-            "WITH resolved_entries AS (
-                 SELECT pe.position,
-                        CASE WHEN pe.track_id IS NOT NULL THEN pe.track_id
-                             ELSE (
-                                 SELECT CASE WHEN COUNT(DISTINCT sm.track_id)=1 THEN MIN(sm.track_id) END
-                                 FROM source_mappings sm
-                                 WHERE sm.locator_kind=pe.locator_kind
-                                   AND sm.locator_encoding=pe.locator_encoding
-                                   AND sm.locator_data=pe.locator_data
-                             )
-                        END AS track_id
-                 FROM playlist_entries pe
-                 WHERE pe.playlist_id=?1
-             )
-             SELECT e.position, e.track_id
-             FROM resolved_entries e
-             WHERE e.track_id IS NOT NULL
-               AND EXISTS (
-                   SELECT 1 FROM source_mappings m
-                   JOIN library_roots r ON r.source_id=m.source_id
-                   WHERE m.track_id=e.track_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) AND m.missing_since_utc_ms IS NULL
-               )
-             ORDER BY e.position",
-        )?;
-        let rows = statement.query_map([playlist_id.to_string()], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.map(|row| {
-            let (position, raw_id) = row?;
-            let position = u64::try_from(position).map_err(|_| {
-                DatabaseError::CorruptData("negative playlist entry position".to_owned())
-            })?;
-            Ok((position, parse_track_id(&raw_id)?))
-        })
-        .collect::<Result<Vec<_>, DatabaseError>>()
-        .map(Some)
+        Ok(Some(entries))
     }
 
     pub fn count_tracks(&self, query: Option<&str>) -> Result<u64, DatabaseError> {
@@ -6625,6 +6580,29 @@ fn database_wal_bytes(path: &Option<std::path::PathBuf>) -> u64 {
     let mut wal = path.as_os_str().to_os_string();
     wal.push("-wal");
     std::fs::metadata(wal).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Everything after the select list of the library page query (FROM and every visibility filter), shared by the queries
+/// that must list exactly the page's rows (its position lookup and the playback queue).
+fn tracks_page_from_where() -> Result<&'static str, DatabaseError> {
+    TRACKS_PAGE_SELECT_SQL
+        .find("\n FROM tracks t")
+        .map(|start| &TRACKS_PAGE_SELECT_SQL[start..])
+        .ok_or_else(|| DatabaseError::CorruptData("track page query changed shape".to_owned()))
+}
+
+/// The artist names of an artist detail list as the JSON its query reads (`None` when there are none).
+fn artist_names_json(artist_names: &[String]) -> Result<Option<String>, DatabaseError> {
+    let artist_names = artist_names
+        .iter()
+        .map(|name| name.trim())
+        .collect::<Vec<_>>();
+    if artist_names.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(&artist_names)
+        .map(Some)
+        .map_err(|error| DatabaseError::CorruptData(error.to_string()))
 }
 
 fn count_tracks_in(
@@ -11413,7 +11391,7 @@ mod tests {
     }
 
     #[test]
-    fn the_source_scope_narrows_playlists_and_tells_which_queue_tracks_are_visible() {
+    fn the_source_scope_narrows_playlists_and_their_queue_entries() {
         use crate::LibrarySourceScope;
         let mut db = Database::open_in_memory().expect("database");
         let nas = add_root(&db, MediaSourceKind::Remote, "NAS / Music");
@@ -11461,20 +11439,216 @@ mod tests {
         let (total, titles) = page_titles(&db);
         assert_eq!(total, 3, "{titles:?}");
         assert!(titles.iter().all(|title| title.starts_with("l title")), "{titles:?}");
-        // Queue rows: the same tracks are the visible ones, and an unknown (external) track counts as local.
-        let ids: Vec<_> = all_tracks.iter().map(|track| track.id).collect();
-        let stranger = TrackId::new();
-        let mut with_stranger = ids.clone();
-        with_stranger.push(stranger);
-        let visible = db.track_ids_in_source_scope(&with_stranger).expect("visible");
-        assert_eq!(visible.len(), 4);
-        assert!(visible.contains(&stranger));
-        db.set_source_scope(LibrarySourceScope::Remote);
-        let visible = db.track_ids_in_source_scope(&with_stranger).expect("visible");
-        assert_eq!(visible.len(), 2);
-        assert!(!visible.contains(&stranger));
+        // The queue of the playlist holds exactly the page's rows, in its order.
+        for scope in [
+            LibrarySourceScope::Local,
+            LibrarySourceScope::Remote,
+            LibrarySourceScope::All,
+        ] {
+            db.set_source_scope(scope);
+            let page = db
+                .get_playlist_page_sorted(playlist.id, 0, 100, PlaylistListSort::default())
+                .expect("page")
+                .expect("playlist");
+            let page_ids: Vec<_> = page
+                .items
+                .iter()
+                .map(|item| (item.position, item.track_id.expect("matched")))
+                .collect();
+            let queue = db
+                .playlist_track_ids(playlist.id, PlaylistListSort::default())
+                .expect("queue")
+                .expect("playlist");
+            assert_eq!(queue, page_ids, "{scope:?}");
+        }
     }
 
+    /// The hard rule: a queue built from a list holds exactly the rows that list's page shows, in its order: the
+    /// source scope, the search, missing files and disabled sources hide the same songs from both.
+    #[test]
+    fn every_list_queue_holds_exactly_the_rows_its_page_shows() {
+        use crate::LibrarySourceScope;
+        let mut db = Database::open_in_memory().expect("database");
+        let nas = add_root(&db, MediaSourceKind::Remote, "NAS / Music");
+        let local = add_root(&db, MediaSourceKind::WindowsFilesystem, "Music");
+        let off = add_root(&db, MediaSourceKind::WindowsFilesystem, "Off");
+        let song = |root: &LibraryRoot, item: &str, title: &str, artist: &str, number: u32| {
+            let mut track = record(root, item, item, title, 10, 1_000);
+            let metadata = track.metadata.as_mut().expect("metadata");
+            metadata.artist = Some(artist.to_owned());
+            metadata.album = Some("Alb".to_owned());
+            metadata.track_number = Some(number);
+            track
+        };
+        let remote_songs = vec![
+            song(&nas, "n0", "Needle Remote", "A", 1),
+            song(&nas, "n1", "Other Remote", "A & B", 2),
+        ];
+        let local_songs = vec![
+            song(&local, "l0", "Needle Local", "A", 3),
+            song(&local, "l1", "Needle Gone", "A", 4),
+            song(&local, "l2", "Plain Local", "B & A", 5),
+        ];
+        let off_songs = vec![song(&off, "d0", "Needle Disabled", "A", 6)];
+        apply(
+            &mut db,
+            &nas,
+            SourceScanState::Complete,
+            &remote_songs,
+            &remote_songs,
+            1,
+        );
+        apply(
+            &mut db,
+            &local,
+            SourceScanState::Complete,
+            &local_songs,
+            &local_songs,
+            1,
+        );
+        apply(
+            &mut db,
+            &off,
+            SourceScanState::Complete,
+            &off_songs,
+            &off_songs,
+            1,
+        );
+        let mut playlist = Playlist::new("everything");
+        playlist.entries = remote_songs
+            .iter()
+            .chain(&local_songs)
+            .chain(&off_songs)
+            .map(|track| PlaylistEntry {
+                track_id: db
+                    .resolve_track_id_for_locator(&track.locator)
+                    .expect("resolve"),
+                locator: track.locator.clone(),
+                title: None,
+                duration_ms: None,
+            })
+            .chain(std::iter::once(PlaylistEntry {
+                track_id: None,
+                locator: MediaLocator::FileSystem(PathBuf::from(r"C:\Music\not-indexed.flac")),
+                title: None,
+                duration_ms: None,
+            }))
+            .collect();
+        db.save_playlist(&playlist).expect("save playlist");
+        // "Needle Gone" disappears from disk; the "Off" source is switched off.
+        let kept = [local_songs[0].clone(), local_songs[2].clone()];
+        apply(&mut db, &local, SourceScanState::Complete, &kept, &[], 2);
+        let mut off_state = off.clone();
+        off_state.enabled = false;
+        db.save_library_root(&off_state).expect("disable source");
+
+        let sort = TrackListSort {
+            field: TrackSortField::Title,
+            direction: TrackSortDirection::Desc,
+        };
+        let artists = vec!["A".to_owned()];
+        let albums = vec!["Alb".to_owned()];
+        let playlist_sort = PlaylistListSort {
+            field: PlaylistSortField::Title,
+            direction: PlaylistSortDirection::Desc,
+        };
+        let ids = |items: Vec<player_core::TrackSummary>| {
+            items.into_iter().map(|track| track.id).collect::<Vec<_>>()
+        };
+        for scope in [
+            LibrarySourceScope::Local,
+            LibrarySourceScope::Remote,
+            LibrarySourceScope::All,
+        ] {
+            db.set_source_scope(scope);
+            for query in [None, Some("needle")] {
+                let request = ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: query.map(str::to_owned),
+                    field_filter: None,
+                    sort,
+                };
+                let library_page = ids(db
+                    .list_tracks_page(request.clone())
+                    .expect("library page")
+                    .items);
+                let library_queue = db
+                    .list_track_ids_filtered_with_alternates(query, &[], None, sort)
+                    .expect("library queue");
+                assert_eq!(library_queue, library_page, "library {scope:?} {query:?}");
+                let artist_page = ids(db
+                    .list_tracks_page_for_artists(request, &[], &artists)
+                    .expect("artist page")
+                    .items);
+                let artist_queue = db
+                    .list_artist_track_ids(query, &[], &artists, sort)
+                    .expect("artist queue");
+                assert_eq!(artist_queue, artist_page, "artist {scope:?} {query:?}");
+            }
+            let album_page = ids(db
+                .list_album_tracks_page_with_index_sort(&albums, None, None, 0, 100)
+                .expect("album page")
+                .items);
+            assert_eq!(
+                db.list_album_track_ids(&albums, None, None)
+                    .expect("album queue"),
+                album_page,
+                "album {scope:?}"
+            );
+            let playlist_page: Vec<_> = db
+                .get_playlist_page_sorted(playlist.id, 0, 100, playlist_sort)
+                .expect("playlist page")
+                .expect("playlist")
+                .items
+                .into_iter()
+                .filter(|item| item.has_enabled_mapping)
+                .map(|item| (item.position, item.track_id.expect("matched")))
+                .collect();
+            let playlist_queue = db
+                .playlist_track_ids(playlist.id, playlist_sort)
+                .expect("playlist queue")
+                .expect("playlist");
+            assert_eq!(playlist_queue, playlist_page, "playlist {scope:?}");
+        }
+        // The case the user reported: local mode never queues a cloud song (nor a missing or switched-off one).
+        db.set_source_scope(LibrarySourceScope::Local);
+        let titles = |track_ids: Vec<TrackId>| {
+            track_ids
+                .into_iter()
+                .map(|id| {
+                    db.get_track_summary(id)
+                        .expect("summary")
+                        .expect("track")
+                        .title
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles(
+                db.list_track_ids_filtered_with_alternates(Some("needle"), &[], None, sort)
+                    .expect("queue")
+            ),
+            ["Needle Local"]
+        );
+        assert_eq!(
+            titles(db.list_album_track_ids(&albums, None, None).expect("queue")),
+            ["Needle Local", "Plain Local"]
+        );
+        assert_eq!(
+            titles(
+                db.list_artist_track_ids(None, &[], &artists, sort)
+                    .expect("queue")
+            ),
+            ["Plain Local", "Needle Local"]
+        );
+        db.set_source_scope(LibrarySourceScope::Remote);
+        assert_eq!(
+            titles(db.list_album_track_ids(&albums, None, None).expect("queue")),
+            ["Needle Remote", "Other Remote"]
+        );
+    }
     #[test]
     fn tracks_know_their_source_and_sort_and_group_by_it() {
         let mut db = Database::open_in_memory().expect("database");
@@ -12824,7 +12998,7 @@ mod tests {
         db.save_playlist(&playlist)
             .expect("save duplicate playlist");
         let queue = db
-            .playlist_track_ids(playlist.id)
+            .playlist_track_ids(playlist.id, PlaylistListSort::default())
             .expect("playlist queue query")
             .expect("playlist exists");
         assert_eq!(queue.len(), 3);
@@ -12833,7 +13007,7 @@ mod tests {
         assert_eq!(queue[1].0, 2);
         assert_eq!(queue[2].0, 3);
         assert!(db
-            .playlist_track_ids(PlaylistId::new())
+            .playlist_track_ids(PlaylistId::new(), PlaylistListSort::default())
             .expect("unknown playlist query")
             .is_none());
     }
@@ -13448,7 +13622,7 @@ mod tests {
             assert_eq!(before.entries[1].track_id, Some(preassigned_track_id));
 
             assert_eq!(
-                db.playlist_track_ids(playlist.id)
+                db.playlist_track_ids(playlist.id, PlaylistListSort::default())
                     .expect("repair queue items")
                     .expect("playlist exists"),
                 vec![(0, indexed_track_id), (1, preassigned_track_id)]

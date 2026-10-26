@@ -78,6 +78,9 @@ pub(crate) enum PlaybackAction {
     SelectTrack {
         track_id: String,
         source: Option<PlaybackQueueSource>,
+        /// The source scope the lists show now: the queue a list builds holds exactly the rows its page shows, and
+        /// this actor reads the library through its own database handle, whose scope is set from this.
+        scope: player_db::LibrarySourceScope,
     },
     #[allow(dead_code)]
     // Explicit play is kept for native transport restoration and future callers.
@@ -366,8 +369,16 @@ impl PlaybackAction {
         )
     }
 
-    pub(crate) fn select_track(track_id: String, source: Option<PlaybackQueueSource>) -> Self {
-        Self::SelectTrack { track_id, source }
+    pub(crate) fn select_track(
+        track_id: String,
+        source: Option<PlaybackQueueSource>,
+        scope: player_db::LibrarySourceScope,
+    ) -> Self {
+        Self::SelectTrack {
+            track_id,
+            source,
+            scope,
+        }
     }
 }
 
@@ -585,9 +596,15 @@ impl AndroidActor {
         action: PlaybackAction,
     ) -> Result<PlaybackSnapshot, String> {
         match action {
-            PlaybackAction::SelectTrack { track_id, source } => self
-                .select_track(request_id, &track_id, source)
-                .map_err(|error| self.start_error(error)),
+            PlaybackAction::SelectTrack {
+                track_id,
+                source,
+                scope,
+            } => {
+                self.database.set_source_scope(scope);
+                self.select_track(request_id, &track_id, source)
+                    .map_err(|error| self.start_error(error))
+            }
             PlaybackAction::Play => {
                 if self.native.track_id.is_none() || self.native.media_key.is_none() {
                     let logical_track_id = self

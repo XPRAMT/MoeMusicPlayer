@@ -71,6 +71,7 @@
     type NowPlayingLayout,
     type NowPlayingAppearancePreferences,
     type PlaylistEntrySummary,
+    type PlaylistListSort,
     type PlaylistSummary,
     type PlaybackQueuePageItem,
     type PlaybackSnapshot,
@@ -736,7 +737,7 @@
       // Every list, count and grouping is read again under the new scope.
       libraryListRevision += 1;
       playlistListRevision += 1;
-      playbackQueueResetKey += 1;
+      // The play queue stays as it is: it was built from a list under the scope of its time (ADR 0037).
     } catch (error) {
       librarySourceScope = previous;
       console.warn('source scope', error);
@@ -3255,12 +3256,13 @@
     activeView = 'playlists';
   }
 
-  async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string): Promise<void> {
+  async function playPlaylistEntry(entry: PlaylistEntrySummary, playlistId: string, sort: PlaylistListSort): Promise<void> {
     if (!entry.trackId || !entry.hasEnabledMapping || !acceptsTrackChoice({ playbackReady, isSeeking })) return;
     const queueSource: PlaybackQueueSource = {
       kind: 'playlist',
       playlistId,
       entryPosition: entry.position,
+      sort,
     };
     await sendPlaybackCommand(
       () => invokeCommand('playback_play', { trackId: entry.trackId!, queueSource }),
@@ -3694,10 +3696,11 @@
 
   async function playArtistTrack(track: TrackSummary): Promise<void> {
     if (!selectedArtist || !acceptsTrackChoice({ playbackReady, isSeeking })) return;
+    // The artist page's own query (`fetchArtistPage`), so the queue holds exactly the rows it shows.
     const queueSource: PlaybackQueueSource = {
-      kind: 'library',
+      kind: 'artist',
+      artistNames: [...selectedArtist.artistNames],
       query: null,
-      fieldFilter: { field: 'artist', value: selectedArtist.artistNames.join('|') },
       sort: librarySort,
     };
     await sendPlaybackCommand(
