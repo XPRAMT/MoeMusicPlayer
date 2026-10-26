@@ -61,6 +61,7 @@ mod sleep_timer;
 mod taskbar_lyrics;
 #[cfg(target_os = "windows")]
 mod floating_lyrics;
+mod fonts;
 #[cfg(target_os = "windows")]
 mod native_lyrics;
 mod track_details;
@@ -7409,6 +7410,32 @@ fn settings_get_language(state: State<'_, AppState>) -> Result<settings::UiLangu
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn settings_get_interface_font(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.interface_font_family)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the main interface's font family (ADR 0042); `None` or empty: the default font.
+#[tauri::command]
+fn settings_set_interface_font(
+    state: State<'_, AppState>,
+    family: Option<String>,
+) -> Result<Option<String>, String> {
+    let family = settings::normalize_font_family(family.as_deref());
+    state
+        .settings
+        .update(|stored| {
+            stored.interface_font_family = family;
+            Ok(())
+        })
+        .map(|stored| stored.interface_font_family)
+        .map_err(|error| error.to_string())
+}
+
 /// Persist the interface language and tell every window (each reloads itself to apply it).
 #[tauri::command]
 fn settings_set_language(
@@ -7613,8 +7640,13 @@ async fn floating_lyrics_android(
     }
     #[cfg(target_os = "android")]
     {
-        let payload = payload.unwrap_or_else(|| serde_json::json!({}));
+        let mut payload = payload.unwrap_or_else(|| serde_json::json!({}));
         return tauri::async_runtime::spawn_blocking(move || {
+            if command == "floatingLyricsUpdate" {
+                // The overlay draws the chosen font from its files (ADR 0042).
+                let state = app.state::<AppState>();
+                fonts::attach_floating_font_faces(&state, &mut payload);
+            }
             app.media_index()
                 .floating_lyrics(&command, payload)
                 .map_err(|error| error.to_string())
@@ -12726,6 +12758,10 @@ pub fn run() {
             settings_apply_output_preset,
             settings_get_language,
             settings_set_language,
+            settings_get_interface_font,
+            settings_set_interface_font,
+            fonts::fonts_list,
+            fonts::fonts_resolve,
             settings_get_taskbar_lyrics,
             settings_set_taskbar_lyrics,
             settings_get_floating_lyrics,

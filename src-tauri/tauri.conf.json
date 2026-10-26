@@ -24,7 +24,13 @@
         "shadow": true,
         "visible": false
       }
-    ]
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
   },
   "bundle": {
     "active": false,

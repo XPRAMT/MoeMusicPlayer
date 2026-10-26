@@ -48,6 +48,17 @@ pub struct AllFilesAccessStatus {
     pub granted: bool,
 }
 
+/// System font files and the system region (Android; ADR 0042).
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemFonts {
+    /// ISO 3166 region of the system locale; empty when unknown.
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
 /// The "read images" permission some systems want before they hand over the wallpaper.
 #[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,6 +204,13 @@ impl<R: Runtime> MediaIndex<R> {
     #[cfg(target_os = "android")]
     pub fn floating_lyrics(&self, command: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
         self.platform.floating_lyrics(command, payload)
+    }
+
+    /// The system font files (`SystemFonts.getAvailableFonts()`, API 29+) and the system region
+    /// (`Locale.getDefault().getCountry()`), for the font pickers (ADR 0042).
+    #[cfg(target_os = "android")]
+    pub fn system_fonts(&self) -> Result<SystemFonts> {
+        self.platform.system_fonts()
     }
 
     /// Open the system All files access page for this app.

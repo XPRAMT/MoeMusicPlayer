@@ -20,6 +20,7 @@ player-db = { path = "../crates/player-db" }
 player-zh = { path = "../crates/player-zh" }
 player-dsd = { path = "../crates/player-dsd" }
 player-formats = { path = "../crates/player-formats" }
+player-fonts = { path = "../crates/player-fonts" }
 player-tags = { path = "../crates/player-tags" }
 player-wavpack = { path = "../crates/player-wavpack" }
 player-remote = { path = "../crates/player-remote" }
@@ -35,7 +36,7 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tauri = { version = "2.12.0", features = [] }
+tauri = { version = "2.12.0", features = ["protocol-asset"] }
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 walkdir = "2.5.0"

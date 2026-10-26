@@ -178,7 +178,7 @@ impl Default for ThemeSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", from = "RawLyricsPreferences")]
 pub struct LyricsPreferences {
     pub show_translation: bool,
@@ -192,6 +192,8 @@ pub struct LyricsPreferences {
     pub auxiliary_scale_percent: u8,
     /// Weight of the original text, 100–1000 (translation and romanization are 50 lighter).
     pub font_weight: u16,
+    /// Font family of the playing page's lyrics (ADR 0042); `None`: the default font.
+    pub font_family: Option<String>,
     pub line_gap_px: u8,
     pub text_effect: LyricsTextEffect,
     /// Display-only Simplified-to-Traditional conversion. Not written into lyric files.
@@ -211,6 +213,7 @@ struct RawLyricsPreferences {
     auxiliary_scale_percent: Option<u8>,
     auxiliary_font_size_px: Option<u8>,
     font_weight: Option<u16>,
+    font_family: Option<serde_json::Value>,
     line_gap_px: Option<u8>,
     text_effect: Option<LyricsTextEffect>,
     simplified_to_traditional: Option<bool>,
@@ -232,6 +235,28 @@ pub const LYRICS_FONT_WEIGHT_RANGE: (u16, u16) = (100, 1000);
 
 pub fn default_lyrics_font_weight() -> u16 {
     500
+}
+
+/// Longest stored font family name; a longer one is treated as none.
+pub const FONT_FAMILY_MAX_CHARS: usize = 256;
+
+/// A stored font family (ADR 0042): only the family name, trimmed; empty or too long is `None`, the default font.
+/// A family that is not installed is kept (each place falls back to the default font when it draws).
+pub fn normalize_font_family(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    (!value.is_empty() && value.chars().count() <= FONT_FAMILY_MAX_CHARS).then(|| value.to_owned())
+}
+
+/// Anything but a usable string is the default font.
+fn lenient_font_family(value: Option<&serde_json::Value>) -> Option<String> {
+    normalize_font_family(value.and_then(serde_json::Value::as_str))
+}
+
+fn deserialize_font_family<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(lenient_font_family(value.as_ref()))
 }
 
 impl From<RawLyricsPreferences> for LyricsPreferences {
@@ -261,6 +286,7 @@ impl From<RawLyricsPreferences> for LyricsPreferences {
                 .font_weight
                 .unwrap_or(defaults.font_weight)
                 .clamp(LYRICS_FONT_WEIGHT_RANGE.0, LYRICS_FONT_WEIGHT_RANGE.1),
+            font_family: lenient_font_family(raw.font_family.as_ref()),
             line_gap_px: raw.line_gap_px.unwrap_or(defaults.line_gap_px),
             text_effect: raw.text_effect.unwrap_or(defaults.text_effect),
             simplified_to_traditional: raw
@@ -288,6 +314,7 @@ impl Default for LyricsPreferences {
             primary_font_size_px: 20,
             auxiliary_scale_percent: default_auxiliary_scale_percent(),
             font_weight: default_lyrics_font_weight(),
+            font_family: None,
             line_gap_px: default_line_gap_px(),
             text_effect: default_lyrics_text_effect(),
             simplified_to_traditional: default_simplified_to_traditional(),
@@ -1033,6 +1060,9 @@ pub struct TaskbarLyricsSettings {
     /// Weight of the original text, 100–1000; translation rows are 50 lighter. Files without it use 500.
     #[serde(default = "default_lyrics_font_weight")]
     pub font_weight: u16,
+    /// Font family (ADR 0042); `None`: the default font. Saved apart per lyrics tab.
+    #[serde(default, deserialize_with = "deserialize_font_family")]
+    pub font_family: Option<String>,
     /// Line animation; older files without it keep the one-line-at-a-time look.
     #[serde(default)]
     pub animation: LyricsAnimation,
@@ -1084,6 +1114,7 @@ impl TaskbarLyricsSettings {
         self.font_weight = self
             .font_weight
             .clamp(LYRICS_FONT_WEIGHT_RANGE.0, LYRICS_FONT_WEIGHT_RANGE.1);
+        self.font_family = normalize_font_family(self.font_family.as_deref());
         self.translation_scale_percent = self.translation_scale_percent.clamp(
             Self::TRANSLATION_SCALE_RANGE_PERCENT.0,
             Self::TRANSLATION_SCALE_RANGE_PERCENT.1,
@@ -1121,6 +1152,7 @@ impl Default for TaskbarLyricsSettings {
             main_opacity_percent: default_main_opacity_percent(),
             secondary_opacity_percent: default_secondary_opacity_percent(),
             font_weight: default_lyrics_font_weight(),
+            font_family: None,
             animation: LyricsAnimation::None,
             hide_when_paused: default_hide_when_paused(),
         }
@@ -1165,6 +1197,9 @@ pub struct FloatingLyricsSettings {
     /// Weight of the original text (see `TaskbarLyricsSettings`), saved apart from the taskbar lyrics'.
     #[serde(default = "default_lyrics_font_weight")]
     pub font_weight: u16,
+    /// Font family (see `TaskbarLyricsSettings`), saved apart from the taskbar lyrics'.
+    #[serde(default, deserialize_with = "deserialize_font_family")]
+    pub font_family: Option<String>,
     /// Panel width: CSS px on Windows, dp on Android; narrowed to the screen when wider.
     #[serde(default = "default_floating_lyrics_width_px")]
     pub width_px: u16,
@@ -1200,6 +1235,7 @@ impl FloatingLyricsSettings {
             main_opacity_percent: self.main_opacity_percent,
             secondary_opacity_percent: self.secondary_opacity_percent,
             font_weight: self.font_weight,
+            font_family: self.font_family.take(),
             ..TaskbarLyricsSettings::default()
         }
         .normalized();
@@ -1207,6 +1243,7 @@ impl FloatingLyricsSettings {
         self.main_opacity_percent = look.main_opacity_percent;
         self.secondary_opacity_percent = look.secondary_opacity_percent;
         self.font_weight = look.font_weight;
+        self.font_family = look.font_family;
         self.width_px = self
             .width_px
             .clamp(Self::WIDTH_RANGE_PX.0, Self::WIDTH_RANGE_PX.1);
@@ -1238,6 +1275,7 @@ impl Default for FloatingLyricsSettings {
             main_opacity_percent: default_main_opacity_percent(),
             secondary_opacity_percent: default_secondary_opacity_percent(),
             font_weight: default_lyrics_font_weight(),
+            font_family: None,
             width_px: Self::DEFAULT_WIDTH_PX,
             landscape_width_px: Self::DEFAULT_WIDTH_PX,
             animation: LyricsAnimation::None,
@@ -1293,6 +1331,7 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
             .map_or(defaults.font_weight, |value| {
                 value.min(u64::from(u16::MAX)) as u16
             }),
+        font_family: lenient_font_family(object.get("fontFamily")),
         width_px: field("widthPx")
             .and_then(|value| value.as_u64())
             .map_or(defaults.width_px, |value| {
@@ -1363,6 +1402,7 @@ fn lenient_taskbar_lyrics(value: Option<serde_json::Value>) -> TaskbarLyricsSett
             .map_or(defaults.font_weight, |value| {
                 value.min(u64::from(u16::MAX)) as u16
             }),
+        font_family: lenient_font_family(object.get("fontFamily")),
         animation: field("animation")
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or(defaults.animation),
@@ -2197,6 +2237,9 @@ pub struct AppSettings {
     /// Interface language (Settings → main).
     #[serde(default)]
     pub language: UiLanguage,
+    /// Font family of the main interface (Settings → main, ADR 0042); `None`: the default font.
+    #[serde(default)]
+    pub interface_font_family: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -2236,6 +2279,7 @@ impl Default for AppSettings {
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             floating_lyrics: FloatingLyricsSettings::default(),
             language: UiLanguage::default(),
+            interface_font_family: None,
         }
     }
 }
@@ -2721,6 +2765,7 @@ struct RawSettings {
     taskbar_lyrics: Option<serde_json::Value>,
     floating_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
+    interface_font_family: Option<serde_json::Value>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2799,6 +2844,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         floating_lyrics: lenient_floating_lyrics(raw.floating_lyrics),
         language: lenient_language(raw.language),
+        interface_font_family: lenient_font_family(raw.interface_font_family.as_ref()),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -3847,6 +3893,7 @@ mod tests {
             main_opacity_percent: 70,
             secondary_opacity_percent: 85,
             font_weight: 700,
+            font_family: Some("Noto Sans TC".into()),
             animation: LyricsAnimation::Continuous,
             hide_when_paused: false,
         };
@@ -4346,13 +4393,14 @@ mod tests {
                 primary_font_size_px: 20,
                 auxiliary_scale_percent: 90,
                 font_weight: 500,
+                font_family: None,
                 line_gap_px: 10,
                 text_effect: LyricsTextEffect::Shadow,
                 simplified_to_traditional: true,
             }
         );
 
-        let value = serde_json::to_value(preferences).expect("serialize lyric preferences");
+        let value = serde_json::to_value(&preferences).expect("serialize lyric preferences");
         assert_eq!(value["showTranslation"], true);
         assert_eq!(value["showRomanization"], false);
         assert_eq!(value["mainOpacityPercent"], 100);
@@ -4361,6 +4409,7 @@ mod tests {
         assert_eq!(value["primaryFontSizePx"], 20);
         assert_eq!(value["auxiliaryScalePercent"], 90);
         assert_eq!(value["fontWeight"], 500);
+        assert!(value["fontFamily"].is_null());
         assert!(value.get("auxiliaryFontSizePx").is_none());
         assert_eq!(value["lineGapPx"], 10);
         assert_eq!(value["textEffect"], "shadow");
@@ -4661,6 +4710,80 @@ mod tests {
     }
 
     #[test]
+    fn font_families_default_to_none_everywhere_and_keep_only_a_usable_name() {
+        // The default font everywhere: nothing changes until a font is chosen (ADR 0042).
+        assert_eq!(LyricsPreferences::default().font_family, None);
+        assert_eq!(TaskbarLyricsSettings::default().font_family, None);
+        assert_eq!(FloatingLyricsSettings::default().font_family, None);
+        assert_eq!(AppSettings::default().interface_font_family, None);
+        assert_eq!(
+            normalize_font_family(Some("  Yu Gothic ")),
+            Some("Yu Gothic".into())
+        );
+        assert_eq!(normalize_font_family(Some("   ")), None);
+        assert_eq!(normalize_font_family(None), None);
+        let long = "x".repeat(FONT_FAMILY_MAX_CHARS + 1);
+        assert_eq!(normalize_font_family(Some(&long)), None);
+        // A family that is not installed is kept: the drawing side falls back.
+        assert_eq!(
+            normalize_font_family(Some("Not Installed Anywhere")),
+            Some("Not Installed Anywhere".into())
+        );
+        let from_json = |text: &str| serde_json::from_str::<LyricsPreferences>(text).unwrap();
+        assert_eq!(from_json("{}").font_family, None);
+        assert_eq!(from_json(r#"{"fontFamily": 3}"#).font_family, None);
+        assert_eq!(
+            from_json(r#"{"fontFamily": " 微軟正黑體 "}"#).font_family,
+            Some("微軟正黑體".into())
+        );
+        let taskbar = lenient_taskbar_lyrics(Some(serde_json::json!({"fontFamily": "Meiryo"})));
+        assert_eq!(taskbar.font_family.as_deref(), Some("Meiryo"));
+        assert_eq!(
+            lenient_taskbar_lyrics(Some(serde_json::json!({}))).font_family,
+            None
+        );
+        let floating = lenient_floating_lyrics(Some(serde_json::json!({"fontFamily": ""})));
+        assert_eq!(floating.font_family, None);
+        let floating = lenient_floating_lyrics(Some(serde_json::json!({"fontFamily": "Arial"})));
+        assert_eq!(floating.font_family.as_deref(), Some("Arial"));
+        let typed: TaskbarLyricsSettings =
+            serde_json::from_value(serde_json::to_value(TaskbarLyricsSettings::default()).unwrap())
+                .unwrap();
+        assert_eq!(typed.font_family, None);
+        let value = serde_json::to_value(&floating).unwrap();
+        assert_eq!(value["fontFamily"], "Arial");
+    }
+
+    #[test]
+    fn the_interface_font_survives_a_restart() {
+        let directory = test_directory("interface-font");
+        let path = directory.join("settings.json");
+        {
+            let store =
+                SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+            store
+                .update(|settings| {
+                    settings.interface_font_family = Some("Noto Sans TC".into());
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        assert_eq!(
+            reopened
+                .snapshot()
+                .unwrap()
+                .interface_font_family
+                .as_deref(),
+            Some("Noto Sans TC")
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["interfaceFontFamily"], "Noto Sans TC");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn font_weight_defaults_to_500_per_tab_and_is_clamped_on_load() {
         assert_eq!(default_lyrics_font_weight(), 500);
         let defaults = TaskbarLyricsSettings::default();
@@ -4910,6 +5033,7 @@ mod tests {
             primary_font_size_px: 26,
             auxiliary_scale_percent: 65,
             font_weight: 700,
+            font_family: Some("Yu Gothic".into()),
             line_gap_px: 42,
             text_effect: LyricsTextEffect::Shadow,
             simplified_to_traditional: true,
@@ -4922,7 +5046,7 @@ mod tests {
             .update(|settings| {
                 settings.track_list_columns = columns.clone();
                 settings.now_playing_layout = NowPlayingLayout::B;
-                settings.lyrics_preferences = lyrics_preferences;
+                settings.lyrics_preferences = lyrics_preferences.clone();
                 Ok(())
             })
             .expect("persist display preferences");
