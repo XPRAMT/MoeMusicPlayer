@@ -10,8 +10,9 @@ use std::path::Path;
 use ttf_parser::{cmap, name, name_id, os2, PlatformId};
 
 /// The version of what `read_font_file` derives from a font file. A cache made by another version is stale and its
-/// files are reparsed (2: threshold coverage tests, legacy-encoding character maps, hidden faces).
-pub const PARSE_VERSION: u32 = 2;
+/// files are reparsed (2: threshold coverage tests, legacy-encoding character maps, hidden faces; 3: the 200
+/// distinctive Traditional / Simplified forms and ㄅ ˙).
+pub const PARSE_VERSION: u32 = 3;
 
 /// Largest `name` / `OS/2` table read.
 const MAX_NAME_TABLE: u32 = 4 << 20;
@@ -300,7 +301,24 @@ pub mod testing {
 mod tests {
     use super::testing::*;
     use super::*;
+    use crate::han_forms::{SIMPLIFIED_FORMS, TRADITIONAL_FORMS};
     use crate::sfnt::build_font;
+
+    /// A Traditional Chinese font's characters: the common ones, the 200 Traditional forms, ㄅ and ˙.
+    fn traditional_chars() -> String {
+        format!(
+            "的一是不了人我在有他這們中大來上國個到說時{}ㄅ˙",
+            TRADITIONAL_FORMS.iter().collect::<String>()
+        )
+    }
+
+    /// A Simplified Chinese font's characters: the common ones and the 200 Simplified forms.
+    fn simplified_chars() -> String {
+        format!(
+            "的一是不了人我在有他这们中大来上国个到说时{}",
+            SIMPLIFIED_FORMS.iter().collect::<String>()
+        )
+    }
 
     #[test]
     fn typographic_names_win_and_localized_records_are_kept() {
@@ -368,11 +386,7 @@ mod tests {
         // With a Unicode subtable the legacy one is ignored.
         assert_eq!(scripts(cmap_with_legacy("Aa", 3, 4)), Scripts(0));
         assert_eq!(
-            scripts(cmap_with_legacy(
-                "的一是不了人我在有他这们中大来上国个到说时体边吗书东",
-                3,
-                4
-            )),
+            scripts(cmap_with_legacy(&simplified_chars(), 3, 4)),
             Scripts(Scripts::SIMPLIFIED)
         );
     }
@@ -399,7 +413,7 @@ mod tests {
         assert!(!face(&format!("Aa\u{E000}\u{F0000}{icons}")).hidden);
         assert!(!face("AaBbCc").hidden);
         assert!(!face("Aa가나다라마바사아자차카타파하一").hidden);
-        let traditional = face("的一是不了人我在有他這們中大來上國個到說時體邊嗎妳戶ㄅㄆㄇㄈㄉㄊ");
+        let traditional = face(&traditional_chars());
         assert!(!traditional.hidden);
         assert_eq!(traditional.scripts, Scripts(Scripts::TRADITIONAL));
     }
@@ -414,14 +428,8 @@ mod tests {
             ]
         };
         let bytes = build_font(&[
-            face(
-                "Han TC",
-                "的一是不了人我在有他這們中大來上國個到說時體邊嗎妳戶ㄅㄆㄇㄈ",
-            ),
-            face(
-                "Han SC",
-                "的一是不了人我在有他这们中大来上国个到说时体边吗书东",
-            ),
+            face("Han TC", &traditional_chars()),
+            face("Han SC", &simplified_chars()),
         ]);
         let directory = std::env::temp_dir().join(format!("player-fonts-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();

@@ -1,7 +1,8 @@
 //! Which writing systems a font covers, and whether it can show ordinary text at all, judged from its character map
-//! (ADR 0042). Every test counts how many characters of a small set are present against a threshold, so an old but
-//! complete font missing one or two of them still passes.
+//! (ADR 0042). Every test but the Bopomofo one counts how many characters of a set are present against a threshold, so
+//! an old but complete font missing a few of them still passes.
 
+use crate::han_forms::{SIMPLIFIED_FORMS, TRADITIONAL_FORMS};
 use serde::{Deserialize, Serialize};
 
 /// Very common Han characters in their Traditional forms: whether a font can show ordinary Chinese text.
@@ -17,18 +18,12 @@ const COMMON_SIMPLIFIED: &[char] = &[
 /// Of either common set at least this many (of 21).
 const COMMON_MIN: usize = 18;
 
-/// Traditional-only forms (their Simplified forms differ). Japanese fonts with JIS X 0213 carry most of them too.
-const TRADITIONAL_FORMS: &[char] = &['體', '邊', '說', '們', '這', '嗎', '妳', '戶'];
-/// Bopomofo: every Big5 and HKSCS font has it, Japanese and Korean fonts do not. This is what tells a Traditional
-/// Chinese font from a Japanese one with old forms (Meiryo, Yu Gothic).
-const BOPOMOFO: &[char] = &['ㄅ', 'ㄆ', 'ㄇ', 'ㄈ', 'ㄉ', 'ㄊ'];
-/// Simplified-only forms (not in Japanese character sets).
-const SIMPLIFIED_FORMS: &[char] = &['体', '边', '说', '们', '这', '吗', '书', '东'];
-/// Of the forms sets at least this many (of 8). A font that has every Simplified form needs every Traditional form
-/// to count as Traditional as well: GBK fonts carry Bopomofo and most Traditional forms (方正 fonts lack 說 or 戶).
-const FORMS_MIN: usize = 7;
-/// Of `BOPOMOFO` at least this many (of 6).
-const BOPOMOFO_MIN: usize = 4;
+/// Of the distinctive forms (`han_forms`: the 200 most frequent Simplified characters outside Big5 and their
+/// Traditional forms outside GB2312) at least this many (90 %) for that writing system.
+const FORMS_MIN: usize = 180;
+/// Bopomofo ㄅ and the neutral-tone mark ˙: every Big5 and HKSCS font has them, Japanese and Korean fonts do not. This
+/// is what tells a Traditional Chinese font from a Japanese one with old forms (Meiryo, Yu Gothic, JIS X 0213).
+const BOPOMOFO: &[char] = &['ㄅ', '˙'];
 
 /// Kana.
 const KANA: &[char] = &[
@@ -89,20 +84,14 @@ fn count(set: &[char], has_char: &impl Fn(char) -> bool) -> usize {
 pub fn detect_scripts(has_char: impl Fn(char) -> bool) -> Scripts {
     let common_traditional = count(COMMON_TRADITIONAL, &has_char) >= COMMON_MIN;
     let common_simplified = count(COMMON_SIMPLIFIED, &has_char) >= COMMON_MIN;
-    let simplified_forms = count(SIMPLIFIED_FORMS, &has_char);
-    let traditional_forms_needed = if simplified_forms == SIMPLIFIED_FORMS.len() {
-        TRADITIONAL_FORMS.len()
-    } else {
-        FORMS_MIN
-    };
     let mut bits = 0;
     if common_traditional
-        && count(TRADITIONAL_FORMS, &has_char) >= traditional_forms_needed
-        && count(BOPOMOFO, &has_char) >= BOPOMOFO_MIN
+        && count(&TRADITIONAL_FORMS, &has_char) >= FORMS_MIN
+        && BOPOMOFO.iter().all(|&c| has_char(c))
     {
         bits |= Scripts::TRADITIONAL;
     }
-    if common_simplified && simplified_forms >= FORMS_MIN {
+    if common_simplified && count(&SIMPLIFIED_FORMS, &has_char) >= FORMS_MIN {
         bits |= Scripts::SIMPLIFIED;
     }
     if count(KANA, &has_char) >= KANA_MIN && count(KANJI, &has_char) >= KANJI_MIN {
@@ -178,8 +167,8 @@ mod tests {
         move |c| !missing.contains(c) && covering(sets)(c)
     }
 
-    const TC: &[&[char]] = &[COMMON_TRADITIONAL, TRADITIONAL_FORMS, BOPOMOFO];
-    const SC: &[&[char]] = &[COMMON_SIMPLIFIED, SIMPLIFIED_FORMS];
+    const TC: &[&[char]] = &[COMMON_TRADITIONAL, &TRADITIONAL_FORMS, BOPOMOFO];
+    const SC: &[&[char]] = &[COMMON_SIMPLIFIED, &SIMPLIFIED_FORMS];
     const JA: &[&[char]] = &[KANA, KANJI];
 
     #[test]
@@ -195,43 +184,69 @@ mod tests {
         );
     }
 
+    /// The last `n` forms of `forms` as one string (to leave them out).
+    fn last(forms: &[char], n: usize) -> String {
+        forms[forms.len() - n..].iter().collect()
+    }
+
     #[test]
     fn an_old_complete_font_missing_a_few_characters_still_passes() {
-        // A Big5 font without 妳, two Bopomofo letters and one common character.
+        // A Big5 font without 20 of the Traditional forms and one common character.
+        let missing = format!("{}的", last(&TRADITIONAL_FORMS, 20));
         assert_eq!(
-            detect_scripts(without(TC, "妳ㄉㄊ的")),
+            detect_scripts(without(TC, &missing)),
             Scripts(Scripts::TRADITIONAL)
         );
+        let missing = format!("{}的", last(&SIMPLIFIED_FORMS, 20));
         assert_eq!(
-            detect_scripts(without(SC, "东的")),
+            detect_scripts(without(SC, &missing)),
             Scripts(Scripts::SIMPLIFIED)
         );
-        // A GBK font: every Simplified form, Bopomofo, all but one Traditional form: Simplified only.
-        let gbk: &[&[char]] = &[
+        // Too many gone: not that writing system any more.
+        assert_eq!(
+            detect_scripts(without(TC, &last(&TRADITIONAL_FORMS, 21))),
+            Scripts(0)
+        );
+        assert_eq!(
+            detect_scripts(without(SC, &last(&SIMPLIFIED_FORMS, 21))),
+            Scripts(0)
+        );
+        assert_eq!(detect_scripts(without(TC, "的一是不")), Scripts(0));
+        // ㄅ and ˙ are both needed.
+        assert_eq!(detect_scripts(without(TC, "ㄅ")), Scripts(0));
+        assert_eq!(detect_scripts(without(TC, "˙")), Scripts(0));
+    }
+
+    #[test]
+    fn a_font_with_both_sets_of_forms_is_both() {
+        // GBK / 簡繁 fonts: every Simplified form, Bopomofo and the Traditional forms.
+        let both: &[&[char]] = &[
             COMMON_SIMPLIFIED,
-            SIMPLIFIED_FORMS,
+            &SIMPLIFIED_FORMS,
             COMMON_TRADITIONAL,
-            TRADITIONAL_FORMS,
+            &TRADITIONAL_FORMS,
             BOPOMOFO,
         ];
         assert_eq!(
-            detect_scripts(without(gbk, "戶")),
-            Scripts(Scripts::SIMPLIFIED)
-        );
-        assert_eq!(
-            detect_scripts(covering(gbk)),
+            detect_scripts(covering(both)),
             Scripts(Scripts::TRADITIONAL | Scripts::SIMPLIFIED)
         );
-        // Too many gone: not that writing system any more.
-        assert_eq!(detect_scripts(without(TC, "妳嗎")), Scripts(0));
-        assert_eq!(detect_scripts(without(TC, "ㄅㄆㄇ")), Scripts(0));
-        assert_eq!(detect_scripts(without(TC, "的一是不")), Scripts(0));
+        // Even with every Simplified form, 90 % of the Traditional forms is enough.
+        assert_eq!(
+            detect_scripts(without(both, &last(&TRADITIONAL_FORMS, 20))),
+            Scripts(Scripts::TRADITIONAL | Scripts::SIMPLIFIED)
+        );
+        // A GB2312 font with Bopomofo but few Traditional forms: Simplified only.
+        assert_eq!(
+            detect_scripts(without(both, &last(&TRADITIONAL_FORMS, 100))),
+            Scripts(Scripts::SIMPLIFIED)
+        );
     }
 
     #[test]
     fn a_japanese_font_with_old_forms_but_no_bopomofo_is_not_traditional() {
         // Meiryo / Yu Gothic: kana, kanji and every Traditional form, but no Bopomofo.
-        let meiryo: &[&[char]] = &[KANA, KANJI, COMMON_TRADITIONAL, TRADITIONAL_FORMS];
+        let meiryo: &[&[char]] = &[KANA, KANJI, COMMON_TRADITIONAL, &TRADITIONAL_FORMS];
         let coverage = assess_coverage(covering(meiryo), || 100);
         assert_eq!(coverage.scripts, Scripts(Scripts::JAPANESE));
         assert!(!coverage.hidden);
@@ -331,12 +346,25 @@ mod tests {
     }
 
     #[test]
-    fn the_distinguishing_sets_do_not_overlap() {
-        for c in TRADITIONAL_FORMS.iter().chain(BOPOMOFO) {
-            assert!(!SIMPLIFIED_FORMS.contains(c) && !KANA.contains(c) && !KANJI.contains(c));
-        }
-        for c in SIMPLIFIED_FORMS {
-            assert!(!KANA.contains(c) && !KANJI.contains(c));
+    fn the_forms_are_200_distinct_pairs() {
+        assert_eq!(TRADITIONAL_FORMS.len(), 200);
+        assert_eq!(SIMPLIFIED_FORMS.len(), 200);
+        let all: std::collections::HashSet<char> = TRADITIONAL_FORMS
+            .iter()
+            .chain(&SIMPLIFIED_FORMS)
+            .copied()
+            .collect();
+        assert_eq!(all.len(), 400, "pairwise distinct, no form in both sets");
+        let pair = |t: char| {
+            let i = TRADITIONAL_FORMS.iter().position(|&c| c == t).unwrap();
+            SIMPLIFIED_FORMS[i]
+        };
+        assert_eq!(pair('這'), '这');
+        assert_eq!(pair('說'), '说');
+        assert_eq!(pair('當'), '当');
+        assert!(!TRADITIONAL_FORMS.contains(&'噹'));
+        for c in BOPOMOFO {
+            assert!(!all.contains(c) && !KANA.contains(c) && !KANJI.contains(c));
         }
     }
 }

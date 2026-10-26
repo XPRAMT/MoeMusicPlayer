@@ -7,6 +7,7 @@
 mod catalog;
 mod diff;
 mod enumerate;
+mod han_forms;
 mod names;
 mod parse;
 mod region;
