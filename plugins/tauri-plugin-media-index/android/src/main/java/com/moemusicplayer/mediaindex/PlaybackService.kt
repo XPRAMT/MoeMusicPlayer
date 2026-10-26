@@ -157,6 +157,10 @@ class PlaybackService : MediaSessionService() {
                     .setAudioProcessorChain(FloatAwareAudioProcessorChain())
                     .build()
         }.setEnableAudioFloatOutput(true)
+            // FLAC tries software decoders first (vendor FLAC decoders fail mid-decode on some devices); a decoder
+            // that fails to initialise falls back to the next one.
+            .setMediaCodecSelector(SoftwareFirstFlacCodecSelector)
+            .setEnableDecoderFallback(true)
         val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources, extractors))
             .setAudioAttributes(

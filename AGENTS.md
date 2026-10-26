@@ -113,7 +113,7 @@ Opus（ADR 0017，Windows；Android 由 Media3）：`crates/player-opus`（自�
 
 WavPack（ADR 0025）：`crates/player-wavpack`（libwavpack 5.6.0 解碼端，BSD-3-Clause，`vendor/`）。編解碼短名（使用者定案）`WVLL`＝無損、`WVL`＝有損 hybrid、`WVDSD`＝DSD-in-WavPack，由 `player_wavpack::summarize` 決定；品質排序（`audio_format_order_by`，由高到低）：DSD、WVDSD、WAV、WVLL、FLAC、WVL、Vorbis、Opus、MP4、MP3。WVDSD 走專案的 DSD 轉換器並支援 DoP。WavPack／Monkey's Audio 的標籤、封面與歌詞直接用檔案的 `ApeTag`（`player-tags/src/ape_cover.rs`、`write_ape_edit`）。位元深度一律以官方編碼器的檔案驗證。待確認：Android 手機上的 WavPack 歌詞、Release GUI 實機播放。
 
-Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 processor chain 的速度／靜音處理後，把 PCM16 等轉成 float32；`DefaultAudioSink` 的原生 float 路徑處理 float 與 24／32-bit PCM，不再二次轉換；`player.volume` 由 Media3 輸出端套用。聽感待驗收。
+Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 processor chain 的速度／靜音處理後，把 PCM16 等轉成 float32；`DefaultAudioSink` 的原生 float 路徑處理 float 與 24／32-bit PCM，不再二次轉換；`player.volume` 由 Media3 輸出端套用。FLAC 先用軟體解碼器、硬體解碼器排在後面當備援（`FlacCodecOrder.kt` 的 `SoftwareFirstFlacCodecSelector`，另開 `setEnableDecoderFallback`），因為部分裝置的廠商 FLAC 解碼器（如 `OMX.qti.audio.decoder.flac`）會在解碼途中失敗（ADR 0006）；其他格式維持預設順序。聽感待驗收；G8142 實機待驗收。
 
 ### Windows 音訊輸出（ADR 0020）
 
