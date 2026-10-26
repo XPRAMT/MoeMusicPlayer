@@ -119,7 +119,7 @@ Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 proce
 
 多裝置輸出（ADR 0020 P0）：`settings.json` 的 `outputDevices`；系統預設與自選裝置互斥（`active_devices`、`setRowEnabled`）；音訊端 `output_devices.rs`、`mirror.rs`，`RodioBackend::apply_devices` 比對差異；斷線以靜音心跳 `StallWatch` 偵測並重試。介面 `OutputDevicesSettings.svelte`＋`output-devices.js`（設定頁與快速設定共用），聲道映射是所有啟用裝置共用的一張矩陣，5 個方案槽（`outputPresets`）。音量是 Windows 端點真實音量（`crates/player-platform-windows/src/endpoint_volume.rs`），不是對音訊乘增益；音量同步（`outputVolumeSync`）由後端 `src-tauri/src/volume_sync.rs` 隨時執行。實機測試 `real_two_devices_play_together`（`--ignored`，靜音）。
 
-取樣率轉換一律 rubato FFT（使用者決定移除選項；設定頁該區只剩「DSEE HX」）；DSEE HX 的 Sony 濾鏡由 `dsee::filter_path` 依序找播放器 exe 旁的 `OmgDseeHxFilter.ax`（其相依 DLL 也須在旁）、再找 Sony Music Center 安裝位置，找到的路徑以參數交給輔助程式 `dsee_hx_stream.exe`；本專案不內含也不散佈這個檔案，更新 zip 只放 exe（ADR 0044）。`settings.json` 的 `resamplingMode` 保留相容但不讀；引擎的 `ResamplingMode::WindowsBuiltin` 已無入口。不做裝置間漂移補償（理由見 ADR 0020；量測工具 `measure_real_device_clocks`，`MOE_CLOCK_DEVICES`／`MOE_CLOCK_SECONDS`）。
+取樣率轉換一律 rubato FFT（使用者決定移除選項；設定頁該區只剩「DSEE HX」）；`settings.json` 的 `resamplingMode` 保留相容但不讀；引擎的 `ResamplingMode::WindowsBuiltin` 已無入口。不做裝置間漂移補償（理由見 ADR 0020；量測工具 `measure_real_device_clocks`，`MOE_CLOCK_DEVICES`／`MOE_CLOCK_SECONDS`）。
 
 獨佔模式（ADR 0020 P1）：`outputExclusive`（`settings_get/set_output_exclusive`），只播第一台啟用裝置；實作 `crates/player-audio-windows/src/exclusive/`。開不起來時該曲以共享備援播放並說明原因（`exclusiveFallback`），下一首重試；勾「系統預設」時跟隨預設裝置，指定裝置時不跟隨；暫停立即釋放裝置，閒置 10 秒（`IDLE_RELEASE`）釋放。裝置通知 `device_notify.rs` → `audio-devices-changed`。實機測試（`--ignored`，靜音）：`real_device_opens_exclusive_and_plays`、`real_device_in_use_is_reported_with_its_reason`、`real_default_device_is_followed`。沒有 DAC，無聽感驗證；ASIO 未做。
 

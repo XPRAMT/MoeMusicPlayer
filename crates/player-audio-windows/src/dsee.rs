@@ -1,8 +1,7 @@
 //! Streaming Sony DSEE HX for stereo at 44.1 kHz or 48 kHz.
 //!
-//! The filter is a 32-bit DirectShow component. The 64-bit player talks to a
-//! small helper and passes it the filter's path: `OmgDseeHxFilter.ax` beside
-//! the player exe, else the Music Center install path.
+//! The installed filter is a 32-bit DirectShow component. The 64-bit player
+//! talks to a small helper that loads it from the fixed Music Center path.
 //! The helper is our program; the Sony filter is never copied or embedded.
 
 use std::collections::VecDeque;
@@ -27,12 +26,10 @@ use symphonia::core::probe::Hint;
 
 use crate::DseeHxState;
 
-/// File name of Sony's filter.
-pub(crate) const FILTER_FILE_NAME: &str = "OmgDseeHxFilter.ax";
-/// Sony Music Center's install path, used when the player's own directory has no filter.
-pub(crate) const MUSIC_CENTER_FILTER_PATH: &str =
+/// Sony's installed filter. Playback loads this path and nowhere else.
+pub(crate) const FILTER_PATH: &str =
     r"C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax";
-pub(crate) const INSTALL_NOTICE: &str = "找不到 OmgDseeHxFilter.ax。DSEE HX 先找播放器執行檔旁的 OmgDseeHxFilter.ax，再找 Sony Music Center 的安裝位置 C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax；本專案不內含也不散佈這個檔案。";
+pub(crate) const INSTALL_NOTICE: &str = "請先安裝 Sony Music Center。DSEE HX 只會載入 C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax，播放器不會內含或散佈這個檔案。";
 pub(crate) fn plausible_hx_rate(rate: u32) -> bool {
     matches!(rate, 44_100 | 48_000 | 88_200 | 96_000 | 176_400 | 192_000)
 }
@@ -50,28 +47,8 @@ const CODEC_MP3: u32 = 2;
 const OUTPUT_REQUEST_HZ: u32 = 96_000;
 const RING_CAP: usize = 176_400 * 2;
 
-/// Places the filter is looked for, in order: beside the running player exe
-/// (not the helper, which may live in the temp directory), then Music Center.
-fn filter_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::with_capacity(2);
-    if let Some(directory) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        candidates.push(directory.join(FILTER_FILE_NAME));
-    }
-    candidates.push(PathBuf::from(MUSIC_CENTER_FILTER_PATH));
-    candidates
-}
-
-/// First candidate that is an existing file.
-fn first_existing_filter(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates.iter().find(|path| path.is_file()).cloned()
-}
-
-/// The filter DSEE HX loads, or `None` when neither location has it.
-pub(crate) fn filter_path() -> Option<PathBuf> {
-    first_existing_filter(&filter_candidates())
+pub(crate) fn filter_installed() -> bool {
+    Path::new(FILTER_PATH).is_file()
 }
 
 /// True when the source format is allowed to enter the filter.
@@ -139,7 +116,7 @@ pub(crate) fn plan(enabled: bool, path: &Path, signal: &TrackSignal) -> DseePlan
             engagement: Engagement::Off,
         };
     }
-    if filter_path().is_none() {
+    if !filter_installed() {
         return DseePlan {
             output_rate: signal.sample_rate,
             engagement: Engagement::Unavailable(INSTALL_NOTICE.to_owned()),
@@ -329,12 +306,11 @@ where
             Ok(path) => path,
             Err(message) => return Err(OpenError::Rejected(decoder, message)),
         };
-        let Some(filter) = filter_path() else {
+        if !filter_installed() {
             return Err(OpenError::Rejected(decoder, INSTALL_NOTICE.to_owned()));
-        };
+        }
         let mut command = Command::new(&helper);
         command
-            .arg(&filter)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -862,7 +838,7 @@ mod tests {
 
     #[test]
     fn installed_filter_streams_24_and_32_bit_pcm() {
-        if filter_path().is_none() {
+        if !filter_installed() {
             return;
         }
         for bits in [24_u16, 32] {
@@ -902,7 +878,7 @@ mod tests {
 
     #[test]
     fn installed_filter_streams_a_short_tone() {
-        if filter_path().is_none() {
+        if !filter_installed() {
             return;
         }
         let rate = 44_100u32;
@@ -936,7 +912,7 @@ mod tests {
     #[test]
     #[ignore = "opens the default output device and plays a short tone"]
     fn installed_filter_streams_while_wasapi_is_playing() {
-        if filter_path().is_none() {
+        if !filter_installed() {
             return;
         }
         use rodio::cpal::traits::HostTrait;
@@ -985,57 +961,6 @@ mod tests {
         let output: Vec<f32> = source.take(2_000).collect();
         assert!(output.iter().any(|sample| sample.abs() > 0.001));
         player.stop();
-    }
-
-    #[test]
-    fn filter_lookup_prefers_the_player_directory_then_music_center() {
-        let root = std::env::temp_dir().join(format!(
-            "moe-dsee-filter-lookup-{}-濾鏡",
-            std::process::id()
-        ));
-        let beside = root.join("player");
-        let sony = root.join("sony");
-        std::fs::create_dir_all(&beside).unwrap();
-        std::fs::create_dir_all(&sony).unwrap();
-        let beside_filter = beside.join(FILTER_FILE_NAME);
-        let sony_filter = sony.join(FILTER_FILE_NAME);
-        let candidates = [beside_filter.clone(), sony_filter.clone()];
-
-        assert_eq!(first_existing_filter(&candidates), None);
-        std::fs::write(&sony_filter, b"sony").unwrap();
-        assert_eq!(
-            first_existing_filter(&candidates),
-            Some(sony_filter.clone())
-        );
-        std::fs::write(&beside_filter, b"beside").unwrap();
-        assert_eq!(
-            first_existing_filter(&candidates),
-            Some(beside_filter.clone())
-        );
-        std::fs::remove_file(&sony_filter).unwrap();
-        assert_eq!(first_existing_filter(&candidates), Some(beside_filter));
-        // A directory with the filter's name is not a filter.
-        std::fs::create_dir_all(&sony_filter).unwrap();
-        assert_eq!(
-            first_existing_filter(std::slice::from_ref(&sony_filter)),
-            None
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn filter_candidates_start_beside_the_player_and_end_at_music_center() {
-        let candidates = filter_candidates();
-        let exe_dir = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        assert_eq!(candidates.first(), Some(&exe_dir.join(FILTER_FILE_NAME)));
-        assert_eq!(
-            candidates.last(),
-            Some(&PathBuf::from(MUSIC_CENTER_FILTER_PATH))
-        );
     }
 
     #[test]

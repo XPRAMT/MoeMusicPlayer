@@ -1,8 +1,7 @@
-// Streaming bridge for a locally present Sony DSEE HX DirectShow filter.
-// This program is ours. It loads the OmgDseeHxFilter.ax path given as its
-// first argument (the player passes the one it found), or, with no argument,
-// C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax.
-// It never copies or embeds that file.
+// Streaming bridge for the locally installed Sony DSEE HX DirectShow filter.
+// This program is ours. It loads
+// C:\Program Files (x86)\Sony\Music Center\Sony.Earth\OmgDseeHxFilter.ax
+// and never copies or embeds that file.
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -22,7 +21,6 @@
 
 static const wchar_t* kFilterPath =
     L"C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax";
-static std::wstring g_filterPath = kFilterPath;
 static const DWORD kOutputHz = 96000;
 
 enum MessageType : uint32_t { kConfig = 1, kData = 2, kEos = 3, kQuit = 4, kReady = 1, kErr = 4 };
@@ -513,15 +511,12 @@ static IPin* first_pin(IBaseFilter* filter, PIN_DIRECTION direction) {
 }
 
 static int run_graph(uint32_t channels, uint32_t codec, uint32_t inHz, uint32_t outHz, uint32_t inBits, uint32_t outBits, uint32_t vbr, uint32_t abr) {
-    const DWORD attributes = GetFileAttributesW(g_filterPath.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    if (GetFileAttributesW(kFilterPath) == INVALID_FILE_ATTRIBUTES) {
         write_err(1, "missing");
         return 3;
     }
-    // Let the filter find companion DLLs in its own directory.
-    const size_t slash = g_filterPath.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) SetDllDirectoryW(g_filterPath.substr(0, slash).c_str());
-    HMODULE module = LoadLibraryW(g_filterPath.c_str());
+    SetDllDirectoryW(L"C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth");
+    HMODULE module = LoadLibraryW(kFilterPath);
     if (!module) { write_err(2, "LoadLibrary failed"); return 3; }
     GUID cls{0xa481d160, 0xab4d, 0x4b97, {0x93, 0xfe, 0xc1, 0xf4, 0xb4, 0xb7, 0x81, 0xdf}};
     auto get = reinterpret_cast<HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**)>(GetProcAddress(module, "DllGetClassObject"));
@@ -658,8 +653,7 @@ done:
     return 0;
 }
 
-int wmain(int argc, wchar_t** argv) {
-    if (argc > 1 && argv[1] && argv[1][0]) g_filterPath = argv[1];
+int wmain() {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return 1;
