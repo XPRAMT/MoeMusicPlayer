@@ -388,6 +388,7 @@ fn playlist_source(
 fn queue_for_duplicate_slot(database: &Database, fixture: &FixtureTracks) -> PlaybackQueue {
     super::queue_for_track(
         database,
+        player_db::LibrarySourceScope::All,
         fixture.first,
         Some(playlist_source(fixture.playlist_id, 1)),
     )
@@ -533,37 +534,61 @@ fn library_source() -> PlaybackQueueSource {
 }
 
 /// The user's report: in local mode a song picked on Android started a queue holding cloud songs. The actor reads the
-/// library through its own database handle, whose scope never followed the switch (the app's handle had it).
+/// library through its own database handle; the scope is the queue query's argument, carried by the action, so no
+/// handle has a scope of its own to fall out of step with the lists.
 #[test]
 fn the_actor_builds_a_list_queue_under_the_scope_the_lists_show() {
     let temporary = TemporaryDatabase::new();
     let mut seed_db = temporary.open();
     let fixture = seed_library(&mut seed_db);
     let cloud = seed_remote_song(&mut seed_db);
-    // The app's own handle is switched to local mode; another handle on the same file keeps showing everything.
-    seed_db.set_source_scope(player_db::LibrarySourceScope::Local);
     let actor_db = temporary.open();
-    let before_fix = super::queue_for_track(&actor_db, fixture.first, Some(library_source()))
-        .expect("queue on the actor's handle");
-    assert!(before_fix
+    // The same query on the app's handle and on the actor's: the scope argument alone decides the rows.
+    let everything = super::queue_for_track(
+        &actor_db,
+        player_db::LibrarySourceScope::All,
+        fixture.first,
+        Some(library_source()),
+    )
+    .expect("queue of every source");
+    assert!(everything
         .snapshot()
         .entries
         .iter()
         .any(|entry| entry.track_id == cloud));
     let page: Vec<_> = seed_db
-        .list_tracks_page(player_core::ListTracksQuery {
-            offset: 0,
-            limit: 100,
-            query: None,
-            field_filter: None,
-            sort: Default::default(),
-        })
+        .list_tracks_page(
+            player_db::LibrarySourceScope::Local,
+            player_core::ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .expect("local page")
         .items
         .into_iter()
         .map(|track| track.id)
         .collect();
     assert!(!page.contains(&cloud));
+    let local_on_actor_handle = super::queue_for_track(
+        &actor_db,
+        player_db::LibrarySourceScope::Local,
+        fixture.first,
+        Some(library_source()),
+    )
+    .expect("local queue on the actor's handle");
+    assert_eq!(
+        local_on_actor_handle
+            .snapshot()
+            .entries
+            .iter()
+            .map(|entry| entry.track_id)
+            .collect::<Vec<_>>(),
+        page
+    );
     drop(seed_db);
 
     let mut harness = ActorFixture::new(actor_db);
@@ -665,6 +690,7 @@ fn failed_load_keeps_queue_cursor_and_saved_position_then_play_reloads_logical_c
     let fixture = seed_library(&mut seed_db);
     let queue = super::queue_for_track(
         &seed_db,
+        player_db::LibrarySourceScope::All,
         fixture.first,
         Some(playlist_source(fixture.playlist_id, 0)),
     )
@@ -1064,6 +1090,7 @@ fn playing_first_entry(
     let seed_db = temporary.open();
     let mut queue = super::queue_for_track(
         &seed_db,
+        player_db::LibrarySourceScope::All,
         fixture.first,
         Some(playlist_source(fixture.playlist_id, 0)),
     )

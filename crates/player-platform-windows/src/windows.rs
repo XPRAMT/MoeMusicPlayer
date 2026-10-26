@@ -821,13 +821,16 @@ mod tests {
             report.metadata_errors
         );
         let page = db
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("page");
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].title.as_deref(), Some("花の歌"));
@@ -858,13 +861,16 @@ mod tests {
             report.metadata_errors
         );
         let page = db
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 200,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 200,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("page");
         for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
             let cols: Vec<&str> = line.split('\t').collect();
@@ -981,13 +987,16 @@ mod tests {
         assert_eq!(unchanged.metadata_reads, 1); // only the malformed file is retried
         assert_eq!(unchanged.metadata_errors.len(), 1);
         let original_page = db
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("initial page");
         assert_eq!(original_page.items.len(), 2);
         let retained_id = original_page
@@ -1016,13 +1025,16 @@ mod tests {
         assert_eq!(after_delete.metadata_reads, 1);
         assert!(after_delete.metadata_errors.is_empty());
         let remaining = db
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("remaining page");
         assert_eq!(remaining.items.len(), 1);
         assert_eq!(remaining.items[0].id, retained_id);
@@ -1037,13 +1049,16 @@ mod tests {
         ));
         assert_eq!(offline.applied.removed_source_mappings, 0);
         assert_eq!(
-            db.list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            db.list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                }
+            )
             .expect("retained offline track")
             .items[0]
                 .id,
@@ -1149,7 +1164,9 @@ mod tests {
             )
             .expect("seed pre-filter MP4 mapping");
         assert_eq!(
-            database.count_tracks(None).expect("legacy visible track"),
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("legacy visible track"),
             1
         );
 
@@ -1167,7 +1184,7 @@ mod tests {
             .expect("incomplete sync");
         assert_eq!(
             database
-                .count_tracks(None)
+                .count_tracks(player_db::LibrarySourceScope::All, None)
                 .expect("incomplete retains track"),
             1
         );
@@ -1186,15 +1203,23 @@ mod tests {
                 1_800_000_000_002,
             )
             .expect("complete folder reconciliation");
-        assert_eq!(database.count_tracks(None).expect("video is hidden"), 0);
+        assert_eq!(
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("video is hidden"),
+            0
+        );
         let page = database
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("read library");
         assert_eq!(page.total_count, 0);
 
@@ -1280,13 +1305,16 @@ mod tests {
         player_core::SyncEngine::sync(&filesystem_root, &mut index, &mut db, 1)
             .expect("filesystem sync");
         let first = db
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("first page");
         assert_eq!(first.items.len(), 1);
         let track_id = first.items[0].id;
@@ -1309,13 +1337,16 @@ mod tests {
         );
 
         let after_fallback = db
-            .list_tracks_page(player_core::ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                player_core::ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("fallback page");
         assert_eq!(after_fallback.items.len(), 1);
         assert_eq!(after_fallback.items[0].id, track_id);

@@ -390,16 +390,19 @@ mod tests {
 
         fn track_count(database: &Database) -> usize {
             database
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 100,
-                    query: None,
-                    field_filter: None,
-                    sort: TrackListSort {
-                        field: TrackSortField::Title,
-                        direction: TrackSortDirection::Asc,
+                .list_tracks_page(
+                    player_db::LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 100,
+                        query: None,
+                        field_filter: None,
+                        sort: TrackListSort {
+                            field: TrackSortField::Title,
+                            direction: TrackSortDirection::Asc,
+                        },
                     },
-                })
+                )
                 .unwrap()
                 .items
                 .len()
@@ -494,16 +497,19 @@ mod tests {
             let mut database = Database::open_in_memory().unwrap();
             sync_list(&mut database, &resolver, &source, 1_000);
             let page = database
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 100,
-                    query: None,
-                    field_filter: None,
-                    sort: TrackListSort {
-                        field: TrackSortField::CreatedAt,
-                        direction: TrackSortDirection::Asc,
+                .list_tracks_page(
+                    player_db::LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 100,
+                        query: None,
+                        field_filter: None,
+                        sort: TrackListSort {
+                            field: TrackSortField::CreatedAt,
+                            direction: TrackSortDirection::Asc,
+                        },
                     },
-                })
+                )
                 .unwrap();
             assert_eq!(page.items.len(), 2);
             let mut expected: Vec<i64> = ["Artist/Album/01 s16.wv", "Other/f32.wv"]
@@ -562,16 +568,19 @@ mod tests {
 
         fn all_ids(database: &Database) -> Vec<player_core::TrackId> {
             let mut ids: Vec<_> = database
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 100,
-                    query: None,
-                    field_filter: None,
-                    sort: TrackListSort {
-                        field: TrackSortField::Title,
-                        direction: TrackSortDirection::Asc,
+                .list_tracks_page(
+                    player_db::LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 100,
+                        query: None,
+                        field_filter: None,
+                        sort: TrackListSort {
+                            field: TrackSortField::Title,
+                            direction: TrackSortDirection::Asc,
+                        },
                     },
-                })
+                )
                 .unwrap()
                 .items
                 .into_iter()

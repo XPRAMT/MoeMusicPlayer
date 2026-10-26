@@ -83,13 +83,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     profile::event("progress_callbacks", &[field("count", progress_callbacks)]);
 
     let page_started = Instant::now();
-    let page = database.list_tracks_page(ListTracksQuery {
-        offset: 0,
-        limit: 1000,
-        query: None,
-        field_filter: None,
-        sort: Default::default(),
-    })?;
+    let page = database.list_tracks_page(
+        player_db::LibrarySourceScope::All,
+        ListTracksQuery {
+            offset: 0,
+            limit: 1000,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        },
+    )?;
     profile::event(
         "first_page",
         &[field("ms", ms(page_started.elapsed())), field("total", page.total_count)],

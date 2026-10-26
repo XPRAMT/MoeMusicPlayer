@@ -257,4 +257,96 @@ mod tests {
         let m3u_export_text = String::from_utf8(m3u_export_bytes).expect("M3U is UTF-8");
         assert!(m3u_export_text.contains("夜色 - Sample Track.mp3"));
     }
+
+    /// Export writes the playlist's whole content whatever the lists show: with the lists in local mode a song whose only
+    /// source is a server is still written. Windows exports through the app's handle and Android through one it opens
+    /// for the export; neither keeps a source scope, so both write the same file (ADR 0037).
+    #[test]
+    fn export_keeps_cloud_entries_in_local_mode_on_both_handles() {
+        use player_core::{
+            FileFingerprint, LibraryRepository, MediaLocator, MediaSourceKind, MediaTrackRecord,
+            Playlist, PlaylistEntry, SourceScanState, TrackIdentity, TrackMetadata,
+        };
+        let directory = TestDirectory::new();
+        let database_path = directory.0.join("library.sqlite3");
+        let playlist_id = {
+            let mut database = Database::open(&database_path).expect("open test database");
+            let mut entries = Vec::new();
+            for (kind, name) in [
+                (MediaSourceKind::WindowsFilesystem, "local"),
+                (MediaSourceKind::Remote, "cloud"),
+            ] {
+                let root = database
+                    .add_library_root(kind, name, MediaLocator::FileSystem(directory.0.join(name)))
+                    .expect("add root");
+                let locator = MediaLocator::FileSystem(directory.0.join(format!("{name}.flac")));
+                let record = MediaTrackRecord {
+                    identity: TrackIdentity {
+                        source_id: root.id,
+                        source_item_id: name.to_owned(),
+                        locator_key: Some(format!("fixture:{name}")),
+                    },
+                    locator: locator.clone(),
+                    fingerprint: FileFingerprint {
+                        size_bytes: 1,
+                        modified_at_utc_ms: Some(1),
+                        created_at_utc_ms: None,
+                    },
+                    metadata: Some(TrackMetadata {
+                        title: Some(format!("{name} song")),
+                        ..TrackMetadata::default()
+                    }),
+                };
+                database
+                    .apply_source_scan(
+                        &root,
+                        &SourceScanState::Complete,
+                        std::slice::from_ref(&record),
+                        std::slice::from_ref(&record),
+                        &[],
+                        1,
+                    )
+                    .expect("persist song");
+                entries.push(PlaylistEntry {
+                    track_id: database
+                        .resolve_track_id_for_locator(&locator)
+                        .expect("resolve"),
+                    locator,
+                    title: None,
+                    duration_ms: None,
+                });
+            }
+            let mut playlist = Playlist::new("mixed");
+            playlist.entries = entries;
+            database.save_playlist(&playlist).expect("save playlist");
+            // The lists in local mode show only the local song.
+            let local_view = database
+                .get_playlist_page_sorted(
+                    player_db::LibrarySourceScope::Local,
+                    playlist.id,
+                    0,
+                    10,
+                    Default::default(),
+                )
+                .expect("local page")
+                .expect("playlist");
+            assert_eq!(local_view.total_count, 1);
+            playlist.id
+        };
+        let export_with = |database: &Database, file: &str| {
+            let path = directory.0.join(file);
+            let exported =
+                export_playlist_file(database, &playlist_id.to_string(), &path, "m3u8", None)
+                    .expect("export");
+            assert_eq!(exported.entry_count, 2);
+            fs::read_to_string(path).expect("read export")
+        };
+        let app_handle = Database::open(&database_path).expect("app handle");
+        let windows_text = export_with(&app_handle, "windows.m3u8");
+        let export_handle = Database::open(&database_path).expect("export handle");
+        let android_text = export_with(&export_handle, "android.m3u8");
+        assert!(windows_text.contains("cloud.flac"), "{windows_text}");
+        assert!(windows_text.contains("local.flac"), "{windows_text}");
+        assert_eq!(windows_text, android_text);
+    }
 }

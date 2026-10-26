@@ -317,13 +317,16 @@ fn the_sync_engine_scans_the_server_into_a_library_with_its_transfer() {
         report.metadata_errors
     );
     let tracks = db
-        .list_tracks_page(ListTracksQuery {
-            offset: 0,
-            limit: 100,
-            query: None,
-            field_filter: None,
-            sort: Default::default(),
-        })
+        .list_tracks_page(
+            player_db::LibrarySourceScope::All,
+            ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .unwrap()
         .items;
     assert_eq!(tracks.len() as u64, expected);

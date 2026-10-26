@@ -78,8 +78,8 @@ pub(crate) enum PlaybackAction {
     SelectTrack {
         track_id: String,
         source: Option<PlaybackQueueSource>,
-        /// The source scope the lists show now: the queue a list builds holds exactly the rows its page shows, and
-        /// this actor reads the library through its own database handle, whose scope is set from this.
+        /// The source scope the lists show now, read from the settings by the command: the queue a list builds holds
+        /// exactly the rows its page shows, and the queue query takes the scope as an argument (ADR 0037).
         scope: player_db::LibrarySourceScope,
     },
     #[allow(dead_code)]
@@ -600,11 +600,9 @@ impl AndroidActor {
                 track_id,
                 source,
                 scope,
-            } => {
-                self.database.set_source_scope(scope);
-                self.select_track(request_id, &track_id, source)
-                    .map_err(|error| self.start_error(error))
-            }
+            } => self
+                .select_track(request_id, &track_id, source, scope)
+                .map_err(|error| self.start_error(error)),
             PlaybackAction::Play => {
                 if self.native.track_id.is_none() || self.native.media_key.is_none() {
                     let logical_track_id = self
@@ -745,6 +743,7 @@ impl AndroidActor {
         request_id: &str,
         track_id_text: &str,
         source: Option<PlaybackQueueSource>,
+        scope: player_db::LibrarySourceScope,
     ) -> Result<PlaybackSnapshot, String> {
         let track_id = TrackId::parse(track_id_text).map_err(|error| error.to_string())?;
         if source.is_none()
@@ -770,7 +769,8 @@ impl AndroidActor {
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
         let uri = crate::android_dsd::playable_uri(&self.database, track_id)
             .map_err(|error| error.to_string())?;
-        let replacement_queue = super::queue_for_track(&self.database, track_id, source.clone())?;
+        let replacement_queue =
+            super::queue_for_track(&self.database, scope, track_id, source.clone())?;
         let mut replacement_queue = replacement_queue;
         replacement_queue.set_repeat_mode(queue_repeat_mode(self.repeat_mode));
         set_queue_shuffle_with_latest_stats(&self.database, &mut replacement_queue, self.shuffle)?;

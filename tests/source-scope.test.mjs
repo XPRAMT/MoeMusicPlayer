@@ -61,3 +61,18 @@ test('every list builds its queue from its own page query, so the queue holds ex
   const entries = readFileSync(new URL('../src/lib/PlaylistEntryList.svelte', import.meta.url), 'utf8');
   assert.match(entries, /onPlay\(entry, playlistId, sort\)/);
 });
+
+test('the scope is an argument of each query, never state kept by a database handle', () => {
+  const database = readFileSync(new URL('../crates/player-db/src/database.rs', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
+  const actor = readFileSync(new URL('../src-tauri/src/android_playback.rs', import.meta.url), 'utf8');
+  for (const source of [database, lib, actor]) {
+    assert.doesNotMatch(source, /set_source_scope|\.source_scope\(\)/);
+  }
+  assert.doesNotMatch(database, /source_scope: Arc</);
+  // The switch only saves the setting: every command reads it where it runs.
+  const switchCommand = lib.match(/fn settings_set_library_source_scope[\s\S]*?\n\}\n/)?.[0] ?? '';
+  assert.match(switchCommand, /library_source_scope = scope/);
+  assert.doesNotMatch(switchCommand, /database/);
+  assert.match(actor, /queue_for_track\(&self\.database, scope,/);
+});

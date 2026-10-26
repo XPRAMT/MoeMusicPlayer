@@ -237,13 +237,16 @@ mod windows_only {
         )?;
 
         let library_count = database
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 1,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })?
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 1,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )?
             .total_count;
         if library_count != music_report.observed {
             return Err(format!(

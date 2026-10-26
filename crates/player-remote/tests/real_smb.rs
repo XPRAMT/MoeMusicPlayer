@@ -278,13 +278,16 @@ fn scans_a_real_share_through_the_sync_engine() {
     }
     assert!(report.observed > 0);
     let page = db
-        .list_tracks_page(ListTracksQuery {
-            offset: 0,
-            limit: 5,
-            query: None,
-            field_filter: None,
-            sort: Default::default(),
-        })
+        .list_tracks_page(
+            player_db::LibrarySourceScope::All,
+            ListTracksQuery {
+                offset: 0,
+                limit: 5,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .unwrap();
     for item in &page.items {
         println!(

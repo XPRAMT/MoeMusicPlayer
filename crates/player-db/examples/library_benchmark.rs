@@ -105,21 +105,25 @@ fn run_size(size: usize) -> Result<(), Box<dyn std::error::Error>> {
     let unchanged_scan = started.elapsed();
 
     let started = Instant::now();
-    let total_tracks = database.count_tracks(None)?;
+    let total_tracks = database.count_tracks(player_db::LibrarySourceScope::All, None)?;
     let count_query = started.elapsed();
 
     let started = Instant::now();
-    let page_items = database.list_tracks_window(None, 0, 100)?;
+    let page_items =
+        database.list_tracks_window(player_db::LibrarySourceScope::All, None, 0, 100)?;
     let page_fetch = started.elapsed();
 
     let started = Instant::now();
-    let first_page = database.list_tracks_page(ListTracksQuery {
-        offset: 0,
-        limit: 100,
-        query: None,
-        field_filter: None,
-        sort: Default::default(),
-    })?;
+    let first_page = database.list_tracks_page(
+        player_db::LibrarySourceScope::All,
+        ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        },
+    )?;
     let combined_page = started.elapsed();
 
     println!(

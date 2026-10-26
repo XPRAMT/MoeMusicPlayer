@@ -956,13 +956,16 @@ mod real_server_tests {
 
         // 4. The playback path of a track, and the reader the engine gets for it.
         let page = database
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 3,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 3,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .unwrap();
         let track = &page.items[0];
         let path = database.resolve_playable_filesystem_locator(track.id).unwrap();

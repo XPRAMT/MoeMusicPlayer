@@ -477,7 +477,12 @@ mod tests {
             first.observed, 1,
             "duplicate positions share one source mapping: {first:#?}"
         );
-        assert_eq!(database.count_tracks(None).expect("count tracks"), 1);
+        assert_eq!(
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("count tracks"),
+            1
+        );
         let saved = database
             .get_playlist(playlist_id)
             .expect("read playlist")
@@ -532,7 +537,9 @@ mod tests {
             )
             .expect("seed old MP4 source mapping without reconciling audio");
         assert_eq!(
-            database.count_tracks(None).expect("legacy mapping visible"),
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("legacy mapping visible"),
             2
         );
         let video_track_id = database
@@ -557,15 +564,23 @@ mod tests {
             .expect("unchanged playlist media check")
             .expect("playlist remains readable");
         assert_eq!(second.metadata_reads, 1, "changed audio tags are refreshed");
-        assert_eq!(database.count_tracks(None).expect("count tracks"), 1);
+        assert_eq!(
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("count tracks"),
+            1
+        );
         let page = database
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("read library projection");
         assert_eq!(page.items[0].id, stable_track_id);
         assert_eq!(
@@ -579,7 +594,9 @@ mod tests {
         assert_eq!(after_mp4_cleanup.entries[3].track_id, None);
         assert_eq!(after_mp4_cleanup.entries[3].locator, video_locator);
         assert_eq!(
-            database.count_tracks(None).expect("only audio is visible"),
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("only audio is visible"),
             1
         );
         let playlist_page = database
@@ -601,7 +618,9 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            database.count_tracks(None).expect("offline cache remains"),
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("offline cache remains"),
             1
         );
 
@@ -613,7 +632,7 @@ mod tests {
         assert_eq!(changed.observed, 0);
         assert_eq!(
             database
-                .count_tracks(None)
+                .count_tracks(player_db::LibrarySourceScope::All, None)
                 .expect("removed mapping is reconciled"),
             0
         );
@@ -633,7 +652,12 @@ mod tests {
             .expect("rescan restored entry")
             .expect("playlist readable");
         assert_eq!(recovery.observed, 1);
-        assert_eq!(database.count_tracks(None).expect("restored mapping"), 1);
+        assert_eq!(
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("restored mapping"),
+            1
+        );
         let page = database
             .get_playlist_page(playlist_id, 0, 10)
             .expect("reconcile restored playlist link")

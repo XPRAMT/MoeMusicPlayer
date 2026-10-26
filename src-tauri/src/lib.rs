@@ -641,6 +641,15 @@ fn enter_database_work(state: &AppState) -> Result<database_lifecycle::DatabaseW
         .ok_or_else(|| "應用程式正在關閉，暫時無法開始新的資料庫工作。".to_owned())
 }
 
+/// The source scope the library lists show now, read from the settings where the command runs (ADR 0037). Every list
+/// query and every queue built from a list takes it as an argument; no database handle keeps a copy.
+fn list_scope(state: &AppState) -> Result<player_db::LibrarySourceScope, String> {
+    state
+        .settings
+        .library_source_scope()
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(target_os = "android")]
 fn android_playback_service(
     state: &AppState,
@@ -1349,13 +1358,16 @@ mod system_media_artwork_tests {
             )
             .expect("persist fixture tracks and locators");
         let tracks = database
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("list fixture tracks")
             .items;
         let id_for = |title: &str| {
@@ -2118,7 +2130,15 @@ fn apply_system_media_event(
                 .as_ref()
                 .map(|track| track.id)
                 .ok_or_else(|| "目前沒有可播放的曲目。".to_owned())?;
-            let change = play_track_from_database(database, playback, &track_id.to_string(), None)?;
+            // Resumes the current track: its queue is kept. Only with no queue at all is a new one made, from the whole
+            // library rather than from a list.
+            let change = play_track_from_database(
+                database,
+                playback,
+                player_db::LibrarySourceScope::All,
+                &track_id.to_string(),
+                None,
+            )?;
             let PreparedTrackChange {
                 ticket,
                 track,
@@ -3255,11 +3275,17 @@ async fn library_get_page(
                     .clone()
             })
         {
-            return merged_library_page(database, &temporary_database, request, &query_alternates)
-                .map_err(|error| error.to_string());
+            return merged_library_page(
+                database,
+                &temporary_database,
+                list_scope(state)?,
+                request,
+                &query_alternates,
+            )
+            .map_err(|error| error.to_string());
         }
         database
-            .list_tracks_page_with_alternates(request, &query_alternates)
+            .list_tracks_page_with_alternates(list_scope(state)?, request, &query_alternates)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3307,9 +3333,14 @@ async fn library_get_track_position(
             })
         {
             // The page query merges the Explorer-opened tracks into the library list: find the track in that merge.
-            let page =
-                merged_library_page(database, &temporary_database, request, &query_alternates)
-                    .map_err(|error| error.to_string())?;
+            let page = merged_library_page(
+                database,
+                &temporary_database,
+                list_scope(state)?,
+                request,
+                &query_alternates,
+            )
+            .map_err(|error| error.to_string())?;
             return Ok(page
                 .items
                 .iter()
@@ -3317,7 +3348,7 @@ async fn library_get_track_position(
                 .map(|index| index as u64));
         }
         database
-            .track_position(&request, &query_alternates, track_id)
+            .track_position(list_scope(state)?, &request, &query_alternates, track_id)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3438,6 +3469,7 @@ async fn library_get_quick_index_for_tracks(
             let page = merged_library_page(
                 database,
                 &temporary_database,
+                list_scope(state)?,
                 ListTracksQuery {
                     limit: u32::MAX,
                     ..request.clone()
@@ -3461,7 +3493,7 @@ async fn library_get_quick_index_for_tracks(
                 .map_err(|error| error.to_string());
         }
         database
-            .quick_index_for_tracks(&request, &alternates)
+            .quick_index_for_tracks(list_scope(state)?, &request, &alternates)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3481,7 +3513,7 @@ async fn library_get_quick_index_for_artists(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .quick_index_for_artists(None, &[], &artist_names, sort)
+            .quick_index_for_artists(list_scope(state)?, None, &[], &artist_names, sort)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3501,7 +3533,7 @@ async fn library_get_quick_index_for_album_tracks(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .quick_index_for_album_tracks(&album_names, sort)
+            .quick_index_for_album_tracks(list_scope(state)?, &album_names, sort)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3529,7 +3561,7 @@ async fn playlist_get_quick_index_groupings(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .quick_index_for_playlist(playlist_id, sort)
+            .quick_index_for_playlist(list_scope(state)?, playlist_id, sort)
             .map_err(|error| error.to_string())
             .and_then(|snapshot| {
                 snapshot.ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
@@ -3588,7 +3620,12 @@ async fn library_create_album_index_snapshot(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .create_album_index_snapshot(&sort_field, &direction, grouping_enabled)
+            .create_album_index_snapshot(
+                list_scope(state)?,
+                &sort_field,
+                &direction,
+                grouping_enabled,
+            )
             .map_err(|error| error.to_string())
     })
     .await
@@ -3628,7 +3665,7 @@ async fn library_resolve_album_index_entry(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let snapshot = database
-            .create_album_navigation_snapshot()
+            .create_album_navigation_snapshot(list_scope(state)?)
             .map_err(|error| error.to_string())?;
         database
             .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
@@ -3660,7 +3697,7 @@ async fn library_resolve_album_index_entry_by_name(
             )
         };
         let snapshot = database
-            .create_album_navigation_snapshot()
+            .create_album_navigation_snapshot(list_scope(state)?)
             .map_err(|error| error.to_string())?;
         database
             .get_index_snapshot_entry(&snapshot.snapshot_id, &key)
@@ -3686,7 +3723,14 @@ async fn library_get_album_page(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .list_album_tracks_page_with_index_sort(&album_names, sort, index_sort, offset, limit)
+            .list_album_tracks_page_with_index_sort(
+                list_scope(state)?,
+                &album_names,
+                sort,
+                index_sort,
+                offset,
+                limit,
+            )
             .map_err(|error| error.to_string())
     })
     .await
@@ -3705,7 +3749,7 @@ async fn library_get_album_detail_facets(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .album_detail_facets(&album_names)
+            .album_detail_facets(list_scope(state)?, &album_names)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3724,7 +3768,7 @@ async fn library_get_album_detail_artists(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .album_detail_artists(&album_names)
+            .album_detail_artists(list_scope(state)?, &album_names)
             .map_err(|error| error.to_string())
     })
     .await
@@ -3796,6 +3840,8 @@ async fn album_artwork_selection_ensure(
     let app_for_directory = app.clone();
     let selection_key = key.clone();
     let (directory, cached, candidates, tree_uris) = run_database_work(app.clone(), move |state| {
+        // The album's songs as its card counts them (the same scope as the album list).
+        let scope = list_scope(state)?;
         let directory = album_artwork_cache_directory(&app_for_directory, state)?;
         let cached = album_artwork_cache::get_selection(&directory, &selection_key)?;
         // An album with no cover remembered from before remote tracks were told apart from missing ones may only have failed
@@ -3806,7 +3852,7 @@ async fn album_artwork_selection_ensure(
             .is_some_and(|selection| selection.track_ids.is_empty())
             && state.database.as_ref().is_some_and(|database| {
                 database
-                    .album_artwork_candidate_locators(&album_names)
+                    .album_artwork_candidate_locators(scope, &album_names)
                     .map(|candidates| {
                         candidates.iter().any(|(_, locators)| {
                             locators
@@ -3834,7 +3880,7 @@ async fn album_artwork_selection_ensure(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let candidates = database
-            .album_artwork_candidate_locators(&album_names)
+            .album_artwork_candidate_locators(scope, &album_names)
             .map_err(|error| error.to_string())?;
         // Android folder artwork is read through real paths (ADR 0014); no SAF trees.
         let tree_uris: Vec<String> = Vec::new();
@@ -4171,7 +4217,12 @@ async fn library_create_artist_index_snapshot(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         database
-            .create_artist_index_snapshot(&sort_field, &direction, grouping_enabled)
+            .create_artist_index_snapshot(
+                list_scope(state)?,
+                &sort_field,
+                &direction,
+                grouping_enabled,
+            )
             .map_err(|error| error.to_string())
     })
     .await
@@ -4211,7 +4262,7 @@ async fn library_resolve_artist_index_entry(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let snapshot = database
-            .create_artist_navigation_snapshot()
+            .create_artist_navigation_snapshot(list_scope(state)?)
             .map_err(|error| error.to_string())?;
         database
             .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
@@ -4236,7 +4287,7 @@ async fn library_resolve_artist_index_entry_by_name(
             .music_identity_key(&name)
             .map_err(|error| error.to_string())?;
         let snapshot = database
-            .create_artist_navigation_snapshot()
+            .create_artist_navigation_snapshot(list_scope(state)?)
             .map_err(|error| error.to_string())?;
         database
             .get_index_snapshot_entry(&snapshot.snapshot_id, &identity_key)
@@ -4263,6 +4314,7 @@ fn library_get_artist_page(
     })?;
     database
         .list_tracks_page_for_artists(
+            list_scope(&state)?,
             ListTracksQuery {
                 query,
                 field_filter: None,
@@ -4280,6 +4332,7 @@ fn library_get_artist_page(
 fn merged_library_page(
     database: &Database,
     temporary_database: &Database,
+    scope: player_db::LibrarySourceScope,
     request: ListTracksQuery,
     query_alternates: &[String],
 ) -> Result<Page<TrackSummary>, String> {
@@ -4293,7 +4346,7 @@ fn merged_library_page(
     // The transient catalog is already a SQLite database. Read its complete filtered result in
     // one SQLite statement instead of repeatedly issuing small internal pages.
     let temporary_items = temporary_database
-        .list_tracks_all_with_alternates(&temporary_query, query_alternates)
+        .list_tracks_all_with_alternates(scope, &temporary_query, query_alternates)
         .map_err(|error| error.to_string())?;
 
     let mut temporary_paths = HashSet::new();
@@ -4329,6 +4382,7 @@ fn merged_library_page(
     };
     let persistent_total = database
         .list_tracks_page_with_alternates(
+            scope,
             ListTracksQuery {
                 limit: 1,
                 ..persistent_query.clone()
@@ -4348,6 +4402,7 @@ fn merged_library_page(
         .min(persistent_total.total_count);
     let mut persistent_items = database
         .list_tracks_window_with_alternates(
+            scope,
             &persistent_query,
             query_alternates,
             0,
@@ -4629,6 +4684,7 @@ struct LibraryQueueSearch {
 fn queue_for_merged_library_search(
     database: &Database,
     temporary_database: Option<&Database>,
+    scope: player_db::LibrarySourceScope,
     selected_track_id: TrackId,
     search: LibraryQueueSearch,
     shuffle: bool,
@@ -4645,6 +4701,7 @@ fn queue_for_merged_library_search(
         Some(temporary_database) => merged_library_page(
             database,
             temporary_database,
+            scope,
             ListTracksQuery {
                 query: query.clone(),
                 field_filter: field_filter.clone(),
@@ -4660,6 +4717,7 @@ fn queue_for_merged_library_search(
         .collect::<Vec<_>>(),
         None => database
             .list_track_ids_filtered_with_alternates(
+                scope,
                 query.as_deref(),
                 &query_alternates,
                 field_filter.as_ref(),
@@ -4848,7 +4906,13 @@ fn playlist_get_page(
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
     database
-        .get_playlist_page_sorted(playlist_id, offset, limit, sort.unwrap_or_default())
+        .get_playlist_page_sorted(
+            list_scope(&state)?,
+            playlist_id,
+            offset,
+            limit,
+            sort.unwrap_or_default(),
+        )
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "找不到這份播放清單，請重新載入清單。".to_owned())
 }
@@ -4873,7 +4937,12 @@ fn playlist_get_track_position(
             .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
     })?;
     database
-        .playlist_track_position(playlist_id, sort.unwrap_or_default(), track_id)
+        .playlist_track_position(
+            list_scope(&state)?,
+            playlist_id,
+            sort.unwrap_or_default(),
+            track_id,
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -7318,9 +7387,10 @@ fn settings_get_library_source_scope(
         .map_err(|error| error.to_string())
 }
 
-/// Switch the library lists between all songs, only local songs and only remote songs. Every list, count and grouping
-/// follows at once (the page reloads its lists), and so does the next queue built from a list; the current queue and
-/// playback are not affected.
+/// Switch the library lists between all songs, only local songs and only remote songs. Only the setting changes: every
+/// list query and every queue built from a list reads it where it runs and passes it to the database (no handle keeps
+/// a copy), so every list, count and grouping follows at once (the page reloads its lists), and so does the next queue
+/// built from a list; the current queue and playback are not affected.
 #[tauri::command]
 fn settings_set_library_source_scope(
     state: State<'_, AppState>,
@@ -7333,20 +7403,6 @@ fn settings_set_library_source_scope(
             Ok(())
         })
         .map_err(|error| error.to_string())?;
-    if let Some(database) = state.database.as_ref() {
-        database.set_source_scope(saved.library_source_scope);
-    }
-    // The Explorer-opened songs (local files) are listed under the same scope as the library.
-    #[cfg(target_os = "windows")]
-    if let Some(temporary_database) = state.playback.as_ref().and_then(|playback| {
-        playback
-            .temporary_catalog
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }) {
-        temporary_database.set_source_scope(saved.library_source_scope);
-    }
     Ok(saved.library_source_scope)
 }
 
@@ -9758,7 +9814,13 @@ async fn playback_play(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let service = windows_playback_service(&state)?;
-        let change = play_track_from_database(database, service, &track_id, queue_source)?;
+        let change = play_track_from_database(
+            database,
+            service,
+            list_scope(&state)?,
+            &track_id,
+            queue_source,
+        )?;
         let PreparedTrackChange {
             ticket,
             track,
@@ -9774,13 +9836,10 @@ async fn playback_play(
     }
     #[cfg(target_os = "android")]
     {
-        // The actor reads the library through its own database handle: it builds the queue under the scope the lists
-        // show now, so the queue holds exactly the rows of the page the track was picked from.
-        let scope = state
-            .settings
-            .snapshot()
-            .map_err(|error| error.to_string())?
-            .library_source_scope;
+        // The actor reads the library through its own database handle; the scope the lists show now travels with the
+        // action as the queue query's argument, so the queue holds exactly the rows of the page the track was picked
+        // from.
+        let scope = list_scope(&state)?;
         android_playback_service(&state)?
             .execute(android_playback::PlaybackAction::select_track(
                 track_id,
@@ -9894,7 +9953,14 @@ fn check_started_track_file(app: &AppHandle, track_id: TrackId) {
     let Some(database) = state.database.as_ref() else {
         return;
     };
-    let album_before = database.album_index_key_for_track(track_id).ok().flatten();
+    // The album key and count as the album list shows them, so the right album card forgets its cover.
+    let Ok(scope) = list_scope(&state) else {
+        return;
+    };
+    let album_before = database
+        .album_index_key_for_track(scope, track_id)
+        .ok()
+        .flatten();
     let remote = player_core::remote_content();
     let outcome =
         track_freshness::check_track_file(database, track_id, remote.as_deref(), |locator| {
@@ -9904,7 +9970,10 @@ fn check_started_track_file(app: &AppHandle, track_id: TrackId) {
         return;
     }
     eprintln!("[track-check] the playing song's file changed; its tags were read again");
-    let album_after = database.album_index_key_for_track(track_id).ok().flatten();
+    let album_after = database
+        .album_index_key_for_track(scope, track_id)
+        .ok()
+        .flatten();
     track_details::forget_saved_album_covers(app, &state, album_before, album_after);
     let _ = tauri::async_runtime::block_on(refresh_current_track(app, &state));
     let _ = app.emit(TRACK_FILE_REFRESHED_EVENT, track_id.to_string());
@@ -10829,6 +10898,7 @@ fn windows_open_default_apps_settings() -> Result<(), String> {
 /// between the page load and the click) still plays: it is put first, ahead of the list.
 fn queue_for_track(
     database: &Database,
+    scope: player_db::LibrarySourceScope,
     track_id: TrackId,
     source: Option<PlaybackQueueSource>,
 ) -> Result<PlaybackQueue, String> {
@@ -10850,6 +10920,7 @@ fn queue_for_track(
         }) => {
             let track_ids = database
                 .list_track_ids_filtered_with_alternates(
+                    scope,
                     query.as_deref(),
                     &query_alternates,
                     field_filter.as_ref(),
@@ -10872,7 +10943,7 @@ fn queue_for_track(
             sort,
         }) => {
             let track_ids = database
-                .list_artist_track_ids(query.as_deref(), &[], &artist_names, sort)
+                .list_artist_track_ids(scope, query.as_deref(), &[], &artist_names, sort)
                 .map_err(|error| error.to_string())?;
             (
                 library_entries(track_ids),
@@ -10890,7 +10961,7 @@ fn queue_for_track(
             index_sort,
         }) => {
             let track_ids = database
-                .list_album_track_ids(&album_names, sort, index_sort)
+                .list_album_track_ids(scope, &album_names, sort, index_sort)
                 .map_err(|error| error.to_string())?;
             // Persisted like a library queue: the session stores the ordered entries
             // themselves, so restoring never re-queries or re-sorts.
@@ -10912,7 +10983,7 @@ fn queue_for_track(
             let playlist_id = PlaylistId::parse(&playlist_id)
                 .map_err(|error| format!("播放清單 ID 無效：{error}"))?;
             let entries = database
-                .playlist_track_ids(playlist_id, sort)
+                .playlist_track_ids(scope, playlist_id, sort)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "播放清單已不存在，請重新整理。".to_owned())?
                 .into_iter()
@@ -10937,7 +11008,7 @@ fn queue_for_track(
         }
         None => {
             let track_ids = database
-                .list_track_ids(None)
+                .list_track_ids(scope, None)
                 .map_err(|error| error.to_string())?;
             (
                 library_entries(track_ids),
@@ -11154,11 +11225,9 @@ fn open_external_audio_path(
     let temporary_database = if temporary_records.is_empty() {
         None
     } else {
+        // Its lists are read with the same explicit scope argument as the library's (ADR 0037); it keeps none itself.
         let mut temporary_database =
             Database::open_in_memory().map_err(|error| format!("建立暫存曲庫失敗：{error}"))?;
-        if let Some(database) = database {
-            temporary_database.set_source_scope(database.source_scope());
-        }
         let parent = selected_path
             .parent()
             .ok_or_else(|| "無法判斷音樂檔案所在資料夾。".to_owned())?;
@@ -12424,6 +12493,7 @@ fn restore_playback_session(
 fn play_track_from_database(
     database: &Database,
     service: &WindowsPlaybackService,
+    scope: player_db::LibrarySourceScope,
     track_id: &str,
     source: Option<PlaybackQueueSource>,
 ) -> Result<PreparedTrackChange, String> {
@@ -12519,6 +12589,7 @@ fn play_track_from_database(
             ) => queue_for_merged_library_search(
                 database,
                 temporary_database.as_deref(),
+                scope,
                 track_id,
                 LibraryQueueSearch {
                     query: query.clone(),
@@ -12531,6 +12602,7 @@ fn play_track_from_database(
             (None, true) => queue_for_merged_library_search(
                 database,
                 temporary_database.as_deref(),
+                scope,
                 track_id,
                 LibraryQueueSearch {
                     query: None,
@@ -12540,7 +12612,7 @@ fn play_track_from_database(
                 },
                 shuffle,
             )?,
-            _ => queue_for_track(database, track_id, source)?,
+            _ => queue_for_track(database, scope, track_id, source)?,
         };
         queue.set_repeat_mode(queue_repeat_mode(repeat_mode));
         if !used_merged_search {
@@ -12971,9 +13043,6 @@ pub fn run() {
             let initial_settings = settings
                 .snapshot()
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
-            if let Some(database) = database.as_ref() {
-                database.set_source_scope(initial_settings.library_source_scope);
-            }
             #[cfg(target_os = "android")]
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "windows")]
@@ -13483,7 +13552,12 @@ mod windows_library_integration_tests {
             .get_playlist(playlist_id)
             .expect("read playlist")
             .is_some());
-        assert_eq!(database.count_tracks(None).expect("track count"), 1);
+        assert_eq!(
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("track count"),
+            1
+        );
         let track_id = database
             .resolve_track_id_for_locator(&player_core::MediaLocator::FileSystem(
                 media_path.clone(),
@@ -13507,7 +13581,7 @@ mod windows_library_integration_tests {
         // Library pages only count mapped tracks; the Track row itself must remain.
         assert_eq!(
             database
-                .count_tracks(None)
+                .count_tracks(player_db::LibrarySourceScope::All, None)
                 .expect("unmapped tracks leave library"),
             0
         );
@@ -13553,7 +13627,9 @@ mod windows_library_integration_tests {
         .expect("create an existing playlist projection")
         .expect("playlist source is readable");
         assert_eq!(
-            database.count_tracks(None).expect("initial track mapping"),
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("initial track mapping"),
             1
         );
 
@@ -13570,7 +13646,9 @@ mod windows_library_integration_tests {
         };
         assert!(error.contains("設定來源清單尚未確認"));
         assert_eq!(
-            database.count_tracks(None).expect("mapping is preserved"),
+            database
+                .count_tracks(player_db::LibrarySourceScope::All, None)
+                .expect("mapping is preserved"),
             1
         );
         let root = database
@@ -13824,13 +13902,16 @@ mod windows_library_integration_tests {
             assert_eq!(report.added_or_updated, 1);
 
             let page = database
-                .list_tracks_page(ListTracksQuery {
-                    query: None,
-                    field_filter: None,
-                    offset: 0,
-                    limit: 25,
-                    sort: Default::default(),
-                })
+                .list_tracks_page(
+                    player_db::LibrarySourceScope::All,
+                    ListTracksQuery {
+                        query: None,
+                        field_filter: None,
+                        offset: 0,
+                        limit: 25,
+                        sort: Default::default(),
+                    },
+                )
                 .expect("load first library page");
             assert_eq!(page.total_count, 1);
             assert_eq!(page.items.len(), 1);
@@ -13840,13 +13921,16 @@ mod windows_library_integration_tests {
             first_track_id = page.items[0].id;
 
             let filtered = database
-                .list_tracks_page(ListTracksQuery {
-                    query: Some("夜色".to_owned()),
-                    field_filter: None,
-                    offset: 0,
-                    limit: 25,
-                    sort: Default::default(),
-                })
+                .list_tracks_page(
+                    player_db::LibrarySourceScope::All,
+                    ListTracksQuery {
+                        query: Some("夜色".to_owned()),
+                        field_filter: None,
+                        offset: 0,
+                        limit: 25,
+                        sort: Default::default(),
+                    },
+                )
                 .expect("search only the requested page");
             assert_eq!(filtered.total_count, 1);
             assert_eq!(filtered.items[0].id, first_track_id);
@@ -13871,13 +13955,16 @@ mod windows_library_integration_tests {
         );
 
         let reopened_page = reopened
-            .list_tracks_page(ListTracksQuery {
-                query: None,
-                field_filter: None,
-                offset: 0,
-                limit: 25,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    query: None,
+                    field_filter: None,
+                    offset: 0,
+                    limit: 25,
+                    sort: Default::default(),
+                },
+            )
             .expect("read persisted library page after reopen");
         assert_eq!(reopened_page.total_count, 1);
         assert_eq!(reopened_page.items[0].id, first_track_id);
@@ -13947,12 +14034,13 @@ mod windows_library_integration_tests {
 
     fn album_page_ids(
         database: &Database,
+        scope: player_db::LibrarySourceScope,
         names: &[String],
         sort: Option<TrackListSort>,
         index_sort: Option<TrackSortDirection>,
     ) -> Vec<TrackId> {
         database
-            .list_album_tracks_page_with_index_sort(names, sort, index_sort, 0, 500)
+            .list_album_tracks_page_with_index_sort(scope, names, sort, index_sort, 0, 500)
             .expect("album page")
             .items
             .into_iter()
@@ -13993,11 +14081,18 @@ mod windows_library_integration_tests {
             (Some(TrackListSort::default()), None),
         ];
         for (sort, index_sort) in sorts {
-            let page = album_page_ids(&database, &names, sort, index_sort);
+            let page = album_page_ids(
+                &database,
+                player_db::LibrarySourceScope::All,
+                &names,
+                sort,
+                index_sort,
+            );
             assert_eq!(page.len(), 5);
             for selected in &page {
                 let queue = queue_for_track(
                     &database,
+                    player_db::LibrarySourceScope::All,
                     *selected,
                     Some(PlaybackQueueSource::Album {
                         album_names: names.clone(),
@@ -14012,7 +14107,14 @@ mod windows_library_integration_tests {
         }
         // Default `#` order is track number, never the added order.
         let titles = database
-            .list_album_tracks_page_with_index_sort(&names, None, None, 0, 10)
+            .list_album_tracks_page_with_index_sort(
+                player_db::LibrarySourceScope::All,
+                &names,
+                None,
+                None,
+                0,
+                10,
+            )
             .expect("page")
             .items
             .into_iter()
@@ -14036,9 +14138,16 @@ mod windows_library_integration_tests {
         ]);
         let names = vec!["Box".to_owned()];
         for index_sort in [None, Some(TrackSortDirection::Desc)] {
-            let page = album_page_ids(&database, &names, None, index_sort);
+            let page = album_page_ids(
+                &database,
+                player_db::LibrarySourceScope::All,
+                &names,
+                None,
+                index_sort,
+            );
             let queue = queue_for_track(
                 &database,
+                player_db::LibrarySourceScope::All,
                 page[1],
                 Some(PlaybackQueueSource::Album {
                     album_names: names.clone(),
@@ -14059,9 +14168,16 @@ mod windows_library_integration_tests {
             ("b", "Live", Some(1), Some(2)),
         ]);
         let names = vec!["Live".to_owned()];
-        let page = album_page_ids(&database, &names, None, None);
+        let page = album_page_ids(
+            &database,
+            player_db::LibrarySourceScope::All,
+            &names,
+            None,
+            None,
+        );
         let mut queue = queue_for_track(
             &database,
+            player_db::LibrarySourceScope::All,
             page[0],
             Some(PlaybackQueueSource::Album {
                 album_names: names.clone(),
@@ -14091,10 +14207,17 @@ mod windows_library_integration_tests {
             ("x3", "B", None, Some(1)),
         ]);
         let names = vec!["A|B".to_owned()];
-        let page = album_page_ids(&database, &names, None, None);
+        let page = album_page_ids(
+            &database,
+            player_db::LibrarySourceScope::All,
+            &names,
+            None,
+            None,
+        );
         assert_eq!(page.len(), 1);
         let queue = queue_for_track(
             &database,
+            player_db::LibrarySourceScope::All,
             page[0],
             Some(PlaybackQueueSource::Album {
                 album_names: names,
@@ -14174,18 +14297,22 @@ mod windows_library_integration_tests {
             value: "hanser|HANSER".to_owned(),
         };
         let page = database
-            .list_tracks_page(ListTracksQuery {
-                query: Some("needle".to_owned()),
-                field_filter: Some(filter.clone()),
-                offset: 0,
-                limit: 10,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    query: Some("needle".to_owned()),
+                    field_filter: Some(filter.clone()),
+                    offset: 0,
+                    limit: 10,
+                    sort: Default::default(),
+                },
+            )
             .expect("read exact-filtered page");
         assert_eq!(page.total_count, 2);
         let selected_track = page.items[0].id;
         let queue = queue_for_track(
             &database,
+            player_db::LibrarySourceScope::All,
             selected_track,
             Some(PlaybackQueueSource::Library {
                 query: Some("needle".to_owned()),
@@ -14284,7 +14411,8 @@ mod windows_library_integration_tests {
         let mut off_state = off.clone();
         off_state.enabled = false;
         database.save_library_root(&off_state).expect("disable source");
-        database.set_source_scope(player_db::LibrarySourceScope::Local);
+        // The lists show local songs only: every page and every queue below gets that scope as its argument.
+        let scope = player_db::LibrarySourceScope::Local;
 
         let sort = TrackListSort {
             field: player_core::TrackSortField::Title,
@@ -14292,13 +14420,16 @@ mod windows_library_integration_tests {
         };
         let library_page = |query: Option<&str>| {
             database
-                .list_tracks_page(ListTracksQuery {
-                    query: query.map(str::to_owned),
-                    field_filter: None,
-                    offset: 0,
-                    limit: 100,
-                    sort,
-                })
+                .list_tracks_page(
+                    scope,
+                    ListTracksQuery {
+                        query: query.map(str::to_owned),
+                        field_filter: None,
+                        offset: 0,
+                        limit: 100,
+                        sort,
+                    },
+                )
                 .expect("library page")
                 .items
                 .into_iter()
@@ -14309,6 +14440,7 @@ mod windows_library_integration_tests {
         assert_eq!(needle_page, vec![id_of(&database, &local_songs[0])]);
         let library_queue = queue_for_track(
             &database,
+            scope,
             needle_page[0],
             Some(PlaybackQueueSource::Library {
                 query: Some("needle".to_owned()),
@@ -14322,6 +14454,7 @@ mod windows_library_integration_tests {
 
         let artist_page = database
             .list_tracks_page_for_artists(
+                scope,
                 ListTracksQuery {
                     query: None,
                     field_filter: None,
@@ -14340,6 +14473,7 @@ mod windows_library_integration_tests {
         assert_eq!(artist_page, library_page(None));
         let artist_queue = queue_for_track(
             &database,
+            scope,
             artist_page[1],
             Some(PlaybackQueueSource::Artist {
                 artist_names: vec!["singer".to_owned()],
@@ -14351,9 +14485,10 @@ mod windows_library_integration_tests {
         assert_eq!(queue_ids(&artist_queue), artist_page);
         assert_eq!(artist_queue.current(), artist_page[1]);
 
-        let album_page = album_page_ids(&database, &["Album".to_owned()], None, None);
+        let album_page = album_page_ids(&database, scope, &["Album".to_owned()], None, None);
         let album_queue = queue_for_track(
             &database,
+            scope,
             album_page[0],
             Some(PlaybackQueueSource::Album {
                 album_names: vec!["Album".to_owned()],
@@ -14369,7 +14504,7 @@ mod windows_library_integration_tests {
             direction: player_core::PlaylistSortDirection::Desc,
         };
         let playlist_page = database
-            .get_playlist_page_sorted(playlist.id, 0, 100, playlist_sort)
+            .get_playlist_page_sorted(scope, playlist.id, 0, 100, playlist_sort)
             .expect("playlist page")
             .expect("playlist")
             .items
@@ -14380,6 +14515,7 @@ mod windows_library_integration_tests {
         let (position, picked) = playlist_page[1];
         let playlist_queue = queue_for_track(
             &database,
+            scope,
             picked,
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
@@ -14403,6 +14539,7 @@ mod windows_library_integration_tests {
         // first, ahead of the list's rows.
         let hidden_click = queue_for_track(
             &database,
+            scope,
             cloud,
             Some(PlaybackQueueSource::Library {
                 query: None,
@@ -14501,6 +14638,7 @@ mod windows_library_integration_tests {
         let first_page = merged_library_page(
             &library,
             &temporary,
+            player_db::LibrarySourceScope::All,
             ListTracksQuery {
                 offset: 0,
                 limit: 2,
@@ -14522,6 +14660,7 @@ mod windows_library_integration_tests {
         let second_page = merged_library_page(
             &library,
             &temporary,
+            player_db::LibrarySourceScope::All,
             ListTracksQuery {
                 offset: 2,
                 limit: 2,
@@ -15176,13 +15315,16 @@ mod windows_library_integration_tests {
         .expect("register isolated folder");
         sync_windows_sources(&mut database).expect("index isolated tracks");
         let tracks = database
-            .list_tracks_page(ListTracksQuery {
-                query: None,
-                field_filter: None,
-                offset: 0,
-                limit: 10,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    query: None,
+                    field_filter: None,
+                    offset: 0,
+                    limit: 10,
+                    sort: Default::default(),
+                },
+            )
             .expect("read isolated tracks");
         assert_eq!(tracks.total_count, 2);
 
@@ -15198,6 +15340,7 @@ mod windows_library_integration_tests {
         let change = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &first_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
@@ -15276,6 +15419,7 @@ mod windows_library_integration_tests {
         let selected = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &selected_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
@@ -15319,6 +15463,7 @@ mod windows_library_integration_tests {
         let playlist_selection = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &first_id.to_string(),
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
@@ -15367,6 +15512,7 @@ mod windows_library_integration_tests {
         let queue_jump = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &first_id.to_string(),
             Some(PlaybackQueueSource::Queue {
                 traversal_position: 0,
@@ -15397,9 +15543,14 @@ mod windows_library_integration_tests {
         assert_eq!(queue_after_jump.entries, queue_before_jump.entries);
         assert_eq!(queue_after_jump.play_order, queue_before_jump.play_order);
 
-        let explicit_play =
-            play_track_from_database(&database, &service, &selected_id.to_string(), None)
-                .expect("explicit Play of current track");
+        let explicit_play = play_track_from_database(
+            &database,
+            &service,
+            player_db::LibrarySourceScope::All,
+            &selected_id.to_string(),
+            None,
+        )
+        .expect("explicit Play of current track");
         explicit_play
             .ticket
             .wait(Duration::from_secs(2))
@@ -15409,6 +15560,7 @@ mod windows_library_integration_tests {
         let selected_while_playing = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &first_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
@@ -15452,6 +15604,7 @@ mod windows_library_integration_tests {
         let change = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &selected_id.to_string(),
             Some(PlaybackQueueSource::Library {
                 query: None,
@@ -15487,13 +15640,16 @@ mod windows_library_integration_tests {
         let sync = sync_windows_sources(&mut database).expect("sync source before playback");
         assert_eq!(sync.sources[0].state, "complete");
         let page = database
-            .list_tracks_page(ListTracksQuery {
-                query: None,
-                field_filter: None,
-                offset: 0,
-                limit: 10,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                player_db::LibrarySourceScope::All,
+                ListTracksQuery {
+                    query: None,
+                    field_filter: None,
+                    offset: 0,
+                    limit: 10,
+                    sort: Default::default(),
+                },
+            )
             .expect("read track page");
         assert_eq!(page.total_count, 1);
         let track_id = page.items[0].id;
@@ -15508,8 +15664,14 @@ mod windows_library_integration_tests {
         })
         .expect("create test audio worker");
         let service = WindowsPlaybackService::new(player);
-        let change = play_track_from_database(&database, &service, &track_id.to_string(), None)
-            .expect("resolve internal ID and enqueue playback");
+        let change = play_track_from_database(
+            &database,
+            &service,
+            player_db::LibrarySourceScope::All,
+            &track_id.to_string(),
+            None,
+        )
+        .expect("resolve internal ID and enqueue playback");
         let PreparedTrackChange {
             ticket,
             track,
@@ -15596,6 +15758,7 @@ mod windows_library_integration_tests {
             .expect("save duplicate playlist entries");
         let first_entry_queue = queue_for_track(
             &database,
+            player_db::LibrarySourceScope::All,
             track_id,
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
@@ -15607,6 +15770,7 @@ mod windows_library_integration_tests {
         assert!(first_entry_queue.can_next());
         let last_entry_queue = queue_for_track(
             &database,
+            player_db::LibrarySourceScope::All,
             track_id,
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
@@ -15621,6 +15785,7 @@ mod windows_library_integration_tests {
         let change = play_track_from_database(
             &database,
             &service,
+            player_db::LibrarySourceScope::All,
             &track_id.to_string(),
             Some(PlaybackQueueSource::Playlist {
                 playlist_id: playlist.id.to_string(),
@@ -16007,13 +16172,16 @@ mod windows_library_integration_tests {
             add_windows_folder_to_database(&database, source.to_str().unwrap()).unwrap();
             sync_windows_sources(&mut database).unwrap();
             let tracks = database
-                .list_tracks_page(ListTracksQuery {
-                    query: None,
-                    field_filter: None,
-                    offset: 0,
-                    limit: 10,
-                    sort: Default::default(),
-                })
+                .list_tracks_page(
+                    player_db::LibrarySourceScope::All,
+                    ListTracksQuery {
+                        query: None,
+                        field_filter: None,
+                        offset: 0,
+                        limit: 10,
+                        sort: Default::default(),
+                    },
+                )
                 .unwrap();
             assert_eq!(tracks.total_count, 3);
             let failing = Arc::new(Mutex::new(Vec::new()));
@@ -16037,6 +16205,7 @@ mod windows_library_integration_tests {
             let change = play_track_from_database(
                 &database,
                 &service,
+                player_db::LibrarySourceScope::All,
                 &tracks.items[0].id.to_string(),
                 Some(PlaybackQueueSource::Library {
                     query: None,
@@ -16279,6 +16448,7 @@ mod windows_library_integration_tests {
         let change = play_track_from_database(
             &fixture.database,
             &fixture.service,
+            player_db::LibrarySourceScope::All,
             &fixture.order[0].to_string(),
             None,
         )
@@ -16391,6 +16561,7 @@ mod windows_library_integration_tests {
         let change = play_track_from_database(
             &fixture.database,
             &fixture.service,
+            player_db::LibrarySourceScope::All,
             &fixture.order[2].to_string(),
             None,
         )

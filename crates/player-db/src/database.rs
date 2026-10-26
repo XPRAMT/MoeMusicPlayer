@@ -44,11 +44,20 @@ const SCHEMA_VERSION: i64 = 24;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
-const SOURCE_SCOPE_FUNCTION: &str = "moe_in_scope";
+/// The pure SQL function that answers "is this source in scope": `moe_source_in_scope(scope code, source kind, locator
+/// kind)`. It holds no state; the scope is part of the statement text.
+const SOURCE_SCOPE_FUNCTION: &str = "moe_source_in_scope";
+/// The placeholder the scoped SQL texts are written with. It is deliberately not a registered function: a text that
+/// reaches SQLite without going through `LibrarySourceScope::bind` fails with "no such function" instead of quietly
+/// listing every source.
+const SOURCE_SCOPE_PLACEHOLDER: &str = "moe_in_scope(";
 
-/// Which sources the library lists show: everything, only the local ones, or only the remote ones. It narrows every
-/// list, count and grouping (a track is visible when one of its enabled sources is in scope); playback still resolves
-/// every enabled source, so a queued track keeps playing when the scope changes.
+/// Which sources the library lists show: everything, only the local ones, or only the remote ones. It is an explicit
+/// argument of every query that shows a list as the screen shows it (pages, counts, groupings, quick indexes, artist
+/// and album snapshots, playlist pages and every queue built from a list): a track is visible when one of its enabled
+/// sources is in scope. The database keeps no scope of its own, so two handles on the same file always answer the same
+/// query the same way. Whole-data reads (export, sync, playback resolution, single-track summaries) take no scope and
+/// see every source (ADR 0037).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LibrarySourceScope {
@@ -59,12 +68,28 @@ pub enum LibrarySourceScope {
 }
 
 impl LibrarySourceScope {
-    fn from_code(code: u8) -> Self {
+    fn code(self) -> u8 {
+        match self {
+            Self::All => 0,
+            Self::Local => 1,
+            Self::Remote => 2,
+        }
+    }
+
+    fn from_code(code: i64) -> Self {
         match code {
             1 => Self::Local,
             2 => Self::Remote,
             _ => Self::All,
         }
+    }
+
+    /// The statement text with this scope written into every scope test of `sql`.
+    fn bind(self, sql: &str) -> String {
+        sql.replace(
+            SOURCE_SCOPE_PLACEHOLDER,
+            &format!("{SOURCE_SCOPE_FUNCTION}({}, ", self.code()),
+        )
     }
 
     /// A source is remote when it is a remote folder or when it is found on a server (a playlist file kept on one).
@@ -1331,7 +1356,6 @@ fn register_natural_title_collation(connection: &Connection) -> rusqlite::Result
 fn register_music_collation(
     connection: &Connection,
     collation_spec: &MusicCollationSpec,
-    source_scope: Arc<std::sync::atomic::AtomicU8>,
 ) -> rusqlite::Result<()> {
     let collators = collation_spec.build_collators();
     connection.create_collation(MUSIC_COLLATION_NAME, {
@@ -1356,15 +1380,15 @@ fn register_music_collation(
             Ok(year_group_label(value.as_deref()))
         },
     )?;
-    // Not deterministic: the answer follows the scope switch.
+    // Pure: the scope is the first argument, written into the statement by `LibrarySourceScope::bind`.
     connection.create_scalar_function(
         SOURCE_SCOPE_FUNCTION,
-        2,
-        FunctionFlags::SQLITE_UTF8,
-        move |context| {
-            let kind = context.get::<String>(0)?;
-            let locator_kind = context.get::<String>(1)?;
-            let scope = LibrarySourceScope::from_code(source_scope.load(std::sync::atomic::Ordering::Relaxed));
+        3,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let scope = LibrarySourceScope::from_code(context.get::<i64>(0)?);
+            let kind = context.get::<String>(1)?;
+            let locator_kind = context.get::<String>(2)?;
             Ok(scope.admits(&kind, &locator_kind))
         },
     )?;
@@ -1588,8 +1612,6 @@ pub struct Database {
     connection: Mutex<Connection>,
     collation_spec: MusicCollationSpec,
     collators: MusicCollators,
-    /// See `LibrarySourceScope`; shared with the SQL function that narrows the lists.
-    source_scope: Arc<std::sync::atomic::AtomicU8>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1857,7 +1879,7 @@ impl Database {
                 .as_deref()
                 .and_then(MusicCollationSpec::from_signature)
                 .unwrap_or_else(|| collation_spec.clone());
-            register_music_collation(&validation_connection, &validation_spec, Arc::default())?;
+            register_music_collation(&validation_connection, &validation_spec)?;
         }
         validation_connection.busy_timeout(Duration::from_secs(5))?;
         let check: String = validation_connection
@@ -1952,24 +1974,12 @@ impl Database {
         Ok(())
     }
 
-    /// Narrow every list, count and grouping to local or remote sources (or both), and with them every playback queue
-    /// built from a list (it holds exactly the list's rows). Playback still resolves all sources. The scope belongs to
-    /// this handle: another `Database` opened on the same file keeps its own.
-    pub fn set_source_scope(&self, scope: LibrarySourceScope) {
-        self.source_scope.store(scope as u8, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn source_scope(&self) -> LibrarySourceScope {
-        LibrarySourceScope::from_code(self.source_scope.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
     fn from_connection_with_collation(
         connection: Connection,
         collation_spec: MusicCollationSpec,
     ) -> Result<Self, DatabaseError> {
         register_natural_title_collation(&connection)?;
-        let source_scope = Arc::<std::sync::atomic::AtomicU8>::default();
-        register_music_collation(&connection, &collation_spec, Arc::clone(&source_scope))?;
+        register_music_collation(&connection, &collation_spec)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -1977,7 +1987,6 @@ impl Database {
             connection: Mutex::new(connection),
             collators: collation_spec.build_collators(),
             collation_spec,
-            source_scope,
         };
         database.migrate()?;
         database.backfill_missing_title_sort_keys()?;
@@ -2630,6 +2639,7 @@ impl Database {
     /// grouping key or a series of pages to scan.
     pub fn quick_index_for_tracks(
         &self,
+        scope: LibrarySourceScope,
         request: &ListTracksQuery,
         query_alternates: &[String],
     ) -> Result<QuickIndexSnapshot, DatabaseError> {
@@ -2672,7 +2682,7 @@ impl Database {
              WHERE previous_label IS NULL OR previous_label <> group_label
              ORDER BY position"
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map(
             params![
                 query_json,
@@ -2878,6 +2888,7 @@ impl Database {
     /// album just to rebuild these summaries.
     pub fn album_detail_facets(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
     ) -> Result<AlbumDetailFacets, DatabaseError> {
         let names = album_names.iter().cloned().collect::<HashSet<_>>();
@@ -2903,7 +2914,7 @@ impl Database {
             String,
         ) =
             connection.query_row(
-                "WITH visible AS MATERIALIZED (
+                &scope.bind("WITH visible AS MATERIALIZED (
                     SELECT t.track_id,
                            t.disc_number
                     FROM tracks t
@@ -2951,7 +2962,7 @@ impl Database {
                     COALESCE((SELECT json_group_array(json_object('label', label, 'beforeIndex', before_index))
                               FROM (SELECT label, before_index FROM ascending_groups ORDER BY group_order, disc_order)), '[]'),
                     COALESCE((SELECT json_group_array(json_object('label', label, 'beforeIndex', before_index))
-                              FROM (SELECT label, before_index FROM descending_groups ORDER BY group_order, disc_order DESC)), '[]')",
+                              FROM (SELECT label, before_index FROM descending_groups ORDER BY group_order, disc_order DESC)), '[]')"),
                 [&names_json],
                 |row| {
                     Ok((
@@ -2982,6 +2993,7 @@ impl Database {
     /// resulting unique names with the same ICU collation as all other music text lists.
     pub fn album_detail_artists(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
     ) -> Result<Vec<String>, DatabaseError> {
         let names = album_names.iter().cloned().collect::<HashSet<_>>();
@@ -2994,7 +3006,7 @@ impl Database {
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let connection = self.lock()?;
         let artists = {
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare(&scope.bind(
                 "WITH visible AS MATERIALIZED (
                     SELECT t.track_id,
                            COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='artist'), t.artist) AS artist
@@ -3025,7 +3037,7 @@ impl Database {
                 )
                 SELECT name FROM ranked WHERE display_rank=1
                 ORDER BY name COLLATE MUSIC_LOCALE_NATURAL",
-            )?;
+            ))?;
             let rows = statement.query_map([names_json], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -3034,19 +3046,30 @@ impl Database {
 
     pub fn create_album_index_snapshot(
         &self,
+        scope: LibrarySourceScope,
         sort_field: &str,
         direction: &str,
         grouping_enabled: bool,
     ) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_album_index_snapshot_for_kind(sort_field, direction, grouping_enabled, "album")
+        self.create_album_index_snapshot_for_kind(
+            scope,
+            sort_field,
+            direction,
+            grouping_enabled,
+            "album",
+        )
     }
 
-    pub fn create_album_navigation_snapshot(&self) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_album_index_snapshot_for_kind("title", "asc", false, "album-navigation")
+    pub fn create_album_navigation_snapshot(
+        &self,
+        scope: LibrarySourceScope,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_album_index_snapshot_for_kind(scope, "title", "asc", false, "album-navigation")
     }
 
     fn create_album_index_snapshot_for_kind(
         &self,
+        scope: LibrarySourceScope,
         sort_field: &str,
         direction: &str,
         grouping_enabled: bool,
@@ -3136,7 +3159,10 @@ impl Database {
              LEFT JOIN ranked_names r ON r.identity_key=g.identity_key AND r.display_rank=1
              LEFT JOIN query_aliases_json q ON q.identity_key=g.identity_key",
         );
-        tx.execute(&insert_sql, params![snapshot_id, snapshot_kind])?;
+        tx.execute(
+            &scope.bind(&insert_sql),
+            params![snapshot_id, snapshot_kind],
+        )?;
         let info = Self::materialize_index_snapshot(
             &tx,
             snapshot_kind,
@@ -3153,21 +3179,24 @@ impl Database {
     /// Read a paged album track list ordered by disc, track number, then natural title.
     pub fn list_album_tracks_page(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
         offset: u64,
         requested_limit: u32,
     ) -> Result<Page<TrackSummary>, DatabaseError> {
-        self.list_album_tracks_page_sorted(album_names, None, offset, requested_limit)
+        self.list_album_tracks_page_sorted(scope, album_names, None, offset, requested_limit)
     }
 
     pub fn list_album_tracks_page_sorted(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
         sort: Option<TrackListSort>,
         offset: u64,
         requested_limit: u32,
     ) -> Result<Page<TrackSummary>, DatabaseError> {
         self.list_album_tracks_page_with_index_sort(
+            scope,
             album_names,
             sort,
             None,
@@ -3180,6 +3209,7 @@ impl Database {
     /// index groups are supplied separately by the album detail query when sorting by `#`.
     pub fn quick_index_for_album_tracks(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
         sort: TrackListSort,
     ) -> Result<QuickIndexSnapshot, DatabaseError> {
@@ -3211,7 +3241,7 @@ impl Database {
             order_by = tracks_order_by_sql(sort),
         );
         let connection = self.lock()?;
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map([names_json], |row| {
             Ok((
                 row.get::<_, i64>(0)?.max(0) as u64,
@@ -3235,6 +3265,7 @@ impl Database {
     /// `list_album_tracks_page_with_index_sort`, so the page and the playback queue share one query and one ordering.
     pub fn list_album_track_ids(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
         sort: Option<TrackListSort>,
         index_sort: Option<TrackSortDirection>,
@@ -3242,6 +3273,7 @@ impl Database {
         let mut ids = Vec::new();
         loop {
             let page = self.list_album_tracks_page_with_index_sort(
+                scope,
                 album_names,
                 sort,
                 index_sort,
@@ -3259,6 +3291,7 @@ impl Database {
 
     pub fn list_album_tracks_page_with_index_sort(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
         sort: Option<TrackListSort>,
         index_sort: Option<TrackSortDirection>,
@@ -3280,12 +3313,12 @@ impl Database {
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let connection = self.lock()?;
         let total_count = connection.query_row(
-            "SELECT COUNT(DISTINCT t.track_id)
+            &scope.bind("SELECT COUNT(DISTINCT t.track_id)
              FROM tracks t
              WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                    IN (SELECT value FROM json_each(?1))
                AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
-                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) AND m.missing_since_utc_ms IS NULL WHERE m.track_id=t.track_id)",
+                           ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) AND m.missing_since_utc_ms IS NULL WHERE m.track_id=t.track_id)"),
             [&names_json],
             |row| row.get::<_, i64>(0),
         )?.max(0) as u64;
@@ -3295,14 +3328,14 @@ impl Database {
         // multi-disc. Discs 0, 1 and blank are one disc, so its order (and grouping) ignores the disc number entirely.
         let has_numbered_discs = if sort.is_none() {
             connection.query_row(
-                "SELECT EXISTS(
+                &scope.bind("SELECT EXISTS(
                      SELECT 1 FROM tracks t
                      WHERE COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, '') COLLATE BINARY
                            IN (SELECT value FROM json_each(?1))
                        AND t.disc_number >= 2
                        AND EXISTS (SELECT 1 FROM source_mappings m JOIN library_roots r
                                    ON r.source_id=m.source_id AND r.enabled=1 AND moe_in_scope(r.source_kind, r.locator_kind) AND m.missing_since_utc_ms IS NULL WHERE m.track_id=t.track_id)
-                 )",
+                 )"),
                 [&names_json],
                 |row| row.get::<_, bool>(0),
             )?
@@ -3329,13 +3362,13 @@ impl Database {
                 COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='title'), t.title, '') COLLATE MUSIC_LOCALE_NATURAL, t.track_id".to_owned(),
         });
         let sql = format!("{ALBUM_TRACKS_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map(
             params![names_json, limit, database_offset],
             row_to_track_summary,
         )?;
         let mut items = rows.collect::<Result<Vec<_>, _>>()?;
-        attach_file_names(&connection, &mut items)?;
+        attach_file_names(&connection, scope, &mut items)?;
         Ok(Page {
             items,
             offset,
@@ -3348,6 +3381,7 @@ impl Database {
     /// not count the album or materialize playback statistics and file names for every row.
     pub fn list_album_artwork_candidates(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
         offset: u64,
         requested_limit: u32,
@@ -3363,7 +3397,7 @@ impl Database {
         let limit = query_limit(requested_limit);
         let database_offset = i64::try_from(offset).unwrap_or(i64::MAX);
         let connection = self.lock()?;
-        let mut statement = connection.prepare(ALBUM_ARTWORK_CANDIDATES_SQL)?;
+        let mut statement = connection.prepare(&scope.bind(ALBUM_ARTWORK_CANDIDATES_SQL))?;
         let rows = statement.query_map(params![names_json, limit, database_offset], |row| {
             row.get::<_, String>(0)
         })?;
@@ -3378,6 +3412,7 @@ impl Database {
     /// This is a backend-only scan input: callers must not page it through the UI.
     pub fn album_artwork_candidate_locators(
         &self,
+        scope: LibrarySourceScope,
         album_names: &[String],
     ) -> Result<Vec<(TrackId, Vec<MediaLocator>)>, DatabaseError> {
         let unique_names = album_names.iter().cloned().collect::<HashSet<_>>();
@@ -3389,7 +3424,7 @@ impl Database {
         let names_json = serde_json::to_string(&names)
             .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
         let connection = self.lock()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(&scope.bind(
             "SELECT t.track_id, m.locator_kind, m.locator_encoding, m.locator_data
              FROM tracks t
              JOIN source_mappings m ON m.track_id=t.track_id
@@ -3402,7 +3437,7 @@ impl Database {
                       t.track_id,
                       CASE WHEN m.locator_kind='filesystem_path' THEN 0 ELSE 1 END,
                       r.source_id, m.source_item_id",
-        )?;
+        ))?;
         let mut rows = statement.query([names_json])?;
         let mut candidates: Vec<(TrackId, Vec<MediaLocator>)> = Vec::new();
         while let Some(row) = rows.next()? {
@@ -3426,11 +3461,13 @@ impl Database {
 
     pub fn create_artist_index_snapshot(
         &self,
+        scope: LibrarySourceScope,
         sort_field: &str,
         direction: &str,
         grouping_enabled: bool,
     ) -> Result<IndexSnapshotInfo, DatabaseError> {
         self.create_artist_index_snapshot_for_kind(
+            scope,
             sort_field,
             direction,
             grouping_enabled,
@@ -3438,12 +3475,22 @@ impl Database {
         )
     }
 
-    pub fn create_artist_navigation_snapshot(&self) -> Result<IndexSnapshotInfo, DatabaseError> {
-        self.create_artist_index_snapshot_for_kind("title", "asc", false, "artist-navigation")
+    pub fn create_artist_navigation_snapshot(
+        &self,
+        scope: LibrarySourceScope,
+    ) -> Result<IndexSnapshotInfo, DatabaseError> {
+        self.create_artist_index_snapshot_for_kind(
+            scope,
+            "title",
+            "asc",
+            false,
+            "artist-navigation",
+        )
     }
 
     fn create_artist_index_snapshot_for_kind(
         &self,
+        scope: LibrarySourceScope,
         sort_field: &str,
         direction: &str,
         grouping_enabled: bool,
@@ -3537,7 +3584,10 @@ impl Database {
              JOIN names_json j ON j.artist_key=m.artist_key
              JOIN ranked_names r ON r.artist_key=m.artist_key AND r.display_rank=1"
         );
-        tx.execute(&insert_sql, params![snapshot_id, snapshot_kind])?;
+        tx.execute(
+            &scope.bind(&insert_sql),
+            params![snapshot_id, snapshot_kind],
+        )?;
         let info = Self::materialize_index_snapshot(
             &tx,
             snapshot_kind,
@@ -3931,15 +3981,22 @@ impl Database {
         .collect()
     }
 
-    /// Return one IPC-safe window. Missing TrackIds are repaired from exact or normalized
-    /// locator identity before paging; a locator resolves only to one unique internal TrackId.
+    /// Return one IPC-safe window of the whole playlist in file order, every entry whatever the source scope: the
+    /// playlist's content as export, sync and favourites rewrite it. Missing TrackIds are repaired from exact or
+    /// normalized locator identity before paging; a locator resolves only to one unique internal TrackId.
     pub fn get_playlist_page(
         &self,
         playlist_id: PlaylistId,
         offset: u64,
         limit: u32,
     ) -> Result<Option<PlaylistPage>, DatabaseError> {
-        self.get_playlist_page_sorted(playlist_id, offset, limit, PlaylistListSort::default())
+        self.get_playlist_page_sorted(
+            LibrarySourceScope::All,
+            playlist_id,
+            offset,
+            limit,
+            PlaylistListSort::default(),
+        )
     }
 
     /// Where `track_id` is in the playlist as the sorted pages list it (0-based; the first entry when the track
@@ -3947,6 +4004,7 @@ impl Database {
     /// resolution and ordering as the pages, numbered with `ROW_NUMBER()`.
     pub fn playlist_track_position(
         &self,
+        scope: LibrarySourceScope,
         playlist_id: PlaylistId,
         sort: PlaylistListSort,
         track_id: TrackId,
@@ -3974,7 +4032,7 @@ impl Database {
         );
         let position = connection
             .query_row(
-                &sql,
+                &scope.bind(&sql),
                 params![playlist_id.to_string(), track_id.to_string()],
                 |row| row.get::<_, i64>(0),
             )
@@ -3982,8 +4040,10 @@ impl Database {
         Ok(position.and_then(|value| u64::try_from(value).ok()))
     }
 
+    /// One page of a playlist as the screen lists it: sorted, and narrowed to `scope`.
     pub fn get_playlist_page_sorted(
         &self,
+        scope: LibrarySourceScope,
         playlist_id: PlaylistId,
         offset: u64,
         limit: u32,
@@ -4002,7 +4062,7 @@ impl Database {
         let limit = query_limit(limit);
         reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
         let total_count: i64 = connection.query_row(
-            &format!("SELECT COUNT(*) FROM ({PLAYLIST_PAGE_SQL})"),
+            &scope.bind(&format!("SELECT COUNT(*) FROM ({PLAYLIST_PAGE_SQL})")),
             [playlist_id.to_string()],
             |row| row.get(0),
         )?;
@@ -4012,7 +4072,7 @@ impl Database {
         };
         let order_by = playlist_order_by(sort, direction);
         let query = format!("{PLAYLIST_PAGE_SQL} ORDER BY {order_by} LIMIT ?2 OFFSET ?3");
-        let mut statement = connection.prepare(&query)?;
+        let mut statement = connection.prepare(&scope.bind(&query))?;
         let rows = statement.query_map(
             params![
                 playlist_id.to_string(),
@@ -4136,6 +4196,7 @@ impl Database {
     /// where each ICU quick-index group begins.
     pub fn quick_index_for_playlist(
         &self,
+        scope: LibrarySourceScope,
         playlist_id: PlaylistId,
         sort: PlaylistListSort,
     ) -> Result<Option<QuickIndexSnapshot>, DatabaseError> {
@@ -4172,7 +4233,7 @@ impl Database {
         ) {
             reconcile_unmatched_playlist_entries(&mut connection, playlist_id)?;
             return self
-                .playlist_key_quick_index(&connection, playlist_id, sort)
+                .playlist_key_quick_index(&connection, scope, playlist_id, sort)
                 .map(Some);
         }
 
@@ -4205,7 +4266,7 @@ impl Database {
              WHERE previous_label IS NULL OR previous_label <> group_label
              ORDER BY position"
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map([playlist_id.to_string()], |row| {
             Ok((
                 row.get::<_, i64>(0)?.max(0) as u64,
@@ -4230,6 +4291,7 @@ impl Database {
     fn playlist_key_quick_index(
         &self,
         connection: &Connection,
+        scope: LibrarySourceScope,
         playlist_id: PlaylistId,
         sort: PlaylistListSort,
     ) -> Result<QuickIndexSnapshot, DatabaseError> {
@@ -4275,7 +4337,7 @@ impl Database {
              WHERE previous_label IS NULL OR previous_label <> group_label
              ORDER BY position"
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map([playlist_id.to_string()], |row| {
             Ok((
                 row.get::<_, i64>(0)?.max(0) as u64,
@@ -4305,14 +4367,16 @@ impl Database {
 
     pub fn list_tracks_page(
         &self,
+        scope: LibrarySourceScope,
         request: ListTracksQuery,
     ) -> Result<Page<TrackSummary>, DatabaseError> {
-        self.list_tracks_page_with_alternates(request, &[])
+        self.list_tracks_page_with_alternates(scope, request, &[])
     }
 
     /// Search the library page across the original query and its script variants.
     pub fn list_tracks_page_with_alternates(
         &self,
+        scope: LibrarySourceScope,
         request: ListTracksQuery,
         query_alternates: &[String],
     ) -> Result<Page<TrackSummary>, DatabaseError> {
@@ -4322,9 +4386,10 @@ impl Database {
         let search_value = search.as_deref();
         let filter = request.field_filter.as_ref();
         let total_count =
-            count_tracks_filtered_in(&connection, search_value, query_alternates, filter)?;
+            count_tracks_filtered_in(&connection, scope, search_value, query_alternates, filter)?;
         let items = fetch_tracks_window_filtered(
             &connection,
+            scope,
             search_value,
             query_alternates,
             filter,
@@ -4345,6 +4410,7 @@ impl Database {
     /// ordering as the pages, numbered with `ROW_NUMBER()`.
     pub fn track_position(
         &self,
+        scope: LibrarySourceScope,
         request: &ListTracksQuery,
         query_alternates: &[String],
         track_id: TrackId,
@@ -4369,7 +4435,7 @@ impl Database {
         // ?2 and ?3 (limit and offset of the page query) are not used here.
         let position = connection
             .query_row(
-                &sql,
+                &scope.bind(&sql),
                 params![
                     query_json,
                     0_i64,
@@ -4390,12 +4456,14 @@ impl Database {
     /// renderer-facing pages must continue to use `list_tracks_page_with_alternates`.
     pub fn list_tracks_all_with_alternates(
         &self,
+        scope: LibrarySourceScope,
         request: &ListTracksQuery,
         query_alternates: &[String],
     ) -> Result<Vec<TrackSummary>, DatabaseError> {
         let connection = self.lock()?;
         fetch_tracks_window_filtered_unbounded(
             &connection,
+            scope,
             request
                 .query
                 .as_deref()
@@ -4412,6 +4480,7 @@ impl Database {
     /// one SQLite query with filtering and ordering applied before LIMIT/OFFSET.
     pub fn list_tracks_window_with_alternates(
         &self,
+        scope: LibrarySourceScope,
         request: &ListTracksQuery,
         query_alternates: &[String],
         offset: u64,
@@ -4420,6 +4489,7 @@ impl Database {
         let connection = self.lock()?;
         fetch_tracks_window_filtered_unbounded(
             &connection,
+            scope,
             request
                 .query
                 .as_deref()
@@ -4436,6 +4506,7 @@ impl Database {
     /// the same delimiter parser as the artist index, avoiding a full candidate scan in Rust.
     pub fn list_tracks_page_for_artists(
         &self,
+        scope: LibrarySourceScope,
         request: ListTracksQuery,
         query_alternates: &[String],
         artist_names: &[String],
@@ -4452,7 +4523,9 @@ impl Database {
         let search = request.query.filter(|text| !text.trim().is_empty());
         let query_json = search_terms_json(search.as_deref(), query_alternates)?;
         let total_count: i64 = connection.query_row(
-            &format!("SELECT COUNT(*) FROM ({ARTIST_TRACKS_PREFIX_SQL})"),
+            &scope.bind(&format!(
+                "SELECT COUNT(*) FROM ({ARTIST_TRACKS_PREFIX_SQL})"
+            )),
             params![query_json, artist_json],
             |row| row.get(0),
         )?;
@@ -4462,7 +4535,7 @@ impl Database {
             ARTIST_TRACKS_PREFIX_SQL,
             tracks_order_by_sql(request.sort)
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let mut page = statement
             .query_map(
                 params![
@@ -4474,7 +4547,7 @@ impl Database {
                 row_to_track_summary,
             )?
             .collect::<Result<Vec<_>, _>>()?;
-        attach_file_names(&connection, &mut page)?;
+        attach_file_names(&connection, scope, &mut page)?;
         Ok(Page {
             items: page,
             offset: request.offset,
@@ -4488,6 +4561,7 @@ impl Database {
     /// only group offsets.
     pub fn quick_index_for_artists(
         &self,
+        scope: LibrarySourceScope,
         query: Option<&str>,
         query_alternates: &[String],
         artist_names: &[String],
@@ -4524,7 +4598,7 @@ impl Database {
              ORDER BY position",
             order_by = tracks_order_by_sql(sort),
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map(params![query_json, artist_json], |row| {
             Ok((
                 row.get::<_, i64>(0)?.max(0) as u64,
@@ -4546,24 +4620,30 @@ impl Database {
 
     /// Return stable IDs in exactly the same filter and order as library pages.
     /// Playback queue setup keeps these compact IDs inside Rust.
-    pub fn list_track_ids(&self, query: Option<&str>) -> Result<Vec<TrackId>, DatabaseError> {
-        self.list_track_ids_filtered(query, None, TrackListSort::default())
+    pub fn list_track_ids(
+        &self,
+        scope: LibrarySourceScope,
+        query: Option<&str>,
+    ) -> Result<Vec<TrackId>, DatabaseError> {
+        self.list_track_ids_filtered(scope, query, None, TrackListSort::default())
     }
 
     /// Return stable IDs using the same query, field filter, and sort as library pages.
     pub fn list_track_ids_filtered(
         &self,
+        scope: LibrarySourceScope,
         query: Option<&str>,
         field_filter: Option<&TrackFieldFilter>,
         sort: TrackListSort,
     ) -> Result<Vec<TrackId>, DatabaseError> {
-        self.list_track_ids_filtered_with_alternates(query, &[], field_filter, sort)
+        self.list_track_ids_filtered_with_alternates(scope, query, &[], field_filter, sort)
     }
 
     /// Return stable IDs using the same union of query terms, field filter, and sort as library pages: the FROM and
     /// WHERE of `list_tracks_page` itself, so the playback queue holds exactly the rows the page shows.
     pub fn list_track_ids_filtered_with_alternates(
         &self,
+        scope: LibrarySourceScope,
         query: Option<&str>,
         query_alternates: &[String],
         field_filter: Option<&TrackFieldFilter>,
@@ -4578,7 +4658,7 @@ impl Database {
             from_where = tracks_page_from_where()?,
             order_by = tracks_order_by_sql(sort)
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         // ?2 and ?3 (limit and offset of the page query) are not used here.
         let rows = statement.query_map(
             params![
@@ -4604,6 +4684,7 @@ impl Database {
     /// ordering as `list_tracks_page_for_artists`.
     pub fn list_artist_track_ids(
         &self,
+        scope: LibrarySourceScope,
         query: Option<&str>,
         query_alternates: &[String],
         artist_names: &[String],
@@ -4619,7 +4700,7 @@ impl Database {
             "{ARTIST_TRACKS_PREFIX_SQL} ORDER BY {}",
             tracks_order_by_sql(sort)
         );
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let rows = statement.query_map(params![query_json, artist_json], |row| {
             row.get::<_, String>(0)
         })?;
@@ -4631,6 +4712,7 @@ impl Database {
     /// an enabled mapping, each with its original entry position. Duplicate Track IDs remain separate queue entries.
     pub fn playlist_track_ids(
         &self,
+        scope: LibrarySourceScope,
         playlist_id: PlaylistId,
         sort: PlaylistListSort,
     ) -> Result<Option<Vec<(u64, TrackId)>>, DatabaseError> {
@@ -4638,7 +4720,7 @@ impl Database {
         let mut offset = 0_u64;
         loop {
             let Some(page) =
-                self.get_playlist_page_sorted(playlist_id, offset, MAX_PAGE_SIZE, sort)?
+                self.get_playlist_page_sorted(scope, playlist_id, offset, MAX_PAGE_SIZE, sort)?
             else {
                 return Ok(None);
             };
@@ -4656,25 +4738,31 @@ impl Database {
         Ok(Some(entries))
     }
 
-    pub fn count_tracks(&self, query: Option<&str>) -> Result<u64, DatabaseError> {
+    pub fn count_tracks(
+        &self,
+        scope: LibrarySourceScope,
+        query: Option<&str>,
+    ) -> Result<u64, DatabaseError> {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
-        Ok(count_tracks_in(&connection, query, &[])?.max(0) as u64)
+        Ok(count_tracks_in(&connection, scope, query, &[])?.max(0) as u64)
     }
 
     pub fn list_tracks_window(
         &self,
+        scope: LibrarySourceScope,
         query: Option<&str>,
         offset: u64,
         limit: u32,
     ) -> Result<Vec<TrackSummary>, DatabaseError> {
         let connection = self.lock()?;
         let query = query.filter(|text| !text.trim().is_empty());
-        fetch_tracks_window(&connection, query, offset, query_limit(limit))
+        fetch_tracks_window(&connection, scope, query, offset, query_limit(limit))
     }
 
     /// Return the current user-facing metadata for one internal track ID.
-    /// User overrides are applied just as they are for paginated library results.
+    /// User overrides are applied just as they are for paginated library results. A single track is read whole: its
+    /// times and source name come from every enabled source, whatever the lists' source scope.
     pub fn get_track_summary(
         &self,
         track_id: TrackId,
@@ -4682,26 +4770,32 @@ impl Database {
         let connection = self.lock()?;
         let mut summary = connection
             .query_row(
-                TRACK_SUMMARY_SQL,
+                &LibrarySourceScope::All.bind(TRACK_SUMMARY_SQL),
                 [track_id.to_string()],
                 row_to_track_summary,
             )
             .optional()?;
         if let Some(summary) = summary.as_mut() {
-            attach_file_names(&connection, std::slice::from_mut(summary))?;
+            attach_file_names(
+                &connection,
+                LibrarySourceScope::All,
+                std::slice::from_mut(summary),
+            )?;
         }
         Ok(summary)
     }
 
     /// Resolve a bounded batch of Track IDs to their current user-facing metadata.
-    /// The output retains the input order, duplicate IDs, and missing-track slots.
+    /// The output retains the input order, duplicate IDs, and missing-track slots. Like `get_track_summary`, every
+    /// enabled source counts (the play queue is not narrowed by the source scope either).
     pub fn get_track_summaries(
         &self,
         track_ids: &[TrackId],
     ) -> Result<Vec<Option<TrackSummary>>, DatabaseError> {
         let connection = self.lock()?;
         let mut summaries = {
-            let mut statement = connection.prepare_cached(TRACK_SUMMARY_SQL)?;
+            let mut statement =
+                connection.prepare_cached(&LibrarySourceScope::All.bind(TRACK_SUMMARY_SQL))?;
             let collected = track_ids
                 .iter()
                 .map(|track_id| {
@@ -4720,7 +4814,12 @@ impl Database {
         // One shared attach step (file name, source name, modified time) so the queue rows carry
         // the same fields as every other list.
         let mut found = summaries.iter_mut().flatten().collect::<Vec<_>>();
-        attach_file_name_fields(&connection, &ids, found.as_mut_slice())?;
+        attach_file_name_fields(
+            &connection,
+            LibrarySourceScope::All,
+            &ids,
+            found.as_mut_slice(),
+        )?;
         Ok(summaries)
     }
 
@@ -5108,6 +5207,7 @@ impl Database {
     /// album list counts them. `None` for a track that is not in the library.
     pub fn album_index_key_for_track(
         &self,
+        scope: LibrarySourceScope,
         track_id: TrackId,
     ) -> Result<Option<(String, u64)>, DatabaseError> {
         const KEY_SQL: &str = "CASE WHEN music_trim_whitespace(COALESCE((SELECT value FROM track_overrides WHERE track_id=t.track_id AND field='album'), t.album, ''))=''
@@ -5118,7 +5218,9 @@ impl Database {
         let connection = self.lock()?;
         let key: Option<String> = connection
             .query_row(
-                &format!("SELECT {KEY_SQL} FROM tracks t WHERE t.track_id=?1 AND {IN_LIBRARY_SQL}"),
+                &scope.bind(&format!(
+                    "SELECT {KEY_SQL} FROM tracks t WHERE t.track_id=?1 AND {IN_LIBRARY_SQL}"
+                )),
                 [track_id.to_string()],
                 |row| row.get(0),
             )
@@ -5127,7 +5229,9 @@ impl Database {
             return Ok(None);
         };
         let count: i64 = connection.query_row(
-            &format!("SELECT COUNT(*) FROM tracks t WHERE {IN_LIBRARY_SQL} AND {KEY_SQL}=?1"),
+            &scope.bind(&format!(
+                "SELECT COUNT(*) FROM tracks t WHERE {IN_LIBRARY_SQL} AND {KEY_SQL}=?1"
+            )),
             [&key],
             |row| row.get(0),
         )?;
@@ -6607,30 +6711,36 @@ fn artist_names_json(artist_names: &[String]) -> Result<Option<String>, Database
 
 fn count_tracks_in(
     connection: &Connection,
+    scope: LibrarySourceScope,
     query: Option<&str>,
     query_alternates: &[String],
 ) -> Result<i64, DatabaseError> {
     if let Some(query) = query {
         let query_json = search_terms_json(Some(query), query_alternates)?;
-        Ok(connection.query_row(COUNT_SEARCH_SQL, [query_json], |row| row.get(0))?)
+        Ok(
+            connection.query_row(&scope.bind(COUNT_SEARCH_SQL), [query_json], |row| {
+                row.get(0)
+            })?,
+        )
     } else {
-        Ok(connection.query_row(COUNT_LIBRARY_SQL, [], |row| row.get(0))?)
+        Ok(connection.query_row(&scope.bind(COUNT_LIBRARY_SQL), [], |row| row.get(0))?)
     }
 }
 
 fn count_tracks_filtered_in(
     connection: &Connection,
+    scope: LibrarySourceScope,
     query: Option<&str>,
     query_alternates: &[String],
     field_filter: Option<&TrackFieldFilter>,
 ) -> Result<i64, DatabaseError> {
     if field_filter.is_none() {
-        return count_tracks_in(connection, query, query_alternates);
+        return count_tracks_in(connection, scope, query, query_alternates);
     }
     let query_json = search_terms_json(query, query_alternates)?;
     let (title_filter, artist_filter, album_filter) = field_filter_values(field_filter)?;
     Ok(connection.query_row(
-        COUNT_FIELD_FILTER_SQL,
+        &scope.bind(COUNT_FIELD_FILTER_SQL),
         params![query_json, title_filter, artist_filter, album_filter],
         |row| row.get(0),
     )?)
@@ -6638,12 +6748,14 @@ fn count_tracks_filtered_in(
 
 fn fetch_tracks_window(
     connection: &Connection,
+    scope: LibrarySourceScope,
     query: Option<&str>,
     offset: u64,
     limit: u32,
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
     fetch_tracks_window_filtered(
         connection,
+        scope,
         query,
         &[],
         None,
@@ -6799,8 +6911,11 @@ fn queue_sort_order_by(sort: TrackListSort) -> String {
     }
 }
 
+// The scope joins the page's own filters; they all describe one list query.
+#[allow(clippy::too_many_arguments)]
 fn fetch_tracks_window_filtered(
     connection: &Connection,
+    scope: LibrarySourceScope,
     query: Option<&str>,
     query_alternates: &[String],
     field_filter: Option<&TrackFieldFilter>,
@@ -6810,6 +6925,7 @@ fn fetch_tracks_window_filtered(
 ) -> Result<Vec<TrackSummary>, DatabaseError> {
     fetch_tracks_window_filtered_unbounded(
         connection,
+        scope,
         query,
         query_alternates,
         field_filter,
@@ -6819,8 +6935,11 @@ fn fetch_tracks_window_filtered(
     )
 }
 
+// The scope joins the page's own filters; they all describe one list query.
+#[allow(clippy::too_many_arguments)]
 fn fetch_tracks_window_filtered_unbounded(
     connection: &Connection,
+    scope: LibrarySourceScope,
     query: Option<&str>,
     query_alternates: &[String],
     field_filter: Option<&TrackFieldFilter>,
@@ -6836,7 +6955,7 @@ fn fetch_tracks_window_filtered_unbounded(
         TRACKS_PAGE_SELECT_SQL, order_by
     );
     let mut items = {
-        let mut statement = connection.prepare(&sql)?;
+        let mut statement = connection.prepare(&scope.bind(&sql))?;
         let collected = statement
             .query_map(
                 params![
@@ -6852,7 +6971,7 @@ fn fetch_tracks_window_filtered_unbounded(
             .collect::<Result<Vec<_>, _>>()?;
         collected
     };
-    attach_file_names(connection, &mut items)?;
+    attach_file_names(connection, scope, &mut items)?;
     Ok(items)
 }
 
@@ -6980,6 +7099,7 @@ fn blank_to_none(value: Option<String>) -> Option<String> {
 
 fn attach_file_names(
     connection: &Connection,
+    scope: LibrarySourceScope,
     items: &mut [TrackSummary],
 ) -> Result<(), DatabaseError> {
     if items.is_empty() {
@@ -6987,17 +7107,20 @@ fn attach_file_names(
     }
     let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
     let mut refs = items.iter_mut().collect::<Vec<_>>();
-    attach_file_name_fields(connection, &ids, refs.as_mut_slice())
+    attach_file_name_fields(connection, scope, &ids, refs.as_mut_slice())
 }
 
+/// The source name and modified time follow the scope of the list the rows belong to (the same ones its source and
+/// modified sorts use).
 fn attach_file_name_fields(
     connection: &Connection,
+    scope: LibrarySourceScope,
     ids: &[TrackId],
     items: &mut [&mut TrackSummary],
 ) -> Result<(), DatabaseError> {
     let names = file_names_for_tracks(connection, ids)?;
-    let sources = source_names_for_tracks(connection, ids)?;
-    let modified = modified_times_for_tracks(connection, ids)?;
+    let sources = source_names_for_tracks(connection, scope, ids)?;
+    let modified = modified_times_for_tracks(connection, scope, ids)?;
     for item in items.iter_mut() {
         item.file_name = names.get(&item.id).cloned();
         item.source_name = sources.get(&item.id).cloned();
@@ -7009,6 +7132,7 @@ fn attach_file_name_fields(
 /// The modified time of each track's file (the same one the modified sort and grouping use).
 fn modified_times_for_tracks(
     connection: &Connection,
+    scope: LibrarySourceScope,
     track_ids: &[TrackId],
 ) -> Result<HashMap<TrackId, i64>, DatabaseError> {
     if track_ids.is_empty() {
@@ -7018,11 +7142,11 @@ fn modified_times_for_tracks(
     let ids_json = serde_json::to_string(&ids)
         .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
     let mut times = HashMap::new();
-    let mut statement = connection.prepare(&format!(
+    let mut statement = connection.prepare(&scope.bind(&format!(
         "SELECT t.track_id, {TRACK_MODIFIED_AT_SQL}
          FROM tracks t
          WHERE t.track_id IN (SELECT value FROM json_each(?1))"
-    ))?;
+    )))?;
     let mut rows = statement.query([ids_json])?;
     while let Some(row) = rows.next()? {
         let id = parse_track_id(&row.get::<_, String>(0)?)?;
@@ -7036,6 +7160,7 @@ fn modified_times_for_tracks(
 /// The name of the place each track comes from (the same one the source sort and grouping use).
 fn source_names_for_tracks(
     connection: &Connection,
+    scope: LibrarySourceScope,
     track_ids: &[TrackId],
 ) -> Result<HashMap<TrackId, String>, DatabaseError> {
     if track_ids.is_empty() {
@@ -7045,11 +7170,11 @@ fn source_names_for_tracks(
     let ids_json = serde_json::to_string(&ids)
         .map_err(|error| DatabaseError::CorruptData(error.to_string()))?;
     let mut names = HashMap::new();
-    let mut statement = connection.prepare(&format!(
+    let mut statement = connection.prepare(&scope.bind(&format!(
         "SELECT t.track_id, {TRACK_SOURCE_NAME_SQL} AS source_name
          FROM tracks t
          WHERE t.track_id IN (SELECT value FROM json_each(?1))"
-    ))?;
+    )))?;
     let mut rows = statement.query([ids_json])?;
     while let Some(row) = rows.next()? {
         let id = parse_track_id(&row.get::<_, String>(0)?)?;
@@ -7783,9 +7908,10 @@ mod tests {
 
     use super::{
         natural_title_cmp, query_limit, CollationType, Database, DatabaseError, LibraryRepository,
-        MusicCollationSpec, Ordering, PlaybackSessionCheckpoint, PlaylistFileSyncState,
-        QueueSortCandidate, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3,
-        SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9, TRACKS_PAGE_SQL,
+        LibrarySourceScope, MusicCollationSpec, Ordering, PlaybackSessionCheckpoint,
+        PlaylistFileSyncState, QueueSortCandidate, ThemePreferences, COUNT_LIBRARY_SQL, SCHEMA_V1,
+        SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9,
+        TRACKS_PAGE_SQL,
     };
 
     fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -8061,10 +8187,10 @@ mod tests {
             2_000,
         );
         let detail_page = db
-            .list_album_tracks_page(&["album".to_owned()], 0, 10)
+            .list_album_tracks_page(LibrarySourceScope::All, &["album".to_owned()], 0, 10)
             .expect("album detail page");
         let candidate_ids = db
-            .list_album_artwork_candidates(&["album".to_owned()], 0, 10)
+            .list_album_artwork_candidates(LibrarySourceScope::All, &["album".to_owned()], 0, 10)
             .expect("album artwork candidates");
         assert_eq!(
             candidate_ids,
@@ -8075,7 +8201,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let candidate_locators = db
-            .album_artwork_candidate_locators(&["album".to_owned()])
+            .album_artwork_candidate_locators(LibrarySourceScope::All, &["album".to_owned()])
             .expect("album artwork candidates with locators");
         assert_eq!(
             candidate_locators
@@ -8088,7 +8214,7 @@ mod tests {
             .iter()
             .all(|(_, locators)| !locators.is_empty()));
         assert_eq!(
-            db.list_album_artwork_candidates(&["album".to_owned()], 1, 2)
+            db.list_album_artwork_candidates(LibrarySourceScope::All, &["album".to_owned()], 1, 2)
                 .expect("paged candidates"),
             candidate_ids[1..3]
         );
@@ -8130,15 +8256,18 @@ mod tests {
 
         let started = Instant::now();
         for album in &album_names {
-            db.list_album_tracks_page(std::slice::from_ref(album), 0, 8)
+            db.list_album_tracks_page(LibrarySourceScope::All, std::slice::from_ref(album), 0, 8)
                 .expect("full album page");
         }
         let full_page_elapsed = started.elapsed();
 
         let started = Instant::now();
         for album in &album_names {
-            db.album_artwork_candidate_locators(std::slice::from_ref(album))
-                .expect("artwork candidates");
+            db.album_artwork_candidate_locators(
+                LibrarySourceScope::All,
+                std::slice::from_ref(album),
+            )
+            .expect("artwork candidates");
         }
         let candidate_elapsed = started.elapsed();
         eprintln!(
@@ -8191,13 +8320,16 @@ mod tests {
         db.save_library_root(&disabled_root_state)
             .expect("disable source");
         let track_ids = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort::default(),
+                },
+            )
             .expect("tracks")
             .items;
         {
@@ -8244,7 +8376,7 @@ mod tests {
         );
 
         let snapshot = db
-            .create_artist_index_snapshot("title", "asc", true)
+            .create_artist_index_snapshot(LibrarySourceScope::All, "title", "asc", true)
             .expect("create SQLite artist snapshot");
         let all_artists = db
             .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 100)
@@ -8281,7 +8413,7 @@ mod tests {
         assert_eq!(first_page.items.len(), 2);
         assert!(first_page.items[0].display_name <= first_page.items[1].display_name);
         let navigation = db
-            .create_artist_navigation_snapshot()
+            .create_artist_navigation_snapshot(LibrarySourceScope::All)
             .expect("create isolated artist navigation snapshot");
         let resolved_hanser = db
             .get_index_snapshot_entry::<ArtistIndexEntry>(&navigation.snapshot_id, "hanser")
@@ -8299,7 +8431,7 @@ mod tests {
             .expect("second artist snapshot page");
         assert_eq!(last_page.items.len(), 1);
         let ranked = db
-            .create_artist_index_snapshot("trackCount", "desc", false)
+            .create_artist_index_snapshot(LibrarySourceScope::All, "trackCount", "desc", false)
             .expect("replace artist snapshot with metric ordering");
         let ranked_page = db
             .get_index_snapshot_page::<ArtistIndexEntry>(&ranked.snapshot_id, 0, 10)
@@ -8317,6 +8449,7 @@ mod tests {
 
         let artist_page = db
             .list_tracks_page_for_artists(
+                LibrarySourceScope::All,
                 ListTracksQuery {
                     offset: 0,
                     limit: 10,
@@ -8335,6 +8468,7 @@ mod tests {
         assert_eq!(artist_page.total_count, 3);
         let ampersand_artist_page = db
             .list_tracks_page_for_artists(
+                LibrarySourceScope::All,
                 ListTracksQuery {
                     offset: 0,
                     limit: 10,
@@ -8349,6 +8483,7 @@ mod tests {
         assert_eq!(ampersand_artist_page.total_count, 1);
         let substring_collision = db
             .list_tracks_page_for_artists(
+                LibrarySourceScope::All,
                 ListTracksQuery {
                     offset: 0,
                     limit: 10,
@@ -8395,7 +8530,7 @@ mod tests {
         );
 
         let snapshot = db
-            .create_artist_index_snapshot("title", "asc", true)
+            .create_artist_index_snapshot(LibrarySourceScope::All, "title", "asc", true)
             .expect("create artist snapshot");
         let page = db
             .get_index_snapshot_page::<ArtistIndexEntry>(&snapshot.snapshot_id, 0, 10)
@@ -8432,6 +8567,7 @@ mod tests {
 
         let tracks = db
             .list_tracks_page_for_artists(
+                LibrarySourceScope::All,
                 ListTracksQuery {
                     offset: 0,
                     limit: 10,
@@ -8486,7 +8622,7 @@ mod tests {
         );
 
         let snapshot = db
-            .create_album_index_snapshot("title", "asc", true)
+            .create_album_index_snapshot(LibrarySourceScope::All, "title", "asc", true)
             .expect("create album snapshot");
         let page = db
             .get_index_snapshot_page::<AlbumIndexEntry>(&snapshot.snapshot_id, 0, 10)
@@ -8518,7 +8654,7 @@ mod tests {
         );
 
         let tracks = db
-            .list_album_tracks_page(&unknown.aliases, 0, 10)
+            .list_album_tracks_page(LibrarySourceScope::All, &unknown.aliases, 0, 10)
             .expect("query unmarked album detail");
         assert_eq!(tracks.total_count, 2);
         assert_eq!(
@@ -8594,7 +8730,7 @@ mod tests {
 
         let sorted_keys = |field: &str, direction: &str| {
             let snapshot = db
-                .create_album_index_snapshot(field, direction, false)
+                .create_album_index_snapshot(LibrarySourceScope::All, field, direction, false)
                 .expect("create album snapshot");
             db.get_index_snapshot_page::<AlbumIndexEntry>(&snapshot.snapshot_id, 0, 10)
                 .expect("read album snapshot")
@@ -8653,16 +8789,34 @@ mod tests {
             (TrackSortDirection::Desc, vec![12, 11, 10, 3, 2, 1]),
         ] {
             let page = db
-                .list_album_tracks_page_with_index_sort(&["Mixed".into()], None, Some(direction), 0, 10)
+                .list_album_tracks_page_with_index_sort(
+                    LibrarySourceScope::All,
+                    &["Mixed".into()],
+                    None,
+                    Some(direction),
+                    0,
+                    10,
+                )
                 .expect("album page");
             let order = page.items.iter().map(|item| item.track_number.unwrap()).collect::<Vec<_>>();
             assert_eq!(order, expected);
         }
-        let plain = db.list_album_tracks_page(&["Mixed".into()], 0, 10).expect("default album page");
-        let order = plain.items.iter().map(|item| item.track_number.unwrap()).collect::<Vec<_>>();
+        let plain = db
+            .list_album_tracks_page(LibrarySourceScope::All, &["Mixed".into()], 0, 10)
+            .expect("default album page");
+        let order = plain
+            .items
+            .iter()
+            .map(|item| item.track_number.unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(order, vec![1, 2, 3, 10, 11, 12]);
-        let facets = db.album_detail_facets(&["Mixed".into()]).expect("disc groups");
-        assert!(facets.quick_index_ascending.groups.is_empty() && facets.quick_index_descending.groups.is_empty());
+        let facets = db
+            .album_detail_facets(LibrarySourceScope::All, &["Mixed".into()])
+            .expect("disc groups");
+        assert!(
+            facets.quick_index_ascending.groups.is_empty()
+                && facets.quick_index_descending.groups.is_empty()
+        );
     }
 
     #[test]
@@ -8725,6 +8879,7 @@ mod tests {
 
         let page = db
             .list_album_tracks_page(
+                LibrarySourceScope::All,
                 &[
                     "專輯 A".into(),
                     "专辑 A".into(),
@@ -8740,6 +8895,7 @@ mod tests {
         assert_eq!(page.items[2].disc_number, Some(2));
         let descending = db
             .list_album_tracks_page_with_index_sort(
+                LibrarySourceScope::All,
                 &[
                     "專輯 A".into(),
                     "专辑 A".into(),
@@ -8757,14 +8913,14 @@ mod tests {
         assert_eq!(descending.items[1].track_number, Some(11));
         assert_eq!(descending.items[2].track_number, Some(10));
         assert_eq!(
-            db.list_album_tracks_page(&[], 0, 10)
+            db.list_album_tracks_page(LibrarySourceScope::All, &[], 0, 10)
                 .expect("empty aliases")
                 .total_count,
             0
         );
 
         let album_snapshot = db
-            .create_album_index_snapshot("trackCount", "desc", false)
+            .create_album_index_snapshot(LibrarySourceScope::All, "trackCount", "desc", false)
             .expect("create SQLite album snapshot");
         let album_page = db
             .get_index_snapshot_page::<AlbumIndexEntry>(&album_snapshot.snapshot_id, 0, 2)
@@ -8794,7 +8950,7 @@ mod tests {
         assert_eq!(all_albums.items[0].track_count, 3);
         assert!(all_albums.items[0].key != "album:unmarked");
         let navigation = db
-            .create_album_navigation_snapshot()
+            .create_album_navigation_snapshot(LibrarySourceScope::All)
             .expect("create isolated album navigation snapshot");
         let resolved_album = db
             .get_index_snapshot_entry::<AlbumIndexEntry>(&navigation.snapshot_id, "album:專輯 a")
@@ -8841,7 +8997,7 @@ mod tests {
         );
 
         let facets = db
-            .album_detail_facets(&["Shared Album".to_owned()])
+            .album_detail_facets(LibrarySourceScope::All, &["Shared Album".to_owned()])
             .expect("aggregate album detail facets");
         assert_eq!(facets.track_count, 4);
         assert_eq!(facets.unknown_disc_track_count, 1);
@@ -8859,7 +9015,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            db.album_detail_artists(&["Shared Album".to_owned()])
+            db.album_detail_artists(LibrarySourceScope::All, &["Shared Album".to_owned()])
                 .expect("merge and sort album artists"),
             vec!["歌手簡".to_owned()],
         );
@@ -8907,7 +9063,7 @@ mod tests {
 
         let aliases = ["Multi-disc".to_owned()];
         let facets = db
-            .album_detail_facets(&aliases)
+            .album_detail_facets(LibrarySourceScope::All, &aliases)
             .expect("album detail facets and SQLite disc group snapshots");
         let ascending_groups = facets
             .quick_index_ascending
@@ -8943,6 +9099,7 @@ mod tests {
         );
         let ascending = db
             .list_album_tracks_page_with_index_sort(
+                LibrarySourceScope::All,
                 &aliases,
                 None,
                 Some(TrackSortDirection::Asc),
@@ -8968,6 +9125,7 @@ mod tests {
 
         let descending = db
             .list_album_tracks_page_with_index_sort(
+                LibrarySourceScope::All,
                 &aliases,
                 None,
                 Some(TrackSortDirection::Desc),
@@ -9024,7 +9182,10 @@ mod tests {
             1_800_000_000_400,
         );
         let facets = unclassified_db
-            .album_detail_facets(&["Only low disc numbers".to_owned()])
+            .album_detail_facets(
+                LibrarySourceScope::All,
+                &["Only low disc numbers".to_owned()],
+            )
             .expect("album without disc classification");
         assert!(facets.quick_index_ascending.groups.is_empty());
         assert!(facets.quick_index_descending.groups.is_empty());
@@ -9070,7 +9231,7 @@ mod tests {
         );
 
         let album_ascending = db
-            .create_album_index_snapshot("title", "asc", true)
+            .create_album_index_snapshot(LibrarySourceScope::All, "title", "asc", true)
             .expect("ascending album snapshot");
         let albums: player_core::Page<AlbumIndexEntry> = db
             .get_index_snapshot_page(&album_ascending.snapshot_id, 0, 20)
@@ -9108,7 +9269,7 @@ mod tests {
         );
 
         let album_descending = db
-            .create_album_index_snapshot("title", "desc", true)
+            .create_album_index_snapshot(LibrarySourceScope::All, "title", "desc", true)
             .expect("descending album snapshot");
         let albums: player_core::Page<AlbumIndexEntry> = db
             .get_index_snapshot_page(&album_descending.snapshot_id, 0, 20)
@@ -9144,7 +9305,7 @@ mod tests {
         );
 
         let artist_ascending = db
-            .create_artist_index_snapshot("title", "asc", true)
+            .create_artist_index_snapshot(LibrarySourceScope::All, "title", "asc", true)
             .expect("ascending artist snapshot");
         let artists: player_core::Page<ArtistIndexEntry> = db
             .get_index_snapshot_page(&artist_ascending.snapshot_id, 0, 20)
@@ -9172,7 +9333,7 @@ mod tests {
         );
 
         let artist_descending = db
-            .create_artist_index_snapshot("title", "desc", true)
+            .create_artist_index_snapshot(LibrarySourceScope::All, "title", "desc", true)
             .expect("descending artist snapshot");
         let artists: player_core::Page<ArtistIndexEntry> = db
             .get_index_snapshot_page(&artist_descending.snapshot_id, 0, 20)
@@ -9248,24 +9409,30 @@ mod tests {
         offset: u64,
         limit: u32,
     ) -> player_core::Page<player_core::TrackSummary> {
-        db.list_tracks_page(ListTracksQuery {
-            offset,
-            limit,
-            query: None,
-            field_filter: None,
-            sort: Default::default(),
-        })
+        db.list_tracks_page(
+            LibrarySourceScope::All,
+            ListTracksQuery {
+                offset,
+                limit,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .expect("list tracks")
     }
 
     fn track_id_for_query(db: &Database, query: &str) -> TrackId {
-        db.list_tracks_page(ListTracksQuery {
-            offset: 0,
-            limit: 20,
-            query: Some(query.to_owned()),
-            field_filter: None,
-            sort: Default::default(),
-        })
+        db.list_tracks_page(
+            LibrarySourceScope::All,
+            ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: Some(query.to_owned()),
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .expect("find track")
         .items
         .into_iter()
@@ -9292,9 +9459,13 @@ mod tests {
             .expect("resolve indexed track")
             .expect("track remains stored");
 
-        assert_eq!(db.count_tracks(None).expect("count enabled tracks"), 1);
         assert_eq!(
-            db.count_tracks(Some("Source-only"))
+            db.count_tracks(LibrarySourceScope::All, None)
+                .expect("count enabled tracks"),
+            1
+        );
+        assert_eq!(
+            db.count_tracks(LibrarySourceScope::All, Some("Source-only"))
                 .expect("search enabled tracks"),
             1
         );
@@ -9305,14 +9476,19 @@ mod tests {
         let hidden = list(&db, 0, 10);
         assert!(hidden.items.is_empty());
         assert_eq!(hidden.total_count, 0);
-        assert_eq!(db.count_tracks(None).expect("count after disabling"), 0);
         assert_eq!(
-            db.count_tracks(Some("Source-only"))
+            db.count_tracks(LibrarySourceScope::All, None)
+                .expect("count after disabling"),
+            0
+        );
+        assert_eq!(
+            db.count_tracks(LibrarySourceScope::All, Some("Source-only"))
                 .expect("search after disabling"),
             0
         );
         assert!(db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Title,
@@ -10524,6 +10700,7 @@ mod tests {
 
         let by_title = db
             .get_playlist_page_sorted(
+                LibrarySourceScope::All,
                 playlist.id,
                 0,
                 2,
@@ -10555,6 +10732,7 @@ mod tests {
 
         let grouped = db
             .quick_index_for_playlist(
+                LibrarySourceScope::All,
                 playlist.id,
                 PlaylistListSort {
                     field: PlaylistSortField::Title,
@@ -10575,6 +10753,7 @@ mod tests {
 
         let by_position = db
             .get_playlist_page_sorted(
+                LibrarySourceScope::All,
                 playlist.id,
                 0,
                 3,
@@ -10637,6 +10816,7 @@ mod tests {
         ] {
             let page = db
                 .get_playlist_page_sorted(
+                    LibrarySourceScope::All,
                     playlist.id,
                     0,
                     10,
@@ -10925,13 +11105,16 @@ mod tests {
         );
         // The ids in the order the tracks were given (the scan stores them by title "title N").
         let page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 100,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("tracks");
         let ids = (0..tracks.len())
             .map(|index| {
@@ -10983,7 +11166,9 @@ mod tests {
                     direction,
                 },
             };
-            let page = db.list_tracks_page(request.clone()).expect("page");
+            let page = db
+                .list_tracks_page(LibrarySourceScope::All, request.clone())
+                .expect("page");
             let years: Vec<_> = page
                 .items
                 .iter()
@@ -10991,7 +11176,7 @@ mod tests {
                 .collect();
             (
                 years,
-                db.quick_index_for_tracks(&request, &[])
+                db.quick_index_for_tracks(LibrarySourceScope::All, &request, &[])
                     .expect("quick index"),
             )
         };
@@ -11093,12 +11278,12 @@ mod tests {
                 direction,
             };
             let snapshot = db
-                .quick_index_for_playlist(playlist.id, sort)
+                .quick_index_for_playlist(LibrarySourceScope::All, playlist.id, sort)
                 .expect("playlist quick index")
                 .expect("playlist exists");
             assert_eq!(groups(&snapshot), expected, "playlist {direction:?}");
             let page = db
-                .get_playlist_page_sorted(playlist.id, 0, 100, sort)
+                .get_playlist_page_sorted(LibrarySourceScope::All, playlist.id, 0, 100, sort)
                 .expect("page")
                 .expect("playlist exists");
             let years: Vec<_> = page
@@ -11136,6 +11321,7 @@ mod tests {
         let (db, _) = grouping_library("wavpack-format-groups", &tracks);
         let ascending = db
             .quick_index_for_tracks(
+                LibrarySourceScope::All,
                 &ListTracksQuery {
                     offset: 0,
                     limit: 100,
@@ -11333,19 +11519,36 @@ mod tests {
             field_filter: None,
             sort: TrackListSort { field: TrackSortField::Title, direction: TrackSortDirection::Asc },
         };
-        let titles = |db: &Database| -> Vec<String> {
-            db.list_tracks_page(query.clone()).expect("page").items.iter().map(|t| t.title.clone().unwrap_or_default()).collect()
+        let titles = |scope: LibrarySourceScope| -> Vec<String> {
+            db.list_tracks_page(scope, query.clone())
+                .expect("page")
+                .items
+                .iter()
+                .map(|t| t.title.clone().unwrap_or_default())
+                .collect()
         };
-        use crate::LibrarySourceScope;
-        assert_eq!(db.source_scope(), LibrarySourceScope::All);
-        assert_eq!(titles(&db).len(), 5);
-        db.set_source_scope(LibrarySourceScope::Local);
-        assert_eq!(titles(&db), ["l title 0", "l title 1", "l title 2"]);
-        db.set_source_scope(LibrarySourceScope::Remote);
-        assert_eq!(titles(&db), ["n title 0", "n title 1"]);
-        assert_eq!(db.list_tracks_page(query.clone()).expect("page").total_count, 2);
-        db.set_source_scope(LibrarySourceScope::All);
-        assert_eq!(titles(&db).len(), 5);
+        assert_eq!(titles(LibrarySourceScope::All).len(), 5);
+        assert_eq!(
+            titles(LibrarySourceScope::Local),
+            ["l title 0", "l title 1", "l title 2"]
+        );
+        assert_eq!(
+            titles(LibrarySourceScope::Remote),
+            ["n title 0", "n title 1"]
+        );
+        assert_eq!(
+            db.list_tracks_page(LibrarySourceScope::Remote, query.clone())
+                .expect("page")
+                .total_count,
+            2
+        );
+        assert_eq!(
+            db.count_tracks(LibrarySourceScope::Local, None)
+                .expect("count"),
+            3
+        );
+        // No call leaves anything behind: the next All query sees every source again.
+        assert_eq!(titles(LibrarySourceScope::All).len(), 5);
     }
 
     #[test]
@@ -11370,24 +11573,34 @@ mod tests {
                 .collect();
             apply(&mut db, root, SourceScanState::Complete, &records, &records, 2_000);
         }
-        let titles = |db: &Database| -> Vec<String> {
-            db.list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 100,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort { field: TrackSortField::Title, direction: TrackSortDirection::Asc },
-            })
+        let titles = |scope: LibrarySourceScope| -> Vec<String> {
+            db.list_tracks_page(
+                scope,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
+                },
+            )
             .expect("page")
             .items
             .iter()
             .map(|t| t.title.clone().unwrap_or_default())
             .collect()
         };
-        db.set_source_scope(LibrarySourceScope::Remote);
-        assert_eq!(titles(&db), ["r title 0", "r title 1"]);
-        db.set_source_scope(LibrarySourceScope::Local);
-        assert_eq!(titles(&db), ["l title 0", "l title 1"]);
+        assert_eq!(
+            titles(LibrarySourceScope::Remote),
+            ["r title 0", "r title 1"]
+        );
+        assert_eq!(
+            titles(LibrarySourceScope::Local),
+            ["l title 0", "l title 1"]
+        );
     }
 
     #[test]
@@ -11403,13 +11616,19 @@ mod tests {
             apply(&mut db, root, SourceScanState::Complete, &records, &records, 2_000);
         }
         let all_tracks = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 100,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort { field: TrackSortField::Title, direction: TrackSortDirection::Asc },
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
+                },
+            )
             .expect("tracks")
             .items;
         let mut playlist = Playlist::new("mixed");
@@ -11423,20 +11642,18 @@ mod tests {
             })
             .collect();
         db.save_playlist(&playlist).expect("save playlist");
-        let page_titles = |db: &Database| -> (u64, Vec<String>) {
+        let page_titles = |scope: LibrarySourceScope| -> (u64, Vec<String>) {
             let page = db
-                .get_playlist_page_sorted(playlist.id, 0, 100, PlaylistListSort::default())
+                .get_playlist_page_sorted(scope, playlist.id, 0, 100, PlaylistListSort::default())
                 .expect("page")
                 .expect("playlist");
             (page.total_count, page.items.iter().map(|item| item.title.clone().unwrap_or_default()).collect())
         };
-        assert_eq!(page_titles(&db).0, 5);
-        db.set_source_scope(LibrarySourceScope::Remote);
-        let (total, titles) = page_titles(&db);
+        assert_eq!(page_titles(LibrarySourceScope::All).0, 5);
+        let (total, titles) = page_titles(LibrarySourceScope::Remote);
         assert_eq!(total, 2, "{titles:?}");
         assert!(titles.iter().all(|title| title.starts_with("n title")), "{titles:?}");
-        db.set_source_scope(LibrarySourceScope::Local);
-        let (total, titles) = page_titles(&db);
+        let (total, titles) = page_titles(LibrarySourceScope::Local);
         assert_eq!(total, 3, "{titles:?}");
         assert!(titles.iter().all(|title| title.starts_with("l title")), "{titles:?}");
         // The queue of the playlist holds exactly the page's rows, in its order.
@@ -11445,9 +11662,8 @@ mod tests {
             LibrarySourceScope::Remote,
             LibrarySourceScope::All,
         ] {
-            db.set_source_scope(scope);
             let page = db
-                .get_playlist_page_sorted(playlist.id, 0, 100, PlaylistListSort::default())
+                .get_playlist_page_sorted(scope, playlist.id, 0, 100, PlaylistListSort::default())
                 .expect("page")
                 .expect("playlist");
             let page_ids: Vec<_> = page
@@ -11456,7 +11672,7 @@ mod tests {
                 .map(|item| (item.position, item.track_id.expect("matched")))
                 .collect();
             let queue = db
-                .playlist_track_ids(playlist.id, PlaylistListSort::default())
+                .playlist_track_ids(scope, playlist.id, PlaylistListSort::default())
                 .expect("queue")
                 .expect("playlist");
             assert_eq!(queue, page_ids, "{scope:?}");
@@ -11560,7 +11776,6 @@ mod tests {
             LibrarySourceScope::Remote,
             LibrarySourceScope::All,
         ] {
-            db.set_source_scope(scope);
             for query in [None, Some("needle")] {
                 let request = ListTracksQuery {
                     offset: 0,
@@ -11570,34 +11785,34 @@ mod tests {
                     sort,
                 };
                 let library_page = ids(db
-                    .list_tracks_page(request.clone())
+                    .list_tracks_page(scope, request.clone())
                     .expect("library page")
                     .items);
                 let library_queue = db
-                    .list_track_ids_filtered_with_alternates(query, &[], None, sort)
+                    .list_track_ids_filtered_with_alternates(scope, query, &[], None, sort)
                     .expect("library queue");
                 assert_eq!(library_queue, library_page, "library {scope:?} {query:?}");
                 let artist_page = ids(db
-                    .list_tracks_page_for_artists(request, &[], &artists)
+                    .list_tracks_page_for_artists(scope, request, &[], &artists)
                     .expect("artist page")
                     .items);
                 let artist_queue = db
-                    .list_artist_track_ids(query, &[], &artists, sort)
+                    .list_artist_track_ids(scope, query, &[], &artists, sort)
                     .expect("artist queue");
                 assert_eq!(artist_queue, artist_page, "artist {scope:?} {query:?}");
             }
             let album_page = ids(db
-                .list_album_tracks_page_with_index_sort(&albums, None, None, 0, 100)
+                .list_album_tracks_page_with_index_sort(scope, &albums, None, None, 0, 100)
                 .expect("album page")
                 .items);
             assert_eq!(
-                db.list_album_track_ids(&albums, None, None)
+                db.list_album_track_ids(scope, &albums, None, None)
                     .expect("album queue"),
                 album_page,
                 "album {scope:?}"
             );
             let playlist_page: Vec<_> = db
-                .get_playlist_page_sorted(playlist.id, 0, 100, playlist_sort)
+                .get_playlist_page_sorted(scope, playlist.id, 0, 100, playlist_sort)
                 .expect("playlist page")
                 .expect("playlist")
                 .items
@@ -11606,13 +11821,12 @@ mod tests {
                 .map(|item| (item.position, item.track_id.expect("matched")))
                 .collect();
             let playlist_queue = db
-                .playlist_track_ids(playlist.id, playlist_sort)
+                .playlist_track_ids(scope, playlist.id, playlist_sort)
                 .expect("playlist queue")
                 .expect("playlist");
             assert_eq!(playlist_queue, playlist_page, "playlist {scope:?}");
         }
         // The case the user reported: local mode never queues a cloud song (nor a missing or switched-off one).
-        db.set_source_scope(LibrarySourceScope::Local);
         let titles = |track_ids: Vec<TrackId>| {
             track_ids
                 .into_iter()
@@ -11627,28 +11841,208 @@ mod tests {
         };
         assert_eq!(
             titles(
-                db.list_track_ids_filtered_with_alternates(Some("needle"), &[], None, sort)
-                    .expect("queue")
+                db.list_track_ids_filtered_with_alternates(
+                    LibrarySourceScope::Local,
+                    Some("needle"),
+                    &[],
+                    None,
+                    sort
+                )
+                .expect("queue")
             ),
             ["Needle Local"]
         );
         assert_eq!(
-            titles(db.list_album_track_ids(&albums, None, None).expect("queue")),
+            titles(
+                db.list_album_track_ids(LibrarySourceScope::Local, &albums, None, None)
+                    .expect("queue")
+            ),
             ["Needle Local", "Plain Local"]
         );
         assert_eq!(
             titles(
-                db.list_artist_track_ids(None, &[], &artists, sort)
+                db.list_artist_track_ids(LibrarySourceScope::Local, None, &[], &artists, sort)
                     .expect("queue")
             ),
             ["Plain Local", "Needle Local"]
         );
-        db.set_source_scope(LibrarySourceScope::Remote);
         assert_eq!(
-            titles(db.list_album_track_ids(&albums, None, None).expect("queue")),
+            titles(
+                db.list_album_track_ids(LibrarySourceScope::Remote, &albums, None, None)
+                    .expect("queue")
+            ),
             ["Needle Remote", "Other Remote"]
         );
     }
+
+    /// The scope is an argument, not a setting of a handle: two handles opened separately on the same file (the main
+    /// one and, say, the Android playback actor's) answer every list query the same way for the same scope.
+    #[test]
+    fn two_handles_on_one_file_list_the_same_rows_for_the_same_scope() {
+        let path = std::env::temp_dir().join(format!(
+            "moemusic-scope-handles-{}.sqlite",
+            player_core::TrackId::new()
+        ));
+        let playlist_id;
+        {
+            let mut db = Database::open(&path).expect("open database");
+            let nas = add_root(&db, MediaSourceKind::Remote, "NAS / Music");
+            let local = add_root(&db, MediaSourceKind::WindowsFilesystem, "Music");
+            let mut all = Vec::new();
+            for (root, base) in [(&nas, "n"), (&local, "l")] {
+                let records: Vec<_> = (0..2)
+                    .map(|index| {
+                        let name = format!("{base}-{index}");
+                        record(
+                            root,
+                            &name,
+                            &name,
+                            &format!("{base} title {index}"),
+                            100,
+                            1_000,
+                        )
+                    })
+                    .collect();
+                apply(
+                    &mut db,
+                    root,
+                    SourceScanState::Complete,
+                    &records,
+                    &records,
+                    2_000,
+                );
+                all.extend(records);
+            }
+            let mut playlist = Playlist::new("mixed");
+            playlist.entries = all
+                .iter()
+                .map(|track| PlaylistEntry {
+                    track_id: db
+                        .resolve_track_id_for_locator(&track.locator)
+                        .expect("resolve"),
+                    locator: track.locator.clone(),
+                    title: None,
+                    duration_ms: None,
+                })
+                .collect();
+            db.save_playlist(&playlist).expect("save playlist");
+            playlist_id = playlist.id;
+        }
+        let first = Database::open(&path).expect("first handle");
+        let second = Database::open(&path).expect("second handle");
+        let request = ListTracksQuery {
+            offset: 0,
+            limit: 100,
+            query: None,
+            field_filter: None,
+            sort: TrackListSort {
+                field: TrackSortField::Title,
+                direction: TrackSortDirection::Asc,
+            },
+        };
+        let lists = |db: &Database, scope: LibrarySourceScope| {
+            let page = db.list_tracks_page(scope, request.clone()).expect("page");
+            let ids = page.items.iter().map(|track| track.id).collect::<Vec<_>>();
+            let queue = db
+                .list_track_ids_filtered_with_alternates(scope, None, &[], None, request.sort)
+                .expect("queue");
+            let playlist = db
+                .playlist_track_ids(scope, playlist_id, PlaylistListSort::default())
+                .expect("playlist queue")
+                .expect("playlist");
+            (page.total_count, ids, queue, playlist)
+        };
+        let mut expected_totals = Vec::new();
+        for scope in [
+            LibrarySourceScope::Local,
+            LibrarySourceScope::Remote,
+            LibrarySourceScope::All,
+        ] {
+            // Interleave the handles and the scopes: nothing one call does changes what the next one sees.
+            let from_first = lists(&first, scope);
+            let from_second = lists(&second, scope);
+            assert_eq!(from_first, from_second, "{scope:?}");
+            assert_eq!(
+                from_first.1, from_first.2,
+                "{scope:?}: the queue is the page"
+            );
+            expected_totals.push(from_first.0);
+        }
+        assert_eq!(expected_totals, [2, 2, 4]);
+        drop((first, second));
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_os_string();
+            file.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(file));
+        }
+    }
+
+    /// Export, sync and the favourites rewrite read the playlist's content: every entry, whatever the lists show.
+    #[test]
+    fn the_whole_playlist_page_ignores_the_source_scope() {
+        let mut db = Database::open_in_memory().expect("database");
+        let nas = add_root(&db, MediaSourceKind::Remote, "NAS / Music");
+        let local = add_root(&db, MediaSourceKind::WindowsFilesystem, "Music");
+        let mut all = Vec::new();
+        for (root, base) in [(&nas, "n"), (&local, "l")] {
+            let name = format!("{base}-0");
+            let records = vec![record(
+                root,
+                &name,
+                &name,
+                &format!("{base} title"),
+                100,
+                1_000,
+            )];
+            apply(
+                &mut db,
+                root,
+                SourceScanState::Complete,
+                &records,
+                &records,
+                2_000,
+            );
+            all.extend(records);
+        }
+        let mut playlist = Playlist::new("mixed");
+        playlist.entries = all
+            .iter()
+            .map(|track| PlaylistEntry {
+                track_id: db
+                    .resolve_track_id_for_locator(&track.locator)
+                    .expect("resolve"),
+                locator: track.locator.clone(),
+                title: None,
+                duration_ms: None,
+            })
+            .collect();
+        db.save_playlist(&playlist).expect("save playlist");
+        let whole = db
+            .get_playlist_page(playlist.id, 0, 100)
+            .expect("page")
+            .expect("playlist");
+        assert_eq!(whole.total_count, 2);
+        let local_view = db
+            .get_playlist_page_sorted(
+                LibrarySourceScope::Local,
+                playlist.id,
+                0,
+                100,
+                PlaylistListSort::default(),
+            )
+            .expect("page")
+            .expect("playlist");
+        assert_eq!(local_view.total_count, 1);
+        // Asking for the local view first leaves the whole page whole.
+        assert_eq!(
+            db.get_playlist_page(playlist.id, 0, 100)
+                .expect("page")
+                .expect("playlist")
+                .total_count,
+            2
+        );
+    }
+
     #[test]
     fn tracks_know_their_source_and_sort_and_group_by_it() {
         let mut db = Database::open_in_memory().expect("database");
@@ -11683,7 +12077,9 @@ mod tests {
                 direction,
             },
         };
-        let ascending = db.list_tracks_page(query(TrackSortDirection::Asc)).expect("ascending");
+        let ascending = db
+            .list_tracks_page(LibrarySourceScope::All, query(TrackSortDirection::Asc))
+            .expect("ascending");
         let sources: Vec<_> = ascending
             .items
             .iter()
@@ -11695,22 +12091,41 @@ mod tests {
         assert_eq!(sources.iter().filter(|name| *name == "我的smb").count(), 1);
         // One group per name, in one run each.
         let groups = db
-            .quick_index_for_tracks(&query(TrackSortDirection::Asc), &[])
+            .quick_index_for_tracks(
+                LibrarySourceScope::All,
+                &query(TrackSortDirection::Asc),
+                &[],
+            )
             .expect("groups");
         assert_eq!(groups.labels.len(), 3, "{:?}", groups.labels);
         // Inside a source the tracks keep their title order.
-        let first_local = ascending.items.iter().position(|t| t.source_name.as_deref() == Some("本地")).unwrap();
-        assert_eq!(ascending.items[first_local].title.as_deref(), Some("l title 0"));
-        let descending = db.list_tracks_page(query(TrackSortDirection::Desc)).expect("descending");
+        let first_local = ascending
+            .items
+            .iter()
+            .position(|t| t.source_name.as_deref() == Some("本地"))
+            .unwrap();
+        assert_eq!(
+            ascending.items[first_local].title.as_deref(),
+            Some("l title 0")
+        );
+        let descending = db
+            .list_tracks_page(LibrarySourceScope::All, query(TrackSortDirection::Desc))
+            .expect("descending");
         assert_eq!(
             descending.items.first().map(|t| t.source_name.clone()),
             ascending.items.last().map(|t| t.source_name.clone())
         );
 
         // Renaming the server renames the group; removing the label makes the source a local one.
-        db.set_source_label(nas.id, Some("renamed")).expect("rename");
-        let renamed = db.list_tracks_page(query(TrackSortDirection::Asc)).expect("renamed");
-        assert!(renamed.items.iter().any(|t| t.source_name.as_deref() == Some("renamed")));
+        db.set_source_label(nas.id, Some("renamed"))
+            .expect("rename");
+        let renamed = db
+            .list_tracks_page(LibrarySourceScope::All, query(TrackSortDirection::Asc))
+            .expect("renamed");
+        assert!(renamed
+            .items
+            .iter()
+            .any(|t| t.source_name.as_deref() == Some("renamed")));
         db.set_source_label(nas.id, None).expect("clear");
     }
 
@@ -11726,16 +12141,19 @@ mod tests {
         apply(&mut db, &local, SourceScanState::Complete, &local_records, &local_records, 9_000);
         let ids: Vec<_> = {
             let page = db
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 10,
-                    query: None,
-                    field_filter: None,
-                    sort: TrackListSort {
-                        field: TrackSortField::ModifiedAt,
-                        direction: TrackSortDirection::Asc,
+                .list_tracks_page(
+                    LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 10,
+                        query: None,
+                        field_filter: None,
+                        sort: TrackListSort {
+                            field: TrackSortField::ModifiedAt,
+                            direction: TrackSortDirection::Asc,
+                        },
                     },
-                })
+                )
                 .expect("page");
             page.items.iter().map(|track| track.id).collect()
         };
@@ -11780,14 +12198,26 @@ mod tests {
         db.save_playlist(&playlist).expect("save");
         let sort = |direction| PlaylistListSort { field: PlaylistSortField::Source, direction };
         let page = db
-            .get_playlist_page_sorted(playlist.id, 0, 10, sort(PlaylistSortDirection::Asc))
+            .get_playlist_page_sorted(
+                LibrarySourceScope::All,
+                playlist.id,
+                0,
+                10,
+                sort(PlaylistSortDirection::Asc),
+            )
             .expect("page")
             .expect("exists");
         let names: Vec<_> = page.items.iter().map(|item| item.source_name.clone()).collect();
         assert!(names.contains(&Some("smb1".to_owned())) && names.contains(&Some("本地".to_owned())), "{names:?}");
         assert_eq!(page.items.iter().find(|i| i.source_name.as_deref() == Some("smb1")).unwrap().modified_at_utc_ms, Some(5_000));
         let reversed = db
-            .get_playlist_page_sorted(playlist.id, 0, 10, sort(PlaylistSortDirection::Desc))
+            .get_playlist_page_sorted(
+                LibrarySourceScope::All,
+                playlist.id,
+                0,
+                10,
+                sort(PlaylistSortDirection::Desc),
+            )
             .expect("page")
             .expect("exists");
         assert_eq!(
@@ -11795,18 +12225,27 @@ mod tests {
             reversed.items.iter().map(|i| i.position).collect::<Vec<_>>()
         );
         let groups = db
-            .quick_index_for_playlist(playlist.id, sort(PlaylistSortDirection::Asc))
+            .quick_index_for_playlist(
+                LibrarySourceScope::All,
+                playlist.id,
+                sort(PlaylistSortDirection::Asc),
+            )
             .expect("groups")
             .expect("exists");
         assert_eq!(groups.labels.len(), 2, "{:?}", groups.labels);
 
         // Album detail groups by source too.
         let album_groups = db
-            .quick_index_for_album_tracks(&["album".to_owned()], source_sort(TrackSortDirection::Asc))
+            .quick_index_for_album_tracks(
+                LibrarySourceScope::All,
+                &["album".to_owned()],
+                source_sort(TrackSortDirection::Asc),
+            )
             .expect("album groups");
         assert_eq!(album_groups.labels.len(), 2, "{:?}", album_groups.labels);
         let album_modified = db
             .quick_index_for_album_tracks(
+                LibrarySourceScope::All,
                 &["album".to_owned()],
                 TrackListSort { field: TrackSortField::ModifiedAt, direction: TrackSortDirection::Asc },
             )
@@ -11845,7 +12284,11 @@ mod tests {
             },
         };
         let ascending = db
-            .quick_index_for_tracks(&request(TrackSortDirection::Asc), &[])
+            .quick_index_for_tracks(
+                LibrarySourceScope::All,
+                &request(TrackSortDirection::Asc),
+                &[],
+            )
             .expect("ascending");
         // Quality order: unknown, MP3, MPEG-4 (M4A and AAC are MP4 too), FLAC, WAV (WAV and WAVE together), DSD.
         assert_eq!(
@@ -11864,7 +12307,11 @@ mod tests {
             ])
         );
         let descending = db
-            .quick_index_for_tracks(&request(TrackSortDirection::Desc), &[])
+            .quick_index_for_tracks(
+                LibrarySourceScope::All,
+                &request(TrackSortDirection::Desc),
+                &[],
+            )
             .expect("descending");
         assert_eq!(
             descending.labels,
@@ -11885,6 +12332,7 @@ mod tests {
         db.save_playlist(&playlist).expect("save playlist");
         let snapshot = db
             .quick_index_for_playlist(
+                LibrarySourceScope::All,
                 playlist.id,
                 PlaylistListSort {
                     field: PlaylistSortField::AudioFormat,
@@ -11921,11 +12369,19 @@ mod tests {
             },
         };
         let ascending = db
-            .quick_index_for_tracks(&request(TrackSortDirection::Asc), &[])
+            .quick_index_for_tracks(
+                LibrarySourceScope::All,
+                &request(TrackSortDirection::Asc),
+                &[],
+            )
             .expect("asc");
         assert_eq!(groups(&ascending), group_names(&[("2020", 0), ("2021", 1)]));
         let descending = db
-            .quick_index_for_tracks(&request(TrackSortDirection::Desc), &[])
+            .quick_index_for_tracks(
+                LibrarySourceScope::All,
+                &request(TrackSortDirection::Desc),
+                &[],
+            )
             .expect("desc");
         assert_eq!(
             groups(&descending),
@@ -11969,13 +12425,16 @@ mod tests {
             2_000,
         );
         let tracks = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 100,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("tracks")
             .items;
         // The playlist holds every track but the last one, in reverse order, and the first one twice.
@@ -12006,7 +12465,7 @@ mod tests {
             for direction in [PlaylistSortDirection::Asc, PlaylistSortDirection::Desc] {
                 let sort = PlaylistListSort { field, direction };
                 let page = db
-                    .get_playlist_page_sorted(playlist.id, 0, 100, sort)
+                    .get_playlist_page_sorted(LibrarySourceScope::All, playlist.id, 0, 100, sort)
                     .expect("page")
                     .expect("playlist exists");
                 for track in &members {
@@ -12016,8 +12475,13 @@ mod tests {
                         .position(|item| item.track_id == Some(track.id))
                         .expect("in the page") as u64;
                     assert_eq!(
-                        db.playlist_track_position(playlist.id, sort, track.id)
-                            .expect("position"),
+                        db.playlist_track_position(
+                            LibrarySourceScope::All,
+                            playlist.id,
+                            sort,
+                            track.id
+                        )
+                        .expect("position"),
                         Some(first),
                         "{field:?} {direction:?}: {:?}",
                         track.title
@@ -12027,8 +12491,13 @@ mod tests {
         }
         let outside = tracks.last().expect("a track outside the playlist").id;
         assert_eq!(
-            db.playlist_track_position(playlist.id, PlaylistListSort::default(), outside)
-                .unwrap(),
+            db.playlist_track_position(
+                LibrarySourceScope::All,
+                playlist.id,
+                PlaylistListSort::default(),
+                outside
+            )
+            .unwrap(),
             None
         );
     }
@@ -12078,11 +12547,13 @@ mod tests {
                         field_filter: None,
                         sort: TrackListSort { field, direction },
                     };
-                    let page = db.list_tracks_page(request.clone()).expect("page");
+                    let page = db
+                        .list_tracks_page(LibrarySourceScope::All, request.clone())
+                        .expect("page");
                     assert!(!page.items.is_empty());
                     for (index, track) in page.items.iter().enumerate() {
                         assert_eq!(
-                            db.track_position(&request, &[], track.id)
+                            db.track_position(LibrarySourceScope::All, &request, &[], track.id)
                                 .expect("position"),
                             Some(index as u64),
                             "{field:?} {direction:?} {query:?}: {:?}",
@@ -12101,9 +12572,14 @@ mod tests {
             sort: Default::default(),
         };
         let hidden = track_id_for_query(&db, "alpha");
-        assert_eq!(db.track_position(&request, &[], hidden).unwrap(), None);
         assert_eq!(
-            db.track_position(&request, &[], TrackId::new()).unwrap(),
+            db.track_position(LibrarySourceScope::All, &request, &[], hidden)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            db.track_position(LibrarySourceScope::All, &request, &[], TrackId::new())
+                .unwrap(),
             None
         );
     }
@@ -12144,16 +12620,19 @@ mod tests {
         );
 
         let page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::Title,
-                    direction: TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("sorted page");
         let displayed_titles = page
             .items
@@ -12177,16 +12656,19 @@ mod tests {
         let repaired = Database::open_with_collation(&path, collation)
             .expect("reopen database and repair missing title sort keys");
         let repaired_page = repaired
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::Title,
-                    direction: TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("page after startup repair");
         let repaired_sort_title: String = repaired
             .lock()
@@ -12255,16 +12737,19 @@ mod tests {
             2_000,
         );
         let page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::Title,
-                    direction: TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("sorted page");
         assert_eq!(
             page.items
@@ -12334,16 +12819,19 @@ mod tests {
         let reopened = Database::open_checked(&path)
             .expect("startup checks and reopen using the current ICU comparator");
         let page = reopened
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::Title,
-                    direction: TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("read sorted page");
         let titles = [
             "不負韶光 無駕帶伴奏".to_owned(),
@@ -12421,16 +12909,19 @@ mod tests {
             (TrackSortField::Album, vec!["中 2", "中 10", "字 2"]),
         ] {
             let page = db
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 10,
-                    query: None,
-                    field_filter: None,
-                    sort: TrackListSort {
-                        field,
-                        direction: TrackSortDirection::Asc,
+                .list_tracks_page(
+                    LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 10,
+                        query: None,
+                        field_filter: None,
+                        sort: TrackListSort {
+                            field,
+                            direction: TrackSortDirection::Asc,
+                        },
                     },
-                })
+                )
                 .expect("sorted page");
             assert_eq!(
                 page.items
@@ -12484,16 +12975,19 @@ mod tests {
         );
 
         let tracks = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::Title,
-                    direction: TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::Title,
+                        direction: TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("read tracks")
             .items;
         let expected_named = [
@@ -12508,13 +13002,16 @@ mod tests {
             ] {
                 let sort = TrackListSort { field, direction };
                 let page = db
-                    .list_tracks_page(ListTracksQuery {
-                        offset: 0,
-                        limit: 10,
-                        query: None,
-                        field_filter: None,
-                        sort,
-                    })
+                    .list_tracks_page(
+                        LibrarySourceScope::All,
+                        ListTracksQuery {
+                            offset: 0,
+                            limit: 10,
+                            query: None,
+                            field_filter: None,
+                            sort,
+                        },
+                    )
                     .expect("sort library page");
                 let titles = page
                     .items
@@ -12558,6 +13055,7 @@ mod tests {
             ] {
                 let page = db
                     .get_playlist_page_sorted(
+                        LibrarySourceScope::All,
                         playlist.id,
                         0,
                         10,
@@ -12702,6 +13200,7 @@ mod tests {
 
         let sorted = db
             .get_playlist_page_sorted(
+                LibrarySourceScope::All,
                 playlist.id,
                 0,
                 20,
@@ -12732,16 +13231,19 @@ mod tests {
         assert_eq!(sorted.items[8].bit_depth, Some(24));
 
         let library_sorted = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 20,
-                query: None,
-                field_filter: None,
-                sort: player_core::TrackListSort {
-                    field: player_core::TrackSortField::AudioFormat,
-                    direction: player_core::TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 20,
+                    query: None,
+                    field_filter: None,
+                    sort: player_core::TrackListSort {
+                        field: player_core::TrackSortField::AudioFormat,
+                        direction: player_core::TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("sort library by audio format");
         assert_eq!(
             library_sorted
@@ -12762,6 +13264,7 @@ mod tests {
         assert_eq!(library_sorted.items[8].bit_depth, Some(24));
         let queue_track_ids = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 None,
                 player_core::TrackListSort {
@@ -12781,6 +13284,7 @@ mod tests {
 
         let playlist_desc = db
             .get_playlist_page_sorted(
+                LibrarySourceScope::All,
                 playlist.id,
                 0,
                 20,
@@ -12809,16 +13313,19 @@ mod tests {
         assert_eq!(playlist_desc.items[8].bitrate_bps, Some(160_000));
         assert_eq!(playlist_desc.items[9].bitrate_bps, Some(96_000));
         let library_desc = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 20,
-                query: None,
-                field_filter: None,
-                sort: player_core::TrackListSort {
-                    field: player_core::TrackSortField::AudioFormat,
-                    direction: player_core::TrackSortDirection::Desc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 20,
+                    query: None,
+                    field_filter: None,
+                    sort: player_core::TrackListSort {
+                        field: player_core::TrackSortField::AudioFormat,
+                        direction: player_core::TrackSortDirection::Desc,
+                    },
                 },
-            })
+            )
             .expect("sort library quality descending");
         assert_eq!(
             library_desc
@@ -12839,6 +13346,7 @@ mod tests {
         assert_eq!(library_desc.items[9].bitrate_bps, Some(96_000));
         let queue_track_ids_desc = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 None,
                 player_core::TrackListSort {
@@ -12950,21 +13458,30 @@ mod tests {
         );
 
         let page_ids = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 20,
-                query: Some("a".to_owned()),
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 20,
+                    query: Some("a".to_owned()),
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("query matching library page")
             .items
             .into_iter()
             .map(|track| track.id)
             .collect::<Vec<_>>();
-        assert_eq!(db.list_track_ids(Some("a")).expect("queue query"), page_ids);
         assert_eq!(
-            db.list_track_ids(Some("  ")).expect("all queue IDs").len(),
+            db.list_track_ids(LibrarySourceScope::All, Some("a"))
+                .expect("queue query"),
+            page_ids
+        );
+        assert_eq!(
+            db.list_track_ids(LibrarySourceScope::All, Some("  "))
+                .expect("all queue IDs")
+                .len(),
             2
         );
 
@@ -12998,7 +13515,11 @@ mod tests {
         db.save_playlist(&playlist)
             .expect("save duplicate playlist");
         let queue = db
-            .playlist_track_ids(playlist.id, PlaylistListSort::default())
+            .playlist_track_ids(
+                LibrarySourceScope::All,
+                playlist.id,
+                PlaylistListSort::default(),
+            )
             .expect("playlist queue query")
             .expect("playlist exists");
         assert_eq!(queue.len(), 3);
@@ -13007,7 +13528,11 @@ mod tests {
         assert_eq!(queue[1].0, 2);
         assert_eq!(queue[2].0, 3);
         assert!(db
-            .playlist_track_ids(PlaylistId::new(), PlaylistListSort::default())
+            .playlist_track_ids(
+                LibrarySourceScope::All,
+                PlaylistId::new(),
+                PlaylistListSort::default()
+            )
             .expect("unknown playlist query")
             .is_none());
     }
@@ -13034,7 +13559,7 @@ mod tests {
         );
 
         let track_id = db
-            .list_track_ids(None)
+            .list_track_ids(LibrarySourceScope::All, None)
             .expect("list inserted track")
             .into_iter()
             .next()
@@ -13426,7 +13951,12 @@ mod tests {
         let started = std::time::Instant::now();
         let checked = Database::open_checked(&path).expect("checked open 100k fixture");
         let elapsed = started.elapsed();
-        assert_eq!(checked.count_tracks(None).expect("count tracks"), 100_000);
+        assert_eq!(
+            checked
+                .count_tracks(LibrarySourceScope::All, None)
+                .expect("count tracks"),
+            100_000
+        );
         let database_bytes = fs::metadata(&path).expect("database file metadata").len();
         eprintln!(
             "sqlite_version={} tracks=100000 main_database_bytes={} checked_open_with_pending_wal_ms={}",
@@ -13440,7 +13970,12 @@ mod tests {
         let started = std::time::Instant::now();
         let reopened = Database::open_checked(&path).expect("checked open without pending WAL");
         let clean_open_elapsed = started.elapsed();
-        assert_eq!(reopened.count_tracks(None).expect("count tracks"), 100_000);
+        assert_eq!(
+            reopened
+                .count_tracks(LibrarySourceScope::All, None)
+                .expect("count tracks"),
+            100_000
+        );
         eprintln!(
             "sqlite_version={} tracks=100000 main_database_bytes={} checked_open_without_wal_ms={}",
             rusqlite::version(),
@@ -13622,9 +14157,13 @@ mod tests {
             assert_eq!(before.entries[1].track_id, Some(preassigned_track_id));
 
             assert_eq!(
-                db.playlist_track_ids(playlist.id, PlaylistListSort::default())
-                    .expect("repair queue items")
-                    .expect("playlist exists"),
+                db.playlist_track_ids(
+                    LibrarySourceScope::All,
+                    playlist.id,
+                    PlaylistListSort::default()
+                )
+                .expect("repair queue items")
+                .expect("playlist exists"),
                 vec![(0, indexed_track_id), (1, preassigned_track_id)]
             );
             let page = db
@@ -14095,16 +14634,19 @@ mod tests {
             direction: TrackSortDirection::Desc,
         };
         let page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: desc,
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: desc,
+                },
+            )
             .expect("title desc page");
         let ids = db
-            .list_track_ids_filtered(None, None, desc)
+            .list_track_ids_filtered(LibrarySourceScope::All, None, None, desc)
             .expect("title desc queue ids");
         assert_eq!(
             page.items
@@ -14187,7 +14729,7 @@ mod tests {
             },
         };
         let snapshot = db
-            .quick_index_for_tracks(&request, &[])
+            .quick_index_for_tracks(LibrarySourceScope::All, &request, &[])
             .expect("quick index snapshot");
         assert_eq!(snapshot.total_count, 5);
         assert_eq!(
@@ -14212,10 +14754,20 @@ mod tests {
             ]
         );
         let artist_snapshot = db
-            .quick_index_for_artists(None, &[], &["artist".to_owned()], request.sort)
+            .quick_index_for_artists(
+                LibrarySourceScope::All,
+                None,
+                &[],
+                &["artist".to_owned()],
+                request.sort,
+            )
             .expect("artist detail quick index");
         let album_snapshot = db
-            .quick_index_for_album_tracks(&["album".to_owned()], request.sort)
+            .quick_index_for_album_tracks(
+                LibrarySourceScope::All,
+                &["album".to_owned()],
+                request.sort,
+            )
             .expect("album detail quick index");
         assert_eq!(artist_snapshot, snapshot);
         assert_eq!(album_snapshot, snapshot);
@@ -14232,16 +14784,19 @@ mod tests {
         ];
         apply(&mut db, &root, SourceScanState::Complete, &records, &records, 9_000);
         let page = |direction| {
-            db.list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::ModifiedAt,
-                    direction,
+            db.list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::ModifiedAt,
+                        direction,
+                    },
                 },
-            })
+            )
             .expect("modified sort")
         };
         let ascending = page(TrackSortDirection::Asc);
@@ -14281,16 +14836,19 @@ mod tests {
         );
 
         let ascending = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::CreatedAt,
-                    direction: TrackSortDirection::Asc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::CreatedAt,
+                        direction: TrackSortDirection::Asc,
+                    },
                 },
-            })
+            )
             .expect("ascending creation timestamp sort");
         assert_eq!(
             ascending
@@ -14311,16 +14869,19 @@ mod tests {
         );
 
         let descending = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: TrackListSort {
-                    field: TrackSortField::CreatedAt,
-                    direction: TrackSortDirection::Desc,
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: TrackListSort {
+                        field: TrackSortField::CreatedAt,
+                        direction: TrackSortDirection::Desc,
+                    },
                 },
-            })
+            )
             .expect("descending creation timestamp sort");
         assert_eq!(
             descending
@@ -14375,16 +14936,19 @@ mod tests {
             ),
         ] {
             let page = db
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 10,
-                    query: None,
-                    field_filter: None,
-                    sort: TrackListSort {
-                        field: TrackSortField::Title,
-                        direction,
+                .list_tracks_page(
+                    LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 10,
+                        query: None,
+                        field_filter: None,
+                        sort: TrackListSort {
+                            field: TrackSortField::Title,
+                            direction,
+                        },
                     },
-                })
+                )
                 .expect("sort library");
             assert_eq!(
                 page.items
@@ -14413,13 +14977,16 @@ mod tests {
             1000,
         );
         let page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("base page");
         let short_id = page
             .items
@@ -14451,13 +15018,16 @@ mod tests {
             direction: TrackSortDirection::Desc,
         };
         let sorted = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 10,
-                query: None,
-                field_filter: None,
-                sort: desc,
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 10,
+                    query: None,
+                    field_filter: None,
+                    sort: desc,
+                },
+            )
             .expect("play-count desc page");
         assert_eq!(
             sorted
@@ -14469,7 +15039,7 @@ mod tests {
             "2.0 plays should rank above 0.5 plays even when raw played_ms is lower"
         );
         assert_eq!(
-            db.list_track_ids_filtered(None, None, desc)
+            db.list_track_ids_filtered(LibrarySourceScope::All, None, None, desc)
                 .expect("matching queue order"),
             sorted
                 .items
@@ -14495,13 +15065,16 @@ mod tests {
         );
 
         let page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 1,
-                limit: 1,
-                query: None,
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 1,
+                    limit: 1,
+                    query: None,
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("page query");
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.offset, 1);
@@ -14509,13 +15082,16 @@ mod tests {
         assert_eq!(page.total_count, 2);
 
         let filtered = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 50,
-                query: Some("alpha".to_owned()),
-                field_filter: None,
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 50,
+                    query: Some("alpha".to_owned()),
+                    field_filter: None,
+                    sort: Default::default(),
+                },
+            )
             .expect("text filter");
         assert_eq!(filtered.total_count, 1);
         assert_eq!(filtered.items[0].title.as_deref(), Some("Alpha"));
@@ -14555,7 +15131,7 @@ mod tests {
         };
 
         let all = db
-            .list_tracks_all_with_alternates(&query, &[])
+            .list_tracks_all_with_alternates(LibrarySourceScope::All, &query, &[])
             .expect("one unbounded SQLite result");
         assert_eq!(all.len(), 1_205);
         assert_eq!(all[0].title.as_deref(), Some("Snapshot 1204"));
@@ -14565,7 +15141,7 @@ mod tests {
         );
 
         let backend_range = db
-            .list_tracks_window_with_alternates(&query, &[], 1_100, 105)
+            .list_tracks_window_with_alternates(LibrarySourceScope::All, &query, &[], 1_100, 105)
             .expect("backend range beyond renderer cap");
         assert_eq!(backend_range.len(), 105);
         assert_eq!(
@@ -14579,6 +15155,7 @@ mod tests {
 
         let renderer_page = db
             .list_tracks_page_with_alternates(
+                LibrarySourceScope::All,
                 ListTracksQuery {
                     limit: 5_000,
                     ..query
@@ -14658,16 +15235,24 @@ mod tests {
             ),
         ] {
             let page = db
-                .list_tracks_page(ListTracksQuery {
-                    offset: 0,
-                    limit: 1,
-                    query: Some("needle".to_owned()),
-                    field_filter: Some(filter.clone()),
-                    sort: Default::default(),
-                })
+                .list_tracks_page(
+                    LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 0,
+                        limit: 1,
+                        query: Some("needle".to_owned()),
+                        field_filter: Some(filter.clone()),
+                        sort: Default::default(),
+                    },
+                )
                 .expect("exact field filtered page");
             let queue_ids = db
-                .list_track_ids_filtered(Some("needle"), Some(&filter), Default::default())
+                .list_track_ids_filtered(
+                    LibrarySourceScope::All,
+                    Some("needle"),
+                    Some(&filter),
+                    Default::default(),
+                )
                 .expect("same exact field filter for queue");
             assert_eq!(queue_ids, expected);
             assert_eq!(page.total_count, expected.len() as u64);
@@ -14676,13 +15261,16 @@ mod tests {
                 expected.first().copied()
             );
             let second_page = db
-                .list_tracks_page(ListTracksQuery {
-                    offset: 1,
-                    limit: 1,
-                    query: Some("needle".to_owned()),
-                    field_filter: Some(filter),
-                    sort: Default::default(),
-                })
+                .list_tracks_page(
+                    LibrarySourceScope::All,
+                    ListTracksQuery {
+                        offset: 1,
+                        limit: 1,
+                        query: Some("needle".to_owned()),
+                        field_filter: Some(filter),
+                        sort: Default::default(),
+                    },
+                )
                 .expect("second exact field filtered page");
             assert_eq!(second_page.total_count, expected.len() as u64);
             assert_eq!(
@@ -14696,7 +15284,12 @@ mod tests {
             value: "Hanser".to_owned(),
         };
         assert!(db
-            .list_track_ids_filtered(None, Some(&binary_case_mismatch), Default::default())
+            .list_track_ids_filtered(
+                LibrarySourceScope::All,
+                None,
+                Some(&binary_case_mismatch),
+                Default::default()
+            )
             .expect("binary case-sensitive value")
             .is_empty());
 
@@ -14707,8 +15300,13 @@ mod tests {
             value: "手動・夜曲".to_owned(),
         };
         assert_eq!(
-            db.list_track_ids_filtered(None, Some(&overridden), Default::default())
-                .expect("filter current user-facing title"),
+            db.list_track_ids_filtered(
+                LibrarySourceScope::All,
+                None,
+                Some(&overridden),
+                Default::default()
+            )
+            .expect("filter current user-facing title"),
             vec![third_id]
         );
     }
@@ -14747,6 +15345,7 @@ mod tests {
         for offset in 0..3 {
             let page = db
                 .list_tracks_page_with_alternates(
+                    LibrarySourceScope::All,
                     ListTracksQuery {
                         offset,
                         limit: 1,
@@ -14772,6 +15371,7 @@ mod tests {
 
         let queue_ids = db
             .list_track_ids_filtered_with_alternates(
+                LibrarySourceScope::All,
                 query.as_deref(),
                 &alternates,
                 None,
@@ -14829,6 +15429,7 @@ mod tests {
         };
         let hanser_ids = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Artist,
@@ -14850,19 +15451,23 @@ mod tests {
             ]
         );
         let yousa_page = db
-            .list_tracks_page(ListTracksQuery {
-                offset: 0,
-                limit: 20,
-                query: None,
-                field_filter: Some(TrackFieldFilter {
-                    field: TrackField::Artist,
-                    value: "yousa".to_owned(),
-                }),
-                sort: Default::default(),
-            })
+            .list_tracks_page(
+                LibrarySourceScope::All,
+                ListTracksQuery {
+                    offset: 0,
+                    limit: 20,
+                    query: None,
+                    field_filter: Some(TrackFieldFilter {
+                        field: TrackField::Artist,
+                        value: "yousa".to_owned(),
+                    }),
+                    sort: Default::default(),
+                },
+            )
             .expect("yousa page");
         let yousa_ids = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Artist,
@@ -14885,6 +15490,7 @@ mod tests {
         );
         let john_ids = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Artist,
@@ -14896,6 +15502,7 @@ mod tests {
         assert!(john_ids.is_empty());
         let john_lennon_ids = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Artist,
@@ -14910,6 +15517,7 @@ mod tests {
         );
         assert!(db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Artist,
@@ -14953,6 +15561,7 @@ mod tests {
             .collect::<Vec<_>>();
         let filtered = db
             .list_track_ids_filtered(
+                LibrarySourceScope::All,
                 None,
                 Some(&TrackFieldFilter {
                     field: TrackField::Artist,
@@ -15181,7 +15790,7 @@ mod tests {
             .expect("resolve disabled track locator")
             .expect("disabled track metadata remains stored");
         assert_eq!(
-            db.count_tracks(Some("Disabled only track"))
+            db.count_tracks(LibrarySourceScope::All, Some("Disabled only track"))
                 .expect("disabled track is hidden from search"),
             0
         );
@@ -15230,7 +15839,8 @@ mod tests {
     fn unfiltered_page_plan_uses_sort_and_mapping_indexes() {
         let db = Database::open_in_memory().expect("database");
         let connection = db.lock().expect("connection");
-        let explain_page_sql = format!("EXPLAIN QUERY PLAN {TRACKS_PAGE_SQL}");
+        let explain_page_sql =
+            LibrarySourceScope::All.bind(&format!("EXPLAIN QUERY PLAN {TRACKS_PAGE_SQL}"));
         let plan = connection
             .prepare(&explain_page_sql)
             .expect("explain page query")
@@ -15248,7 +15858,8 @@ mod tests {
             .expect("read query plan")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect query plan");
-        let explain_count_sql = format!("EXPLAIN QUERY PLAN {COUNT_LIBRARY_SQL}");
+        let explain_count_sql =
+            LibrarySourceScope::All.bind(&format!("EXPLAIN QUERY PLAN {COUNT_LIBRARY_SQL}"));
         let count_plan = connection
             .prepare(&explain_count_sql)
             .expect("explain count query")
@@ -16185,13 +16796,16 @@ mod tests {
     }
 
     fn all_visible_tracks(db: &Database) -> Vec<player_core::TrackSummary> {
-        db.list_tracks_page(ListTracksQuery {
-            offset: 0,
-            limit: 100,
-            query: None,
-            field_filter: None,
-            sort: Default::default(),
-        })
+        db.list_tracks_page(
+            LibrarySourceScope::All,
+            ListTracksQuery {
+                offset: 0,
+                limit: 100,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .expect("list")
         .items
     }

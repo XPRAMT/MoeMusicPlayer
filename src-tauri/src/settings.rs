@@ -2598,6 +2598,15 @@ impl SettingsStore {
             .map_err(|_| SettingsError::Poisoned)
     }
 
+    /// The source scope the library lists show now (all, local or remote songs), read from the settings themselves: the
+    /// one place it is kept. Every list query and every queue built from a list passes it explicitly (ADR 0037).
+    pub fn library_source_scope(&self) -> Result<player_db::LibrarySourceScope, SettingsError> {
+        self.settings
+            .lock()
+            .map(|settings| settings.library_source_scope)
+            .map_err(|_| SettingsError::Poisoned)
+    }
+
     pub fn recovery_warning(&self) -> Option<String> {
         self.recovery_warning.clone()
     }

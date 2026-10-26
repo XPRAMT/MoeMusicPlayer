@@ -76,13 +76,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     )?;
     let initial_elapsed = initial_started.elapsed();
-    let page = database.list_tracks_page(ListTracksQuery {
-        offset: 0,
-        limit: 1,
-        query: None,
-        field_filter: None,
-        sort: Default::default(),
-    })?;
+    let page = database.list_tracks_page(
+        player_db::LibrarySourceScope::All,
+        ListTracksQuery {
+            offset: 0,
+            limit: 1,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        },
+    )?;
 
     println!(
         "finished pass=initial elapsed_seconds={:.3} state={:?} observed={} metadata_reads={} unchanged={} updated={} removed_mappings={} errors={} database_tracks={} database={}",
@@ -133,13 +136,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     )?;
     let unchanged_elapsed = unchanged_started.elapsed();
-    let unchanged_page = database.list_tracks_page(ListTracksQuery {
-        offset: 0,
-        limit: 1,
-        query: None,
-        field_filter: None,
-        sort: Default::default(),
-    })?;
+    let unchanged_page = database.list_tracks_page(
+        player_db::LibrarySourceScope::All,
+        ListTracksQuery {
+            offset: 0,
+            limit: 1,
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        },
+    )?;
     println!(
         "finished pass=unchanged elapsed_seconds={:.3} state={:?} observed={} metadata_reads={} unchanged={} updated={} removed_mappings={} errors={} database_tracks={}",
         unchanged_elapsed.as_secs_f64(),

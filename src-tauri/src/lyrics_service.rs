@@ -3952,7 +3952,7 @@ mod tests {
         assert_eq!(
             fixture
                 .database
-                .album_index_key_for_track(fixture.track_id)
+                .album_index_key_for_track(player_db::LibrarySourceScope::All, fixture.track_id)
                 .expect("album key"),
             Some(("album:unmarked".to_owned(), 1))
         );
@@ -3964,7 +3964,7 @@ mod tests {
             .expect("refresh one track");
         let (key, count) = fixture
             .database
-            .album_index_key_for_track(fixture.track_id)
+            .album_index_key_for_track(player_db::LibrarySourceScope::All, fixture.track_id)
             .expect("album key")
             .expect("track in the library");
         assert!(

@@ -797,8 +797,15 @@ pub async fn track_details_save(
 /// Event with the album index keys whose cover caches were cleared after a save; the page drops their memory entries.
 const ALBUM_ARTWORK_INVALIDATED_EVENT: &str = "album-artwork-invalidated";
 
+/// The album key and count as the album list shows them (under the lists' source scope), like the album card's.
 fn album_index_key(state: &AppState, id: player_core::TrackId) -> Option<(String, u64)> {
-    state.database.as_ref()?.album_index_key_for_track(id).ok().flatten()
+    let scope = crate::list_scope(state).ok()?;
+    state
+        .database
+        .as_ref()?
+        .album_index_key_for_track(scope, id)
+        .ok()
+        .flatten()
 }
 
 /// Only the saved track's album (before and after the save, when its album tag changed) loses its chosen covers, in

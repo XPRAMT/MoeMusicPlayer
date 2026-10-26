@@ -300,13 +300,16 @@ fn the_sync_engine_stores_remote_tracks_and_leaves_them_when_the_server_is_down(
     );
 
     let page = |db: &Database| {
-        db.list_tracks_page(ListTracksQuery {
-            offset: 0,
-            limit: 20,
-            query: None,
-            field_filter: None,
-            sort: Default::default(),
-        })
+        db.list_tracks_page(
+            player_db::LibrarySourceScope::All,
+            ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+        )
         .expect("page")
     };
     let first = page(&db);
@@ -512,16 +515,19 @@ impl RemoteFs for WithCreationTimes {
 
 fn created_by_path(db: &Database, root: &LibraryRoot) -> Vec<(String, Option<i64>, Option<i64>)> {
     let page = db
-        .list_tracks_page(ListTracksQuery {
-            offset: 0,
-            limit: 20,
-            query: None,
-            field_filter: None,
-            sort: player_core::TrackListSort {
-                field: player_core::TrackSortField::CreatedAt,
-                direction: player_core::TrackSortDirection::Asc,
+        .list_tracks_page(
+            player_db::LibrarySourceScope::All,
+            ListTracksQuery {
+                offset: 0,
+                limit: 20,
+                query: None,
+                field_filter: None,
+                sort: player_core::TrackListSort {
+                    field: player_core::TrackSortField::CreatedAt,
+                    direction: player_core::TrackSortDirection::Asc,
+                },
             },
-        })
+        )
         .expect("page");
     page.items
         .iter()
