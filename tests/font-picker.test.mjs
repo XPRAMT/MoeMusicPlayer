@@ -16,7 +16,10 @@ import {
   fontPickerRows,
   normalizeFontFamily,
   quoteCssFamily,
-  visibleRowRange,
+  WINDOWS_NATIVE_LYRICS_CJK_FAMILY,
+  cssStackFamilies,
+  defaultFontFamily,
+  fontPickerGroups,
 } from '../src/lib/font-picker.js';
 import { DEFAULT_LYRICS_PREFERENCES, normalizeLyricsPreferences } from '../src/lib/lyrics-preferences.js';
 import { DEFAULT_TASKBAR_LYRICS_SETTINGS, normalizeTaskbarLyricsSettings } from '../src/lib/taskbar-lyrics-settings.js';
@@ -83,12 +86,64 @@ test('「預設字型」 is always the first row, also while searching', () => {
   assert.equal(new Set(fontPickerRows(fonts, '').map((row) => row.key)).size, fonts.length + 1, 'unique keys');
 });
 
-test('only the rows in view (plus overscan) are rendered', () => {
-  assert.deepEqual(visibleRowRange(0, 288, 36, 1000), { start: 0, end: 12 });
-  assert.deepEqual(visibleRowRange(3600, 288, 36, 1000), { start: 96, end: 112 });
-  assert.deepEqual(visibleRowRange(35990, 288, 36, 1000), { start: 995, end: 1000 });
-  assert.deepEqual(visibleRowRange(0, 288, 36, 0), { start: 0, end: 0 });
-  assert.deepEqual(visibleRowRange(-50, 0, 36, 5, 0), { start: 0, end: 1 });
+test('group headings follow the backend order and hide groups without a match while searching', () => {
+  const sorted = [fonts[0], fonts[2], fonts[1], fonts[3]]; // traditional, latin, japanese, japanese
+  assert.deepEqual(fontPickerGroups(fontPickerRows(sorted, '')), [
+    { group: 'traditional', beforeIndex: 1 },
+    { group: 'latin', beforeIndex: 2 },
+    { group: 'japanese', beforeIndex: 3 },
+  ], '「預設字型」 (row 0) stays above the first heading');
+  assert.deepEqual(fontPickerGroups(fontPickerRows(sorted, 'gothic')), [{ group: 'japanese', beforeIndex: 1 }]);
+  assert.deepEqual(fontPickerGroups(fontPickerRows(sorted, 'nothing')), []);
+});
+
+test('「預設（…）」 names the font the default actually draws (CJK) text in, per target', () => {
+  const catalog = [
+    { family: 'Segoe UI', displayName: 'Segoe UI', group: 'latin', faces: [] },
+    { family: 'Microsoft JhengHei', displayName: '微軟正黑體', group: 'traditional', faces: [] },
+    { family: 'Yu Gothic', displayName: '游ゴシック', group: 'japanese', faces: [] },
+    { family: 'Noto Sans CJK TC', displayName: 'Noto Sans CJK TC', group: 'traditional', faces: [] },
+  ];
+  const name = (input) => defaultFontFamily({ fonts: catalog, ...input })?.displayName ?? null;
+  assert.deepEqual(cssStackFamilies(DEFAULT_INTERFACE_FONT_STACK), ['Segoe UI', 'Microsoft JhengHei', 'sans-serif']);
+  // Windows: Segoe UI has no CJK glyphs, so Chinese text is drawn by Microsoft JhengHei.
+  assert.equal(name({ target: 'interface', platform: 'windows' }), '微軟正黑體');
+  assert.equal(name({ target: 'lyrics', platform: 'windows' }), '微軟正黑體');
+  assert.equal(name({ target: 'lyrics', platform: 'windows', interfaceFamily: 'yu gothic' }), '游ゴシック', 'the playing page follows the interface font');
+  assert.equal(name({ target: 'lyrics', platform: 'windows', interfaceFamily: 'Not Installed' }), '微軟正黑體');
+  assert.equal(name({ target: 'taskbar', platform: 'windows' }), '微軟正黑體');
+  assert.equal(name({ target: 'floating', platform: 'windows' }), '微軟正黑體');
+  // Only Latin fonts of the stack installed: the first of them.
+  assert.equal(defaultFontFamily({ target: 'interface', platform: 'windows', fonts: [catalog[0]] })?.family, 'Segoe UI');
+  // Android: nothing of the stack is installed, so sans-serif: the system default for the region.
+  const androidFonts = [catalog[3]];
+  assert.equal(defaultFontFamily({ target: 'interface', platform: 'android', fonts: androidFonts, systemDefault: 'Noto Sans CJK TC' })?.family, 'Noto Sans CJK TC');
+  assert.equal(defaultFontFamily({ target: 'floating', platform: 'android', fonts: androidFonts, systemDefault: 'Noto Sans CJK TC' })?.family, 'Noto Sans CJK TC');
+  // Unknown: the label stays 「預設字型」.
+  assert.equal(defaultFontFamily({ target: 'floating', platform: 'android', fonts: androidFonts, systemDefault: null }), null);
+  assert.equal(defaultFontFamily({ target: 'interface', platform: 'windows', fonts: [] }), null);
+});
+
+test('the native lyrics default named by the picker is the family win.rs maps CJK text to', () => {
+  const win = read('crates/player-lyrics-native/src/win.rs');
+  assert.ok(win.includes(`let family = HSTRING::from("${WINDOWS_NATIVE_LYRICS_CJK_FAMILY}");`), 'win.rs CJK fallback mapping');
+  const picker = read('src/lib/FontPicker.svelte');
+  assert.match(picker, /tr\('預設（\{0\}）', \[defaultFont\.displayName\]\)/);
+  const look = read('src/lib/LyricsLookSettings.svelte');
+  assert.match(look, /<FontPicker[^>]*target=\{fontTarget\}/);
+  const app = read('src/App.svelte');
+  assert.match(app, /fontTarget="taskbar"/);
+  assert.match(app, /fontTarget="floating"/);
+  assert.match(app, /setInterfaceFontForPickers\(interfaceFontFamily\)/);
+});
+
+test('the picker reuses the library virtual list (group rows, quick index) and never draws a row in the real family', () => {
+  const picker = read('src/lib/FontPicker.svelte');
+  assert.match(picker, /import PagedVirtualList from '\.\/PagedVirtualList\.svelte'/);
+  assert.match(picker, /<PagedVirtualList[\s\S]*\{groupRows\}[\s\S]*\{quickIndexLabels\}/);
+  assert.match(picker, /use:rowFace=\{item\.font\}/);
+  assert.doesNotMatch(picker, /ensureAndroidFontFaces\(row/, 'rows no longer register the real font files');
+  for (const label of ['繁體中文', '簡體中文', '日文', '英文']) assert.ok(picker.includes(`tr('${label}')`), label);
 });
 
 test('the current setting shows its localized name, or the stored one when it is not listed', () => {
@@ -148,6 +203,6 @@ test('the picker reads the list only when it opens and keeps one shared list', (
 test('the new labels are translated', () => {
   for (const language of ['ja', 'en', 'zh-CN']) {
     const catalog = JSON.parse(read(`src/lib/i18n/${language}.json`));
-    for (const key of ['字型', '預設字型', '搜尋字型', '讀取字型中…', '主介面字型']) assert.ok(catalog[key], `${language}: ${key}`);
+    for (const key of ['字型', '預設字型', '預設（{0}）', '搜尋字型', '讀取字型中…', '主介面字型', '繁體中文', '簡體中文', '日文', '英文']) assert.ok(catalog[key], `${language}: ${key}`);
   }
 });

@@ -38,7 +38,7 @@
 <script lang="ts" generics="Item">
   import { tr } from './i18n.js';
   import { displayUnknown } from './unknown-label.js';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
     getNextActiveIndex,
@@ -610,6 +610,19 @@
     quickIndexMaxHeight = Math.max(0, rect.height - 24);
     quickIndexTrigger = event.currentTarget as HTMLButtonElement;
     quickIndexOpen = true;
+    void tick().then(() => centreQuickIndexInContainingBlock(rect.left + rect.width / 2, rect.top + rect.height / 2));
+  }
+
+  /** A list inside a transformed or filtered ancestor (the font pickers in the quick-settings drawer) makes that
+   *  ancestor the fixed popover's containing block: shift the popover by the difference so it is still centred on the
+   *  list. Elsewhere (the library) the difference is zero and nothing moves. */
+  function centreQuickIndexInContainingBlock(centreX: number, centreY: number): void {
+    if (!quickIndexOpen || !quickIndexDialog) return;
+    const placed = quickIndexDialog.getBoundingClientRect();
+    const dx = centreX - (placed.left + placed.width / 2);
+    const dy = centreY - (placed.top + placed.height / 2);
+    if (Math.abs(dx) > 0.5) quickIndexCenterX += dx;
+    if (Math.abs(dy) > 0.5) quickIndexCenterY += dy;
   }
 
   function chooseQuickIndexLabel(label: string): void {

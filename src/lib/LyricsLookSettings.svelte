@@ -16,6 +16,7 @@
     settings,
     onChange,
     idPrefix,
+    fontTarget = 'lyrics',
     fontAriaLabel,
     colorAriaLabel = '',
     autoColorHint = '',
@@ -35,6 +36,8 @@
     settings: LookFields;
     onChange: (patch: Partial<LyricsLookSettings>) => void;
     idPrefix: string;
+    /** What the page's lyrics are drawn by: names the font 「預設（…）」 stands for. */
+    fontTarget?: 'lyrics' | 'taskbar' | 'floating';
     fontAriaLabel: string;
     colorAriaLabel?: string;
     autoColorHint?: string;
@@ -97,7 +100,7 @@
 
 <section class="quick-settings-group" aria-labelledby="{idPrefix}-size-heading">
   <h3 id="{idPrefix}-size-heading">{tr("字體與大小")}</h3>
-  <FontPicker idPrefix="{idPrefix}-font" value={settings.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} />
+  <FontPicker idPrefix="{idPrefix}-font" target={fontTarget} value={settings.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} />
   <label class="lyrics-preference-range">
     <span><strong>{tr("字體大小")}</strong><output>{settings.fontSizePx} px</output></span>
     <input

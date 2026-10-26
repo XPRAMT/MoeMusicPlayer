@@ -265,12 +265,16 @@ export interface FontFamilyEntry {
   displayName: string;
   group: 'traditional' | 'simplified' | 'japanese' | 'latin';
   faces: FontFaceFile[];
+  /** The family's name subset file (only the glyphs of `displayName`), once the background refresh made it. */
+  subset?: string;
 }
 
 /** `fonts_list`: the cached fonts; `refreshing` means `fonts-list-updated` follows with the refreshed list. */
 export interface FontList {
   fonts: FontFamilyEntry[];
   refreshing: boolean;
+  /** Android: the family the system draws its default text in (for 「預設（…）」). */
+  systemDefault?: string | null;
 }
 
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */

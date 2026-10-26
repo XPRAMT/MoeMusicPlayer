@@ -945,5 +945,10 @@
   "搜尋字型": "Search fonts",
   "搜尋字型…": "Search fonts…",
   "預設字型": "Default font",
-  "讀取字型中…": "Loading fonts…"
+  "讀取字型中…": "Loading fonts…",
+  "繁體中文": "Traditional Chinese",
+  "簡體中文": "Simplified Chinese",
+  "日文": "Japanese",
+  "英文": "English",
+  "預設（{0}）": "Default ({0})"
 }

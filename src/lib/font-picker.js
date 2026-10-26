@@ -56,7 +56,7 @@ function fold(value) {
 
 /**
  * @typedef {{ path: string, faceIndex: number, weight: number, italic: boolean }} FontFace
- * @typedef {{ family: string, displayName: string, group: 'traditional'|'simplified'|'japanese'|'latin', faces: FontFace[] }} FontEntry
+ * @typedef {{ family: string, displayName: string, group: 'traditional'|'simplified'|'japanese'|'latin', faces: FontFace[], subset?: string }} FontEntry
  */
 
 /**
@@ -88,19 +88,74 @@ export function fontPickerRows(fonts, query) {
 }
 
 /**
- * The rows to render for a scroll position: those in view plus `overscan` on each side.
- * @param {number} scrollTop
- * @param {number} viewportHeight
- * @param {number} rowHeight
- * @param {number} count
- * @param {number} [overscan]
- * @returns {{ start: number, end: number }} `start` inclusive, `end` exclusive.
+ * Group headings for `rows` (from `fontPickerRows`): one before the first font of each group, in the backend's group
+ * order (the OS region's), so a group without a matching font has no heading while searching. 「預設字型」 (row 0)
+ * stays above the first heading.
+ * @param {ReadonlyArray<{ font: FontEntry | null }>} rows
+ * @returns {Array<{ group: FontEntry['group'], beforeIndex: number }>}
  */
-export function visibleRowRange(scrollTop, viewportHeight, rowHeight, count, overscan = 4) {
-  if (count <= 0 || rowHeight <= 0) return { start: 0, end: 0 };
-  const first = Math.floor(Math.max(0, scrollTop) / rowHeight);
-  const last = Math.ceil((Math.max(0, scrollTop) + Math.max(0, viewportHeight)) / rowHeight);
-  return { start: Math.max(0, first - overscan), end: Math.min(count, Math.max(last, first + 1) + overscan) };
+export function fontPickerGroups(rows) {
+  /** @type {Array<{ group: FontEntry['group'], beforeIndex: number }>} */
+  const groups = [];
+  rows.forEach((row, index) => {
+    const group = row.font?.group;
+    if (group && groups[groups.length - 1]?.group !== group) groups.push({ group, beforeIndex: index });
+  });
+  return groups;
+}
+
+/**
+ * The family names of a CSS `font-family` list, unquoted; generic families (`sans-serif`) stay as they are.
+ * @param {string} stack
+ */
+export function cssStackFamilies(stack) {
+  return String(stack)
+    .split(',')
+    .map((part) => part.trim().replace(/^(['"])(.*)\1$/, '$2').trim())
+    .filter(Boolean);
+}
+
+const GENERIC_FAMILIES = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui']);
+
+/**
+ * The family the Windows native lyrics draw CJK text in when no font is chosen (`player-lyrics-native` win.rs:
+ * Segoe UI, whose missing CJK and kana go to this family through the font fallback the renderer builds).
+ */
+export const WINDOWS_NATIVE_LYRICS_CJK_FAMILY = 'Microsoft JhengHei';
+
+/**
+ * The installed family 「預設字型」 actually draws a picker target's (CJK) text in, for the 「預設（…）」 label, or null when
+ * it cannot be told.
+ * - `interface`: the first family of the default stack that is installed and has CJK glyphs (Segoe UI has none, so
+ *   Chinese and Japanese text falls through to Microsoft JhengHei, the family that draws most of the interface's
+ *   text); else the first installed one; reaching the generic `sans-serif` means the system default (Android).
+ * - `lyrics` (playing page): follows the interface font (`--app-font-stack`), so the chosen interface font when it is
+ *   listed, else as `interface`.
+ * - `taskbar` / `floating`: Windows: the native renderer's CJK family; Android (floating): the system default.
+ * @param {{ target: 'interface' | 'lyrics' | 'taskbar' | 'floating', platform: string, fonts: readonly FontEntry[], systemDefault?: string | null, interfaceFamily?: string | null, stack?: string }} input
+ * @returns {FontEntry | null}
+ */
+export function defaultFontFamily({ target, platform, fonts, systemDefault = null, interfaceFamily = null, stack = DEFAULT_INTERFACE_FONT_STACK }) {
+  const find = (/** @type {string | null | undefined} */ name) => {
+    const lower = normalizeFontFamily(name)?.toLowerCase();
+    return lower ? fonts.find((font) => font.family.toLowerCase() === lower) ?? null : null;
+  };
+  if (target === 'taskbar' || target === 'floating') {
+    return platform === 'windows' ? find(WINDOWS_NATIVE_LYRICS_CJK_FAMILY) : find(systemDefault);
+  }
+  if (target === 'lyrics') {
+    const inherited = find(interfaceFamily);
+    if (inherited) return inherited;
+  }
+  /** @type {FontEntry | null} */
+  let firstInstalled = null;
+  for (const name of cssStackFamilies(stack)) {
+    if (GENERIC_FAMILIES.has(name.toLowerCase())) return firstInstalled ?? find(systemDefault);
+    const font = find(name);
+    if (font && font.group !== 'latin') return font;
+    firstInstalled ??= font;
+  }
+  return firstInstalled ?? find(systemDefault);
 }
 
 /**

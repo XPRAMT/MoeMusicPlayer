@@ -3,7 +3,11 @@
   // pickers, and all of them show the same list: the list, its loading state and the background refresh live here,
   // once. The list is read only when a picker opens (never at startup); the cached list shows at once and a
   // background refresh replaces it in place (`fonts-list-updated`), keeping each picker's scroll and search.
+  // Rows are drawn in their own fonts without blocking the page (font-row-faces.js); the loaded faces are shared.
+  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { SvelteMap } from 'svelte/reactivity';
   import type { FontFamilyEntry } from './ipc';
+  import { createFontRowScheduler, fontRowSource, loadFontRowFace } from './font-row-faces.js';
 
   const catalog = $state({
     fonts: [] as FontFamilyEntry[],
@@ -12,11 +16,46 @@
     /** The first read has answered. */
     loaded: false,
     failure: null as string | null,
+    /** Android: the family the system draws default text in (`fonts_list`). */
+    systemDefault: null as string | null,
+    /** The chosen interface font: the playing-page lyrics' default follows it. */
+    interfaceFamily: null as string | null,
   });
   let loading: Promise<void> | null = null;
   let listening = false;
   /** Refreshes received so far: a `fonts_list` answer older than a refresh must not undo it. */
   let updates = 0;
+  /** Bumped whenever the list is replaced (the virtual list rebuilds its rows). */
+  let listRevision = $state(0);
+
+  /** Row face key → the CSS family its face was added under. */
+  const rowFaces = new SvelteMap<string, string>();
+  const rowScheduler = createFontRowScheduler({
+    load: loadFontRowFace,
+    onLoaded: (key, face) => rowFaces.set(key, face),
+  });
+  /** One observer for every picker row: a row is "in view" while it intersects the visible part of its list. */
+  let rowObserver: IntersectionObserver | null = null;
+  const observedRows = new Map<Element, { key: string; source: string; shown: boolean }>();
+
+  function observer(): IntersectionObserver | null {
+    if (rowObserver || typeof IntersectionObserver === 'undefined') return rowObserver;
+    rowObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const row = observedRows.get(entry.target);
+        if (!row || row.shown === entry.isIntersecting) continue;
+        row.shown = entry.isIntersecting;
+        if (row.shown) rowScheduler.show(row);
+        else rowScheduler.hide(row.key);
+      }
+    });
+    return rowObserver;
+  }
+
+  /** The playing-page lyrics' 「預設（…）」 follows the interface font (App keeps this in step with the setting). */
+  export function setInterfaceFontForPickers(family: string | null | undefined): void {
+    catalog.interfaceFamily = family ?? null;
+  }
 </script>
 
 <script lang="ts">
@@ -25,49 +64,80 @@
   import { tr } from './i18n.js';
   import { getErrorText, invokeCommand } from './ipc';
   import { ensureAndroidFontFaces, isAndroidWebView } from './font-faces.js';
+  import PagedVirtualList from './PagedVirtualList.svelte';
   import {
     DEFAULT_INTERFACE_FONT_STACK,
     FONT_PICKER_ROW_PX,
     applyFontListUpdate,
+    defaultFontFamily,
     fontDisplayName,
     fontFamilyCss,
+    fontPickerGroups,
     fontPickerRows,
-    visibleRowRange,
   } from './font-picker.js';
+
+  type FontTarget = 'interface' | 'lyrics' | 'taskbar' | 'floating';
+  type PickerRow = ReturnType<typeof fontPickerRows>[number];
 
   let {
     value,
     onChange,
     idPrefix,
     label = tr('字型'),
+    target = 'interface',
   }: {
     /** The stored family; null: 「預設字型」. */
     value: string | null | undefined;
     onChange: (family: string | null) => void;
     idPrefix: string;
     label?: string;
+    /** What the setting draws: decides which font 「預設（…）」 names. */
+    target?: FontTarget;
   } = $props();
 
   const android = isAndroidWebView();
+  const platform = android ? 'android' : typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent ?? '') ? 'windows' : 'other';
+  const groupLabels: Record<FontFamilyEntry['group'], string> = {
+    traditional: tr('繁體中文'),
+    simplified: tr('簡體中文'),
+    japanese: tr('日文'),
+    latin: tr('英文'),
+  };
   let open = $state(false);
   let query = $state('');
-  let scrollTop = $state(0);
-  let viewportHeight = $state(FONT_PICKER_ROW_PX * 8);
 
   const rows = $derived(fontPickerRows(catalog.fonts, query));
-  const range = $derived(visibleRowRange(scrollTop, viewportHeight, FONT_PICKER_ROW_PX, rows.length));
-  const visibleRows = $derived(rows.slice(range.start, range.end).map((row, offset) => ({ row, index: range.start + offset })));
-  const currentName = $derived(fontDisplayName(catalog.fonts, value) ?? tr('預設字型'));
+  const groups = $derived(fontPickerGroups(rows));
+  const groupRows = $derived(groups.map(({ group, beforeIndex }) => ({ label: groupLabels[group], beforeIndex })));
+  const quickIndexLabels = $derived(groupRows.map(({ label }) => label));
+  const itemAt = $derived((index: number): PickerRow | null => rows[index] ?? null);
   const currentKey = $derived((value ?? '').toLowerCase());
+  const defaultFont = $derived(defaultFontFamily({
+    target,
+    platform,
+    fonts: catalog.fonts,
+    systemDefault: catalog.systemDefault,
+    interfaceFamily: catalog.interfaceFamily,
+  }));
+  const defaultLabel = $derived(defaultFont ? tr('預設（{0}）', [defaultFont.displayName]) : tr('預設字型'));
+  const currentFont = $derived(catalog.fonts.find((font) => font.family.toLowerCase() === currentKey) ?? null);
+  const currentName = $derived(fontDisplayName(catalog.fonts, value) ?? defaultLabel);
   const showLoading = $derived(open && catalog.fonts.length === 0 && (!catalog.loaded || catalog.refreshing));
+
+  function replaceFonts(fonts: FontFamilyEntry[]) {
+    if (fonts === catalog.fonts) return;
+    catalog.fonts = fonts;
+    listRevision += 1;
+  }
 
   function ensureLoaded() {
     if (loading || !isTauri()) return;
     if (!listening) {
       listening = true;
-      void listen<{ fonts: FontFamilyEntry[]; changed: boolean }>('fonts-list-updated', (event) => {
+      void listen<{ fonts: FontFamilyEntry[]; changed: boolean; systemDefault?: string | null }>('fonts-list-updated', (event) => {
         updates += 1;
-        catalog.fonts = applyFontListUpdate(catalog.fonts, event.payload);
+        replaceFonts(applyFontListUpdate(catalog.fonts, event.payload));
+        if (event.payload.changed) catalog.systemDefault = event.payload.systemDefault ?? null;
         catalog.refreshing = false;
       });
     }
@@ -76,7 +146,10 @@
     loading = invokeCommand('fonts_list', {})
       .then((list) => {
         // A refresh that already answered with a newer list wins; an unchanged one sends no list.
-        if (updates === before || !catalog.fonts.length) catalog.fonts = list.fonts;
+        if (updates === before || !catalog.fonts.length) {
+          replaceFonts(list.fonts);
+          catalog.systemDefault = list.systemDefault ?? null;
+        }
         if (updates === before) catalog.refreshing = list.refreshing;
       })
       .catch((error) => {
@@ -95,15 +168,46 @@
     if (open) ensureLoaded();
   }
 
-  function rowFont(font: FontFamilyEntry | null): string {
+  /** The current setting's label keeps the real family (as the setting is applied). */
+  function currentFontCss(font: FontFamilyEntry | null): string {
     if (!font) return DEFAULT_INTERFACE_FONT_STACK;
     return fontFamilyCss(font.family, DEFAULT_INTERFACE_FONT_STACK, { android });
   }
 
-  // Android loads a font's files only for the rows in view.
+  /** A row: the default font until its own face has loaded (never the real family, which would load during layout). */
+  function rowFontCss(font: FontFamilyEntry | null): string {
+    const source = fontRowSource(font, convertFileSrc);
+    const face = source ? rowFaces.get(source.key) : undefined;
+    return face ? `"${face}", ${DEFAULT_INTERFACE_FONT_STACK}` : DEFAULT_INTERFACE_FONT_STACK;
+  }
+
+  /** Watch a row while it is rendered: its face loads once it has stayed in view (font-row-faces.js). */
+  function rowFace(node: HTMLElement, font: FontFamilyEntry | null) {
+    let watched: { key: string; source: string; shown: boolean } | null = null;
+    const watch = (next: FontFamilyEntry | null) => {
+      const source = fontRowSource(next, convertFileSrc);
+      if (watched && source && watched.key === source.key) return;
+      unwatch();
+      const io = observer();
+      if (!source || !io || rowFaces.has(source.key)) return;
+      watched = { ...source, shown: false };
+      observedRows.set(node, watched);
+      io.observe(node);
+    };
+    const unwatch = () => {
+      if (!watched) return;
+      if (watched.shown) rowScheduler.hide(watched.key);
+      observedRows.delete(node);
+      rowObserver?.unobserve(node);
+      watched = null;
+    };
+    watch(font);
+    return { update: watch, destroy: unwatch };
+  }
+
+  // Android draws the current setting's label through the chosen family's @font-face (as App applies it).
   $effect(() => {
-    if (!android || !open) return;
-    for (const { row } of visibleRows) ensureAndroidFontFaces(row.font);
+    if (android && open && currentFont) ensureAndroidFontFaces(currentFont);
   });
 </script>
 
@@ -117,7 +221,7 @@
     onclick={toggle}
   >
     <strong>{label}</strong>
-    <span class="font-picker-current-name" style={`font-family:${rowFont(catalog.fonts.find((font) => font.family.toLowerCase() === currentKey) ?? null)}`}>{currentName}</span>
+    <span class="font-picker-current-name" style={`font-family:${currentFontCss(currentFont)}`}>{currentName}</span>
     <span class="font-picker-chevron" aria-hidden="true">{open ? '▴' : '▾'}</span>
   </button>
   {#if open}
@@ -130,36 +234,47 @@
         aria-label={tr('搜尋字型')}
         autocomplete="off"
         spellcheck="false"
-        oninput={() => { scrollTop = 0; }}
       />
       {#if showLoading}
         <p class="font-picker-status" role="status">{tr('讀取字型中…')}</p>
       {:else if catalog.failure && catalog.fonts.length === 0}
         <p class="font-picker-status" role="alert">{catalog.failure}</p>
       {/if}
-      <div
-        class="font-picker-list"
-        role="listbox"
-        aria-label={label}
-        tabindex="-1"
-        bind:clientHeight={viewportHeight}
-        onscroll={(event) => { scrollTop = event.currentTarget.scrollTop; }}
+      <!-- The library's virtual list: same group rows (0.7× height, 1 px line below) and quick index panel. -->
+      <PagedVirtualList
+        totalCount={rows.length}
+        revision={listRevision}
+        generation={0}
+        scrollResetKey={query}
+        {itemAt}
+        getKey={(row: PickerRow) => row.key}
+        isSelected={(row: PickerRow) => (row.family ?? '').toLowerCase() === currentKey}
+        rowHeight={FONT_PICKER_ROW_PX}
+        headerHeight={0}
+        maxViewportHeight={288}
+        listId="{idPrefix}-font-picker"
+        ariaLabel={label}
+        columnCount={1}
+        gridTemplate="minmax(0,1fr)"
+        className="font-picker-list"
+        rowClassName="font-picker-row"
+        listName="fonts"
+        onRange={() => {}}
+        onPlay={(row: PickerRow) => onChange(row.family)}
+        {groupRows}
+        {quickIndexLabels}
       >
-        <div class="font-picker-spacer" style={`height:${rows.length * FONT_PICKER_ROW_PX}px`}>
-          {#each visibleRows as { row, index } (row.key)}
-            {@const chosen = (row.family ?? '').toLowerCase() === currentKey}
-            <button
-              class="font-picker-row"
-              class:is-active={chosen}
-              type="button"
-              role="option"
-              aria-selected={chosen}
-              style={`top:${index * FONT_PICKER_ROW_PX}px;height:${FONT_PICKER_ROW_PX}px;font-family:${rowFont(row.font)}`}
-              onclick={() => onChange(row.family)}
-            >{row.font ? row.font.displayName : tr('預設字型')}</button>
-          {/each}
-        </div>
-      </div>
+        {#snippet row({ item })}
+          {#if item}
+            <span
+              class="font-picker-row-name"
+              role="gridcell"
+              style={`font-family:${item.font ? rowFontCss(item.font) : currentFontCss(null)}`}
+              use:rowFace={item.font}
+            >{item.font ? item.font.displayName : defaultLabel}</span>
+          {/if}
+        {/snippet}
+      </PagedVirtualList>
     </div>
   {/if}
 </div>
@@ -242,47 +357,33 @@
     font-size: var(--font-caption);
   }
 
-  .font-picker-list {
-    position: relative;
-    height: min(288px, 50vh);
-    overflow-y: auto;
-    overscroll-behavior: none;
-    border: 1px solid var(--line);
-    border-radius: 9px;
-  }
-
-  .font-picker-spacer {
-    position: relative;
-  }
-
-  .font-picker-row {
-    position: absolute;
-    left: 0;
-    right: 0;
-    box-sizing: border-box;
-    overflow: hidden;
-    padding: 0 12px;
-    border: 0;
+  /* Rows are PagedVirtualList's (rowClassName); the name is this component's. */
+  :global(.paged-virtual-row.font-picker-row) {
+    display: flex;
+    align-items: center;
     color: var(--text);
-    background: transparent;
-    font-size: var(--font-title);
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: pointer;
   }
 
-  .font-picker-row:hover {
+  :global(.paged-virtual-row.font-picker-row:hover) {
     background: rgba(var(--text-rgb), 0.06);
   }
 
-  .font-picker-row.is-active {
+  :global(.paged-virtual-row.font-picker-row.selected) {
     color: var(--accent);
     background: rgba(var(--text-rgb), 0.08);
   }
 
-  .font-picker-row:focus-visible {
-    outline: var(--focus-ring);
-    outline-offset: -1px;
+  :global(.paged-virtual-viewport:focus-visible .paged-virtual-row.font-picker-row.active) {
+    box-shadow: inset 2px 0 0 var(--line);
+  }
+
+  .font-picker-row-name {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0 12px;
+    font-size: var(--font-title);
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

@@ -214,7 +214,7 @@
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import LyricsLookSettings from './lib/LyricsLookSettings.svelte';
-  import FontPicker from './lib/FontPicker.svelte';
+  import FontPicker, { setInterfaceFontForPickers } from './lib/FontPicker.svelte';
   import { DEFAULT_INTERFACE_FONT_STACK, fontFamilyCss, normalizeFontFamily } from './lib/font-picker.js';
   import { ensureAndroidFontFaces } from './lib/font-faces.js';
   import type { FloatingLyricsAndroidStatus, FloatingLyricsSettings } from './lib/ipc';
@@ -1925,6 +1925,8 @@
     const root = document.documentElement;
     if (interfaceFontFamily) root.style.setProperty('--app-font-family', fontFamilyCss(interfaceFontFamily, DEFAULT_INTERFACE_FONT_STACK, { android: isAndroidPlatform }));
     else root.style.removeProperty('--app-font-family');
+    // The playing-page lyrics' 「預設（…）」 follows the interface font.
+    setInterfaceFontForPickers(interfaceFontFamily);
   });
   // Android WebView reaches a font only through @font-face: register the chosen families' files from the font cache
   // (no scan at startup; a family not in the cache draws in the default font).
@@ -4756,6 +4758,7 @@
                       settings={taskbarLyricsSettings}
                       onChange={setTaskbarLyricsSettings}
                       idPrefix="{scope}taskbar-lyrics"
+                      fontTarget="taskbar"
                       fontAriaLabel={tr("工作列歌詞字體大小")}
                       colorAriaLabel={tr("工作列歌詞顏色")}
                       autoColorHint={tr("關閉時依工作列的深淺色自動使用黑色或白色")}
@@ -4817,6 +4820,7 @@
                       settings={floatingLyricsSettings}
                       onChange={setFloatingLyricsSettings}
                       idPrefix="{scope}floating-lyrics"
+                      fontTarget="floating"
                       fontAriaLabel={tr("浮動歌詞字體大小")}
                       colorAriaLabel={tr("浮動歌詞顏色")}
                       autoColorHint={tr("關閉時使用白色")}
