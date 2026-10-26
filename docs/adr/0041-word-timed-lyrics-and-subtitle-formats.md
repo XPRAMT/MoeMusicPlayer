@@ -19,14 +19,14 @@
 - 內容可解析就算有，純文字也算（純文字會贏過旁檔）；看起來像字幕卻解析不出任何行（`LyricsContent::Unusable`）算沒有，往下一個來源找。
 - 手動選擇照舊固定。本機手動選擇只存來源參照，每次重讀。
 - 歌詞選擇清單的本機候選也依這個順序排：內嵌在前，旁檔在後。
-- 所有平台同一個順序：資料庫路徑（`local_lyrics_for_track`：`track_embedded_lyrics` → `track_lyric_sidecars`）、開檔備援（Windows `find_lyrics`／`find_all_lyrics`、Android `android_find_all_lyrics`、遠端 `remote_lyric_texts`）、遠端查找快取。
+- 所有平台同一個順序，每次都讀檔案當下內容（ADR 0040）：Windows `find_lyrics`／`find_all_lyrics`、Android `android_find_all_lyrics`、遠端 `remote_lyric_texts`；資料庫只提供旁檔的位置（`track_lyric_sidecars`）。
 
 旁檔之間取 `.lrc` > `.qrc` > `.ass` > `.srt`，理由：
 - `.lrc` 是歌詞專用格式，最可能就是使用者為這首歌準備的；
 - ASS 有 `\k` 逐字，又常帶雙語樣式；
 - SRT 只有行級。
 
-同一首歌有多個旁檔時，掃描器只記下排序最前的一個（`player_core::lyric_sidecar_rank`、`LYRIC_SIDECAR_EXTENSIONS`）。`track_lyric_sidecars` 一首一列、指紋含檔名，不需 schema 變更。這個排序不看內容：排序最前的旁檔即使解析不出歌詞，資料庫路徑也不會改用下一個；開檔備援路徑則會依序試下去。
+同一首歌有多個旁檔時，掃描器只記下排序最前的一個（`player_core::lyric_sidecar_rank`、`LYRIC_SIDECAR_EXTENSIONS`）。`track_lyric_sidecars` 一首一列、只記檔名。這個排序不看內容：排序最前的旁檔即使解析不出歌詞，也不會改用下一個；只有來源尚未掃描過旁檔（`NotScanned`）時才在旁邊依序試下去。
 
 ### D2 內容偵測
 
