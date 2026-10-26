@@ -6,9 +6,9 @@ import java.text.BreakIterator
 import java.util.Locale
 
 /** [TextMetrics] on a `Paint` with the lyric typeface (the same face and size the line images are drawn with). */
-internal class PaintTextMetrics(sizePx: Float, weight: Int) : TextMetrics {
+internal class PaintTextMetrics(sizePx: Float, weight: Int, fontFaces: List<LyricFontFace> = emptyList()) : TextMetrics {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-        typeface = lyricTypeface(weight)
+        typeface = lyricTypeface(weight, fontFaces)
         textSize = sizePx
     }
     private val bounds = Rect()
@@ -72,7 +72,7 @@ internal object LyricsMasks {
  * the previous model is reused while the lyrics and the font measures are unchanged, and the raster generation
  * increases whenever any raster look changed.
  */
-internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int) -> TextMetrics) {
+internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int, fontFaces: List<LyricFontFace>) -> TextMetrics) {
     private data class ModelKey(
         val linesVersion: Int,
         val showTranslation: Boolean,
@@ -81,6 +81,7 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
         val mainWeight: Int,
         val secondWeight: Int,
         val strip: Boolean,
+        val fontFaces: List<LyricFontFace>,
     )
 
     private var key: ModelKey? = null
@@ -111,6 +112,7 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
             density = i.density,
             weight = weight,
             defaultFace = false,
+            fontFaces = i.fontFaces,
         )
     }
 
@@ -138,11 +140,11 @@ internal class RenderBuilder(private val metricsFor: (sizePx: Float, weight: Int
 
     private fun buildModel(i: RenderInputs): RenderModel {
         val wantStrip = i.animation == ANIMATION_CONTINUOUS
-        val wanted = ModelKey(i.linesVersion, i.showTranslation, i.mainPx, i.secondPx, i.mainWeight, i.secondWeight, wantStrip)
+        val wanted = ModelKey(i.linesVersion, i.showTranslation, i.mainPx, i.secondPx, i.mainWeight, i.secondWeight, wantStrip, i.fontFaces)
         val cached = model
         if (cached != null && wanted == key) return cached
-        val main = metricsFor(i.mainPx, i.mainWeight)
-        val second = metricsFor(i.secondPx, i.secondWeight)
+        val main = metricsFor(i.mainPx, i.mainWeight, i.fontFaces)
+        val second = metricsFor(i.secondPx, i.secondWeight, i.fontFaces)
         val lines = i.lines
         val n = lines.size
         val texts = Array(n) { lines[it].trimmedText }

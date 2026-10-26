@@ -89,6 +89,8 @@ object FloatingLyricsOverlay {
     private var translationScalePercent = 80
     /** Weight of the original text (this tab's own `fontWeight`); the translation row is 50 lighter. */
     private var fontWeight = FloatingLyricsRules.DEFAULT_FONT_WEIGHT
+    /** The chosen font's upright faces (`fontFaces`, resolved by Rust from `fontFamily`; ADR 0042); empty: the default font. */
+    private var fontFaces: List<LyricFontFace> = emptyList()
     private var useCustomColor = false
     private var customColor = "#00e1ff"
     private var showTranslation = true
@@ -262,6 +264,7 @@ object FloatingLyricsOverlay {
         fontSizePx = settings.optInt("fontSizePx", 28).coerceIn(1, 50)
         translationScalePercent = settings.optInt("translationScalePercent", 80).coerceIn(1, 100)
         fontWeight = FloatingLyricsRules.fontWeight(settings.optInt("fontWeight", FloatingLyricsRules.DEFAULT_FONT_WEIGHT))
+        fontFaces = LyricFonts.parse(settings.optJSONArray("fontFaces"))
         useCustomColor = settings.optBoolean("useCustomColor", false)
         customColor = settings.optString("customColor", "#00e1ff")
         showTranslation = settings.optBoolean("showTranslation", true)
@@ -381,7 +384,7 @@ object FloatingLyricsOverlay {
     private fun topRoomPx(context: Context): Int = FloatingLyricsRules.panelTopRoomPx(mainRowHeightPx(context))
 
     private fun mainRowHeightPx(context: Context): Int {
-        val metrics = Paint().apply { typeface = lyricTypeface(fontWeight); textSize = mainFontPx(context) }.fontMetrics
+        val metrics = Paint().apply { typeface = lyricTypeface(fontWeight, fontFaces); textSize = mainFontPx(context) }.fontMetrics
         return maxOf(1, FloatingLyricsRules.lineHeightPx(metrics.ascent, metrics.descent))
     }
 
@@ -515,8 +518,8 @@ object FloatingLyricsOverlay {
     private fun glLayout(context: Context, windowWidth: Int): LyricsLayout {
         val mainPx = mainFontPx(context)
         val secondPx = mainPx * translationScalePercent / 100f
-        val main = Paint().apply { typeface = lyricTypeface(fontWeight); textSize = mainPx }.fontMetrics
-        val second = Paint().apply { typeface = lyricTypeface(FloatingLyricsRules.auxiliaryFontWeight(fontWeight)); textSize = secondPx }.fontMetrics
+        val main = Paint().apply { typeface = lyricTypeface(fontWeight, fontFaces); textSize = mainPx }.fontMetrics
+        val second = Paint().apply { typeface = lyricTypeface(FloatingLyricsRules.auxiliaryFontWeight(fontWeight), fontFaces); textSize = secondPx }.fontMetrics
         val margin = marginPx(context)
         val lock = lockPx(context)
         return LyricsLayout(
@@ -735,7 +738,7 @@ object FloatingLyricsOverlay {
                 FloatingLyricsRules.mainOpacityPercent(mainOpacityPercent) / 100f,
                 FloatingLyricsRules.secondaryOpacityPercent(secondaryOpacityPercent) / 100f,
                 isLocked(context), context.resources.displayMetrics.density, glLayout(context, layout.width),
-                dp(context, 10).toFloat(),
+                dp(context, 10).toFloat(), fontFaces,
             ),
         )
     }

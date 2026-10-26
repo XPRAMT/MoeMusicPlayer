@@ -53,7 +53,7 @@ class LyricsFramePlannerTest {
         )
     }
 
-    private fun state(i: RenderInputs) = RenderBuilder { _, _ -> FakeMetrics() }.build(i)
+    private fun state(i: RenderInputs) = RenderBuilder { _, _, _ -> FakeMetrics() }.build(i)
 
     private fun clock(position: Long = 0, playing: Boolean = true, track: String = "t", active: Boolean = true, duration: Long = 100_000) =
         ClockSnapshot(track, 1, position, 0, playing, 1f, active, duration)
@@ -434,7 +434,7 @@ class LyricsFramePlannerTest {
 
     @Test
     fun theBuilderReusesTheModelUntilTheLinesOrTheMeasuresChange() {
-        val builder = RenderBuilder { _, _ -> FakeMetrics() }
+        val builder = RenderBuilder { _, _, _ -> FakeMetrics() }
         val lines = listOf(line(0, "one"))
         val a = builder.build(inputs(lines, version = 1))
         val b = builder.build(inputs(lines, version = 1))
@@ -446,7 +446,7 @@ class LyricsFramePlannerTest {
 
     @Test
     fun theRasterGenerationRisesOnlyWhenALookChanges() {
-        val builder = RenderBuilder { _, _ -> FakeMetrics() }
+        val builder = RenderBuilder { _, _, _ -> FakeMetrics() }
         val lines = listOf(line(0, "one"))
         val a = builder.build(inputs(lines))
         val b = builder.build(inputs(lines, locked = false))

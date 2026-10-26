@@ -22,6 +22,8 @@ internal data class LineLook(
     val weight: Int = FloatingLyricsRules.DEFAULT_FONT_WEIGHT,
     /** The view never left the platform's default face (its weight was never changed from the default): that face, not `weight`'s. */
     val defaultFace: Boolean = false,
+    /** The chosen font's upright faces (ADR 0042); empty: the default font. Another font is another bitmap. */
+    val fontFaces: List<LyricFontFace> = emptyList(),
 )
 
 /**
@@ -31,13 +33,18 @@ internal data class LineLook(
  */
 internal class TileSet(val bitmaps: Array<Bitmap>, val tiles: List<TilePlan.Tile>, val imageW: Int, val imageH: Int, val pad: Int)
 
-/** The typeface for `weight`: any weight on API 28+, bold from 600 on older systems (see `typefaceChoice`). */
-internal fun lyricTypeface(weight: Int): Typeface {
+/**
+ * The typeface for `weight`: any weight on API 28+, bold from 600 on older systems (see `typefaceChoice`). With a
+ * chosen font (`fontFaces`, ADR 0042) its face nearest to `weight` is the base; a font file that cannot be loaded
+ * draws in the default font.
+ */
+internal fun lyricTypeface(weight: Int, fontFaces: List<LyricFontFace> = emptyList()): Typeface {
+    val base = LyricFonts.nearest(fontFaces, weight)?.let(LyricFonts::typeface) ?: Typeface.DEFAULT
     val choice = FloatingLyricsRules.typefaceChoice(weight, android.os.Build.VERSION.SDK_INT)
     return if (choice.weight != null) {
-        Typeface.create(Typeface.DEFAULT, choice.weight, false)
+        Typeface.create(base, choice.weight, false)
     } else {
-        Typeface.create(Typeface.DEFAULT, if (choice.bold) Typeface.BOLD else Typeface.NORMAL)
+        Typeface.create(base, if (choice.bold) Typeface.BOLD else Typeface.NORMAL)
     }
 }
 
@@ -86,7 +93,7 @@ internal object LineRasteriser {
     private fun buildTiles(value: String, look: LineLook, chunk: Int): TileSet? {
         if (value.isEmpty()) return null
         val started = if (LyricsTrace.on) System.nanoTime() else 0L
-        val face = if (look.defaultFace) Typeface.DEFAULT else lyricTypeface(look.weight)
+        val face = if (look.defaultFace) Typeface.DEFAULT else lyricTypeface(look.weight, look.fontFaces)
         val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
             typeface = face
             textSize = look.sizePx

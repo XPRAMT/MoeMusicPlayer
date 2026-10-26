@@ -169,4 +169,6 @@ internal class RenderInputs(
     val density: Float,
     val layout: LyricsLayout,
     val backgroundRadiusPx: Float,
+    /** The chosen font's upright faces (ADR 0042); empty: the default font. */
+    val fontFaces: List<LyricFontFace> = emptyList(),
 )

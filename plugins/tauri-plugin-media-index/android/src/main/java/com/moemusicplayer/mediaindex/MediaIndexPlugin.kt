@@ -681,6 +681,26 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         )
     }
 
+    /**
+     * The font pickers (ADR 0042): the system font files (`SystemFonts.getAvailableFonts()`, API 29+; Rust also scans
+     * the font folders) and the system region (`Locale.getDefault().getCountry()`, not the app's language).
+     */
+    @Command
+    fun listSystemFonts(invoke: Invoke) {
+        val paths = JSONArray()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                android.graphics.fonts.SystemFonts.getAvailableFonts()
+                    .mapNotNull { it.file?.absolutePath }
+                    .distinct()
+                    .forEach { paths.put(it) }
+            } catch (error: Throwable) {
+                Log.w(TAG, "SystemFonts.getAvailableFonts failed: ${error.message}")
+            }
+        }
+        invoke.resolve(JSObject().put("region", java.util.Locale.getDefault().country ?: "").put("paths", paths))
+    }
+
     /** Floating lyrics (ADR 0032): look settings, the current track's lines, or the lock state from the page. */
     @Command
     fun floatingLyricsUpdate(invoke: Invoke) {

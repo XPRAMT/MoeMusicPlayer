@@ -27,7 +27,7 @@ internal class GlLyricsPanel(context: Context, private val onFatal: (String) -> 
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val renderThread = LyricsRenderThread { reason -> mainHandler.post { if (!destroyed) onFatal(reason) } }
-    private val builder = RenderBuilder { size, weight -> PaintTextMetrics(size, weight) }
+    private val builder = RenderBuilder { size, weight, fontFaces -> PaintTextMetrics(size, weight, fontFaces) }
     private val pending = AtomicReference<RenderInputs?>()
     private val scheduled = AtomicBoolean(false)
     private val executor: ThreadPoolExecutor by lazy {
