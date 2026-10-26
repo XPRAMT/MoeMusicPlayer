@@ -40,8 +40,8 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
   always reserves a symmetric gutter on both sides (`--lyric-browse-gutter`) and the button sits in the left one.
   The button (and its icon, whose stroke scales with it) is one primary text line square: the rows' primary font size
   times their primary line height (`--lyric-primary-font-size` x `--lyric-primary-line-height`, CSS only, no
-  measuring), so it follows the original-text size setting; it is placed on the row's first text line (below the
-  row's top padding), not the middle of a row with translation or romanization. The gutter is the button plus a 1 px
+  measuring), so it follows the original-text size setting; it is centred vertically on the whole row, so a row with
+  translation or romanization has it in the middle of its lines and a row with only the original text on that line. The gutter is the button plus a 1 px
   inset from the row edge and 1 px before the text, so the button never covers text, centred text stays centred and
   rows never reflow when it appears; rows are border-box, so the row measurements, karaoke widths and the cover-zoom
   frozen width include the gutter unchanged. It fades in over 200 ms (no fade with reduced motion).

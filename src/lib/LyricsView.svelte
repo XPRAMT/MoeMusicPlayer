@@ -1285,8 +1285,8 @@
      row always reserves on BOTH sides (symmetric, so centred text stays centred), so the button never covers text and
      rows never reflow when it appears. The rows are border-box, so their measured heights, the karaoke word widths and
      the cover-zoom frozen width all include the gutter as they are. The button is as tall and wide as one primary text
-     line (the rows' own primary font size x line height, so it follows the 原文 size setting) and sits on the row's
-     first line; the gutter is the button plus 1px on each side of it. */
+     line (the rows' own primary font size x line height, so it follows the 原文 size setting) and is centred on the
+     whole row; the gutter is the button plus 1px on each side of it. */
   .timed-lyrics-viewport {
     --lyric-browse-button: calc(var(--lyric-primary-font-size, 14px) * var(--lyric-primary-line-height, 1.35));
     --lyric-browse-inset: 1px;
@@ -1301,8 +1301,9 @@
   .lyric-browse-seek {
     position: absolute;
     z-index: 1;
-    /* The first text line starts below the row's top padding (the shadow blur). */
-    top: var(--lyric-shadow-blur);
+    /* Centred on the whole row (the original with its translation / romanization); the row's vertical padding is
+       symmetric, so this is the middle of its text. */
+    top: 50%;
     left: var(--lyric-browse-inset);
     display: inline-flex;
     box-sizing: border-box;
@@ -1317,6 +1318,7 @@
     background: transparent;
     line-height: 1;
     cursor: pointer;
+    transform: translateY(-50%);
     animation: lyric-browse-seek-in 200ms ease-out;
   }
 
