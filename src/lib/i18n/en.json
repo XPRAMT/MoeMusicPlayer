@@ -410,6 +410,7 @@
   "專輯縮圖快取需要 MoeMusicPlayer 桌面程式。": "The album thumbnail cache needs the MoeMusicPlayer desktop app.",
   "從左側選擇播放清單。": "Choose a playlist from the left.",
   "從曲庫或播放清單開始播放歌曲後，佇列會顯示在這裡。": "After you start playing a song from the library or a playlist, the queue appears here.",
+  "從這句開始播放（{0}）": "Play from this line ({0})",
   "從頭播放目前歌曲": "Play the current song from the start",
   "掃描已完成，部分項目有錯誤": "Scan finished with errors in some items",
   "掃描中，已檢查 {0} / {1} 個檔案系統項目": "Scanning; {0} / {1} file system items checked",

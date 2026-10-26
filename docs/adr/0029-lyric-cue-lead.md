@@ -31,6 +31,23 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
 - The highlighted line on the Now Playing page changes up to 200 ms before the line's timestamp, by design.
 - Playback-clock corrections can still move a change by up to the clock's convergence error (< 250 ms, ADR 0028).
 
+## Browse and seek
+
+- A scroll by the user (wheel, pointer or touch on the timed lyrics viewport, including the scrollbar) starts
+  browsing. While browsing, the row under the viewport centre (`findBrowseCentreRow`, a search over the same layout
+  the virtual window uses, run in the existing scroll handler) shows a play button at the row's left edge with the
+  seek time, unless it is the current line (`browseButtonIndex`). The button is absolutely placed, so rows do not
+  reflow; it fades in over 200 ms (no fade with reduced motion).
+- The button seeks to the moment the line becomes current: `ceil(startMs - display offset)`, clamped at 0
+  (`browseSeekPositionMs`); no `LYRIC_CUE_LEAD_MS`. The seek goes through the shell (`onSeek` →
+  `commitPlaybackSeek` → `seekPlayback`), browsing ends at once, and the jump lands instantly as any seek.
+- No timeout. Browsing ends when the drawn current line changes (`browseReturnAction`): if the user is idle the
+  normal cue scroll returns to it; if a pointer or finger is down, the wheel guard is running, or a scroll (or its
+  momentum) has not reached `scrollend`, the return waits and runs when that ends, with the cue scroll length.
+  While browsing, `correctTimedCenter` does not recentre and re-measured rows keep the view in place.
+- Pressing the button is not a scroll (it neither stops the cue scroll nor starts browsing) and carries
+  `data-swipe-ignore` for the Now Playing swipe gestures. Plain lyrics and the lyric windows have no browsing.
+
 ## 目前設計細節（自 AGENTS.md 移入）
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。

@@ -5657,6 +5657,7 @@
                   sharedController={lyricsController}
                   sharedState={lyricsState}
                   layoutFrozen={coverZooming}
+                  onSeek={commitPlaybackSeek}
                 />
               {/snippet}
             </NowPlayingArrangement>

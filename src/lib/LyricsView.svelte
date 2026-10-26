@@ -2,7 +2,11 @@
   import { tr } from './i18n.js';
   import { onDestroy, tick, untrack } from 'svelte';
   import { emit, listen } from '@tauri-apps/api/event';
+  import { IconPlayerPlay } from '@tabler/icons-svelte-runes';
   import { defaultLyricsApi, type LyricsApi } from './lyrics-api';
+  import { seekPlayback } from './ipc';
+  import { formatDuration } from './format';
+  import { browseButtonIndex, browseReturnAction, browseSeekPositionMs, findBrowseCentreRow } from './lyrics-browse.js';
   import type {
     LyricLine,
     LyricsCandidate,
@@ -119,6 +123,9 @@
     /** True while the cover is being zoomed: the text layout stays at the last settled size (the column only clips it) and
      *  is rebuilt once, instantly, when this turns false. */
     layoutFrozen?: boolean;
+    /** Seeks for the browse-and-seek play button (the shell's own seek, which goes through `seekPlayback`); alone the
+     *  view calls `seekPlayback` itself. */
+    onSeek?: (positionMs: number) => Promise<unknown>;
   }
 
   let {
@@ -135,6 +142,7 @@
     sharedController,
     sharedState,
     layoutFrozen = false,
+    onSeek = (positionMs: number) => seekPlayback(positionMs),
   }: Props = $props();
 
   let ownState = $state<LyricsViewState>({
@@ -243,6 +251,16 @@
   let timedSmoothScrolling = false;
   let timedUserScrolling = false;
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
+  // Browse and seek (ADR 0029): a scroll by the user starts browsing; the line at the viewport centre (when it is not
+  // the current line) shows a play button that seeks to it. Browsing ends when the current line changes (or, if the
+  // user is still scrolling then, when that scroll ends) and the view returns to the current line. No timeout.
+  let browsing = $state(false);
+  let browseCentreIndex = $state(-1);
+  let browsePendingReturn = false;
+  /** A scroll (the user's or its momentum) is running while browsing; cleared by `scrollend`. */
+  let browseScrolling = false;
+  let pointerHeld = false;
+  let touchHeld = false;
   let timingOffsetSec = $state(0);
   let timingPanelOpen = $state(false);
   let timingShownSec = $derived(lyricsShiftShownSec(timingOffsetSec));
@@ -326,6 +344,8 @@
       ? displayActiveTimedIndex
       : -1,
   );
+  /** The row showing the browse-and-seek play button, or -1. */
+  let browseButtonRow = $derived(browseButtonIndex({ browsing, centreIndex: browseCentreIndex, currentIndex: visibleActiveTimedIndex }));
   let plainLayout = $derived(buildLyricsLayout(lines, layoutPreferences, preferences.lineGapPx, layoutWidth));
   // Word highlight (ADR 0041 D10): only the current line with word timing (or its own end time) is split into words, and one CSS
   // animation moves a single accent edge over it (`karaokeLine`). Recomputed only on a line change, seek, play/pause
@@ -423,14 +443,60 @@
   function correctTimedCenter(): void {
     const element = timedViewport;
     const activeIndex = displayActiveTimedIndex;
-    if (!element || activeIndex < 0 || timedSmoothScrolling || timedUserScrolling) return;
+    if (!element || activeIndex < 0 || timedSmoothScrolling || timedUserScrolling || browsing) return;
     const targetTop = timedCueScrollTop(timedLayout, activeIndex, timedViewportHeight, element.clientHeight);
     if (Math.abs(element.scrollTop - targetTop) > 1) element.scrollTo({ top: targetTop, behavior: 'instant' });
   }
 
   /** Whether correctTimedCenter would recenter now; otherwise a measured row keeps the top row in place instead. */
   function timedCenterFollows(): boolean {
-    return displayActiveTimedIndex >= 0 && !timedSmoothScrolling && !timedUserScrolling;
+    return displayActiveTimedIndex >= 0 && !timedSmoothScrolling && !timedUserScrolling && !browsing;
+  }
+
+  function userScrollActive(): boolean {
+    return pointerHeld || touchHeld || timedUserScrolling;
+  }
+  /** Browsing: the row under the viewport centre, from the layout the virtual window already uses (no DOM reads
+   *  beyond the scroll position and height the window reads too). */
+  function updateBrowseCentre(element: HTMLDivElement): void {
+    const index = findBrowseCentreRow(timedLayout, element.scrollTop, element.clientHeight || timedViewportHeight, timedEdgePadding);
+    if (index !== browseCentreIndex) browseCentreIndex = index;
+  }
+  function endBrowse(): void {
+    browsing = false;
+    browseCentreIndex = -1;
+    browsePendingReturn = false;
+    browseScrolling = false;
+  }
+  /** The current line changed while the user was still scrolling: once the scroll has ended, return to it with the
+   *  cue scroll (instant with reduced motion). */
+  function finishDeferredBrowse(): void {
+    const action = browseReturnAction({ browsing, cueChanged: false, pendingReturn: browsePendingReturn, userActive: userScrollActive() || browseScrolling });
+    if (action !== 'return') return;
+    endBrowse();
+    const element = timedViewport;
+    const activeIndex = displayActiveTimedIndex;
+    if (!element || activeIndex < 0) return;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const targetTop = timedCueScrollTop(timedLayout, activeIndex, timedViewportHeight, element.clientHeight);
+    const plan = planTimedScroll({ kind: 'cue', glideRunning: cueGlide !== null, animationMs: LYRIC_CUE_LEAD_MS, reducedMotion, distancePx: targetTop - element.scrollTop });
+    if (plan === 'retarget') glideCueScroll(element, targetTop);
+    else if (plan === 'rest') startCueScroll(element, targetTop, LYRIC_CUE_LEAD_MS);
+    else if (plan === 'instant') {
+      stopCueScroll();
+      element.scrollTo({ top: targetTop, behavior: 'instant' });
+      refreshTimedWindow();
+    }
+  }
+  /** The play button: seek to where the browsed line becomes current (its start and the display offset, no lead).
+   *  The seek is a jump, so the view lands on the line at once (the navigation effect below). */
+  function seekToBrowsedLine(timelineIndex: number): void {
+    const entry = timedLines[timelineIndex];
+    if (!entry) return;
+    endBrowse();
+    void Promise.resolve(onSeek(browseSeekPositionMs(entry.startMs, timedOffsetMs)))
+      .catch(() => {})
+      .finally(() => requestAnimationFrame(() => correctTimedCenter()));
   }
   /** Row under the top edge and the distance into it, so re-measured rows above it do not shift the view. */
   function captureScrollAnchor(layout: ReturnType<typeof buildLyricsLayout>, viewport: HTMLDivElement, timed: boolean) {
@@ -596,6 +662,7 @@
     plainScrollTop = 0;
     if (plainViewport) plainViewport.scrollTop = 0;
     if (timedViewport) timedViewport.scrollTop = 0;
+    untrack(() => endBrowse());
     timingPanelOpen = false;
     candidateQuery = '';
     submittedQuery = '';
@@ -662,9 +729,16 @@
       index: activeIndex,
       glideRunning: cueGlide !== null,
     });
+    const cueChanged = previous === null || previous.index !== activeIndex || previous.trackId !== currentTrackId;
     previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight, jumpId, clockPlaying, offsetMs };
 
     const frame = requestAnimationFrame(() => {
+      // Browsing keeps the user's position until the current line changes; a change while the user is still
+      // scrolling waits for that scroll to end (`finishDeferredBrowse`).
+      const browse = browseReturnAction({ browsing, cueChanged, pendingReturn: browsePendingReturn, userActive: userScrollActive() || browseScrolling });
+      if (browse === 'keep') return;
+      if (browse === 'defer') { browsePendingReturn = true; return; }
+      if (browse === 'return') endBrowse();
       const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       const targetTop = timedCueScrollTop(layout, activeIndex, viewportHeight, element.clientHeight);
       const plan = planTimedScroll({ kind, glideRunning: cueGlide !== null, animationMs, reducedMotion, distancePx: targetTop - element.scrollTop });
@@ -690,27 +764,64 @@
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
       userScrollResetTimer = null;
       if (shouldCorrectCenter) correctTimedCenter();
+      browseScrolling = false;
+      finishDeferredBrowse();
     };
-    const onUserScroll = () => {
+    // The browse play button is not a scroll: pressing it must neither stop the cue scroll nor start browsing.
+    const fromBrowseButton = (event: Event) => event.target instanceof Element && event.target.closest('.lyric-browse-seek') !== null;
+    const onUserScroll = (event: Event) => {
+      if (fromBrowseButton(event)) return;
+      if (event.type === 'pointerdown' && (event as PointerEvent).pointerType !== 'touch') pointerHeld = true;
+      else if (event.type === 'touchstart') touchHeld = true;
       stopCueScroll();
       timedUserScrolling = true;
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
-      userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; }, 300);
+      userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; finishDeferredBrowse(); }, 300);
     };
-    const onScroll = () => refreshTimedWindow();
+    const onPointerRelease = () => {
+      if (!pointerHeld) return;
+      pointerHeld = false;
+      finishDeferredBrowse();
+    };
+    const onTouchRelease = (event: TouchEvent) => {
+      if (!touchHeld || event.touches.length > 0) return;
+      touchHeld = false;
+      finishDeferredBrowse();
+    };
+    // Without `scrollend` a momentum scroll cannot be told apart, so browsing then waits only for the input guard.
+    const tracksScrollEnd = 'onscrollend' in element;
+    const onScroll = () => {
+      refreshTimedWindow();
+      // Every scroll while browsing is the user's (or its momentum): the view's own scrolls run only when not browsing.
+      if (!browsing && userScrollActive() && !cueGlide) browsing = true;
+      if (!browsing) return;
+      if (tracksScrollEnd) browseScrolling = true;
+      updateBrowseCentre(element);
+    };
     element.addEventListener('scroll', onScroll, { passive: true });
     element.addEventListener('scrollend', onScrollEnd);
     element.addEventListener('wheel', onUserScroll, { passive: true });
     element.addEventListener('pointerdown', onUserScroll, { passive: true });
     element.addEventListener('touchstart', onUserScroll, { passive: true });
+    window.addEventListener('pointerup', onPointerRelease, { passive: true });
+    window.addEventListener('pointercancel', onPointerRelease, { passive: true });
+    window.addEventListener('touchend', onTouchRelease, { passive: true });
+    window.addEventListener('touchcancel', onTouchRelease, { passive: true });
     return () => {
       element.removeEventListener('scroll', onScroll);
       element.removeEventListener('scrollend', onScrollEnd);
       element.removeEventListener('wheel', onUserScroll);
       element.removeEventListener('pointerdown', onUserScroll);
       element.removeEventListener('touchstart', onUserScroll);
+      window.removeEventListener('pointerup', onPointerRelease);
+      window.removeEventListener('pointercancel', onPointerRelease);
+      window.removeEventListener('touchend', onTouchRelease);
+      window.removeEventListener('touchcancel', onTouchRelease);
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
       userScrollResetTimer = null;
+      pointerHeld = false;
+      touchHeld = false;
+      untrack(() => endBrowse());
     };
   });
 
@@ -926,6 +1037,20 @@
             style={`--lyric-text-opacity:${getLyricLineOpacity(timelineIndex, visibleActiveTimedIndex, preferences.mainOpacityPercent, preferences.secondaryOpacityPercent)};--lyric-gap-after:${timedLayout.gaps[timelineIndex]}px`}
             aria-current={timelineIndex === visibleActiveTimedIndex ? 'true' : undefined}
           >
+            {#if timelineIndex === browseButtonRow}
+              {@const seekLabel = formatDuration(browseSeekPositionMs(row.startMs, timedOffsetMs))}
+              <button
+                type="button"
+                class="lyric-browse-seek"
+                data-swipe-ignore
+                data-testid="lyric-browse-seek"
+                aria-label={tr('從這句開始播放（{0}）', [seekLabel])}
+                onclick={() => seekToBrowsedLine(timelineIndex)}
+              >
+                <IconPlayerPlay size={14} stroke={2} aria-hidden="true" />
+                <span class="lyric-browse-time">{seekLabel}</span>
+              </button>
+            {/if}
             {#if row.line.text?.trim()}
               {#if currentLineWords?.words && currentLineWords.index === timelineIndex}
                 {#key currentLineWords.key}
@@ -1158,6 +1283,53 @@
   .lyric-line.active {
     color: var(--text);
     background: transparent;
+  }
+
+  /* Browse and seek (ADR 0029): the play button of the centre line while browsing. Absolutely placed at the row's left
+     edge, so the row's height and the centred text never move. */
+  .timed-lyrics-viewport .lyric-line {
+    position: relative;
+  }
+
+  .lyric-browse-seek {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--accent);
+    background: transparent;
+    font: inherit;
+    font-size: var(--font-caption);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    cursor: pointer;
+    transform: translateY(-50%);
+    animation: lyric-browse-seek-in 200ms ease-out;
+  }
+
+  .lyric-browse-seek:hover {
+    background: rgba(var(--text-rgb), 0.1);
+  }
+
+  .lyric-browse-seek:focus-visible {
+    outline-offset: -1px;
+  }
+
+  @keyframes lyric-browse-seek-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lyric-browse-seek {
+      animation: none;
+    }
   }
 
   .lyric-line.empty {
