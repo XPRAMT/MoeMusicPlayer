@@ -8,6 +8,7 @@ pub mod playback_queue;
 pub mod playback_statistics;
 pub mod playlist;
 pub mod profile;
+pub mod seek;
 pub mod sync;
 pub mod track_start;
 #[cfg(windows)]
@@ -66,6 +67,11 @@ pub use remote::{
     running_load_superseded, served_from_cache_only, set_remote_content, walk_server_key,
     LoadCancel, LoadCounter, RemoteContent, RemoteFileHandle, RemoteStamp, RemoteStream,
     LOAD_SUPERSEDED, REMOTE_LINK_LOST, REMOTE_UNREACHABLE,
+};
+
+pub use seek::{
+    clamp_seek, clamp_seek_ms, plan_seek, plan_seek_ms, seek_failure_ends_track, SeekPlan,
+    SEEK_TAIL_WINDOW,
 };
 
 pub use track_start::{

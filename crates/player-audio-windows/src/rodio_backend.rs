@@ -1758,6 +1758,38 @@ mod tests {
             .join(name)
     }
 
+    /// Symphonia's FLAC demuxer reports the end of the stream for a seek to the last sample (ADR 0036). Whatever a
+    /// decoder refuses near the end must fall inside the tail window, so the worker ends the track instead of failing.
+    #[test]
+    fn decoders_that_refuse_a_seek_do_so_only_in_the_tail() {
+        for name in [
+            "seek-tone.flac",
+            "seek-tone.mp3",
+            "seek-tone.ogg",
+            "seek-tone.wav",
+            "aac-lc.m4a",
+        ] {
+            let total = open_decoder(&fixture(name))
+                .unwrap()
+                .total_duration()
+                .expect("fixture duration");
+            for back_ms in [0_u64, 1, 5, 20, 100, 500, 900] {
+                let target = total.saturating_sub(Duration::from_millis(back_ms));
+                let mut decoder = open_decoder(&fixture(name)).unwrap();
+                if decoder.try_seek(target).is_err() {
+                    assert!(
+                        player_core::seek_failure_ends_track(target, Some(total)),
+                        "{name}: a refused seek {back_ms} ms before the end"
+                    );
+                }
+            }
+            let mut decoder = open_decoder(&fixture(name)).unwrap();
+            decoder
+                .try_seek(total / 2)
+                .unwrap_or_else(|error| panic!("{name}: mid-file seek: {error}"));
+        }
+    }
+
     /// Write a stereo Opus file (a tone per channel) to a temporary path; returns it and its length in frames.
     fn write_test_opus(name: &str, seconds: f64) -> (PathBuf, usize) {
         let frames = (48_000.0 * seconds) as usize;

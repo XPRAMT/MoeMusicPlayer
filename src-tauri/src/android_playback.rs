@@ -603,8 +603,17 @@ impl AndroidActor {
             PlaybackAction::Pause => self.native_command(request_id, "pause", None, None, None),
             PlaybackAction::Stop => self.native_command(request_id, "stop", None, None, None),
             PlaybackAction::Seek(position_ms) => {
-                self.meter.seal_segment(&self.native, Instant::now());
-                self.native_command(request_id, "seek", None, Some(position_ms), None)
+                let duration_ms = self.known_duration_ms();
+                match player_core::plan_seek_ms(position_ms, duration_ms) {
+                    player_core::SeekPlan::To(_) => {
+                        self.meter.seal_segment(&self.native, Instant::now());
+                        let target = player_core::clamp_seek_ms(position_ms, duration_ms);
+                        self.native_command(request_id, "seek", None, Some(target), None)
+                    }
+                    player_core::SeekPlan::EndOfTrack => {
+                        self.end_track_by_seek(request_id, duration_ms.unwrap_or(position_ms))
+                    }
+                }
             }
             PlaybackAction::SetVolume(volume) => {
                 if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
@@ -935,6 +944,48 @@ impl AndroidActor {
         self.checkpoint_position(true)?;
         self.flush_statistics()?;
         Ok(self.publish_snapshot())
+    }
+
+    /// The duration of the current track as the snapshot reports it (the player's, else the library's).
+    fn known_duration_ms(&self) -> Option<u64> {
+        self.native
+            .duration_ms
+            .or_else(|| {
+                self.current_track
+                    .as_ref()
+                    .and_then(|track| track.duration_ms)
+            })
+            .filter(|duration| *duration > 0)
+    }
+
+    /// A seek to the end of the track (ADR 0036): the track ends as it would on its own, never with an error. The
+    /// native player is paused at the end first, so the track that is over stays silent when no entry starts (and a
+    /// later Play ends it again at once); then the natural-end walk over the queue runs.
+    fn end_track_by_seek(
+        &mut self,
+        request_id: &str,
+        duration_ms: u64,
+    ) -> Result<PlaybackSnapshot, String> {
+        self.meter.seal_segment(&self.native, Instant::now());
+        for (op, position_ms) in [("pause", None), ("seek", Some(duration_ms))] {
+            let command = self.new_command(
+                request_id,
+                op,
+                None,
+                None,
+                None,
+                position_ms,
+                None,
+                None,
+                None,
+                None,
+            );
+            self.native = self.transact(command)?;
+        }
+        self.native.state = "ended".to_owned();
+        self.native.position_ms = duration_ms;
+        self.meter.reset_segment(&self.native, Instant::now());
+        self.start_after_natural_end(request_id)
     }
 
     fn reload_current_for_explicit_play(

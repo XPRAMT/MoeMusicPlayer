@@ -497,7 +497,10 @@ class PlaybackService : MediaSessionService() {
                     sendAck(ack)
                 }
                 "seek" -> {
-                    player.seekTo(command.optLong("positionMs", 0L).coerceAtLeast(0L))
+                    // Rust already clamps and turns a seek to the end into the natural end (ADR 0036); keep it in range here too.
+                    val duration = player.duration
+                    val target = command.optLong("positionMs", 0L).coerceAtLeast(0L)
+                    player.seekTo(if (duration != C.TIME_UNSET && duration > 0L) target.coerceAtMost(duration) else target)
                     ack.put("snapshot", snapshot(player))
                     sendAck(ack)
                 }

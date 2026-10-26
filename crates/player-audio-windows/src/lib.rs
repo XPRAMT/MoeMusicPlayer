@@ -2055,6 +2055,13 @@ fn handle_command(
             }
             let current = read_snapshot(snapshot);
             let state = current.state;
+            // A seek to the end is the track ending, never an error (ADR 0036).
+            if player_core::plan_seek(position, current.duration)
+                == player_core::SeekPlan::EndOfTrack
+            {
+                end_track_by_seek(backend, meter, snapshot, events, current.duration);
+                return Ok(());
+            }
             let lost = matches!(current.last_error, Some(AudioError::RemoteLinkLost(_)));
             if matches!(state, PlaybackState::Stopped | PlaybackState::Ended) || lost {
                 let path = current_path.as_deref().expect("checked above");
@@ -2071,7 +2078,7 @@ fn handle_command(
                 }
             }
             let duration = read_snapshot(snapshot).duration;
-            let requested = duration.map_or(position, |duration| position.min(duration));
+            let requested = player_core::clamp_seek(position, duration);
             match backend.seek(requested) {
                 Ok(actual_position) => {
                     update_snapshot(snapshot, events, |snapshot| {
@@ -2079,6 +2086,12 @@ fn handle_command(
                         snapshot.last_error = None;
                     });
                     meter.reset_anchor(state, actual_position);
+                }
+                // The decoder cannot land in the last frames of the file: that is the end of the track.
+                Err(AudioError::Seek(_))
+                    if player_core::seek_failure_ends_track(requested, duration) =>
+                {
+                    end_track_by_seek(backend, meter, snapshot, events, duration);
                 }
                 Err(error) => {
                     meter.reset_anchor(state, backend.position());
@@ -2206,6 +2219,27 @@ fn sync_resampling_info(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .resampling = info;
     }
+}
+
+/// A seek reached the end of the track (ADR 0036): end it the way it ends on its own. The output stops, the snapshot
+/// says `Ended` at the end with no error, and the host's natural-end walk over the queue takes it from there.
+fn end_track_by_seek(
+    backend: &mut Box<dyn AudioBackend>,
+    meter: &mut PlaybackMeter,
+    snapshot: &Arc<RwLock<PlaybackSnapshot>>,
+    events: &SyncSender<AudioEvent>,
+    duration: Option<Duration>,
+) {
+    // Stopping cannot fail in a way that matters here: the track is over either way.
+    let _ = backend.stop();
+    let position = duration.unwrap_or_else(|| backend.position());
+    update_snapshot(snapshot, events, |state| {
+        state.state = PlaybackState::Ended;
+        state.position = position;
+        state.last_error = None;
+    });
+    meter.request_flush();
+    meter.reset_anchor(PlaybackState::Ended, position);
 }
 
 fn update_position(
@@ -2804,6 +2838,90 @@ mod tests {
         assert_eq!(player.snapshot().state, PlaybackState::Stopped);
         player.play().unwrap();
         wait_for(&player, PlaybackState::Playing);
+    }
+
+    /// A decoder that cannot seek at all, like Symphonia's FLAC demuxer asked for the last sample of a file.
+    #[derive(Default)]
+    struct SeeklessBackend(FakeBackend);
+
+    impl AudioBackend for SeeklessBackend {
+        fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
+            self.0.load(path)
+        }
+        fn play(&mut self) -> Result<(), AudioError> {
+            self.0.play()
+        }
+        fn pause(&mut self) -> Result<(), AudioError> {
+            self.0.pause()
+        }
+        fn stop(&mut self) -> Result<(), AudioError> {
+            self.0.stop()
+        }
+        fn seek(&mut self, _position: Duration) -> Result<Duration, AudioError> {
+            Err(AudioError::Seek("end of stream".to_owned()))
+        }
+        fn set_volume(&mut self, volume: f32) -> Result<(), AudioError> {
+            self.0.set_volume(volume)
+        }
+        fn position(&self) -> Duration {
+            self.0.position()
+        }
+        fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+    }
+
+    fn acked_seek(player: &PlayerHandle, position: Duration) -> Result<(), AudioError> {
+        player
+            .request_seek(position)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .map(drop)
+    }
+
+    #[test]
+    fn a_seek_to_or_past_the_end_ends_the_track_without_an_error() {
+        for target in [Duration::from_secs(5), Duration::from_secs(9)] {
+            let player = player();
+            wait_for(&player, PlaybackState::Empty);
+            player.load(PathBuf::from("fixture.wav")).unwrap();
+            wait_for(&player, PlaybackState::Ready);
+            player.play().unwrap();
+            wait_for(&player, PlaybackState::Playing);
+            acked_seek(&player, target).expect("a seek to the end is not an error");
+            let snapshot = player.snapshot();
+            assert_eq!(snapshot.state, PlaybackState::Ended, "{target:?}");
+            assert_eq!(snapshot.position, Duration::from_secs(5));
+            assert_eq!(snapshot.last_error, None);
+            // The track can be played again from the start.
+            player.play().unwrap();
+            wait_for(&player, PlaybackState::Playing);
+        }
+    }
+
+    #[test]
+    fn a_failed_seek_in_the_tail_ends_the_track_and_elsewhere_stays_an_error() {
+        let player = PlayerHandle::with_backend_factory(|| Ok(Box::<SeeklessBackend>::default()))
+            .expect("worker should start");
+        wait_for(&player, PlaybackState::Empty);
+        player.load(PathBuf::from("fixture.flac")).unwrap();
+        wait_for(&player, PlaybackState::Ready);
+        player.play().unwrap();
+        wait_for(&player, PlaybackState::Playing);
+
+        assert!(matches!(
+            acked_seek(&player, Duration::from_secs(1)),
+            Err(AudioError::Seek(_))
+        ));
+        assert_eq!(player.snapshot().state, PlaybackState::Error);
+
+        player.play().unwrap();
+        wait_for(&player, PlaybackState::Playing);
+        acked_seek(&player, Duration::from_millis(4_980)).expect("the tail is the end");
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.state, PlaybackState::Ended);
+        assert_eq!(snapshot.position, Duration::from_secs(5));
+        assert_eq!(snapshot.last_error, None);
     }
 
     #[test]

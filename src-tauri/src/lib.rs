@@ -10018,11 +10018,14 @@ async fn playback_seek(
         await_playback_ack(seek_playback(service, position_ms)?).await?;
         if let Some(database) = state.database.as_ref() {
             checkpoint_playback_position(database, service, true)?;
+            // A seek to the end ended the track: go on through the queue now, as at a natural end (ADR 0036).
+            advance_ended_queue(database, service).await?;
         }
         Ok(service.snapshot())
     }
     #[cfg(target_os = "android")]
     {
+        // The actor clamps to the track it knows and ends the track for a seek to the end (ADR 0036).
         android_playback_service(&state)?
             .execute(android_playback::PlaybackAction::Seek(position_ms))
             .await
@@ -11691,9 +11694,14 @@ fn seek_playback(
         .command_gate
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Clamped to the track; a seek to the end ends the track in the audio worker (ADR 0036).
+    let position = player_core::clamp_seek(
+        Duration::from_millis(position_ms),
+        service.player.snapshot().duration,
+    );
     service
         .player
-        .request_seek(Duration::from_millis(position_ms))
+        .request_seek(position)
         .map_err(|error| playback_audio_error_message(&error))
 }
 

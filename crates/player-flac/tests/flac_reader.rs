@@ -245,3 +245,40 @@ fn the_wav_stream_reads_any_range_like_a_file() {
     assert_eq!(wav.read_at(total, &mut buffer).unwrap(), 0);
     assert_eq!(wav.read_at(total + 100, &mut buffer).unwrap(), 0);
 }
+
+/// A seek near the end (ADR 0036) jumps straight into the last FLAC frame: it gives the right samples, and the end
+/// itself reads as the end, never as an error.
+#[test]
+fn the_wav_stream_jumps_into_the_last_frame_and_to_the_end() {
+    for &(name, _, channels, _, frames) in FIXTURES {
+        let bytes_per_frame = u64::from(channels) * 4;
+        let whole = read_wav(
+            &mut FlacWavStream::new(FlacReader::open_path(&fixture(name)).unwrap()).unwrap(),
+            4_096,
+        );
+        for back in [1_u64, 2, 20, 500] {
+            let mut wav =
+                FlacWavStream::new(FlacReader::open_path(&fixture(name)).unwrap()).unwrap();
+            let position = WAV_HEADER_LEN + (frames - back) * bytes_per_frame;
+            let mut buffer = vec![0_u8; 4_096];
+            let count = wav.read_at(position, &mut buffer).unwrap();
+            assert_eq!(
+                count as u64,
+                (back * bytes_per_frame).min(4_096),
+                "{name} -{back}"
+            );
+            assert_eq!(
+                buffer[..count],
+                whole[position as usize..position as usize + count],
+                "{name} -{back}"
+            );
+        }
+        let mut wav = FlacWavStream::new(FlacReader::open_path(&fixture(name)).unwrap()).unwrap();
+        let mut buffer = [0_u8; 16];
+        assert_eq!(
+            wav.read_at(wav.total_len(), &mut buffer).unwrap(),
+            0,
+            "{name}"
+        );
+    }
+}

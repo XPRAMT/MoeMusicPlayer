@@ -1115,6 +1115,93 @@ fn when_a_track_ends_the_walk_goes_past_a_failure_to_the_next_entry_that_loads()
 }
 
 #[test]
+fn a_seek_past_the_end_is_the_end_of_the_track_and_the_walk_starts_the_next_entry() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| {
+        actor.handle_action("seek-end", PlaybackAction::Seek(9_999))
+    });
+    // The track that is over is silenced at its end (clamped to the duration), never sought past it.
+    let pause = harness.fake.next_command();
+    assert_eq!(pause.op, "pause");
+    harness.fake.ack(&pause);
+    let seek = harness.fake.next_command();
+    assert_eq!(seek.op, "seek");
+    assert_eq!(seek.position_ms, Some(8_000));
+    harness.fake.ack(&seek);
+    // Then the natural-end walk: the next entry starts playing.
+    let load = harness.fake.next_command();
+    assert_eq!(load.op, "load");
+    assert_eq!(load.play_when_ready, Some(true));
+    harness.fake.ack(&load);
+    let capabilities = harness.fake.next_command();
+    assert_eq!(capabilities.op, "set_capabilities");
+    harness.fake.ack(&capabilities);
+    let (actor, result) = handle.join().expect("seek thread");
+    let snapshot = result.expect("a seek to the end is not an error");
+    harness.actor = Some(actor);
+    assert_eq!(snapshot.state, "playing");
+    assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    assert_eq!(
+        harness.actor().queue.as_ref().map(PlaybackQueue::cursor),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_seek_to_the_end_with_nothing_to_go_on_to_rests_at_the_end_without_an_error() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness.actor_mut().queue = None;
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| {
+        actor.handle_action("seek-end", PlaybackAction::Seek(8_000))
+    });
+    for op in ["pause", "seek"] {
+        let command = harness.fake.next_command();
+        assert_eq!(command.op, op);
+        harness.fake.ack(&command);
+    }
+    let (actor, result) = handle.join().expect("seek thread");
+    let snapshot = result.expect("a seek to the end is not an error");
+    harness.fake.no_command();
+    harness.actor = Some(actor);
+    assert_eq!(snapshot.state, "ended");
+    assert_eq!(snapshot.position_ms, 8_000);
+    assert!(!snapshot.is_playing);
+    assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    assert!(snapshot.start_failure.is_none());
+}
+
+#[test]
+fn a_seek_just_before_the_end_is_an_ordinary_seek() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| {
+        actor.handle_action("seek-tail", PlaybackAction::Seek(7_999))
+    });
+    let seek = harness.fake.next_command();
+    assert_eq!(seek.op, "seek");
+    assert_eq!(seek.position_ms, Some(7_999));
+    harness.fake.ack(&seek);
+    let (actor, result) = handle.join().expect("seek thread");
+    assert_eq!(result.expect("seek").state, "playing");
+    harness.fake.no_command();
+    harness.actor = Some(actor);
+}
+
+#[test]
 fn when_every_entry_fails_the_player_rests_at_the_end_and_the_last_failure_is_reported() {
     let temporary = TemporaryDatabase::new();
     let mut seed_db = temporary.open();
