@@ -1,6 +1,6 @@
 ﻿import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browseButtonIndex, browseReturnAction, browseSeekPositionMs, findBrowseCentreRow } from '../src/lib/lyrics-browse.js';
+import { BROWSE_HOLD_MS, browseButtonIndex, browseCueAction, browseHoldAfterScroll, browseSeekPositionMs, findBrowseCentreRow } from '../src/lib/lyrics-browse.js';
 import { buildLyricsLayout, buildTimedLyricTimeline } from '../src/lib/lyrics-window.js';
 
 const preferences = { primaryFontSizePx: 20, auxiliaryScalePercent: 90, showTranslation: false, showRomanization: false, primaryLineHeight: 1, auxiliaryLineHeight: 1 };
@@ -60,11 +60,46 @@ test('a seek lands where the line becomes current: its start shifted by the disp
   assert.equal(browseSeekPositionMs(Number.NaN, 0), 0);
 });
 
-test('browsing ends on a line change, or after the scroll that was still running at that moment', () => {
-  assert.equal(browseReturnAction({ browsing: false, cueChanged: true, pendingReturn: false, userActive: false }), 'none');
-  assert.equal(browseReturnAction({ browsing: true, cueChanged: false, pendingReturn: false, userActive: false }), 'keep');
-  assert.equal(browseReturnAction({ browsing: true, cueChanged: true, pendingReturn: false, userActive: false }), 'return');
-  assert.equal(browseReturnAction({ browsing: true, cueChanged: true, pendingReturn: false, userActive: true }), 'defer');
-  assert.equal(browseReturnAction({ browsing: true, cueChanged: false, pendingReturn: true, userActive: true }), 'defer');
-  assert.equal(browseReturnAction({ browsing: true, cueChanged: false, pendingReturn: true, userActive: false }), 'return');
+test('the hold starts when the user is idle after a scroll and is not extended by later signals of it', () => {
+  assert.equal(BROWSE_HOLD_MS, 3000);
+  assert.equal(browseHoldAfterScroll(null, { userActive: true, now: 1000 }), null, 'still scrolling: no hold yet');
+  assert.equal(browseHoldAfterScroll(null, { userActive: false, now: 1000 }), 4000);
+  assert.equal(browseHoldAfterScroll(4000, { userActive: false, now: 1300 }), 4000, 'scrollend after the guard timer');
+  assert.equal(browseHoldAfterScroll(4000, { userActive: true, now: 1300 }), null);
+});
+
+test('only the first line change after the hold returns (fake clock, the reported example)', () => {
+  // A small simulation of LyricsView: scroll signals and line changes on one fake clock, no timers.
+  const view = { browsing: true, holdUntil: null, returnedAt: null };
+  const scroll = () => { view.holdUntil = null; };
+  const scrollEnded = (now) => { view.holdUntil = browseHoldAfterScroll(view.holdUntil, { userActive: false, now }); };
+  const lineChange = (now, options = {}) => {
+    const action = browseCueAction({ browsing: view.browsing, cueChanged: true, userActive: false, holdUntil: view.holdUntil, now, ...options });
+    if (action === 'return') { view.browsing = false; view.returnedAt = now; }
+    return action;
+  };
+  scroll();
+  scrollEnded(10_000); // scroll ends 0:10
+  assert.equal(lineChange(11_000), 'keep', 'inside the hold: ignored');
+  // The hold ends at 0:13 by itself: nothing happens (no timer, no return).
+  assert.equal(view.browsing, true);
+  assert.equal(lineChange(20_000), 'return', 'the next line after the hold pulls back');
+  assert.equal(view.returnedAt, 20_000);
+});
+
+test('each new scroll restarts the hold', () => {
+  let holdUntil = browseHoldAfterScroll(null, { userActive: false, now: 10_000 });
+  holdUntil = null; // scrolled again at 0:12
+  holdUntil = browseHoldAfterScroll(holdUntil, { userActive: false, now: 12_500 });
+  assert.equal(browseCueAction({ browsing: true, cueChanged: true, userActive: false, holdUntil, now: 14_000 }), 'keep');
+  assert.equal(browseCueAction({ browsing: true, cueChanged: true, userActive: false, holdUntil, now: 15_500 }), 'return');
+});
+
+test('line changes never return while the user scrolls or before the scroll has ended; seeks return at once', () => {
+  const at = { browsing: true, cueChanged: true, now: 50_000 };
+  assert.equal(browseCueAction({ ...at, userActive: true, holdUntil: 1000 }), 'keep');
+  assert.equal(browseCueAction({ ...at, userActive: false, holdUntil: null }), 'keep', 'scroll not ended yet');
+  assert.equal(browseCueAction({ ...at, cueChanged: false, userActive: false, holdUntil: 1000 }), 'keep');
+  assert.equal(browseCueAction({ ...at, jumped: true, userActive: false, holdUntil: 60_000 }), 'return', 'a seek or track change');
+  assert.equal(browseCueAction({ ...at, browsing: false, userActive: false, holdUntil: null }), 'none');
 });

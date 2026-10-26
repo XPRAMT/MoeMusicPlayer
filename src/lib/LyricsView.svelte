@@ -7,7 +7,7 @@
   import { seekPlayback } from './ipc';
   import { formatDuration } from './format';
   import { appTooltip } from './app-tooltip.js';
-  import { browseButtonIndex, browseReturnAction, browseSeekPositionMs, findBrowseCentreRow } from './lyrics-browse.js';
+  import { browseButtonIndex, browseCueAction, browseHoldAfterScroll, browseSeekPositionMs, findBrowseCentreRow } from './lyrics-browse.js';
   import type {
     LyricLine,
     LyricsCandidate,
@@ -256,11 +256,12 @@
   let timedUserScrolling = false;
   let userScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
   // Browse and seek (ADR 0029): a scroll by the user starts browsing; the line at the viewport centre (when it is not
-  // the current line) shows a play button that seeks to it. Browsing ends when the current line changes (or, if the
-  // user is still scrolling then, when that scroll ends) and the view returns to the current line. No timeout.
+  // the current line) shows a play button that seeks to it. After the scroll ends, line changes are ignored for
+  // BROWSE_HOLD_MS; the first line change after that ends browsing and the view returns to the current line.
   let browsing = $state(false);
   let browseCentreIndex = $state(-1);
-  let browsePendingReturn = false;
+  /** When the hold after the user's last scroll ends (performance.now() time); null while the user is scrolling. */
+  let browseHoldUntil: number | null = null;
   /** A scroll (the user's or its momentum) is running while browsing; cleared by `scrollend`. */
   let browseScrolling = false;
   let pointerHeld = false;
@@ -475,28 +476,13 @@
   function endBrowse(): void {
     browsing = false;
     browseCentreIndex = -1;
-    browsePendingReturn = false;
+    browseHoldUntil = null;
     browseScrolling = false;
   }
-  /** The current line changed while the user was still scrolling: once the scroll has ended, return to it with the
-   *  cue scroll (instant with reduced motion). */
-  function finishDeferredBrowse(): void {
-    const action = browseReturnAction({ browsing, cueChanged: false, pendingReturn: browsePendingReturn, userActive: userScrollActive() || browseScrolling });
-    if (action !== 'return') return;
-    endBrowse();
-    const element = timedViewport;
-    const activeIndex = displayActiveTimedIndex;
-    if (!element || activeIndex < 0) return;
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    const targetTop = timedCueScrollTop(timedLayout, activeIndex, timedViewportHeight, element.clientHeight);
-    const plan = planTimedScroll({ kind: 'cue', glideRunning: cueGlide !== null, animationMs: LYRIC_CUE_LEAD_MS, reducedMotion, distancePx: targetTop - element.scrollTop });
-    if (plan === 'retarget') glideCueScroll(element, targetTop);
-    else if (plan === 'rest') startCueScroll(element, targetTop, LYRIC_CUE_LEAD_MS);
-    else if (plan === 'instant') {
-      stopCueScroll();
-      element.scrollTo({ top: targetTop, behavior: 'instant' });
-      refreshTimedWindow();
-    }
+  /** A scroll signal (`scrollend`, input release, the wheel guard ending): once the user is idle the hold starts. */
+  function noteBrowseScrollEnded(): void {
+    if (!browsing) return;
+    browseHoldUntil = browseHoldAfterScroll(browseHoldUntil, { userActive: userScrollActive() || browseScrolling, now: performance.now() });
   }
   /** The play button: seek to where the browsed line becomes current (its start and the display offset, no lead).
    *  The seek is a jump, so the view lands on the line at once (the navigation effect below). */
@@ -740,14 +726,13 @@
       glideRunning: cueGlide !== null,
     });
     const cueChanged = previous === null || previous.index !== activeIndex || previous.trackId !== currentTrackId;
+    const jumped = seeked || previous?.trackId !== currentTrackId;
     previousTimedNavigation = { trackId: currentTrackId, generation: layout.generation, index: activeIndex, viewport: element, height: viewportHeight, jumpId, clockPlaying, offsetMs };
 
     const frame = requestAnimationFrame(() => {
-      // Browsing keeps the user's position until the current line changes; a change while the user is still
-      // scrolling waits for that scroll to end (`finishDeferredBrowse`).
-      const browse = browseReturnAction({ browsing, cueChanged, pendingReturn: browsePendingReturn, userActive: userScrollActive() || browseScrolling });
+      // Browsing keeps the user's position until the first line change after the hold (a seek or track change: at once).
+      const browse = browseCueAction({ browsing, cueChanged, jumped, userActive: userScrollActive() || browseScrolling, holdUntil: browseHoldUntil, now: performance.now() });
       if (browse === 'keep') return;
-      if (browse === 'defer') { browsePendingReturn = true; return; }
       if (browse === 'return') endBrowse();
       const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
       const targetTop = timedCueScrollTop(layout, activeIndex, viewportHeight, element.clientHeight);
@@ -775,7 +760,7 @@
       userScrollResetTimer = null;
       if (shouldCorrectCenter) correctTimedCenter();
       browseScrolling = false;
-      finishDeferredBrowse();
+      noteBrowseScrollEnded();
     };
     // The browse play button is not a scroll: pressing it must neither stop the cue scroll nor start browsing.
     const fromBrowseButton = (event: Event) => event.target instanceof Element && event.target.closest('.lyric-browse-seek') !== null;
@@ -786,17 +771,17 @@
       stopCueScroll();
       timedUserScrolling = true;
       if (userScrollResetTimer) clearTimeout(userScrollResetTimer);
-      userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; finishDeferredBrowse(); }, 300);
+      userScrollResetTimer = setTimeout(() => { timedUserScrolling = false; userScrollResetTimer = null; noteBrowseScrollEnded(); }, 300);
     };
     const onPointerRelease = () => {
       if (!pointerHeld) return;
       pointerHeld = false;
-      finishDeferredBrowse();
+      noteBrowseScrollEnded();
     };
     const onTouchRelease = (event: TouchEvent) => {
       if (!touchHeld || event.touches.length > 0) return;
       touchHeld = false;
-      finishDeferredBrowse();
+      noteBrowseScrollEnded();
     };
     // Without `scrollend` a momentum scroll cannot be told apart, so browsing then waits only for the input guard.
     const tracksScrollEnd = 'onscrollend' in element;
@@ -806,6 +791,7 @@
       if (!browsing && userScrollActive() && !cueGlide) browsing = true;
       if (!browsing) return;
       if (tracksScrollEnd) browseScrolling = true;
+      browseHoldUntil = null; // a new scroll restarts the hold when it ends
       updateBrowseCentre(element);
     };
     element.addEventListener('scroll', onScroll, { passive: true });

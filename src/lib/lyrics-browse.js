@@ -40,14 +40,32 @@ export function browseSeekPositionMs(startMs, offsetMs) {
   return Math.max(0, Math.ceil(startMs - (Number.isFinite(offsetMs) ? offsetMs : 0)));
 }
 
+/** After the user's scroll ends, line changes do not pull the view back for this long (each new scroll restarts it). */
+export const BROWSE_HOLD_MS = 3000;
+
 /**
- * What browsing does when the current line changes or a scroll ends: `keep` (nothing to end), `defer` (the user is
- * still scrolling; pull back when the scroll ends) or `return` (end browsing and scroll back to the current line).
- * @param {{ browsing: boolean, cueChanged: boolean, pendingReturn: boolean, userActive: boolean }} input
- * @returns {'none' | 'keep' | 'defer' | 'return'}
+ * The hold after a scroll signal (`scrollend`, input release, the wheel guard ending): while the user is still
+ * scrolling there is no hold yet (`null`); once idle it ends `BROWSE_HOLD_MS` after the first idle signal (later
+ * signals of the same scroll do not extend it). A new scroll sets it back to `null`.
+ * @param {number | null} holdUntil @param {{ userActive: boolean, now: number }} input
+ * @returns {number | null}
  */
-export function browseReturnAction({ browsing, cueChanged, pendingReturn, userActive }) {
+export function browseHoldAfterScroll(holdUntil, { userActive, now }) {
+  if (userActive) return null;
+  return holdUntil ?? now + BROWSE_HOLD_MS;
+}
+
+/**
+ * What browsing does when the current line changes: `keep` the user's position, or `return` (end browsing and
+ * scroll back to the current line). Only a line change after the hold has ended returns (a change inside the hold is
+ * ignored, and the hold ending does not return by itself); a seek or track change (`jumped`) returns at once unless
+ * the user is scrolling.
+ * @param {{ browsing: boolean, cueChanged: boolean, jumped?: boolean, userActive: boolean, holdUntil: number | null, now: number }} input
+ * @returns {'none' | 'keep' | 'return'}
+ */
+export function browseCueAction({ browsing, cueChanged, jumped = false, userActive, holdUntil, now }) {
   if (!browsing) return 'none';
-  if (!cueChanged && !pendingReturn) return 'keep';
-  return userActive ? 'defer' : 'return';
+  if (!cueChanged || userActive) return 'keep';
+  if (jumped) return 'return';
+  return holdUntil !== null && now >= holdUntil ? 'return' : 'keep';
 }
