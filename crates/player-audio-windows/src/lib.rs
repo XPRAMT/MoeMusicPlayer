@@ -118,6 +118,9 @@ pub struct PlaybackSnapshot {
     /// When `position` was last read from the backend (updates that change it stamp it), so a reader can
     /// extrapolate the audio position to any instant (the native lyrics clock, ADR 0034).
     pub position_at: Option<Instant>,
+    /// With `Ended`: the track was ended by a seek to its end while it was not playing (ADR 0036), so the track the
+    /// natural-end walk starts next stays paused. `false` after a track played out.
+    pub ended_while_paused: bool,
 }
 
 impl Default for PlaybackSnapshot {
@@ -130,6 +133,7 @@ impl Default for PlaybackSnapshot {
             last_error: None,
             resampling: None,
             position_at: None,
+            ended_while_paused: false,
         }
     }
 }
@@ -1873,6 +1877,7 @@ fn load_track(
                 state.position = Duration::ZERO;
                 state.duration = duration;
                 state.last_error = None;
+                state.ended_while_paused = false;
             });
             Ok(())
         }
@@ -1949,7 +1954,10 @@ fn handle_command(
             // Sample intent on the audio worker, after earlier queued commands
             // (such as Pause) have completed. A Tauri-side snapshot would race
             // with the bounded actor queue.
-            let prior_state = read_snapshot(snapshot).state;
+            let prior = read_snapshot(snapshot);
+            let prior_state = prior.state;
+            // A track ended by a seek while paused: the next one stays paused (ADR 0036).
+            let paused_end = prior_state == PlaybackState::Ended && prior.ended_while_paused;
             load_track(
                 backend,
                 current_path,
@@ -1965,7 +1973,7 @@ fn handle_command(
                     return Err(error);
                 }
                 set_state(snapshot, events, PlaybackState::Playing);
-            } else if prior_state == PlaybackState::Paused {
+            } else if prior_state == PlaybackState::Paused || paused_end {
                 set_state(snapshot, events, PlaybackState::Paused);
             }
         }
@@ -2059,7 +2067,7 @@ fn handle_command(
             if player_core::plan_seek(position, current.duration)
                 == player_core::SeekPlan::EndOfTrack
             {
-                end_track_by_seek(backend, meter, snapshot, events, current.duration);
+                end_track_by_seek(backend, meter, snapshot, events, current.duration, state);
                 return Ok(());
             }
             let lost = matches!(current.last_error, Some(AudioError::RemoteLinkLost(_)));
@@ -2091,7 +2099,7 @@ fn handle_command(
                 Err(AudioError::Seek(_))
                     if player_core::seek_failure_ends_track(requested, duration) =>
                 {
-                    end_track_by_seek(backend, meter, snapshot, events, duration);
+                    end_track_by_seek(backend, meter, snapshot, events, duration, state);
                 }
                 Err(error) => {
                     meter.reset_anchor(state, backend.position());
@@ -2222,13 +2230,15 @@ fn sync_resampling_info(
 }
 
 /// A seek reached the end of the track (ADR 0036): end it the way it ends on its own. The output stops, the snapshot
-/// says `Ended` at the end with no error, and the host's natural-end walk over the queue takes it from there.
+/// says `Ended` at the end with no error, and the host's natural-end walk over the queue takes it from there. When the
+/// track was not playing, `ended_while_paused` tells the walk to load the next track paused.
 fn end_track_by_seek(
     backend: &mut Box<dyn AudioBackend>,
     meter: &mut PlaybackMeter,
     snapshot: &Arc<RwLock<PlaybackSnapshot>>,
     events: &SyncSender<AudioEvent>,
     duration: Option<Duration>,
+    prior_state: PlaybackState,
 ) {
     // Stopping cannot fail in a way that matters here: the track is over either way.
     let _ = backend.stop();
@@ -2237,6 +2247,7 @@ fn end_track_by_seek(
         state.state = PlaybackState::Ended;
         state.position = position;
         state.last_error = None;
+        state.ended_while_paused = prior_state != PlaybackState::Playing;
     });
     meter.request_flush();
     meter.reset_anchor(PlaybackState::Ended, position);
@@ -2281,6 +2292,7 @@ fn update_position(
         update_snapshot(snapshot, events, |state| {
             state.position = position;
             state.state = PlaybackState::Ended;
+            state.ended_while_paused = false;
         });
         meter.request_flush();
         meter.reset_anchor(PlaybackState::Ended, position);
@@ -2893,10 +2905,36 @@ mod tests {
             assert_eq!(snapshot.state, PlaybackState::Ended, "{target:?}");
             assert_eq!(snapshot.position, Duration::from_secs(5));
             assert_eq!(snapshot.last_error, None);
+            assert!(!snapshot.ended_while_paused, "it was playing");
             // The track can be played again from the start.
             player.play().unwrap();
             wait_for(&player, PlaybackState::Playing);
         }
+    }
+
+    #[test]
+    fn a_seek_to_the_end_while_paused_ends_the_track_and_the_next_load_stays_paused() {
+        let player = player();
+        wait_for(&player, PlaybackState::Empty);
+        player.load(PathBuf::from("fixture.wav")).unwrap();
+        wait_for(&player, PlaybackState::Ready);
+        player.play().unwrap();
+        wait_for(&player, PlaybackState::Playing);
+        player.pause().unwrap();
+        wait_for(&player, PlaybackState::Paused);
+        acked_seek(&player, Duration::from_secs(5)).expect("a seek to the end is not an error");
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.state, PlaybackState::Ended);
+        assert!(snapshot.ended_while_paused);
+        // What the natural-end walk asks for when it does not force playing.
+        let loaded = player
+            .request_load_preserving_playback(PathBuf::from("next.wav"))
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(loaded.state, PlaybackState::Paused);
+        assert_eq!(loaded.position, Duration::ZERO);
+        assert!(!loaded.ended_while_paused);
     }
 
     #[test]

@@ -680,6 +680,7 @@ mod tests {
                 last_error: None,
                 resampling: None,
                 position_at: None,
+                ended_while_paused: false,
             },
             metadata: None,
             capabilities: MediaControlCapabilities::default(),

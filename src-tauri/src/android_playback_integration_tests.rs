@@ -1181,6 +1181,91 @@ fn a_seek_to_the_end_with_nothing_to_go_on_to_rests_at_the_end_without_an_error(
 }
 
 #[test]
+fn a_seek_to_the_end_while_paused_loads_the_next_entry_paused_at_its_start() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness.actor_mut().native.state = "paused".to_owned();
+    harness.fake.snapshot.state = "paused".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| {
+        actor.handle_action("seek-end", PlaybackAction::Seek(8_000))
+    });
+    for op in ["pause", "seek"] {
+        let command = harness.fake.next_command();
+        assert_eq!(command.op, op);
+        harness.fake.ack(&command);
+    }
+    // The natural-end walk, but the entry is loaded without playing, at its start.
+    let load = harness.fake.next_command();
+    assert_eq!(load.op, "load");
+    assert_eq!(load.play_when_ready, Some(false));
+    assert_eq!(load.position_ms.unwrap_or(0), 0);
+    harness.fake.ack(&load);
+    let capabilities = harness.fake.next_command();
+    assert_eq!(capabilities.op, "set_capabilities");
+    harness.fake.ack(&capabilities);
+    let (actor, result) = handle.join().expect("seek thread");
+    let snapshot = result.expect("a seek to the end is not an error");
+    harness.actor = Some(actor);
+    assert!(!snapshot.is_playing, "{}", snapshot.state);
+    assert_eq!(snapshot.position_ms, 0);
+    assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    assert_eq!(
+        harness.actor().queue.as_ref().map(PlaybackQueue::cursor),
+        Some(1)
+    );
+}
+
+#[test]
+fn after_a_seek_to_the_end_the_service_ended_event_does_not_walk_again() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    drop(seed_db);
+    let mut harness = playing_first_entry(&temporary, &fixture, QueueRepeatMode::Off);
+    harness.actor_mut().native.state = "paused".to_owned();
+    harness.fake.snapshot.state = "paused".to_owned();
+    let actor = harness.take_actor();
+    let handle = perform_on_thread(actor, |actor| {
+        actor.handle_action("seek-end", PlaybackAction::Seek(8_000))
+    });
+    for op in ["pause", "seek"] {
+        let command = harness.fake.next_command();
+        assert_eq!(command.op, op);
+        harness.fake.ack(&command);
+    }
+    // Neither remaining entry opens: the player rests at the end of the first track.
+    for _ in 0..2 {
+        let attempt = harness.fake.next_command();
+        assert_eq!(attempt.op, "load");
+        assert_eq!(attempt.play_when_ready, Some(false));
+        harness.fake.refuse_load(&attempt, "Cannot open the file");
+    }
+    let (actor, result) = handle.join().expect("seek thread");
+    let snapshot = result.expect("a seek to the end is not an error");
+    harness.actor = Some(actor);
+    assert_eq!(snapshot.state, "ended");
+    assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+
+    // ExoPlayer then reports the end of the same item: that is not a second natural end.
+    let ended: NativeEvent = serde_json::from_value(serde_json::json!({
+        "v": 1,
+        "kind": "ended",
+        "eventId": "1000",
+        "serviceGeneration": 1,
+        "trackId": fixture.first.to_string(),
+        "mediaKey": "load-3",
+        "loadInstance": 3,
+    }))
+    .expect("Kotlin-compatible ended event");
+    harness.actor_mut().process_transport_event(ended);
+    harness.fake.no_command();
+}
+
+#[test]
 fn a_seek_just_before_the_end_is_an_ordinary_seek() {
     let temporary = TemporaryDatabase::new();
     let mut seed_db = temporary.open();

@@ -11520,6 +11520,8 @@ async fn advance_ended_queue(
     let Some(mut walk) = begin_ended_walk(service) else {
         return Ok(());
     };
+    // A track ended by a seek while paused: the next one is loaded paused at its start (ADR 0036).
+    let play = !service.player.snapshot().ended_while_paused;
     let mut loads_seen = service.player.loads_requested();
     loop {
         // Ask for the next entry under the gate, so a choice of the user cannot slip in between the check and the ask.
@@ -11554,7 +11556,7 @@ async fn advance_ended_queue(
                 break;
             };
             let server = ended_walk_server_key(database, service, track_id);
-            match prepare_track_load(database, service, track_id, true) {
+            match prepare_track_load(database, service, track_id, play) {
                 Ok((ticket, track)) => {
                     loads_seen = service.player.loads_requested();
                     Ok((ticket, track, cursor, server))
@@ -15965,6 +15967,83 @@ mod windows_library_integration_tests {
         );
         let attempts = fixture.attempts.lock().unwrap().clone();
         assert_eq!(attempts, vec![fixture.path_of(1), fixture.path_of(2)]);
+    }
+
+    impl WalkFixture {
+        fn pause(&self) {
+            self.service
+                .player
+                .request_pause()
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap();
+        }
+
+        /// The seek of `playback_seek` (to the 60 s end of the scripted tracks) and the walk it runs.
+        fn seek_to_the_end(&self) {
+            super::seek_playback(&self.service, 99_000)
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .expect("a seek to the end is not an error");
+            assert_eq!(
+                self.service.player.snapshot().state,
+                AudioPlaybackState::Ended
+            );
+            self.walk();
+        }
+    }
+
+    #[test]
+    fn a_seek_to_the_end_while_playing_starts_the_next_entry_playing() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.seek_to_the_end();
+        assert_eq!(fixture.cursor(), 1);
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "playing");
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+    }
+
+    #[test]
+    fn a_seek_to_the_end_while_paused_moves_to_the_next_entry_and_stays_paused_at_its_start() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.fail(1);
+        fixture.pause();
+        fixture.seek_to_the_end();
+        // The walk went past the failure as at any natural end, but nothing started playing.
+        assert_eq!(fixture.cursor(), 2);
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "paused");
+        assert!(!snapshot.is_playing);
+        assert_eq!(snapshot.position_ms, 0);
+        assert_eq!(
+            snapshot.current_track.map(|track| track.id),
+            Some(fixture.order[2])
+        );
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        // A track that later plays out on its own goes on playing as usual.
+        fixture
+            .service
+            .player
+            .request_play()
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap();
+        fixture.end_the_track();
+        assert!(!fixture.service.player.snapshot().ended_while_paused);
+    }
+
+    #[test]
+    fn a_seek_to_the_end_while_paused_with_nothing_to_start_rests_at_the_end_without_an_error() {
+        let fixture = WalkFixture::playing_first_of_three();
+        fixture.fail(1);
+        fixture.fail(2);
+        fixture.pause();
+        fixture.seek_to_the_end();
+        assert_eq!(fixture.cursor(), 0);
+        let snapshot = fixture.service.snapshot();
+        assert_eq!(snapshot.state, "ended");
+        assert!(!snapshot.is_playing);
+        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
     }
 
     #[test]

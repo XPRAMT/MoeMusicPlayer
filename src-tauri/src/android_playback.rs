@@ -432,6 +432,9 @@ struct AndroidActor {
     resume_sink: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     /// How many starts of a track failed so far, and why the last one did (`PlaybackSnapshot::start_failure`).
     start_failures: (u64, Option<StartFailure>),
+    /// The load instance whose track a seek to its end has already ended (ADR 0036): the service's own `ended`
+    /// event for it (ExoPlayer at the end) is not a second natural end.
+    ended_by_seek: Option<u64>,
 }
 
 impl AndroidActor {
@@ -471,6 +474,7 @@ impl AndroidActor {
             resume_reported: std::cell::Cell::new(false),
             resume_sink: None,
             start_failures: (0, None),
+            ended_by_seek: None,
         }
     }
 
@@ -899,6 +903,12 @@ impl AndroidActor {
     /// track change only for the entry that starts. When none starts, the player rests at the end of the track and the
     /// last failure is noted. A choice of the user ends the walk.
     fn start_after_natural_end(&mut self, request_id: &str) -> Result<PlaybackSnapshot, String> {
+        self.walk_after_end(request_id, true)
+    }
+
+    /// The natural-end walk; `play` is false after a seek to the end while paused, so the entry that starts is
+    /// loaded paused at its start (ADR 0036).
+    fn walk_after_end(&mut self, request_id: &str, play: bool) -> Result<PlaybackSnapshot, String> {
         let Some(queue) = self.queue.as_ref() else {
             return Ok(self.publish_snapshot());
         };
@@ -926,7 +936,7 @@ impl AndroidActor {
                 break;
             };
             let server = self.server_key_of_track(track_id);
-            match self.start_entry(request_id, track_id, cursor, true) {
+            match self.start_entry(request_id, track_id, cursor, play) {
                 Ok(snapshot) => return Ok(snapshot),
                 Err(error) => match StartFailure::from_message(&error) {
                     // Replaced by a choice of the user: that choice goes on.
@@ -960,12 +970,15 @@ impl AndroidActor {
 
     /// A seek to the end of the track (ADR 0036): the track ends as it would on its own, never with an error. The
     /// native player is paused at the end first, so the track that is over stays silent when no entry starts (and a
-    /// later Play ends it again at once); then the natural-end walk over the queue runs.
+    /// later Play ends it again at once); then the natural-end walk over the queue runs. A track that was playing
+    /// is followed by one that plays; one that was not playing by one that is loaded paused at its start.
     fn end_track_by_seek(
         &mut self,
         request_id: &str,
         duration_ms: u64,
     ) -> Result<PlaybackSnapshot, String> {
+        let play = counts_as_playing(&self.native.state);
+        self.ended_by_seek = Some(self.native.load_instance);
         self.meter.seal_segment(&self.native, Instant::now());
         for (op, position_ms) in [("pause", None), ("seek", Some(duration_ms))] {
             let command = self.new_command(
@@ -985,7 +998,7 @@ impl AndroidActor {
         self.native.state = "ended".to_owned();
         self.native.position_ms = duration_ms;
         self.meter.reset_segment(&self.native, Instant::now());
-        self.start_after_natural_end(request_id)
+        self.walk_after_end(request_id, play)
     }
 
     fn reload_current_for_explicit_play(
@@ -1496,7 +1509,10 @@ impl AndroidActor {
         }
 
         if event.kind == "ended" {
-            if event.track_id.as_deref() == self.native.track_id.as_deref() {
+            // A seek to the end already ran the walk for this track.
+            let already_ended =
+                self.ended_by_seek.is_some() && event.load_instance == self.ended_by_seek;
+            if !already_ended && event.track_id.as_deref() == self.native.track_id.as_deref() {
                 self.native.state = "ended".to_owned();
                 self.native.position_ms =
                     self.native.duration_ms.unwrap_or(self.native.position_ms);
