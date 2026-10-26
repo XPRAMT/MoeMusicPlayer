@@ -38,9 +38,9 @@ use crate::locator;
 
 #[path = "font_cache.rs"]
 mod font_cache;
-pub use font_cache::{CachedFontFace, FontFileStamp};
+pub use font_cache::{CachedFontFace, FontFileStamp, FontSubsetRecord};
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -683,6 +683,22 @@ const SCHEMA_V23: &[(&str, &str, &str)] = &[
         "ALTER TABLE font_faces ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
     ),
 ];
+
+/// The font pickers' name subsets (ADR 0042): per listed family, which face of which font file (at which size and
+/// modification time) and which display name its tiny subset file was made from; `subset_file` NULL when the face
+/// cannot be subset. Only file names and stamps, never font bytes.
+const SCHEMA_V24: &str = r#"
+CREATE TABLE IF NOT EXISTS font_subsets (
+    family_key TEXT PRIMARY KEY NOT NULL,
+    source_path TEXT NOT NULL,
+    face_index INTEGER NOT NULL,
+    source_size_bytes INTEGER NOT NULL,
+    source_modified_at_utc_ms INTEGER NOT NULL,
+    name_hash TEXT NOT NULL,
+    subset_version INTEGER NOT NULL,
+    subset_file TEXT
+);
+"#;
 
 const SCHEMA_V21: &str = r#"
 DROP TABLE IF EXISTS track_embedded_lyrics;
@@ -2218,6 +2234,13 @@ impl Database {
                 }
             }
             tx.pragma_update(None, "user_version", 23)?;
+            tx.commit()?;
+            version = 23;
+        }
+        if version == 23 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V24)?;
+            tx.pragma_update(None, "user_version", 24)?;
             tx.commit()?;
         }
         connection.execute_batch(

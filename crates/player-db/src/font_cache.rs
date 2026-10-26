@@ -1,6 +1,7 @@
-//! The installed-font cache of the font pickers (ADR 0042, schema v22, v23): per font file its size, modification
-//! time and the parse version that read it, per face its parsed names and metadata. Only names and numbers, never font bytes; the files are the truth and the
-//! cache is rebuilt from them (`font_cache_apply`).
+//! The installed-font cache of the font pickers (ADR 0042, schema v22–v24): per font file its size, modification
+//! time and the parse version that read it, per face its parsed names and metadata, and per listed family where its
+//! name subset came from. Only names and numbers, never font bytes; the files are the truth and the cache is rebuilt
+//! from them (`font_cache_apply`, `font_subsets_apply`).
 
 use super::{Database, DatabaseError};
 use rusqlite::params;
@@ -29,6 +30,25 @@ pub struct CachedFontFace {
     pub scripts: u8,
     /// Not offered in the pickers (`player_fonts::FaceInfo::hidden`), kept so a saved setting still resolves.
     pub hidden: bool,
+}
+
+/// Where a listed family's name subset (ADR 0042) was made from. A record whose source stamp, display name or
+/// subset version no longer matches is stale and the subset is made again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontSubsetRecord {
+    /// The family's stored name, lower-case.
+    pub family_key: String,
+    pub source_path: String,
+    pub face_index: u32,
+    pub source_size_bytes: u64,
+    pub source_modified_at_utc_ms: i64,
+    /// `player_fonts::stable_hash` of the display name the subset holds.
+    pub name_hash: String,
+    /// `player_fonts::SUBSET_VERSION` of the subset.
+    pub subset_version: u32,
+    /// The subset's file name in the subset folder; `None`: the face cannot be subset (a legacy-encoding font), kept
+    /// so it is not tried again until its source or name changes.
+    pub subset_file: Option<String>,
 }
 
 impl Database {
@@ -114,6 +134,64 @@ impl Database {
                     ],
                 )?;
             }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+impl Database {
+    /// Every name subset record, by family.
+    pub fn font_subsets(&self) -> Result<Vec<FontSubsetRecord>, DatabaseError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT family_key, source_path, face_index, source_size_bytes, source_modified_at_utc_ms, name_hash,
+                    subset_version, subset_file
+             FROM font_subsets ORDER BY family_key",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(FontSubsetRecord {
+                family_key: row.get(0)?,
+                source_path: row.get(1)?,
+                face_index: row.get::<_, i64>(2)?.clamp(0, i64::from(u32::MAX)) as u32,
+                source_size_bytes: row.get::<_, i64>(3)?.max(0) as u64,
+                source_modified_at_utc_ms: row.get(4)?,
+                name_hash: row.get(5)?,
+                subset_version: row.get::<_, i64>(6)?.clamp(0, i64::from(u32::MAX)) as u32,
+                subset_file: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// In one transaction: forget the subsets of the `removed` families and record (replace) `made`.
+    pub fn font_subsets_apply(
+        &self,
+        removed: &[String],
+        made: &[FontSubsetRecord],
+    ) -> Result<(), DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        for key in removed {
+            tx.execute("DELETE FROM font_subsets WHERE family_key=?1", [key])?;
+        }
+        for record in made {
+            tx.execute(
+                "INSERT OR REPLACE INTO font_subsets
+                     (family_key, source_path, face_index, source_size_bytes, source_modified_at_utc_ms, name_hash,
+                      subset_version, subset_file)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    record.family_key,
+                    record.source_path,
+                    i64::from(record.face_index),
+                    i64::try_from(record.source_size_bytes).unwrap_or(i64::MAX),
+                    record.source_modified_at_utc_ms,
+                    record.name_hash,
+                    i64::from(record.subset_version),
+                    record.subset_file
+                ],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -234,6 +312,56 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].parse_version, 0, "parsed before v23: stale");
         assert!(!db.font_cache_faces().unwrap()[0].hidden);
+    }
+
+    fn subset_record(key: &str, file: Option<&str>) -> FontSubsetRecord {
+        FontSubsetRecord {
+            family_key: key.to_owned(),
+            source_path: format!("{key}.ttf"),
+            face_index: 1,
+            source_size_bytes: 10,
+            source_modified_at_utc_ms: 20,
+            name_hash: "00ff".to_owned(),
+            subset_version: 1,
+            subset_file: file.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn subset_records_are_replaced_and_forgotten() {
+        let db = Database::open_in_memory().expect("database");
+        assert!(db.font_subsets().unwrap().is_empty());
+        let a = subset_record("a", Some("a1.ttf"));
+        let legacy = subset_record("legacy", None);
+        db.font_subsets_apply(&[], &[a.clone(), legacy.clone()])
+            .unwrap();
+        assert_eq!(db.font_subsets().unwrap(), vec![a, legacy.clone()]);
+        let mut renamed = subset_record("a", Some("a2.ttf"));
+        renamed.name_hash = "1234".to_owned();
+        db.font_subsets_apply(&["legacy".to_owned()], std::slice::from_ref(&renamed))
+            .unwrap();
+        assert_eq!(db.font_subsets().unwrap(), vec![renamed]);
+    }
+
+    #[test]
+    fn migrating_to_v24_adds_the_subset_table() {
+        let db = Database::open_in_memory().expect("database");
+        {
+            let connection = db.lock().unwrap();
+            connection
+                .execute_batch("DROP TABLE font_subsets;")
+                .unwrap();
+            connection.pragma_update(None, "user_version", 23).unwrap();
+        }
+        db.migrate().expect("migrate v23 to v24");
+        db.migrate().expect("again: nothing to do");
+        db.lock()
+            .unwrap()
+            .execute_batch(super::super::SCHEMA_V24)
+            .expect("re-entrant script");
+        db.font_subsets_apply(&[], &[subset_record("b", Some("b.otf"))])
+            .unwrap();
+        assert_eq!(db.font_subsets().unwrap().len(), 1);
     }
 
     #[test]
