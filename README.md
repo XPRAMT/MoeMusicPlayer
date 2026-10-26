@@ -51,7 +51,7 @@ Word-timed lyrics are shown karaoke-style on the Now Playing page. In taskbar an
 |---|---|---|
 | Formats | WAV, MP3, FLAC, AAC/M4A, Ogg Vorbis, Ogg Opus, WavPack (`.wv`, lossless and hybrid, with a matching `.wvc`; also DSD-in-WavPack), DSD (`.dsf`), Matroska audio (`.mka`) | What Android's media framework plays: the common formats above, plus WavPack and DSD (`.dsf`) through the app's own decoders |
 | Output | Shared mode, **WASAPI exclusive mode** (bit-perfect), **DoP** for DSD, **several output devices at once** with per-device volume, delay and channel mapping | The system audio output |
-| DSEE HX upscaling | Optional (needs Sony Music Center; its filter is not included) | No |
+| DSEE HX upscaling | Optional (needs Sony's `OmgDseeHxFilter.ax` beside the player, or Sony Music Center installed; the filter is not included) | No |
 | Lyrics display | Lyrics page, floating window and taskbar lyrics | Lyrics page and floating window |
 | System integration | System media controls, open files from File Explorer, play from the default-app list | Media notification and lock screen controls, background playback |
 | Music sources | Folders and playlists anywhere, SMB servers; background scanning | Folders and playlists by real path after you turn on **All files access** |

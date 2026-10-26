@@ -4608,7 +4608,7 @@
                     />
                     <span class="resampling-option-copy">
                       <strong>{tr("啟用 DSEE HX")}</strong>
-                      <small>{tr("串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。")}</small>
+                      <small>{tr("串流透過 Sony 的 DSEE HX 濾鏡處理：播放器先找執行檔旁的 OmgDseeHxFilter.ax，找不到再找 Sony Music Center 的安裝位置 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'；本專案不內含也不散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。")}</small>
                     </span>
                   </label>
                 </div>

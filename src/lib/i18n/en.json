@@ -225,7 +225,7 @@
   "自動更新適用於 Windows 桌面程式。": "Automatic updates are available for the Windows desktop app.",
   "自動背景透明度": "Automatic background opacity",
   "自動縮放": "Auto resize",
-  "串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。": "The stream is processed by the Sony Music Center filter. Sony Music Center must be installed first; the player loads 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax', and this project does not distribute that file. The DSEE HX effect is applied automatically to stereo music at 48 kHz or below; music above 48 kHz or not in stereo is not processed.",
+  "串流透過 Sony 的 DSEE HX 濾鏡處理：播放器先找執行檔旁的 OmgDseeHxFilter.ax，找不到再找 Sony Music Center 的安裝位置 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'；本專案不內含也不散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。": "The stream is processed by Sony's DSEE HX filter. The player first looks for OmgDseeHxFilter.ax beside its executable, then in the Sony Music Center install path 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'. This project does not include or distribute that file. The DSEE HX effect is applied automatically to stereo music at 48 kHz or below; music above 48 kHz or not in stereo is not processed.",
   "佇列位置更新失敗：": "Failed to update the queue position:",
   "位元完美": "bit-perfect",
   "位元深度": "Bit depth",

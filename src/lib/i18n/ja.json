@@ -225,7 +225,7 @@
   "自動更新適用於 Windows 桌面程式。": "自動更新は Windows のデスクトップアプリで利用できます。",
   "自動背景透明度": "自動の背景の不透明度",
   "自動縮放": "自動で拡大縮小",
-  "串流透過 Sony Music Center 濾鏡處理，需要先安裝 Sony Music Center，播放器載入 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'，本專案不會散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。": "ストリームは Sony Music Center のフィルターで処理されます。事前に Sony Music Center をインストールする必要があり、プレーヤーが 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax' を読み込みます。このファイルは本プロジェクトでは配布しません。48 kHz 以下のステレオ音源には DSEE HX の効果が自動的に適用され、48 kHz を超える音源やステレオ以外は処理しません。",
+  "串流透過 Sony 的 DSEE HX 濾鏡處理：播放器先找執行檔旁的 OmgDseeHxFilter.ax，找不到再找 Sony Music Center 的安裝位置 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax'；本專案不內含也不散佈這個檔案。48 kHz 及以下的雙聲道音樂自動套用DSEE HX效果，高於 48 kHz 或非雙聲道不處理。": "ストリームは Sony の DSEE HX フィルターで処理されます。プレーヤーはまず実行ファイルと同じフォルダーの OmgDseeHxFilter.ax を探し、見つからなければ Sony Music Center のインストール先 'C:\\Program Files (x86)\\Sony\\Music Center\\Sony.Earth\\OmgDseeHxFilter.ax' を探します。このファイルは本プロジェクトに含まれず、配布もしません。48 kHz 以下のステレオ音源には DSEE HX の効果が自動的に適用され、48 kHz を超える音源やステレオ以外は処理しません。",
   "佇列位置更新失敗：": "キューの位置の更新に失敗しました：",
   "位元完美": "ビットパーフェクト",
   "位元深度": "ビット深度",
