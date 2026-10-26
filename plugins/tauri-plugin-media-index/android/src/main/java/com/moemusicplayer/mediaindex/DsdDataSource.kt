@@ -12,12 +12,12 @@ import androidx.media3.datasource.TransferListener
 import java.io.IOException
 
 /**
- * Natives of the Rust DSD and WavPack converters (ADR 0016, ADR 0025), exported from `moemusicplayer_lib`
- * (`src-tauri/src/android_dsd.rs`). A handle is a DSF or WavPack file served as a WAV file of 32-bit float PCM,
- * converted on demand; the Rust side picks the converter from the file extension.
+ * Natives of the Rust DSD, WavPack and FLAC converters (ADR 0016, ADR 0025, ADR 0042), exported from
+ * `moemusicplayer_lib` (`src-tauri/src/android_dsd.rs`). A handle is a DSF, WavPack or FLAC file served as a WAV file
+ * of 32-bit float PCM, converted on demand; the Rust side picks the converter (`player_formats::android_converter`).
  */
 object DsdBridge {
-    /** Opens a DSF file; 0 means it could not be opened or is not supported. */
+    /** Opens a converted file; 0 means it could not be opened or is not supported, -2 an unreachable server. */
     @JvmStatic external fun nativeOpen(path: String): Long
 
     /** Length in bytes of the virtual WAV file, or -1 for an unknown handle. */
@@ -63,20 +63,33 @@ fun remoteLinkLostMessage(error: Throwable?): String? {
 const val WAVPACK_URI_SCHEME = "moewv"
 
 /**
+ * Scheme of a FLAC (`.flac`) track: `moeflac:///path/to/file.flac`, served by the same data source as DSD (ADR 0042:
+ * some devices offer only a vendor FLAC decoder that fails on 24-bit files).
+ */
+const val FLAC_URI_SCHEME = "moeflac"
+
+/** Schemes of local files that Rust converts; which formats these are is decided on the Rust side. */
+val LOCAL_CONVERTED_SCHEMES = setOf(DSD_URI_SCHEME, WAVPACK_URI_SCHEME, FLAC_URI_SCHEME)
+
+/** Whether [scheme] is read through [DsdDataSource] (a converted local file or a remote track). */
+fun isRustServedScheme(scheme: String?): Boolean = scheme in LOCAL_CONVERTED_SCHEMES || scheme == REMOTE_URI_SCHEME
+
+/** The `file:` URI of a converted local track (the same path), or [uri] itself. */
+fun fileUriOfConverted(uri: String): String {
+    for (scheme in LOCAL_CONVERTED_SCHEMES) {
+        if (uri.startsWith("$scheme:")) return "file:" + uri.removePrefix("$scheme:")
+    }
+    return uri
+}
+
+/**
  * Scheme of a track on a remote server (ADR 0026): `moeremote://<source id>/<path>`. Rust reads it through the shared remote
- * provider: DSF and WavPack are converted to float WAV like local files, every other format is passed through byte for
- * byte for Media3 to decode.
+ * provider: DSF, WavPack and FLAC are converted to float WAV like local files, every other format is passed through byte
+ * for byte for Media3 to decode. Whether a load is a converted WAV stream comes with the load command (`converted`).
  */
 const val REMOTE_URI_SCHEME = "moeremote"
 
-/** Whether a track served by Rust is a WAV stream (converted) and not the file's own bytes. */
-fun isConvertedUri(uri: String): Boolean {
-    val lower = uri.lowercase()
-    return lower.startsWith("$DSD_URI_SCHEME:") || lower.startsWith("$WAVPACK_URI_SCHEME:") ||
-        (lower.startsWith("$REMOTE_URI_SCHEME:") && (lower.endsWith(".dsf") || lower.endsWith(".wv")))
-}
-
-/** Reads a `moedsd:///path/to/file.dsf`, `moewv:///path/to/file.wv` or `moeremote://…` URI served by Rust. */
+/** Reads a `moedsd:///…dsf`, `moewv:///…wv`, `moeflac:///…flac` or `moeremote://…` URI served by Rust. */
 @UnstableApi
 class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     private var uri: Uri? = null
@@ -147,7 +160,7 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     }
 }
 
-/** Sends `moedsd:` and `moewv:` URIs to [DsdDataSource] and everything else to the regular data source. */
+/** Sends the URIs Rust serves ([isRustServedScheme]) to [DsdDataSource] and everything else to the regular data source. */
 @UnstableApi
 class DsdAwareDataSourceFactory(private val base: DataSource.Factory) : DataSource.Factory {
     override fun createDataSource(): DataSource = RoutingDataSource(base.createDataSource(), DsdDataSource())
@@ -163,8 +176,7 @@ private class RoutingDataSource(private val base: DataSource, private val dsd: D
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val scheme = dataSpec.uri.scheme
-        active = if (scheme == DSD_URI_SCHEME || scheme == WAVPACK_URI_SCHEME || scheme == REMOTE_URI_SCHEME) dsd else base
+        active = if (isRustServedScheme(dataSpec.uri.scheme)) dsd else base
         return active.open(dataSpec)
     }
 

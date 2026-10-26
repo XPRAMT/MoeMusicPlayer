@@ -23,6 +23,7 @@ player-formats = { path = "../crates/player-formats" }
 player-fonts = { path = "../crates/player-fonts" }
 player-tags = { path = "../crates/player-tags" }
 player-wavpack = { path = "../crates/player-wavpack" }
+player-flac = { path = "../crates/player-flac" }
 player-remote = { path = "../crates/player-remote" }
 lofty = "0.25.4"
 tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }

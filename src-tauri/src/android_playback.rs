@@ -149,6 +149,10 @@ struct NativeCommand {
     track_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content_uri: Option<String>,
+    /// `load`: the data source serves `content_uri` as a converted float WAV stream (`android_dsd`), so the service
+    /// sets the MIME type to `audio/wav` instead of letting the extension choose the extractor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    converted: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<NativeTrackMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1050,6 +1054,9 @@ impl AndroidActor {
             request_id: request_id.to_owned(),
             op,
             track_id,
+            converted: content_uri
+                .as_deref()
+                .map(crate::android_dsd::serves_converted_wav),
             content_uri,
             metadata,
             position_ms,
@@ -2023,6 +2030,7 @@ mod tests {
             op: "load",
             track_id: Some("track-id".into()),
             content_uri: Some("content://media/external/audio/media/123".into()),
+            converted: None,
             metadata: Some(NativeTrackMetadata {
                 title: Some("Title".into()),
                 artist: Some("Artist".into()),
@@ -2159,6 +2167,7 @@ mod tests {
             op: "load",
             track_id: Some("track-a".into()),
             content_uri: Some("content://audio/8".into()),
+            converted: None,
             metadata: None,
             position_ms: Some(0),
             volume: None,

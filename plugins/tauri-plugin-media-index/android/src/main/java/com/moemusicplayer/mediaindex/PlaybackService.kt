@@ -139,8 +139,9 @@ class PlaybackService : MediaSessionService() {
         serviceGeneration = SERVICE_GENERATIONS.incrementAndGet()
 
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
-        // DSD (.dsf) tracks arrive as moedsd:// URIs and WavPack (.wv) tracks as moewv:// URIs; both are served as
-        // 32-bit float WAV by the Rust converters (ADR 0016, ADR 0025), so float PCM output is enabled for them.
+        // DSD (.dsf), WavPack (.wv) and FLAC (.flac) tracks arrive as moedsd://, moewv:// and moeflac:// URIs (remote
+        // ones as moeremote://); they are served as 32-bit float WAV by the Rust converters (ADR 0016, ADR 0025,
+        // ADR 0042), so float PCM output is enabled for them.
         val dataSources = DsdAwareDataSourceFactory(DefaultDataSource.Factory(this))
         mediaPreflight = MediaPreflight(dataSources, extractors)
         // Media3 keeps its existing native float path for 24/32-bit integer and float PCM. The chain converter
@@ -157,9 +158,8 @@ class PlaybackService : MediaSessionService() {
                     .setAudioProcessorChain(FloatAwareAudioProcessorChain())
                     .build()
         }.setEnableAudioFloatOutput(true)
-            // FLAC tries software decoders first (vendor FLAC decoders fail mid-decode on some devices); a decoder
-            // that fails to initialise falls back to the next one.
-            .setMediaCodecSelector(SoftwareFirstFlacCodecSelector)
+            // For the formats Media3 still decodes with MediaCodec (MP3, AAC, Vorbis, Opus…), a decoder that fails to
+            // initialise falls back to the next one the device offers.
             .setEnableDecoderFallback(true)
         val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources, extractors))
@@ -208,8 +208,6 @@ class PlaybackService : MediaSessionService() {
             }
         })
         player.addListener(clockListener)
-        // Diagnostic: logs how the FLAC decoder is chosen (tag MoeMediaIndex, prefix flacdiag).
-        player.addAnalyticsListener(FlacCodecDiagnostics.listener(this))
         exoPlayer = player
         val forwarding = QueueAwarePlayer(player)
         sessionPlayer = forwarding
@@ -431,10 +429,11 @@ class PlaybackService : MediaSessionService() {
                     // remaining legacy tracks may still be content:// URIs.
                     require(
                         uri.startsWith("file:///") || uri.startsWith("content://") ||
-                            uri.startsWith("$DSD_URI_SCHEME:///") || uri.startsWith("$WAVPACK_URI_SCHEME:///") ||
+                            LOCAL_CONVERTED_SCHEMES.any { uri.startsWith("$it:///") } ||
                             uri.startsWith("$REMOTE_URI_SCHEME://"),
                     ) {
-                        "Android playback requires a file://, content://, $DSD_URI_SCHEME://, $WAVPACK_URI_SCHEME:// or $REMOTE_URI_SCHEME:// URI"
+                        "Android playback requires a file://, content://, " +
+                            LOCAL_CONVERTED_SCHEMES.joinToString { "$it://" } + " or $REMOTE_URI_SCHEME:// URI"
                     }
                     require(trackId.isNotBlank()) { "trackId is required" }
                     val metadata = command.optJSONObject("metadata") ?: JSONObject()
@@ -454,8 +453,9 @@ class PlaybackService : MediaSessionService() {
                         .setTag(commandId)
                         .setUri(Uri.parse(uri))
                         .setMediaMetadata(mediaMetadata)
-                    // Both are served as a WAV stream, so the extractor is chosen by MIME type, not by the extension.
-                    if (isConvertedUri(uri)) {
+                    // A converted track is served as a WAV stream, so the extractor is chosen by MIME type, not by the
+                    // extension. Rust says which loads are converted (`player_formats::android_converter`).
+                    if (command.optBoolean("converted", false)) {
                         mediaItemBuilder.setMimeType("audio/wav")
                     }
                     val mediaItem = mediaItemBuilder.build()
@@ -726,13 +726,9 @@ class PlaybackService : MediaSessionService() {
      * the image at [artworkUri].
      */
     private fun loadArtwork(loadUri: String, artworkUri: String?, coverFromRust: ByteArray? = null): ByteArray? {
-        // A DSD track is loaded as moedsd:// and a WavPack track as moewv://; the file (and embedded picture) is the
-        // same path as file://.
-        val contentUri = when {
-            loadUri.startsWith("$DSD_URI_SCHEME:") -> "file:" + loadUri.removePrefix("$DSD_URI_SCHEME:")
-            loadUri.startsWith("$WAVPACK_URI_SCHEME:") -> "file:" + loadUri.removePrefix("$WAVPACK_URI_SCHEME:")
-            else -> loadUri
-        }
+        // A DSD, WavPack or FLAC track is loaded as moedsd://, moewv:// or moeflac://; the file (and embedded picture)
+        // is the same path as file://.
+        val contentUri = fileUriOfConverted(loadUri)
         val embedded = try {
             val retriever = android.media.MediaMetadataRetriever()
             try {

@@ -20,7 +20,7 @@ sealed class PreflightResult {
 
 /**
  * Opens a track the way the player will (through the same data sources, so a `file://`, `content://`, `moedsd://`,
- * `moewv://` or `moeremote://` location is read by the same code) and lets the extractors recognise its container,
+ * `moewv://`, `moeflac://` or `moeremote://` location is read by the same code) and lets the extractors recognise its container,
  * without touching the player (ADR 0036). A new track is switched to only after this passed, so a file that is missing,
  * unreadable, on a server that does not answer, or in a format no extractor knows never takes the playing track down.
  *

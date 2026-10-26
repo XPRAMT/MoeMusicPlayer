@@ -1,9 +1,13 @@
-//! DSD and WavPack playback on Android (ADR 0016, ADR 0025).
+//! DSD, WavPack and FLAC playback on Android (ADR 0016, ADR 0025, ADR 0042).
 //!
-//! Media3 has neither a DSD nor a WavPack decoder, so a `.dsf` track is loaded with a `moedsd:///path/to/file.dsf`
-//! URI and a `.wv` track with `moewv:///path/to/file.wv` (the same data source serves both; the WavPack file is
-//! decoded at its own sample rate, with its `.wvc` correction file when there is one).
-//! The text below describes the DSD case; the WavPack case is the same except for the converter.
+//! Media3 has neither a DSD nor a WavPack decoder, and some devices offer only a vendor FLAC decoder that fails on
+//! 24-bit files, so these formats are decoded here. Which formats go through a converter is decided by
+//! `player_formats::android_converter`: a `.dsf` track is loaded with a `moedsd:///path/to/file.dsf` URI, a `.wv`
+//! track with `moewv:///path/to/file.wv` and a `.flac` track with `moeflac:///path/to/file.flac` (the same data
+//! source serves all three; WavPack and FLAC are decoded at their own sample rate, a hybrid WavPack file with its
+//! `.wvc` correction file when there is one). A remote track keeps its `moeremote://` URI and is converted the same
+//! way when its format needs it. The text below describes the DSD case; the others are the same except for the
+//! converter.
 //!
 //! A DSD URI is served like this. The Kotlin
 //! `DsdDataSource` opens that URI through the JNI exports below and reads it as a WAV file of 32-bit float PCM at
@@ -21,15 +25,20 @@ use std::sync::{Arc, Mutex, OnceLock};
 use player_dsd::dsf::DsfReader;
 use player_dsd::reader::DsdPcmReader;
 use player_dsd::wav::DsdWavStream;
+use player_flac::wav::FlacWavStream;
+use player_formats::AndroidConverter;
 use player_wavpack::wav::WavPackWavStream;
 
 /// URI scheme of a DSD track handed to the Kotlin data source.
 pub(crate) const DSD_URI_SCHEME: &str = "moedsd";
 /// URI scheme of a WavPack track handed to the Kotlin data source.
 pub(crate) const WAVPACK_URI_SCHEME: &str = "moewv";
+/// URI scheme of a FLAC track handed to the Kotlin data source.
+pub(crate) const FLAC_URI_SCHEME: &str = "moeflac";
 /// URI scheme of a remote track (ADR 0026): `moeremote://<source id>/<path>`, the text form of its locator.
 pub(crate) const REMOTE_URI_SCHEME: &str = "moeremote";
-/// `AudioTrack` tops out at 192 kHz (a PCM WavPack file above that cannot be played; DSD is converted to 176.4 kHz).
+/// `AudioTrack` tops out at 192 kHz (a PCM WavPack or FLAC file above that cannot be played; DSD is converted to
+/// 176.4 kHz).
 const ANDROID_MAX_SAMPLE_RATE: u32 = 192_000;
 /// The only PCM rate DSD is converted to on Android.
 pub(crate) const ANDROID_DSD_OUTPUT_RATE: u32 = 176_400;
@@ -44,6 +53,8 @@ enum Served {
     /// DSD inside WavPack, converted like a DSF file.
     DsdWavPack(Box<DsdWavStream<Box<dyn player_dsd::stream::DsdStream>>>),
     WavPack(Box<WavPackWavStream>),
+    /// A local or remote FLAC file.
+    Flac(Box<FlacWavStream>),
 }
 
 /// A remote file served byte for byte.
@@ -85,46 +96,83 @@ impl Served {
             Self::Raw(file) => file.len,
             Self::DsdWavPack(stream) => stream.total_len(),
             Self::WavPack(stream) => stream.total_len(),
+            Self::Flac(stream) => stream.total_len(),
         }
     }
 
     fn read_at(&mut self, position: u64, out: &mut [u8]) -> Result<usize, String> {
         match self {
-            Self::Dsd(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
-            Self::DsdRemote(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+            Self::Dsd(stream) => stream
+                .read_at(position, out)
+                .map_err(|error| error.to_string()),
+            Self::DsdRemote(stream) => stream
+                .read_at(position, out)
+                .map_err(|error| error.to_string()),
             Self::Raw(file) => file.read_at(position, out),
-            Self::DsdWavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
-            Self::WavPack(stream) => stream.read_at(position, out).map_err(|error| error.to_string()),
+            Self::DsdWavPack(stream) => stream
+                .read_at(position, out)
+                .map_err(|error| error.to_string()),
+            Self::WavPack(stream) => stream
+                .read_at(position, out)
+                .map_err(|error| error.to_string()),
+            Self::Flac(stream) => stream
+                .read_at(position, out)
+                .map_err(|error| error.to_string()),
         }
     }
 }
 
 type DsdStreamHandle = Served;
 
-/// `file:///x/y.dsf` becomes `moedsd:///x/y.dsf` and `file:///x/y.wv` becomes `moewv:///x/y.wv`; every other URI is
-/// returned unchanged.
-pub(crate) fn to_dsd_uri(uri: &str) -> String {
-    let Some(rest) = uri.strip_prefix("file://") else {
-        return uri.to_owned();
-    };
-    let lower = rest.to_ascii_lowercase();
-    if lower.ends_with(".dsf") {
-        format!("{DSD_URI_SCHEME}://{rest}")
-    } else if lower.ends_with(".wv") {
-        format!("{WAVPACK_URI_SCHEME}://{rest}")
-    } else {
-        uri.to_owned()
+fn scheme_of(converter: AndroidConverter) -> &'static str {
+    match converter {
+        AndroidConverter::Dsd => DSD_URI_SCHEME,
+        AndroidConverter::WavPack => WAVPACK_URI_SCHEME,
+        AndroidConverter::Flac => FLAC_URI_SCHEME,
     }
 }
 
-/// The URI the player loads for a track: its file URI, as a `moedsd` / `moewv` URI when it is a DSF or WavPack file.
+/// A `file://` URI of a format Android converts gets the converter's scheme (`file:///x/y.dsf` becomes
+/// `moedsd:///x/y.dsf`, `.wv` becomes `moewv://`, `.flac` becomes `moeflac://`); every other URI is returned unchanged.
+pub(crate) fn to_converted_uri(uri: &str) -> String {
+    let Some(rest) = uri.strip_prefix("file://") else {
+        return uri.to_owned();
+    };
+    match player_formats::android_converter(Path::new(rest)) {
+        Some(converter) => format!("{}://{rest}", scheme_of(converter)),
+        None => uri.to_owned(),
+    }
+}
+
+/// Whether the data source serves this load URI as a converted float WAV stream (the service then tells Media3 it is
+/// `audio/wav`, since the extension says otherwise): a converter scheme, or a remote track whose format is converted.
+pub(crate) fn serves_converted_wav(uri: &str) -> bool {
+    let has_scheme = |scheme: &str| {
+        uri.strip_prefix(scheme)
+            .is_some_and(|rest| rest.starts_with("://"))
+    };
+    if [DSD_URI_SCHEME, WAVPACK_URI_SCHEME, FLAC_URI_SCHEME]
+        .into_iter()
+        .any(has_scheme)
+    {
+        return true;
+    }
+    match player_core::parse_remote_locator_uri(uri) {
+        Some(player_core::MediaLocator::Remote { path, .. }) => {
+            player_formats::android_converter(Path::new(&path)).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// The URI the player loads for a track: its file URI, with a converter scheme when Android converts its format.
 pub(crate) fn playable_uri(
     database: &player_db::Database,
     track_id: player_core::TrackId,
 ) -> Result<String, player_db::DatabaseError> {
     database
         .resolve_playable_content_uri(track_id)
-        .map(|uri| to_dsd_uri(&uri))
+        .map(|uri| to_converted_uri(&uri))
 }
 
 fn gain() -> &'static Arc<AtomicU32> {
@@ -166,6 +214,23 @@ fn open_dsf(path: &Path) -> Result<Served, String> {
     Ok(Served::Dsd(Box::new(DsdWavStream::new(reader))))
 }
 
+fn flac_stream(reader: player_flac::FlacReader) -> Result<Served, String> {
+    let rate = reader.info().sample_rate;
+    if rate > ANDROID_MAX_SAMPLE_RATE {
+        return Err(format!(
+            "取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"
+        ));
+    }
+    let stream = FlacWavStream::new(reader).map_err(|error| error.to_string())?;
+    Ok(Served::Flac(Box::new(stream)))
+}
+
+fn open_flac(path: &Path) -> Result<Served, String> {
+    let reader = player_flac::FlacReader::open_path(path)
+        .map_err(|error| format!("無法開啟 FLAC 檔案：{error}"))?;
+    flac_stream(reader)
+}
+
 fn open_wavpack(path: &Path) -> Result<Served, String> {
     // DSD inside WavPack goes through the DSD converter at 176.4 kHz, like a DSF file (ADR 0025).
     if player_wavpack::is_dsd(path) {
@@ -180,17 +245,20 @@ fn open_wavpack(path: &Path) -> Result<Served, String> {
         return Ok(Served::DsdWavPack(Box::new(DsdWavStream::new(reader))));
     }
     // The `.wvc` correction file next to a hybrid `.wv` is used too, as on Windows.
-    let reader = player_wavpack::WavPackReader::open_path(path).map_err(|error| error.to_string())?;
+    let reader =
+        player_wavpack::WavPackReader::open_path(path).map_err(|error| error.to_string())?;
     let rate = reader.info().sample_rate;
     if rate > ANDROID_MAX_SAMPLE_RATE {
-        return Err(format!("取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"));
+        return Err(format!(
+            "取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"
+        ));
     }
     let stream = WavPackWavStream::new(reader).map_err(|error| error.to_string())?;
     Ok(Served::WavPack(Box::new(stream)))
 }
 
-/// Open a remote file through the shared provider (ADR 0026). DSF and WavPack are converted like local files; any
-/// other format is passed through for Media3 to decode.
+/// Open a remote file through the shared provider (ADR 0026). DSF, WavPack and FLAC are converted like local files;
+/// any other format is passed through for Media3 to decode.
 fn open_remote(uri: &str) -> Result<Served, String> {
     let Some(player_core::MediaLocator::Remote { source_id, path }) =
         player_core::parse_remote_locator_uri(uri)
@@ -202,8 +270,8 @@ fn open_remote(uri: &str) -> Result<Served, String> {
         .open_streaming(source_id, &path)
         .map_err(|error| format!("無法開啟遠端檔案：{error}"))?;
     let name = Path::new(&path);
-    match player_formats::decode_engine(name) {
-        player_formats::DecodeEngine::Dsd => {
+    match player_formats::android_converter(name) {
+        Some(AndroidConverter::Dsd) => {
             let dsf = DsfReader::open(BufReader::with_capacity(
                 256 * 1024,
                 Box::new(RemoteStreamAdapter(file.reader)) as Box<dyn player_wavpack::ReadSeek>,
@@ -213,14 +281,24 @@ fn open_remote(uri: &str) -> Result<Served, String> {
                 .map_err(|error| error.to_string())?;
             Ok(Served::DsdRemote(Box::new(DsdWavStream::new(reader))))
         }
-        player_formats::DecodeEngine::WavPack => {
+        Some(AndroidConverter::Flac) => {
+            let reader = player_flac::FlacReader::open(RemoteStreamAdapter(file.reader))
+                .map_err(|error| error.to_string())?;
+            flac_stream(reader)
+        }
+        Some(AndroidConverter::WavPack) => {
             // A hybrid file is lossless with its `.wvc` correction file next to it.
             let correction = content
                 .open_streaming(source_id, &format!("{path}c"))
                 .ok()
-                .map(|handle| Box::new(RemoteStreamAdapter(handle.reader)) as Box<dyn player_wavpack::ReadSeek>);
+                .map(|handle| {
+                    Box::new(RemoteStreamAdapter(handle.reader))
+                        as Box<dyn player_wavpack::ReadSeek>
+                });
             let main = RemoteStreamAdapter(file.reader);
-            let probe_main = content.open(source_id, &path).map_err(|error| error.to_string())?;
+            let probe_main = content
+                .open(source_id, &path)
+                .map_err(|error| error.to_string())?;
             if player_wavpack::is_dsd_from(RemoteStreamAdapter(probe_main.reader)) {
                 let stream = player_wavpack::dsd::WavPackDsdStream::open(main, correction)
                     .map_err(|error| error.to_string())?;
@@ -232,15 +310,18 @@ fn open_remote(uri: &str) -> Result<Served, String> {
                 .map_err(|error| error.to_string())?;
                 return Ok(Served::DsdWavPack(Box::new(DsdWavStream::new(reader))));
             }
-            let reader = player_wavpack::WavPackReader::open(main, correction).map_err(|error| error.to_string())?;
+            let reader = player_wavpack::WavPackReader::open(main, correction)
+                .map_err(|error| error.to_string())?;
             let rate = reader.info().sample_rate;
             if rate > ANDROID_MAX_SAMPLE_RATE {
-                return Err(format!("取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"));
+                return Err(format!(
+                    "取樣率 {rate} Hz 超過 Android 的上限 {ANDROID_MAX_SAMPLE_RATE} Hz"
+                ));
             }
             let stream = WavPackWavStream::new(reader).map_err(|error| error.to_string())?;
             Ok(Served::WavPack(Box::new(stream)))
         }
-        _ => Ok(Served::Raw(RawRemote {
+        None => Ok(Served::Raw(RawRemote {
             reader: file.reader,
             len: file.len,
         })),
@@ -262,18 +343,33 @@ impl std::io::Seek for RemoteStreamAdapter {
     }
 }
 
-/// Open a DSF or WavPack file (or a remote track); the handle (never 0) is used with the other functions until `close`.
+/// Open a DSF, WavPack or FLAC file (or a remote track); the handle (never 0) is used with the other functions until
+/// `close`.
 pub(crate) fn open(path: &Path) -> Result<i64, String> {
-    if path.to_str().is_some_and(|text| text.starts_with("moeremote://")) {
+    if path
+        .to_str()
+        .is_some_and(|text| text.starts_with("moeremote://"))
+    {
         let started = std::time::Instant::now();
         let served = open_remote(path.to_str().unwrap_or_default());
-        eprintln!("[remote] open {:?} took {} ms (ok: {})", path.file_name(), started.elapsed().as_millis(), served.is_ok());
+        eprintln!(
+            "[remote] open {:?} took {} ms (ok: {})",
+            path.file_name(),
+            started.elapsed().as_millis(),
+            served.is_ok()
+        );
         return Ok(register(served?));
     }
-    let served = match player_formats::decode_engine(path) {
-        player_formats::DecodeEngine::Dsd => open_dsf(path)?,
-        player_formats::DecodeEngine::WavPack => open_wavpack(path)?,
-        _ => return Err(format!("不是 DSD 或 WavPack 檔案：{}", path.display())),
+    let served = match player_formats::android_converter(path) {
+        Some(AndroidConverter::Dsd) => open_dsf(path)?,
+        Some(AndroidConverter::WavPack) => open_wavpack(path)?,
+        Some(AndroidConverter::Flac) => open_flac(path)?,
+        None => {
+            return Err(format!(
+                "不是 DSD、WavPack 或 FLAC 檔案：{}",
+                path.display()
+            ))
+        }
     };
     Ok(register(served))
 }
@@ -308,7 +404,11 @@ pub(crate) fn read(handle: i64, position: u64, out: &mut [u8]) -> Result<usize, 
     let started = std::time::Instant::now();
     let result = stream.read_at(position, out);
     if started.elapsed().as_millis() >= 150 {
-        eprintln!("[remote] slow read at {position} ({} bytes) took {} ms", out.len(), started.elapsed().as_millis());
+        eprintln!(
+            "[remote] slow read at {position} ({} bytes) took {} ms",
+            out.len(),
+            started.elapsed().as_millis()
+        );
     }
     result
 }
@@ -354,7 +454,9 @@ mod jni_exports {
     /// The cover of a remote track (`moeremote://…`) as the file's own picture bytes, or null. Blocks on the server, so
     /// the service calls it from a worker thread after the track has started.
     #[no_mangle]
-    pub extern "system" fn Java_com_moemusicplayer_mediaindex_DsdBridge_nativeRemoteCover<'local>(
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_DsdBridge_nativeRemoteCover<
+        'local,
+    >(
         mut env: JNIEnv<'local>,
         _class: JClass<'local>,
         uri: JString<'local>,
@@ -457,13 +559,16 @@ mod tests {
     #[test]
     fn only_dsf_file_uris_become_dsd_uris() {
         assert_eq!(
-            to_dsd_uri("file:///storage/emulated/0/Music/a.dsf"),
+            to_converted_uri("file:///storage/emulated/0/Music/a.dsf"),
             "moedsd:///storage/emulated/0/Music/a.dsf"
         );
-        assert_eq!(to_dsd_uri("file:///x/A%20B.DSF"), "moedsd:///x/A%20B.DSF");
-        assert_eq!(to_dsd_uri("file:///x/a.flac"), "file:///x/a.flac");
         assert_eq!(
-            to_dsd_uri("content://media/external/audio/media/5"),
+            to_converted_uri("file:///x/A%20B.DSF"),
+            "moedsd:///x/A%20B.DSF"
+        );
+        assert_eq!(to_converted_uri("file:///x/a.mp3"), "file:///x/a.mp3");
+        assert_eq!(
+            to_converted_uri("content://media/external/audio/media/5"),
             "content://media/external/audio/media/5"
         );
     }
@@ -501,12 +606,15 @@ mod tests {
     #[test]
     fn wavpack_file_uris_become_wavpack_uris() {
         assert_eq!(
-            to_dsd_uri("file:///storage/emulated/0/Music/a.wv"),
+            to_converted_uri("file:///storage/emulated/0/Music/a.wv"),
             "moewv:///storage/emulated/0/Music/a.wv"
         );
-        assert_eq!(to_dsd_uri("file:///x/A%20B.WV"), "moewv:///x/A%20B.WV");
-        assert_eq!(to_dsd_uri("file:///x/a.wvc"), "file:///x/a.wvc");
-        assert_eq!(to_dsd_uri("file:///x/a.wav"), "file:///x/a.wav");
+        assert_eq!(
+            to_converted_uri("file:///x/A%20B.WV"),
+            "moewv:///x/A%20B.WV"
+        );
+        assert_eq!(to_converted_uri("file:///x/a.wvc"), "file:///x/a.wvc");
+        assert_eq!(to_converted_uri("file:///x/a.wav"), "file:///x/a.wav");
     }
 
     fn wavpack_reference(name: &str) -> std::path::PathBuf {
@@ -524,7 +632,10 @@ mod tests {
         assert_eq!(read(handle, 0, &mut header).unwrap(), 44);
         assert_eq!(&header[0..4], b"RIFF");
         assert_eq!(u16::from_le_bytes(header[20..22].try_into().unwrap()), 3);
-        assert_eq!(u32::from_le_bytes(header[24..28].try_into().unwrap()), 48_000);
+        assert_eq!(
+            u32::from_le_bytes(header[24..28].try_into().unwrap()),
+            48_000
+        );
         // 0.1 s of stereo float: 4800 frames x 8 bytes.
         assert_eq!(total, 44 + 4_800 * 8);
         let mut buffer = vec![0_u8; 1_024];
@@ -547,7 +658,10 @@ mod tests {
         let total = length(handle).unwrap();
         let mut header = [0_u8; 44];
         assert_eq!(read(handle, 0, &mut header).unwrap(), 44);
-        assert_eq!(u32::from_le_bytes(header[24..28].try_into().unwrap()), 176_400);
+        assert_eq!(
+            u32::from_le_bytes(header[24..28].try_into().unwrap()),
+            176_400
+        );
         // 0.2 s of DSD64 at 176.4 kHz: 35 280 frames of 8 bytes.
         assert_eq!(total, 44 + 35_280 * 8);
         let mut buffer = vec![0_u8; 8_192];
@@ -562,6 +676,85 @@ mod tests {
     fn files_that_are_neither_dsd_nor_wavpack_are_refused() {
         assert!(open(&wavpack_reference("int24_stereo.ss.txt")).is_err());
         assert!(open(&wavpack_reference("missing.wv")).is_err());
+        assert!(open(&flac_fixture("missing.flac")).is_err());
+    }
+
+    #[test]
+    fn flac_file_uris_become_flac_uris() {
+        assert_eq!(
+            to_converted_uri("file:///storage/emulated/0/Music/a.flac"),
+            "moeflac:///storage/emulated/0/Music/a.flac"
+        );
+        assert_eq!(
+            to_converted_uri("file:///x/A%20B.FLAC"),
+            "moeflac:///x/A%20B.FLAC"
+        );
+        assert_eq!(
+            to_converted_uri("file:///x/a.flac.lrc"),
+            "file:///x/a.flac.lrc"
+        );
+    }
+
+    #[test]
+    fn converted_load_uris_are_recognised_by_scheme_or_remote_format() {
+        let source = player_core::SourceId::new();
+        let remote = |path: &str| player_core::remote_locator_uri(source, path);
+        for uri in [
+            "moedsd:///x/a.dsf".to_owned(),
+            "moewv:///x/a.wv".to_owned(),
+            "moeflac:///x/a.flac".to_owned(),
+            remote("Music/a b.flac"),
+            remote("Music/a.DSF"),
+            remote("Music/a.wv"),
+        ] {
+            assert!(serves_converted_wav(&uri), "{uri}");
+        }
+        for uri in [
+            "file:///x/a.flac".to_owned(),
+            "content://media/external/audio/media/5".to_owned(),
+            "moeflacx:///x/a.flac".to_owned(),
+            remote("Music/a.mp3"),
+            remote("Music/a.m4a"),
+        ] {
+            assert!(!serves_converted_wav(&uri), "{uri}");
+        }
+    }
+
+    fn flac_fixture(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../crates/player-flac/tests/fixtures")
+            .join(name)
+    }
+
+    #[test]
+    fn a_24_bit_flac_file_is_served_as_a_float_wav_at_its_own_rate_with_random_access() {
+        let handle = open(&flac_fixture("s24_stereo_96000.flac")).unwrap();
+        assert_ne!(handle, 0);
+        let total = length(handle).unwrap();
+        let mut header = [0_u8; 44];
+        assert_eq!(read(handle, 0, &mut header).unwrap(), 44);
+        assert_eq!(&header[0..4], b"RIFF");
+        assert_eq!(u16::from_le_bytes(header[20..22].try_into().unwrap()), 3);
+        assert_eq!(u16::from_le_bytes(header[22..24].try_into().unwrap()), 2);
+        assert_eq!(
+            u32::from_le_bytes(header[24..28].try_into().unwrap()),
+            96_000
+        );
+        // 0.25 s of stereo float: 24 000 frames x 8 bytes.
+        assert_eq!(total, 44 + 24_000 * 8);
+        let mut buffer = vec![0_u8; 4_096];
+        let middle = 44 + 12_000 * 8;
+        assert_eq!(read(handle, middle, &mut buffer).unwrap(), 4_096);
+        assert!(buffer
+            .chunks_exact(4)
+            .any(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() > 0.05));
+        let first = buffer.clone();
+        assert_eq!(read(handle, 100, &mut buffer).unwrap(), 4_096);
+        assert_eq!(read(handle, middle, &mut buffer).unwrap(), 4_096);
+        assert_eq!(buffer, first, "the same range read again after going back");
+        assert_eq!(read(handle, total, &mut buffer).unwrap(), 0);
+        close(handle);
+        assert!(length(handle).is_none());
     }
 
     #[test]

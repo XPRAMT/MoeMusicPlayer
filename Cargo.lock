@@ -3167,6 +3167,7 @@ dependencies = [
  "player-core",
  "player-db",
  "player-dsd",
+ "player-flac",
  "player-fonts",
  "player-formats",
  "player-lyrics-native",

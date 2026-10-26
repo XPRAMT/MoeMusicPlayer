@@ -49,6 +49,18 @@ pub enum DecodeEngine {
     WavPack,
 }
 
+/// A format Android does not leave to Media3's own decoders: Rust decodes it and serves Media3 a 32-bit float WAV
+/// stream through the app's data source (ADR 0016, ADR 0025, ADR 0042).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AndroidConverter {
+    /// The DSD→PCM converter (Media3 has no DSD decoder).
+    Dsd,
+    /// libwavpack (Media3 has no WavPack decoder).
+    WavPack,
+    /// Symphonia's FLAC decoder: some devices offer only a vendor FLAC `MediaCodec` that fails on 24-bit files.
+    Flac,
+}
+
 /// What the player can do with a format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FormatInfo {
@@ -70,6 +82,16 @@ impl FormatInfo {
             FormatId::Opus => DecodeEngine::Opus,
             FormatId::WavPack => DecodeEngine::WavPack,
             _ => DecodeEngine::Rodio,
+        }
+    }
+
+    /// The Rust converter that plays this format on Android, or `None` when Media3 decodes it.
+    pub fn android_converter(&self) -> Option<AndroidConverter> {
+        match self.id {
+            FormatId::Dsf => Some(AndroidConverter::Dsd),
+            FormatId::WavPack => Some(AndroidConverter::WavPack),
+            FormatId::Flac => Some(AndroidConverter::Flac),
+            _ => None,
         }
     }
 }
@@ -349,6 +371,11 @@ pub fn decode_engine(path: &Path) -> DecodeEngine {
     format_of_path(path).map_or(DecodeEngine::Rodio, FormatInfo::decode_engine)
 }
 
+/// The Rust converter that plays this file on Android (by extension), or `None` when Media3 decodes it.
+pub fn android_converter(path: &Path) -> Option<AndroidConverter> {
+    format_of_path(path).and_then(FormatInfo::android_converter)
+}
+
 /// File extension for a MIME type (no dot), when the format is known.
 pub fn extension_for_mime(mime: &str) -> Option<&'static str> {
     let mime = mime.to_ascii_lowercase();
@@ -466,6 +493,37 @@ mod tests {
         assert_eq!(decode_engine(Path::new("a.ogg")), DecodeEngine::Rodio);
         assert_eq!(decode_engine(Path::new("a.flac")), DecodeEngine::Rodio);
         assert_eq!(decode_engine(Path::new("a.unknown")), DecodeEngine::Rodio);
+    }
+
+    #[test]
+    fn android_converts_dsf_wavpack_and_flac_and_leaves_the_rest_to_media3() {
+        assert_eq!(
+            android_converter(Path::new("a.DSF")),
+            Some(AndroidConverter::Dsd)
+        );
+        assert_eq!(
+            android_converter(Path::new("a.wv")),
+            Some(AndroidConverter::WavPack)
+        );
+        assert_eq!(
+            android_converter(Path::new("/x/A%20B.FLAC")),
+            Some(AndroidConverter::Flac)
+        );
+        for other in [
+            "a.wvc",
+            "a.dff",
+            "a.mp3",
+            "a.m4a",
+            "a.ogg",
+            "a.opus",
+            "a.wav",
+            "a.unknown",
+            "flac",
+        ] {
+            assert_eq!(android_converter(Path::new(other)), None, "{other}");
+        }
+        // Windows keeps decoding FLAC with rodio.
+        assert_eq!(decode_engine(Path::new("a.flac")), DecodeEngine::Rodio);
     }
 
     #[test]
