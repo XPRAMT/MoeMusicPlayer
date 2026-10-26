@@ -45,6 +45,7 @@
     type VirtualRange,
   } from './track-list-data.js';
   import { buildPagedVirtualRows, dataIndexToVisualIndex, getGroupedVirtualRange, getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexCellWidthEm, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, getVirtualRowTop, getVirtualRowsHeight, getVisualIndexAtOffset, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
+  import { findFixedContainingBlock, fixedPlacement, measureContainingBlock, viewportToContainingBlock } from './fixed-containing-block.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -188,6 +189,7 @@
   let quickIndexMaxHeight = $state(0);
   let quickIndexCellSizePx = $state(32);
   let quickIndexDialog: HTMLDivElement | undefined = $state();
+  let quickIndexBackdropStyle = $state('');
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
   let hasPreviousGroupSnapshot = false;
@@ -609,20 +611,36 @@
     quickIndexCellSizePx = quickIndexFontPx * getQuickIndexCellWidthEm(quickIndexLabels.map(getQuickIndexDisplayLabel));
     quickIndexMaxHeight = Math.max(0, rect.height - 24);
     quickIndexTrigger = event.currentTarget as HTMLButtonElement;
+    quickIndexBackdropStyle = '';
     quickIndexOpen = true;
-    void tick().then(() => centreQuickIndexInContainingBlock(rect.left + rect.width / 2, rect.top + rect.height / 2));
+    const centreX = rect.left + rect.width / 2;
+    const centreY = rect.top + rect.height / 2;
+    void tick().then(() => placeQuickIndex(centreX, centreY));
   }
 
-  /** A list inside a transformed or filtered ancestor (the font pickers in the quick-settings drawer) makes that
-   *  ancestor the fixed popover's containing block: shift the popover by the difference so it is still centred on the
-   *  list. Elsewhere (the library) the difference is zero and nothing moves. */
-  function centreQuickIndexInContainingBlock(centreX: number, centreY: number): void {
+  /** Places the popover (centred by `translate(-50%, -50%)`) on the list centre, kept inside the window. Inside an
+   *  ancestor that is the fixed popover's containing block (the quick-settings drawer has `backdrop-filter`) the
+   *  viewport point is converted into that ancestor's coordinates and also kept inside it; with no such ancestor (the
+   *  library) the coordinates are the viewport's and nothing changes. Runs after the popover renders, before paint. */
+  function placeQuickIndex(centreX: number, centreY: number): void {
     if (!quickIndexOpen || !quickIndexDialog) return;
-    const placed = quickIndexDialog.getBoundingClientRect();
-    const dx = centreX - (placed.left + placed.width / 2);
-    const dy = centreY - (placed.top + placed.height / 2);
-    if (Math.abs(dx) > 0.5) quickIndexCenterX += dx;
-    if (Math.abs(dy) > 0.5) quickIndexCenterY += dy;
+    const block = measureContainingBlock(findFixedContainingBlock(quickIndexDialog));
+    const placed = fixedPlacement({
+      centreX,
+      centreY,
+      width: quickIndexDialog.offsetWidth,
+      height: quickIndexDialog.offsetHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      block,
+    });
+    quickIndexCenterX = placed.left;
+    quickIndexCenterY = placed.top;
+    if (block) {
+      // The backdrop shares the containing block: stretch it back over the whole window.
+      const origin = viewportToContainingBlock(0, 0, block);
+      quickIndexBackdropStyle = `inset:auto;left:${origin.left}px;top:${origin.top}px;width:${window.innerWidth}px;height:${window.innerHeight}px`;
+    }
   }
 
   function chooseQuickIndexLabel(label: string): void {
@@ -893,7 +911,7 @@
     {/each}
   </div>
   {#if quickIndexOpen}
-    <button type="button" class="quick-index-backdrop" aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
+    <button type="button" class="quick-index-backdrop" style={quickIndexBackdropStyle} aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
     <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndexLabels.length, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label={tr("快速首字查找")} tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
