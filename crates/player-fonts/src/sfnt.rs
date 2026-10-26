@@ -88,7 +88,7 @@ pub fn read_table<R: Read + Seek>(
 }
 
 /// Test helper: an sfnt file (or, with several faces, a collection) holding the given tables.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn build_font(faces: &[Vec<([u8; 4], Vec<u8>)>]) -> Vec<u8> {
     let collection = faces.len() > 1;
     let header_len = if collection { 12 + 4 * faces.len() } else { 0 };

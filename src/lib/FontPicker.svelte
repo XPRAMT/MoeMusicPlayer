@@ -1,13 +1,13 @@
 <script module lang="ts">
   // One picker for the four font settings (ADR 0042). The settings page and the quick-settings drawer each mount the
   // pickers, and all of them show the same list: the list, its loading state and the background refresh live here,
-  // once. The list is read only when a picker opens (never at startup); the cached list shows at once and a
-  // background refresh replaces it in place (`fonts-list-updated`), keeping each picker's scroll and search.
-  // Rows are drawn in their own fonts without blocking the page (font-row-faces.js); the loaded faces are shared.
+  // once. The list is read only when a picker opens (never at startup). The first open waits (「讀取字型中…」) while the
+  // backend scans every font and makes every name subset; later opens show the cached list at once and a background
+  // refresh replaces it in place (`fonts-list-updated`), keeping each picker's scroll and search.
+  // Every row is drawn in its own name subset at once (font-row-faces.js); the registered faces are shared.
   import { convertFileSrc } from '@tauri-apps/api/core';
-  import { SvelteMap } from 'svelte/reactivity';
   import type { FontFamilyEntry } from './ipc';
-  import { createFontRowScheduler, fontRowSource, loadFontRowFace } from './font-row-faces.js';
+  import { addFontRowFace, createFontRowFaces, fontRowFamilyCss } from './font-row-faces.js';
 
   const catalog = $state({
     fonts: [] as FontFamilyEntry[],
@@ -28,29 +28,8 @@
   /** Bumped whenever the list is replaced (the virtual list rebuilds its rows). */
   let listRevision = $state(0);
 
-  /** Row face key → the CSS family its face was added under. */
-  const rowFaces = new SvelteMap<string, string>();
-  const rowScheduler = createFontRowScheduler({
-    load: loadFontRowFace,
-    onLoaded: (key, face) => rowFaces.set(key, face),
-  });
-  /** One observer for every picker row: a row is "in view" while it intersects the visible part of its list. */
-  let rowObserver: IntersectionObserver | null = null;
-  const observedRows = new Map<Element, { key: string; source: string; shown: boolean }>();
-
-  function observer(): IntersectionObserver | null {
-    if (rowObserver || typeof IntersectionObserver === 'undefined') return rowObserver;
-    rowObserver = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const row = observedRows.get(entry.target);
-        if (!row || row.shown === entry.isIntersecting) continue;
-        row.shown = entry.isIntersecting;
-        if (row.shown) rowScheduler.show(row);
-        else rowScheduler.hide(row.key);
-      }
-    });
-    return rowObserver;
-  }
+  /** The rows' subset faces, registered as rows first render (shared by every picker). */
+  const rowFaces = createFontRowFaces({ toUrl: convertFileSrc, addFace: addFontRowFace });
 
   /** The playing-page lyrics' 「預設（…）」 follows the interface font (App keeps this in step with the setting). */
   export function setInterfaceFontForPickers(family: string | null | undefined): void {
@@ -174,35 +153,9 @@
     return fontFamilyCss(font.family, DEFAULT_INTERFACE_FONT_STACK, { android });
   }
 
-  /** A row: the default font until its own face has loaded (never the real family, which would load during layout). */
+  /** A row: its name subset (registered now if this is its first row), else the installed family itself. */
   function rowFontCss(font: FontFamilyEntry | null): string {
-    const source = fontRowSource(font, convertFileSrc);
-    const face = source ? rowFaces.get(source.key) : undefined;
-    return face ? `"${face}", ${DEFAULT_INTERFACE_FONT_STACK}` : DEFAULT_INTERFACE_FONT_STACK;
-  }
-
-  /** Watch a row while it is rendered: its face loads once it has stayed in view (font-row-faces.js). */
-  function rowFace(node: HTMLElement, font: FontFamilyEntry | null) {
-    let watched: { key: string; source: string; shown: boolean } | null = null;
-    const watch = (next: FontFamilyEntry | null) => {
-      const source = fontRowSource(next, convertFileSrc);
-      if (watched && source && watched.key === source.key) return;
-      unwatch();
-      const io = observer();
-      if (!source || !io || rowFaces.has(source.key)) return;
-      watched = { ...source, shown: false };
-      observedRows.set(node, watched);
-      io.observe(node);
-    };
-    const unwatch = () => {
-      if (!watched) return;
-      if (watched.shown) rowScheduler.hide(watched.key);
-      observedRows.delete(node);
-      rowObserver?.unobserve(node);
-      watched = null;
-    };
-    watch(font);
-    return { update: watch, destroy: unwatch };
+    return fontRowFamilyCss(font, rowFaces.faceFor, DEFAULT_INTERFACE_FONT_STACK);
   }
 
   // Android draws the current setting's label through the chosen family's @font-face (as App applies it).
@@ -270,7 +223,6 @@
               class="font-picker-row-name"
               role="gridcell"
               style={`font-family:${item.font ? rowFontCss(item.font) : currentFontCss(null)}`}
-              use:rowFace={item.font}
             >{item.font ? item.font.displayName : defaultLabel}</span>
           {/if}
         {/snippet}

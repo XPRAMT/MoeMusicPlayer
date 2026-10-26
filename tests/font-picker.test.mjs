@@ -137,11 +137,13 @@ test('the native lyrics default named by the picker is the family win.rs maps CJ
   assert.match(app, /setInterfaceFontForPickers\(interfaceFontFamily\)/);
 });
 
-test('the picker reuses the library virtual list (group rows, quick index) and never draws a row in the real family', () => {
+test('the picker reuses the library virtual list (group rows, quick index) and draws each row in its own font at once', () => {
   const picker = read('src/lib/FontPicker.svelte');
   assert.match(picker, /import PagedVirtualList from '\.\/PagedVirtualList\.svelte'/);
   assert.match(picker, /<PagedVirtualList[\s\S]*\{groupRows\}[\s\S]*\{quickIndexLabels\}/);
-  assert.match(picker, /use:rowFace=\{item\.font\}/);
+  assert.match(picker, /style=\{`font-family:\$\{item\.font \? rowFontCss\(item\.font\)/);
+  assert.match(picker, /fontRowFamilyCss\(font, rowFaces\.faceFor, DEFAULT_INTERFACE_FONT_STACK\)/);
+  assert.doesNotMatch(picker, /IntersectionObserver|use:rowFace|setTimeout/, 'no default-font phase, settle delay or load queue');
   assert.doesNotMatch(picker, /ensureAndroidFontFaces\(row/, 'rows no longer register the real font files');
   for (const label of ['繁體中文', '簡體中文', '日文', '英文']) assert.ok(picker.includes(`tr('${label}')`), label);
 });

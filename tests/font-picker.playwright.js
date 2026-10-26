@@ -1,6 +1,7 @@
 async page => {
   // The font picker (ADR 0042) in its harness (tests/font-picker-harness.html, `npx vite --port 4173`): the library's
-  // group rows and quick index panel, 「預設字型」 first, keyboard choice, and rows drawn without the real families.
+  // group rows and quick index panel, 「預設字型」 first, keyboard choice, and each row drawn in its own font at once (its
+  // name subset, or without one, as in the synthetic list, its installed family).
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   await page.setViewportSize({ width: 960, height: 720 });
   await page.goto('http://127.0.0.1:4173/tests/font-picker-harness.html', { waitUntil: 'domcontentloaded' });
@@ -20,12 +21,12 @@ async page => {
       row: row?.getBoundingClientRect().height,
       line: surface ? getComputedStyle(surface).borderBottomWidth : null,
       top: surface ? getComputedStyle(surface).borderTopWidth : null,
-      rowFonts: [...document.querySelectorAll('.font-picker-row-name')].map((name) => name.style.fontFamily),
+      rowFonts: [...document.querySelectorAll('.font-picker-row-name')].map((name) => [name.textContent, name.style.fontFamily]),
     };
   });
   assert(geometry.row === 36 && geometry.group === 30, `heights ${geometry.row} / ${geometry.group}`);
   assert(geometry.line === '1px' && geometry.top === '0px', `separator ${geometry.top} / ${geometry.line}`);
-  assert(geometry.rowFonts.every((font) => !font.includes('微軟正黑體') && !font.includes('Latin')), `rows never use the real family: ${geometry.rowFonts}`);
+  assert(geometry.rowFonts.slice(1).every(([name, font]) => font.startsWith(`"${name}"`) || font.startsWith('"MoeFontRow ')), `rows use their own font: ${geometry.rowFonts}`);
 
   // Group heading → quick index panel → jump.
   await page.locator('.paged-virtual-group-button').first().click();

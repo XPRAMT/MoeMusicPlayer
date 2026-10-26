@@ -5,6 +5,10 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 description = "Installed font discovery for the font pickers (ADR 0042): face names, scripts, region ordering, cache diff"
 
+[features]
+# Fixture fonts for other crates' tests (`player_fonts::testing`).
+testing = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }

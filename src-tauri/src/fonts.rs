@@ -11,15 +11,14 @@ use player_db::{CachedFontFace, Database, FontFileStamp, FontSubsetRecord};
 use player_fonts::{FaceInfo, FaceNames, FileStamp, FontFamily, FontRegion, Scripts};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Sent when a background refresh ends: the current list and whether it differs from the cached one.
 pub const FONTS_UPDATED_EVENT: &str = "fonts-list-updated";
 
-static REFRESHING: AtomicBool = AtomicBool::new(false);
 /// The last list built (any region; only its families and faces are used to resolve a setting).
 static LAST_CATALOG: Mutex<Option<Arc<Vec<FontFamily>>>> = Mutex::new(None);
 
@@ -200,7 +199,7 @@ fn allow_listed_font_files(app: &AppHandle, fonts: &[ListedFont]) {
     allow_font_files(app, &families);
 }
 
-fn subset_directory(state: &crate::AppState) -> Option<PathBuf> {
+fn subset_folder(state: &crate::AppState) -> Option<PathBuf> {
     state
         .settings
         .data_directory()
@@ -210,7 +209,7 @@ fn subset_directory(state: &crate::AppState) -> Option<PathBuf> {
 /// Let the asset protocol serve the name subsets (only their folder, not its subfolders).
 fn allow_subset_directory(app: &AppHandle) {
     let state = app.state::<crate::AppState>();
-    if let Some(directory) = subset_directory(&state) {
+    if let Some(directory) = subset_folder(&state) {
         let _ = std::fs::create_dir_all(&directory);
         let _ = app
             .asset_protocol_scope()
@@ -242,15 +241,20 @@ fn listed_fonts(
 }
 
 /// The picker list now: the visible cached families with their subsets.
-fn current_list(state: &crate::AppState, region: FontRegion) -> Result<Vec<ListedFont>, String> {
-    let database = database(state)?;
+fn current_list(
+    database: &Database,
+    directory: Option<&Path>,
+    region: FontRegion,
+) -> Result<Vec<ListedFont>, String> {
     let fonts = player_fonts::visible_families(&cached_catalog(database, region)?);
     let subsets = database.font_subsets().map_err(|error| error.to_string())?;
-    Ok(listed_fonts(
-        fonts,
-        &subsets,
-        subset_directory(state).as_deref(),
-    ))
+    Ok(listed_fonts(fonts, &subsets, directory))
+}
+
+/// The first open: nothing cached yet (or no subset made yet), so the picker waits for the full scan and every name
+/// subset instead of showing rows that would load whole font files.
+fn needs_full_build(fonts: &[ListedFont]) -> bool {
+    fonts.iter().all(|font| font.subset.is_none())
 }
 
 /// Android: the listed family the system draws its default text in for the region (`sans-serif` and the CJK
@@ -275,30 +279,86 @@ fn system_default_family(region: FontRegion, fonts: &[ListedFont]) -> Option<Str
     }
 }
 
-/// Re-read the font files that are new or changed since they were cached, forget the vanished ones, and send the
-/// list to the page when anything changed (or when the cache was empty, so the page leaves its loading state).
-async fn refresh(app: AppHandle, region: FontRegion, was_empty: bool) -> Result<(), String> {
-    let scan_app = app.clone();
-    let current = tauri::async_runtime::spawn_blocking(move || current_files(&scan_app))
-        .await
-        .map_err(|error| error.to_string())?;
-    let cached = crate::run_database_work(app.clone(), |state| {
-        database(state)?
-            .font_cache_files()
-            .map_err(|error| error.to_string())
-    })
-    .await?;
+/// Where the font work runs: the app (its database work gate, the blocking pool, events to the pages) or a test.
+trait FontHost: Clone + Send + Sync + 'static {
+    /// Short database work (never reading font files while the database is in use).
+    fn database<R, F>(&self, work: F) -> impl Future<Output = Result<R, String>> + Send
+    where
+        R: Send + 'static,
+        F: FnOnce(&Database) -> Result<R, String> + Send + 'static;
+    /// Reading font files or writing subsets, off the async threads.
+    fn blocking<R, F>(&self, work: F) -> impl Future<Output = Result<R, String>> + Send
+    where
+        R: Send + 'static,
+        F: FnOnce() -> R + Send + 'static;
+    /// The installed font files now (names and stat calls only); called inside `blocking`.
+    fn current_files(&self) -> Vec<FileStamp>;
+    /// The UserData folder of the name subsets.
+    fn subset_directory(&self) -> Option<PathBuf>;
+    /// Send a list update to the pages.
+    fn announce(&self, update: FontListUpdated);
+}
+
+#[derive(Clone)]
+struct AppHost(AppHandle);
+
+impl FontHost for AppHost {
+    fn database<R, F>(&self, work: F) -> impl Future<Output = Result<R, String>> + Send
+    where
+        R: Send + 'static,
+        F: FnOnce(&Database) -> Result<R, String> + Send + 'static,
+    {
+        crate::run_database_work(self.0.clone(), move |state| work(database(state)?))
+    }
+
+    fn blocking<R, F>(&self, work: F) -> impl Future<Output = Result<R, String>> + Send
+    where
+        R: Send + 'static,
+        F: FnOnce() -> R + Send + 'static,
+    {
+        let task = tauri::async_runtime::spawn_blocking(work);
+        async move { task.await.map_err(|error| error.to_string()) }
+    }
+
+    fn current_files(&self) -> Vec<FileStamp> {
+        current_files(&self.0)
+    }
+
+    fn subset_directory(&self) -> Option<PathBuf> {
+        subset_folder(&self.0.state::<crate::AppState>())
+    }
+
+    fn announce(&self, update: FontListUpdated) {
+        allow_listed_font_files(&self.0, &update.fonts);
+        let _ = self.0.emit(FONTS_UPDATED_EVENT, update);
+    }
+}
+
+/// Re-read the font files that are new or changed since they were cached and forget the vanished ones; whether
+/// anything changed.
+async fn update_cache<H: FontHost>(host: &H) -> Result<bool, String> {
+    let scan_host = host.clone();
+    let current = host.blocking(move || scan_host.current_files()).await?;
+    let cached = host
+        .database(|database| {
+            database
+                .font_cache_files()
+                .map_err(|error| error.to_string())
+        })
+        .await?;
     let cached: Vec<FileStamp> = cached.into_iter().map(from_db_stamp).collect();
     let diff = player_fonts::diff_files(&cached, &current);
-    let changed = !diff.is_empty();
-    if changed {
-        let to_parse = diff.to_parse.clone();
-        let parsed = tauri::async_runtime::spawn_blocking(move || {
+    if diff.is_empty() {
+        return Ok(false);
+    }
+    let to_parse = diff.to_parse.clone();
+    let parsed = host
+        .blocking(move || {
             to_parse
                 .iter()
                 .map(|stamp| {
-                    let faces = player_fonts::read_font_file(std::path::Path::new(&stamp.path))
-                        .unwrap_or_default();
+                    let faces =
+                        player_fonts::read_font_file(Path::new(&stamp.path)).unwrap_or_default();
                     (
                         to_db_stamp(stamp),
                         faces
@@ -309,39 +369,32 @@ async fn refresh(app: AppHandle, region: FontRegion, was_empty: bool) -> Result<
                 })
                 .collect::<Vec<_>>()
         })
-        .await
-        .map_err(|error| error.to_string())?;
-        let removed = diff.removed.clone();
-        crate::run_database_work(app.clone(), move |state| {
-            database(state)?
-                .font_cache_apply(&removed, &parsed)
-                .map_err(|error| error.to_string())
-        })
         .await?;
-    }
-    if changed || was_empty {
-        emit_list(&app, region, changed).await?;
-    } else {
-        let _ = app.emit(FONTS_UPDATED_EVENT, FontListUpdated::unchanged());
-    }
-    Ok(())
+    let removed = diff.removed.clone();
+    host.database(move |database| {
+        database
+            .font_cache_apply(&removed, &parsed)
+            .map_err(|error| error.to_string())
+    })
+    .await?;
+    Ok(true)
 }
 
-/// Send the current list to the pages.
-async fn emit_list(app: &AppHandle, region: FontRegion, changed: bool) -> Result<(), String> {
-    let fonts =
-        crate::run_database_work(app.clone(), move |state| current_list(state, region)).await?;
-    allow_listed_font_files(app, &fonts);
+/// The picker list from the cache, with the subsets made so far.
+async fn listed<H: FontHost>(host: &H, region: FontRegion) -> Result<Vec<ListedFont>, String> {
+    let directory = host.subset_directory();
+    host.database(move |database| current_list(database, directory.as_deref(), region))
+        .await
+}
+
+/// A changed list as the pages get it.
+fn changed_list(fonts: Vec<ListedFont>, region: FontRegion) -> FontListUpdated {
     let system_default = system_default_family(region, &fonts);
-    let _ = app.emit(
-        FONTS_UPDATED_EVENT,
-        FontListUpdated {
-            fonts,
-            changed,
-            system_default,
-        },
-    );
-    Ok(())
+    FontListUpdated {
+        fonts,
+        changed: true,
+        system_default,
+    }
 }
 
 /// One name subset to make: the record it will have (without its file yet) and the name it shows.
@@ -471,12 +524,19 @@ fn make_subsets(directory: &Path, jobs: &[SubsetJob]) -> Vec<FontSubsetRecord> {
 }
 
 /// Bring the name subsets in line with the listed families: forget the vanished families, make the missing and
-/// stale subsets in batches (the list is sent again after each batch that made one, so rows switch to their subsets
-/// as they come) and delete the files no record names.
-async fn refresh_subsets(app: AppHandle, region: FontRegion) -> Result<(), String> {
-    let (families, stamps, records, directory) =
-        crate::run_database_work(app.clone(), move |state| {
-            let database = database(state)?;
+/// stale subsets in batches and delete the files no record names. With `announce_batches` (the background refresh of
+/// a later open) the list is sent again after each batch that made a subset, so new rows switch to their subsets as
+/// they come; the first open sends nothing and returns the list once everything is made.
+async fn update_subsets<H: FontHost>(
+    host: &H,
+    region: FontRegion,
+    announce_batches: bool,
+) -> Result<(), String> {
+    let Some(directory) = host.subset_directory() else {
+        return Ok(());
+    };
+    let (families, stamps, records) = host
+        .database(move |database| {
             let families = player_fonts::visible_families(&cached_catalog(database, region)?);
             let stamps: HashMap<String, (u64, i64)> = database
                 .font_cache_files()
@@ -485,25 +545,22 @@ async fn refresh_subsets(app: AppHandle, region: FontRegion) -> Result<(), Strin
                 .map(|stamp| (stamp.path, (stamp.size_bytes, stamp.modified_at_utc_ms)))
                 .collect();
             let records = database.font_subsets().map_err(|error| error.to_string())?;
-            Ok((families, stamps, records, subset_directory(state)))
+            Ok((families, stamps, records))
         })
         .await?;
-    let Some(directory) = directory else {
-        return Ok(());
-    };
     let plan_directory = directory.clone();
-    let plan = tauri::async_runtime::spawn_blocking(move || {
-        let _ = std::fs::create_dir_all(&plan_directory);
-        plan_subsets(&families, &stamps, &records, |file| {
-            plan_directory.join(file).is_file()
+    let plan = host
+        .blocking(move || {
+            let _ = std::fs::create_dir_all(&plan_directory);
+            plan_subsets(&families, &stamps, &records, |file| {
+                plan_directory.join(file).is_file()
+            })
         })
-    })
-    .await
-    .map_err(|error| error.to_string())?;
+        .await?;
     if !plan.remove.is_empty() {
         let removed = plan.remove.clone();
-        crate::run_database_work(app.clone(), move |state| {
-            database(state)?
+        host.database(move |database| {
+            database
                 .font_subsets_apply(&removed, &[])
                 .map_err(|error| error.to_string())
         })
@@ -512,14 +569,12 @@ async fn refresh_subsets(app: AppHandle, region: FontRegion) -> Result<(), Strin
     for batch in plan.make.chunks(SUBSET_BATCH) {
         let jobs = batch.to_vec();
         let batch_directory = directory.clone();
-        let (made, jobs) = tauri::async_runtime::spawn_blocking(move || {
-            (make_subsets(&batch_directory, &jobs), jobs)
-        })
-        .await
-        .map_err(|error| error.to_string())?;
+        let (made, jobs) = host
+            .blocking(move || (make_subsets(&batch_directory, &jobs), jobs))
+            .await?;
         let any_file = made.iter().any(|record| record.subset_file.is_some());
-        crate::run_database_work(app.clone(), move |state| {
-            database(state)?
+        host.database(move |database| {
+            database
                 .font_subsets_apply(&[], &made)
                 .map_err(|error| error.to_string())
         })
@@ -527,24 +582,25 @@ async fn refresh_subsets(app: AppHandle, region: FontRegion) -> Result<(), Strin
         for previous in jobs.iter().filter_map(|job| job.previous_file.as_ref()) {
             let _ = std::fs::remove_file(directory.join(previous));
         }
-        if any_file {
-            emit_list(&app, region, true).await?;
+        if announce_batches && any_file {
+            host.announce(changed_list(listed(host, region).await?, region));
         }
     }
     // Files no record names: subsets of vanished or remade families, interrupted writes.
-    let referenced: HashSet<String> = crate::run_database_work(app.clone(), |state| {
-        database(state)?
-            .font_subsets()
-            .map_err(|error| error.to_string())
-            .map(|records| {
-                records
-                    .into_iter()
-                    .filter_map(|record| record.subset_file)
-                    .collect()
-            })
-    })
-    .await?;
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    let referenced: HashSet<String> = host
+        .database(|database| {
+            database
+                .font_subsets()
+                .map_err(|error| error.to_string())
+                .map(|records| {
+                    records
+                        .into_iter()
+                        .filter_map(|record| record.subset_file)
+                        .collect()
+                })
+        })
+        .await?;
+    host.blocking(move || {
         for entry in std::fs::read_dir(&directory)
             .into_iter()
             .flatten()
@@ -555,12 +611,55 @@ async fn refresh_subsets(app: AppHandle, region: FontRegion) -> Result<(), Strin
             }
         }
     })
-    .await;
+    .await?;
     Ok(())
 }
 
-/// The fonts for a picker: the cached list at once (empty on the very first open), then a background refresh whose
-/// result arrives as `fonts-list-updated`.
+/// The first open: the full scan and every name subset, then the list (nothing is sent while it is built).
+async fn build_everything<H: FontHost>(
+    host: &H,
+    region: FontRegion,
+) -> Result<Vec<ListedFont>, String> {
+    update_cache(host).await?;
+    update_subsets(host, region, false).await?;
+    listed(host, region).await
+}
+
+/// A later open: the cached list is already shown; reparse what changed (the list is sent when it changed, else an
+/// empty "unchanged" update ends the page's refreshing state), then make the new families' subsets.
+async fn refresh_in_background<H: FontHost>(host: &H, region: FontRegion) {
+    match update_cache(host).await {
+        Ok(changed) => {
+            let update = if changed {
+                listed(host, region)
+                    .await
+                    .map(|fonts| changed_list(fonts, region))
+            } else {
+                Ok(FontListUpdated::unchanged())
+            };
+            host.announce(update.unwrap_or_else(|error| {
+                eprintln!("[fonts] list failed: {error}");
+                FontListUpdated::unchanged()
+            }));
+            if let Err(error) = update_subsets(host, region, true).await {
+                eprintln!("[fonts] subsets failed: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("[fonts] refresh failed: {error}");
+            host.announce(FontListUpdated::unchanged());
+        }
+    }
+}
+
+/// One font job at a time: a first-open build, or a later open's background refresh.
+static FONT_WORK: LazyLock<Arc<tokio::sync::Mutex<()>>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+
+/// The fonts for a picker (never called at startup). The first open (nothing cached) scans every font file and makes
+/// every name subset before it answers, so the page shows 「讀取字型中…」 and then a list whose rows all have their
+/// subsets. A later open answers with the cached list at once and refreshes in the background
+/// (`fonts-list-updated`).
 #[tauri::command]
 pub async fn fonts_list(app: AppHandle) -> Result<FontList, String> {
     let region_app = app.clone();
@@ -568,33 +667,33 @@ pub async fn fonts_list(app: AppHandle) -> Result<FontList, String> {
         .await
         .map_err(|error| error.to_string())?;
     let region = FontRegion::from_code(&region);
-    let fonts =
-        crate::run_database_work(app.clone(), move |state| current_list(state, region)).await?;
-    allow_listed_font_files(&app, &fonts);
     allow_subset_directory(&app);
-    let system_default = system_default_family(region, &fonts);
-    if !REFRESHING.swap(true, Ordering::SeqCst) {
-        let was_empty = fonts.is_empty();
-        let refresh_app = app.clone();
+    let host = AppHost(app.clone());
+    let mut fonts = listed(&host, region).await?;
+    let mut refreshing = true;
+    if needs_full_build(&fonts) {
+        // A running refresh or another first open finishes first; then the cache may already be complete.
+        let _work = FONT_WORK.lock().await;
+        fonts = listed(&host, region).await?;
+        if needs_full_build(&fonts) {
+            fonts = build_everything(&host, region).await?;
+            // Any other picker waiting on an earlier answer gets the list too.
+            host.announce(changed_list(fonts.clone(), region));
+        }
+        refreshing = false;
+    } else if let Ok(work) = FONT_WORK.clone().try_lock_owned() {
+        let refresh_host = host.clone();
         tauri::async_runtime::spawn(async move {
-            match refresh(refresh_app.clone(), region, was_empty).await {
-                // The name subsets follow the refreshed list (never at startup: only after a picker opened).
-                Ok(()) => {
-                    if let Err(error) = refresh_subsets(refresh_app.clone(), region).await {
-                        eprintln!("[fonts] subsets failed: {error}");
-                    }
-                }
-                Err(error) => {
-                    eprintln!("[fonts] refresh failed: {error}");
-                    let _ = refresh_app.emit(FONTS_UPDATED_EVENT, FontListUpdated::unchanged());
-                }
-            }
-            REFRESHING.store(false, Ordering::SeqCst);
+            refresh_in_background(&refresh_host, region).await;
+            drop(work);
         });
     }
+    // Otherwise a refresh is already running and sends its result.
+    allow_listed_font_files(&app, &fonts);
+    let system_default = system_default_family(region, &fonts);
     Ok(FontList {
         fonts,
-        refreshing: true,
+        refreshing,
         system_default,
     })
 }
@@ -897,5 +996,163 @@ mod tests {
             "nothing written"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The font work against an in-memory database, a folder of fixture fonts and a record of what the pages got.
+    #[derive(Clone)]
+    struct TestHost {
+        database: Arc<Database>,
+        subsets: PathBuf,
+        files: Arc<Mutex<Vec<PathBuf>>>,
+        announced: Arc<Mutex<Vec<FontListUpdated>>>,
+    }
+
+    impl FontHost for TestHost {
+        fn database<R, F>(&self, work: F) -> impl Future<Output = Result<R, String>> + Send
+        where
+            R: Send + 'static,
+            F: FnOnce(&Database) -> Result<R, String> + Send + 'static,
+        {
+            let database = self.database.clone();
+            async move { work(&database) }
+        }
+
+        async fn blocking<R, F>(&self, work: F) -> Result<R, String>
+        where
+            R: Send + 'static,
+            F: FnOnce() -> R + Send + 'static,
+        {
+            Ok(work())
+        }
+
+        fn current_files(&self) -> Vec<FileStamp> {
+            self.files
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|path| player_fonts::file_stamp(path))
+                .collect()
+        }
+
+        fn subset_directory(&self) -> Option<PathBuf> {
+            Some(self.subsets.clone())
+        }
+
+        fn announce(&self, update: FontListUpdated) {
+            self.announced.lock().unwrap().push(update);
+        }
+    }
+
+    fn test_host(name: &str) -> (TestHost, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("moe-font-work-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("fonts")).unwrap();
+        let host = TestHost {
+            database: Arc::new(Database::open_in_memory().unwrap()),
+            subsets: root.join(SUBSET_FOLDER),
+            files: Arc::new(Mutex::new(Vec::new())),
+            announced: Arc::new(Mutex::new(Vec::new())),
+        };
+        (host, root)
+    }
+
+    /// Install a fixture font (its glyphs: A, B, 字, 𠀀) whose family is `family`.
+    fn install(host: &TestHost, root: &Path, family: &str) -> PathBuf {
+        let path = root.join("fonts").join(format!("{family}.ttf"));
+        std::fs::write(&path, player_fonts::testing::truetype_font(family)).unwrap();
+        host.files.lock().unwrap().push(path.clone());
+        path
+    }
+
+    fn subset_of<'a>(fonts: &'a [ListedFont], family: &str) -> Option<&'a str> {
+        fonts
+            .iter()
+            .find(|font| font.family.family == family)
+            .unwrap_or_else(|| panic!("{family} is listed"))
+            .subset
+            .as_deref()
+    }
+
+    #[test]
+    fn the_first_open_returns_the_list_only_once_every_subset_is_made() {
+        let (host, root) = test_host("first");
+        install(&host, &root, "AB");
+        install(&host, &root, "BA");
+        // Its name has none of the font's characters, as a legacy-encoding font: no subset, drawn by its family.
+        install(&host, &root, "Zed");
+        let before = tauri::async_runtime::block_on(listed(&host, FontRegion::Other)).unwrap();
+        assert!(needs_full_build(&before), "nothing cached: the first open");
+
+        let fonts =
+            tauri::async_runtime::block_on(build_everything(&host, FontRegion::Other)).unwrap();
+        assert_eq!(fonts.len(), 3);
+        for family in ["AB", "BA"] {
+            let subset = subset_of(&fonts, family).expect("a subset before the list is returned");
+            assert!(Path::new(subset).is_file(), "{family}'s subset is written");
+        }
+        assert_eq!(subset_of(&fonts, "Zed"), None);
+        assert!(
+            host.announced.lock().unwrap().is_empty(),
+            "no partial lists while the first open builds"
+        );
+        assert!(
+            !needs_full_build(&fonts),
+            "later opens show the cache at once"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_later_open_adds_new_fonts_and_their_subsets_in_the_background_and_drops_vanished_ones() {
+        let (host, root) = test_host("later");
+        install(&host, &root, "AB");
+        let gone = install(&host, &root, "BA");
+        tauri::async_runtime::block_on(build_everything(&host, FontRegion::Other)).unwrap();
+        let old_subset = {
+            let fonts = tauri::async_runtime::block_on(listed(&host, FontRegion::Other)).unwrap();
+            subset_of(&fonts, "BA").unwrap().to_owned()
+        };
+
+        // Unchanged: one "unchanged" update ends the page's refreshing state; nothing is remade.
+        tauri::async_runtime::block_on(refresh_in_background(&host, FontRegion::Other));
+        {
+            let announced = host.announced.lock().unwrap();
+            assert_eq!(announced.len(), 1);
+            assert!(!announced[0].changed);
+        }
+        host.announced.lock().unwrap().clear();
+
+        install(&host, &root, "AAB");
+        host.files.lock().unwrap().retain(|path| path != &gone);
+        tauri::async_runtime::block_on(refresh_in_background(&host, FontRegion::Other));
+        let announced = host.announced.lock().unwrap();
+        assert_eq!(
+            announced.len(),
+            2,
+            "the refreshed list, then the list with the new subset"
+        );
+        let families = |update: &FontListUpdated| -> Vec<String> {
+            update
+                .fonts
+                .iter()
+                .map(|font| font.family.family.clone())
+                .collect()
+        };
+        assert!(announced.iter().all(|update| update.changed));
+        assert_eq!(families(&announced[0]), vec!["AAB", "AB"]);
+        assert_eq!(
+            subset_of(&announced[0].fonts, "AAB"),
+            None,
+            "its real family until the subset exists"
+        );
+        assert!(subset_of(&announced[0].fonts, "AB").is_some(), "kept");
+        assert!(subset_of(&announced[1].fonts, "AAB").is_some());
+        assert!(
+            !Path::new(&old_subset).exists(),
+            "the vanished family's subset is deleted"
+        );
+        drop(announced);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

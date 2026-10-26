@@ -358,18 +358,20 @@ pub fn stable_hash(parts: &[&str]) -> String {
     format!("{hash:016x}")
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
+/// Fixture fonts for tests (this crate's, and other crates' through the `testing` feature).
+#[cfg(any(test, feature = "testing"))]
+#[allow(dead_code)]
+pub(crate) mod fixtures {
+    use super::build_cmap;
 
-    fn be16(values: &[i32]) -> Vec<u8> {
+    pub fn be16(values: &[i32]) -> Vec<u8> {
         values
             .iter()
             .flat_map(|&v| (v as u16).to_be_bytes())
             .collect()
     }
 
-    fn name_record_table(names: &[(u16, u16, &str)]) -> Vec<u8> {
+    pub fn name_record_table(names: &[(u16, u16, &str)]) -> Vec<u8> {
         let mut storage = Vec::new();
         let mut out = be16(&[0, names.len() as i32, 6 + 12 * names.len() as i32]);
         for &(lang, id, text) in names {
@@ -388,20 +390,20 @@ pub(crate) mod tests {
         out
     }
 
-    fn os2() -> Vec<u8> {
+    pub fn os2() -> Vec<u8> {
         let mut table = vec![0u8; 78];
         table[4..6].copy_from_slice(&400u16.to_be_bytes());
         table[6..8].copy_from_slice(&5u16.to_be_bytes());
         table
     }
 
-    fn post() -> Vec<u8> {
+    pub fn post() -> Vec<u8> {
         let mut table = vec![0u8; 32];
         table[0..4].copy_from_slice(&0x0003_0000u32.to_be_bytes());
         table
     }
 
-    fn head(index_to_loc: i32) -> Vec<u8> {
+    pub fn head(index_to_loc: i32) -> Vec<u8> {
         let mut table = be16(&[1, 0, 1, 0]);
         table.extend([0; 4]); // checksum adjustment
         table.extend(0x5F0F_3CF5u32.to_be_bytes());
@@ -411,7 +413,7 @@ pub(crate) mod tests {
         table
     }
 
-    fn hhea(metrics: usize) -> Vec<u8> {
+    pub fn hhea(metrics: usize) -> Vec<u8> {
         let mut table = be16(&[1, 0, 800, -200, 0, 1000, 0, 0, 1000, 1, 0, 0, 0, 0, 0, 0, 0]);
         table.extend(be16(&[metrics as i32]));
         table
@@ -420,7 +422,7 @@ pub(crate) mod tests {
     /// Characters of the fixture fonts, each a square glyph (glyph i + 1 for character i).
     pub const FIXTURE_CHARS: [char; 4] = ['A', 'B', '字', '𠀀'];
 
-    fn fixture_cmap() -> Vec<u8> {
+    pub fn fixture_cmap() -> Vec<u8> {
         let mapping: Vec<(u32, u16)> = FIXTURE_CHARS
             .iter()
             .enumerate()
@@ -429,7 +431,7 @@ pub(crate) mod tests {
         build_cmap(&mapping)
     }
 
-    fn common_tables(family: &str, glyphs: usize) -> Vec<([u8; 4], Vec<u8>)> {
+    pub fn common_tables(family: &str, glyphs: usize) -> Vec<([u8; 4], Vec<u8>)> {
         vec![
             (*b"hhea", hhea(glyphs)),
             (
@@ -484,7 +486,7 @@ pub(crate) mod tests {
         tables
     }
 
-    fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
+    pub fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
         let mut out = be16(&[items.len() as i32]);
         if items.is_empty() {
             return out;
@@ -502,13 +504,13 @@ pub(crate) mod tests {
         out
     }
 
-    fn cff_int(value: i32) -> Vec<u8> {
+    pub fn cff_int(value: i32) -> Vec<u8> {
         let mut out = vec![29];
         out.extend(value.to_be_bytes());
         out
     }
 
-    fn charstring_number(value: i32) -> Vec<u8> {
+    pub fn charstring_number(value: i32) -> Vec<u8> {
         let mut out = vec![28];
         out.extend((value as i16).to_be_bytes());
         out
@@ -567,6 +569,12 @@ pub(crate) mod tests {
         tables.sort_by(|a, b| a.0.cmp(&b.0));
         tables
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::*;
+    use super::*;
 
     fn assert_subset_draws(subset: &[u8], text: &str) {
         let face = ttf_parser::Face::parse(subset, 0).expect("the subset parses");

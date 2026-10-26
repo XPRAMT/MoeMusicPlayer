@@ -265,11 +265,13 @@ export interface FontFamilyEntry {
   displayName: string;
   group: 'traditional' | 'simplified' | 'japanese' | 'latin';
   faces: FontFaceFile[];
-  /** The family's name subset file (only the glyphs of `displayName`), once the background refresh made it. */
+  /** The family's name subset file (only the glyphs of `displayName`); none for a legacy-encoding or symbol font, or
+   * a font installed since the last open until the background refresh has made it. */
   subset?: string;
 }
 
-/** `fonts_list`: the cached fonts; `refreshing` means `fonts-list-updated` follows with the refreshed list. */
+/** `fonts_list`: the fonts (the first open answers once every font is scanned and subset); `refreshing` means
+ * `fonts-list-updated` follows with the refreshed list. */
 export interface FontList {
   fonts: FontFamilyEntry[];
   refreshing: boolean;

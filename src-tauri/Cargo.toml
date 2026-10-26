@@ -65,3 +65,4 @@ jni = "0.21.1"
 [dev-dependencies]
 zeroize = "1"
 player-dsd = { path = "../crates/player-dsd", features = ["testing"] }
+player-fonts = { path = "../crates/player-fonts", features = ["testing"] }
