@@ -116,7 +116,7 @@ test('Android loads a family through one @font-face per face file', () => {
 test('the pickers are wired into the four places', () => {
   const look = read('src/lib/LyricsLookSettings.svelte');
   const at = (needle) => look.indexOf(needle);
-  assert.ok(at('size-heading') < at('<FontPicker') && at('<FontPicker') < at('onChange({ fontWeight'), '字型 sits before 字體粗細 in 字體與大小');
+  assert.ok(at('size-heading') < at('<FontPicker') && at('<FontPicker') < at('tr("字體大小")'), '字型 is the first item of 字體與大小');
   assert.match(look, /<FontPicker[^>]*value=\{settings\.fontFamily\}[^>]*onChange=\{\(fontFamily\) => onChange\(\{ fontFamily \}\)\}/);
   const quick = read('src/lib/NowPlayingQuickSettingsControls.svelte');
   assert.ok(quick.includes('fontFamily: lyrics.fontFamily'));

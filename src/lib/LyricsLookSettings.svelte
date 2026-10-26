@@ -97,6 +97,7 @@
 
 <section class="quick-settings-group" aria-labelledby="{idPrefix}-size-heading">
   <h3 id="{idPrefix}-size-heading">{tr("字體與大小")}</h3>
+  <FontPicker idPrefix="{idPrefix}-font" value={settings.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} />
   <label class="lyrics-preference-range">
     <span><strong>{tr("字體大小")}</strong><output>{settings.fontSizePx} px</output></span>
     <input
@@ -121,7 +122,6 @@
       oninput={(event) => onChange({ translationScalePercent: Number(event.currentTarget.value) })}
     />
   </label>
-  <FontPicker idPrefix="{idPrefix}-font" value={settings.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} />
   <label class="lyrics-preference-range">
     <span><strong>{tr("字體粗細")}</strong><output>{settings.fontWeight}</output></span>
     <input
