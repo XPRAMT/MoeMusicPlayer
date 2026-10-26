@@ -36,7 +36,11 @@ use uuid::Uuid;
 
 use crate::locator;
 
-const SCHEMA_VERSION: i64 = 21;
+#[path = "font_cache.rs"]
+mod font_cache;
+pub use font_cache::{CachedFontFace, FontFileStamp};
+
+const SCHEMA_VERSION: i64 = 22;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -646,6 +650,24 @@ CREATE TABLE music_collation_metadata (
 /// (v17) are dropped, and the sidecars of a source (v18) keep only where they are, the sidecar's file name beside the
 /// audio file of each mapping. `lyric_sidecar_sources` still marks the sources scanned for sidecars: for them a song without
 /// a row has none. Every other table is untouched; the copy-and-rename runs in the migration's transaction.
+/// The font pickers' cache of installed fonts (ADR 0042): names and metadata per font file and face, never font bytes.
+const SCHEMA_V22: &str = r#"
+CREATE TABLE IF NOT EXISTS font_files (
+    path TEXT PRIMARY KEY NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    modified_at_utc_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS font_faces (
+    path TEXT NOT NULL,
+    face_index INTEGER NOT NULL,
+    names_json TEXT NOT NULL,
+    weight INTEGER NOT NULL,
+    italic INTEGER NOT NULL,
+    scripts INTEGER NOT NULL,
+    PRIMARY KEY (path, face_index)
+);
+"#;
+
 const SCHEMA_V21: &str = r#"
 DROP TABLE IF EXISTS track_embedded_lyrics;
 DROP TABLE IF EXISTS remote_lyric_cache;
@@ -2157,6 +2179,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V21)?;
             tx.pragma_update(None, "user_version", 21)?;
+            tx.commit()?;
+            version = 21;
+        }
+        if version == 21 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V22)?;
+            tx.pragma_update(None, "user_version", 22)?;
             tx.commit()?;
         }
         connection.execute_batch(
