@@ -221,7 +221,7 @@
   await page.evaluate(() => window.lyricsViewHarness.setTrack('empty-results-track'));
   await page.waitForFunction(() => window.lyricsViewHarness.snapshot().phase === 'empty');
   assert.equal(await page.locator('[data-testid="lyrics-candidates"]').count(), 1, 'empty search still shows the candidate picker panel');
-  assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'empty search still shows remove lyrics');
+  assert.equal(await page.locator('[data-testid="lyrics-remove"]').count(), 1, 'empty search still shows stop searching');
   assert.equal(await page.locator('[data-testid="lyrics-candidates-search"]').count(), 1, 'empty search still shows the text search field');
   assert.equal(await page.getByRole('heading', { name: '選擇歌詞' }).count(), 0, 'candidate picker has no title row');
   assert.equal(await page.getByRole('button', { name: '再次搜尋' }).count(), 0, 'candidate picker has no second search button');
@@ -237,7 +237,7 @@
       besideOrBelowInput: inputRect ? actionsRect.left >= inputRect.left - 1 : false,
     };
   });
-  assert.deepEqual(emptyActions.labels, ['搜尋', '關閉', '移除歌詞'], 'picker chrome is search, close, and remove');
+  assert.deepEqual(emptyActions.labels, ['搜尋', '關閉', '不再搜尋'], 'picker chrome is search, close, and stop searching');
   assert.equal(emptyActions.flushRight, true, 'picker chrome sits on the right edge');
   assert.equal(emptyActions.besideOrBelowInput, true, 'picker chrome stays with the search field');
   assert.match(await page.locator('.lyrics-candidate-empty').innerText(), /找不到符合的歌詞/);

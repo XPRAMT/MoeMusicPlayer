@@ -26,7 +26,7 @@ test('lyrics view CSS exposes shadow, stroke, and none text effects', () => {
   assert.match(css, /data-text-effect='none'/);
   assert.match(css, /-webkit-text-stroke/);
   assert.match(css, /--text-inverse-rgb/);
-  assert.match(css, /移除歌詞/);
+  assert.match(css, /不再搜尋/);
   assert.match(css, /data-testid="lyrics-remove"/);
   assert.match(css, /data-testid="lyrics-dismiss"/);
 });

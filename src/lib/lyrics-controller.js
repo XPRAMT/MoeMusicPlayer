@@ -334,7 +334,7 @@ export function createLyricsController({ api, onChange, createRequestId: makeReq
       if (typeof api.clearTrack !== 'function') {
         update({
           ...state,
-          error: tr('目前環境不支援移除歌詞。'),
+          error: tr('目前環境不支援停止搜尋歌詞。'),
           failedStage: 'selection',
         });
         return;
