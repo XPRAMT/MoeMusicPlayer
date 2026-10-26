@@ -13,6 +13,7 @@ mod region;
 mod scripts;
 mod sfnt;
 mod subset;
+mod system_default;
 
 pub use catalog::{build_catalog, visible_families, FamilyFace, FontFamily};
 pub use diff::{diff_files, FileDiff, FileStamp};
@@ -24,3 +25,7 @@ pub use scripts::{
     assess_coverage, detect_scripts, is_cjk_mark, legacy_encoding_scripts, Coverage, Scripts,
 };
 pub use subset::{name_subset, read_standalone_face, stable_hash, SUBSET_VERSION};
+pub use system_default::{
+    android_default_font, family_of_system_font, parse_android_font_config, AndroidFontConfig,
+    SystemFontRef, ANDROID_FONT_CONFIGS,
+};
