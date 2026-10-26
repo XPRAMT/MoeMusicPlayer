@@ -155,7 +155,7 @@
   } from './lib/start-failure-notice.js';
   import SourceScopeSwitch from './lib/SourceScopeSwitch.svelte';
   import { formatSyncResultLine } from './lib/sync-result-line.js';
-  import { normalizeSourceScope, shouldShowSourceScopeSwitch } from './lib/source-scope.js';
+  import { normalizeSourceScope, shouldShowSourceScopeSwitch, sourceScopeSwitchAppliesTo } from './lib/source-scope.js';
   import SourceSections from './lib/SourceSections.svelte';
   import { TRACK_TEXT_OVERFLOW_CONTEXT, type TrackTextOverflowMode } from './lib/track-text-overflow-context';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './lib/queue-reorder.js';
@@ -5212,7 +5212,7 @@
         {/if}
       </div>
       <div class="topbar-actions">
-        {#if showSourceScopeSwitch}
+        {#if showSourceScopeSwitch && sourceScopeSwitchAppliesTo(activeView)}
           <SourceScopeSwitch value={librarySourceScope} onChange={(next) => void changeLibrarySourceScope(next)} />
         {/if}
         <button

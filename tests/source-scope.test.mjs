@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import './helpers/untr-fs.mjs';
-import { getScopeIndexFromPosition, normalizeSourceScope, shouldShowSourceScopeSwitch, SOURCE_SCOPES } from '../src/lib/source-scope.js';
+import { getScopeIndexFromPosition, normalizeSourceScope, shouldShowSourceScopeSwitch, SOURCE_SCOPES, sourceScopeSwitchAppliesTo } from '../src/lib/source-scope.js';
 
 test('the switch needs both a local and a remote source that are enabled', () => {
   const local = { kind: 'windowsFilesystem', enabled: true };
@@ -18,6 +18,13 @@ test('the switch needs both a local and a remote source that are enabled', () =>
   assert.equal(shouldShowSourceScopeSwitch([local, remotePlaylist]), true);
   assert.equal(shouldShowSourceScopeSwitch([remotePlaylist]), false);
   assert.equal(shouldShowSourceScopeSwitch([{ kind: 'playlist_file', enabled: true }, remote]), true);
+});
+
+test('the play queue page has no switch, because the queue is not narrowed by it; every other page does', () => {
+  assert.equal(sourceScopeSwitchAppliesTo('queue'), false);
+  for (const view of ['library', 'artists', 'artist-detail', 'albums', 'album-detail', 'playlists', 'settings']) {
+    assert.equal(sourceScopeSwitchAppliesTo(view), true);
+  }
 });
 
 test('the stops run local, all, remote from left to right and a position picks the nearest third', () => {
@@ -40,7 +47,9 @@ test('an unknown stored value means everything', () => {
 
 test('the top bar shows the switch only when it applies and every list reloads on a change', () => {
   const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
-  assert.match(app, /\{#if showSourceScopeSwitch\}[\s\S]*<SourceScopeSwitch/);
+  assert.match(app, /\{#if showSourceScopeSwitch && sourceScopeSwitchAppliesTo\(activeView\)\}[\s\S]*<SourceScopeSwitch/);
+  // Leaving the queue page must not reset the scope: the reset follows the sources alone.
+  assert.match(app, /if \(!showSourceScopeSwitch && librarySourceScope !== 'all'/);
   assert.match(app, /settings_set_library_source_scope[\s\S]{0,200}libraryListRevision \+= 1/);
 });
 

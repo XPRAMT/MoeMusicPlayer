@@ -15,6 +15,12 @@ export function shouldShowSourceScopeSwitch(sources) {
   return enabled.some(isRemoteSource) && enabled.some((source) => !isRemoteSource(source));
 }
 
+/** Whether a page is narrowed by the switch: the play queue is not (it holds what was in scope when it was built, ADR
+ * 0037), so the top bar leaves the switch out there. @param {string} view */
+export function sourceScopeSwitchAppliesTo(view) {
+  return view !== 'queue';
+}
+
 /** Which of the three stops a horizontal position over the track is closest to (0 left, 2 right). @param {number} x @param {number} width */
 export function getScopeIndexFromPosition(x, width) {
   if (!(width > 0) || !Number.isFinite(x)) return 1;
