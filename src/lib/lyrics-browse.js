@@ -41,7 +41,7 @@ export function browseSeekPositionMs(startMs, offsetMs) {
 }
 
 /** After the user's scroll ends, line changes do not pull the view back for this long (each new scroll restarts it). */
-export const BROWSE_HOLD_MS = 3000;
+export const BROWSE_HOLD_MS = 1500;
 
 /**
  * The hold after a scroll signal (`scrollend`, input release, the wheel guard ending): while the user is still

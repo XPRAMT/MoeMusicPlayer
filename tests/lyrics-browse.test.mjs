@@ -61,11 +61,11 @@ test('a seek lands where the line becomes current: its start shifted by the disp
 });
 
 test('the hold starts when the user is idle after a scroll and is not extended by later signals of it', () => {
-  assert.equal(BROWSE_HOLD_MS, 3000);
+  assert.equal(BROWSE_HOLD_MS, 1500);
   assert.equal(browseHoldAfterScroll(null, { userActive: true, now: 1000 }), null, 'still scrolling: no hold yet');
-  assert.equal(browseHoldAfterScroll(null, { userActive: false, now: 1000 }), 4000);
-  assert.equal(browseHoldAfterScroll(4000, { userActive: false, now: 1300 }), 4000, 'scrollend after the guard timer');
-  assert.equal(browseHoldAfterScroll(4000, { userActive: true, now: 1300 }), null);
+  assert.equal(browseHoldAfterScroll(null, { userActive: false, now: 1000 }), 2500);
+  assert.equal(browseHoldAfterScroll(2500, { userActive: false, now: 1300 }), 2500, 'scrollend after the guard timer');
+  assert.equal(browseHoldAfterScroll(2500, { userActive: true, now: 1300 }), null);
 });
 
 test('only the first line change after the hold returns (fake clock, the reported example)', () => {
@@ -81,7 +81,7 @@ test('only the first line change after the hold returns (fake clock, the reporte
   scroll();
   scrollEnded(10_000); // scroll ends 0:10
   assert.equal(lineChange(11_000), 'keep', 'inside the hold: ignored');
-  // The hold ends at 0:13 by itself: nothing happens (no timer, no return).
+  // The hold ends at 0:11.5 by itself: nothing happens (no timer, no return).
   assert.equal(view.browsing, true);
   assert.equal(lineChange(20_000), 'return', 'the next line after the hold pulls back');
   assert.equal(view.returnedAt, 20_000);
@@ -91,8 +91,8 @@ test('each new scroll restarts the hold', () => {
   let holdUntil = browseHoldAfterScroll(null, { userActive: false, now: 10_000 });
   holdUntil = null; // scrolled again at 0:12
   holdUntil = browseHoldAfterScroll(holdUntil, { userActive: false, now: 12_500 });
-  assert.equal(browseCueAction({ browsing: true, cueChanged: true, userActive: false, holdUntil, now: 14_000 }), 'keep');
-  assert.equal(browseCueAction({ browsing: true, cueChanged: true, userActive: false, holdUntil, now: 15_500 }), 'return');
+  assert.equal(browseCueAction({ browsing: true, cueChanged: true, userActive: false, holdUntil, now: 13_500 }), 'keep');
+  assert.equal(browseCueAction({ browsing: true, cueChanged: true, userActive: false, holdUntil, now: 14_000 }), 'return');
 });
 
 test('line changes never return while the user scrolls or before the scroll has ended; seeks return at once', () => {

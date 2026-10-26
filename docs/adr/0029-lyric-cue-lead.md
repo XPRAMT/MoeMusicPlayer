@@ -51,11 +51,11 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
   whose seek target is at or past the track's known duration gets no button, since a seek there would only end the
   track (ADR 0036; an unknown or zero duration does not limit it).
 - Hold, no timeout (`browseHoldAfterScroll`, `browseCueAction`): when the user's scroll ends (no pointer or finger
-  down, the wheel guard over, the scroll and its momentum at `scrollend`) a hold of `BROWSE_HOLD_MS` (3 s) starts;
+  down, the wheel guard over, the scroll and its momentum at `scrollend`) a hold of `BROWSE_HOLD_MS` (1.5 s) starts;
   every new user scroll clears it and it restarts when that scroll ends. A line change inside the hold, or while the
   user is still scrolling, does not pull back; the hold ending does nothing by itself (no timer); the first line
   change after it ends browsing and the normal cue scroll returns to the current line. Example: scroll ends 0:10, a
-  change at 0:11 is ignored, the hold ends 0:13, the view stays, the next line at 0:20 pulls back. The button keeps
+  change at 0:11 is ignored, the hold ends 0:11.5, the view stays, the next line at 0:20 pulls back. The button keeps
   showing meanwhile. A seek or track change while browsing (and the user not scrolling) returns at once, instantly.
   While browsing, `correctTimedCenter` does not recentre and re-measured rows keep the view in place.
 - Pressing the button is not a scroll (it neither stops the cue scroll nor starts browsing) and carries
