@@ -38,14 +38,14 @@
 <script lang="ts" generics="Item">
   import { tr } from './i18n.js';
   import { displayUnknown } from './unknown-label.js';
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
     getNextActiveIndex,
     type VirtualRange,
   } from './track-list-data.js';
   import { buildPagedVirtualRows, dataIndexToVisualIndex, getGroupedVirtualRange, getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexCellWidthEm, getQuickIndexColumnCount, getQuickIndexDisplayLabel, getRestoredListScrollTop, getVirtualRowTop, getVirtualRowsHeight, getVisualIndexAtOffset, reportPagedRange, shouldAdjustGroupAnchor, visualIndexToAnchorDataIndex, visualIndexToDataIndex, visualRangeToDataRange } from './quick-index.js';
-  import { findFixedContainingBlock, fixedPlacement, measureContainingBlock, viewportToContainingBlock } from './fixed-containing-block.js';
+  import { topLayerPopover } from './top-layer-popover.js';
   import {
     QUEUE_REORDER_LONG_PRESS_MS,
     QUEUE_REORDER_MOVE_CANCEL_PX,
@@ -189,7 +189,6 @@
   let quickIndexMaxHeight = $state(0);
   let quickIndexCellSizePx = $state(32);
   let quickIndexDialog: HTMLDivElement | undefined = $state();
-  let quickIndexBackdropStyle = $state('');
   let quickIndexTrigger: HTMLButtonElement | null = null;
   let previousGroupRows: QuickIndexGroup[] = [];
   let hasPreviousGroupSnapshot = false;
@@ -611,36 +610,7 @@
     quickIndexCellSizePx = quickIndexFontPx * getQuickIndexCellWidthEm(quickIndexLabels.map(getQuickIndexDisplayLabel));
     quickIndexMaxHeight = Math.max(0, rect.height - 24);
     quickIndexTrigger = event.currentTarget as HTMLButtonElement;
-    quickIndexBackdropStyle = '';
     quickIndexOpen = true;
-    const centreX = rect.left + rect.width / 2;
-    const centreY = rect.top + rect.height / 2;
-    void tick().then(() => placeQuickIndex(centreX, centreY));
-  }
-
-  /** Places the popover (centred by `translate(-50%, -50%)`) on the list centre, kept inside the window. Inside an
-   *  ancestor that is the fixed popover's containing block (the quick-settings drawer has `backdrop-filter`) the
-   *  viewport point is converted into that ancestor's coordinates and also kept inside it; with no such ancestor (the
-   *  library) the coordinates are the viewport's and nothing changes. Runs after the popover renders, before paint. */
-  function placeQuickIndex(centreX: number, centreY: number): void {
-    if (!quickIndexOpen || !quickIndexDialog) return;
-    const block = measureContainingBlock(findFixedContainingBlock(quickIndexDialog));
-    const placed = fixedPlacement({
-      centreX,
-      centreY,
-      width: quickIndexDialog.offsetWidth,
-      height: quickIndexDialog.offsetHeight,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      block,
-    });
-    quickIndexCenterX = placed.left;
-    quickIndexCenterY = placed.top;
-    if (block) {
-      // The backdrop shares the containing block: stretch it back over the whole window.
-      const origin = viewportToContainingBlock(0, 0, block);
-      quickIndexBackdropStyle = `inset:auto;left:${origin.left}px;top:${origin.top}px;width:${window.innerWidth}px;height:${window.innerHeight}px`;
-    }
   }
 
   function chooseQuickIndexLabel(label: string): void {
@@ -679,13 +649,11 @@
     }
   }
 
-  $effect(() => {
-    if (!quickIndexOpen) return;
-    // preventScroll: this runs before placeQuickIndex, while the popover still sits at viewport coordinates; inside the
-    // quick-settings drawer (overflow: hidden, but still scrollable by focus) a scrolling focus would shift the whole
-    // drawer content out of view to reveal the not-yet-placed popover.
-    quickIndexDialog?.querySelector<HTMLButtonElement>('.quick-index-label:not(:disabled)')?.focus({ preventScroll: true });
-  });
+  /** Runs once the popover is shown in the top layer. preventScroll: focus must never scroll an ancestor (the
+   *  quick-settings drawer is `overflow: hidden` but still scrollable by focus). */
+  function focusFirstQuickIndexLabel(layer: HTMLElement): void {
+    layer.querySelector<HTMLButtonElement>('.quick-index-label:not(:disabled)')?.focus({ preventScroll: true });
+  }
 
   $effect(() => {
     if (quickIndexOpen && quickIndexLabels.length === 0) closeQuickIndex(false);
@@ -914,7 +882,10 @@
     {/each}
   </div>
   {#if quickIndexOpen}
-    <button type="button" class="quick-index-backdrop" style={quickIndexBackdropStyle} aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
+    <!-- Top layer (popover): viewport coordinates and the plain .floating-surface look everywhere, the quick-settings
+         drawer included (it cannot capture, clip or become the backdrop root of a top-layer element). -->
+    <div class="quick-index-layer" popover="manual" use:topLayerPopover={{ onShown: focusFirstQuickIndexLabel }}>
+    <button type="button" class="quick-index-backdrop" aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
     <div bind:this={quickIndexDialog} class="quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndexLabels.length, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label={tr("快速首字查找")} tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
       <div class="quick-index-label-grid">
         {#each quickIndexLabels as label (label)}
@@ -922,6 +893,7 @@
           <button type="button" class="quick-index-label" class:wide-label={label === '漢字'} class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{getQuickIndexDisplayLabel(label)}</button>
         {/each}
       </div>
+    </div>
     </div>
   {/if}
 </div>
@@ -1139,6 +1111,23 @@
     outline-offset: -2px;
   }
 
+  /* The popover element itself: only a transparent, unpainted layer over the window. Resets the UA [popover] box
+     (inset, fit-content size, auto margin, border, padding, overflow, Canvas colors). */
+  .quick-index-layer {
+    position: fixed;
+    inset: 0;
+    width: auto;
+    height: auto;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: visible;
+    color: inherit;
+    background: transparent;
+  }
+
   .quick-index-backdrop {
     position: fixed;
     z-index: 220;
@@ -1149,16 +1138,6 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     box-shadow: none;
-  }
-
-  /* Inside another floating surface (the font pickers in the quick-settings drawer) the popover must not have its own
-     backdrop-filter: the drawer's backdrop-filter makes it the popover's backdrop root, and Chromium/WebView2 then
-     blurs and washes out the whole drawer instead of only the popover's box. The drawer already blurs what is behind
-     it, so the nested popover only needs an opaque-enough tint to keep its labels readable over the list rows. */
-  :global(.floating-surface) .quick-index-popover.floating-surface {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    background: color-mix(in srgb, var(--text-inverse) 90%, transparent);
   }
 
   .quick-index-popover {

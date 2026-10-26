@@ -13,6 +13,7 @@
   import { PagedListController } from './track-list-data.js';
   import { buildAlbumIndexRenderRows, buildAlbumIndexRows, DEFAULT_ALBUM_CARD_MAX_WIDTH_PX, findVisibleAlbumIndexRows, getAlbumCardGrid, getAlbumCardTextHeight, physicalPixelsToCssPixels, shouldGroupAlbumIndex } from './album-index-layout.js';
   import { getQuickIndexAvailableWidth, getQuickIndexCellSizePx, getQuickIndexColumnCount, getQuickIndexDisplayLabel } from './quick-index.js';
+  import { topLayerPopover } from './top-layer-popover.js';
 
   type AlbumIndexSortDirection = 'asc' | 'desc';
 
@@ -298,6 +299,11 @@
     }
   }
 
+  /** Runs once the popover is shown in the top layer (a hidden [popover] cannot take focus). */
+  function focusFirstQuickIndexLabel(layer: HTMLElement): void {
+    layer.querySelector<HTMLButtonElement>('.album-quick-index-label:not(:disabled)')?.focus({ preventScroll: true });
+  }
+
   function measure(): void {
     if (!viewport) return;
     devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
@@ -347,9 +353,6 @@
     if (current === seenGroupingEnabled) return;
     seenGroupingEnabled = current;
     if (shouldGroupAlbumIndex({ sortField, groupingEnabled: true })) void loadSnapshot();
-  });
-  $effect(() => {
-    if (quickIndexOpen) quickIndexDialog?.querySelector<HTMLButtonElement>('.album-quick-index-label:not(:disabled)')?.focus();
   });
   $effect(() => {
     const element = viewport;
@@ -434,6 +437,8 @@
   {/if}
 </div>
 {#if quickIndexOpen}
+  <!-- Top layer (popover), as PagedVirtualList's quick index: viewport coordinates, plain .floating-surface look. -->
+  <div class="album-quick-index-layer" popover="manual" use:topLayerPopover={{ onShown: focusFirstQuickIndexLabel }}>
   <button type="button" class="album-quick-index-backdrop" aria-label={tr("關閉首字索引")} onclick={() => closeQuickIndex()}></button>
   <div bind:this={quickIndexDialog} class="album-quick-index-popover floating-surface" style={`left:${quickIndexCenterX}px;top:${quickIndexCenterY}px;--quick-index-columns:${getQuickIndexColumnCount(quickIndex?.labels.length ?? 0, { availableWidthPx: quickIndexMaxWidth, cellSizePx: quickIndexCellSizePx })};--quick-index-max-width:${quickIndexMaxWidth}px;--quick-index-max-height:${quickIndexMaxHeight}px`} role="dialog" aria-modal="true" aria-label={tr("快速首字查找")} tabindex="-1" onkeydown={handleQuickIndexDialogKeydown}>
     <div class="album-quick-index-label-grid">
@@ -442,6 +447,7 @@
         <button type="button" class="album-quick-index-label" class:wide-label={label === '漢字'} class:unavailable={!available} disabled={!available} onclick={() => chooseQuickIndexLabel(label)}>{getQuickIndexDisplayLabel(label)}</button>
       {/each}
     </div>
+  </div>
   </div>
 {/if}
 
@@ -466,6 +472,8 @@
   .album-index-group-button:focus-visible { outline: var(--focus-ring); outline-offset:-2px; }
   .album-index-card-row { display:grid; align-content:start; }
   .album-card-placeholder { width:var(--album-card-width); aspect-ratio:1; }
+  /* The popover element: a transparent layer over the window; resets the UA [popover] box. */
+  .album-quick-index-layer { position:fixed; inset:0; width:auto; height:auto; max-width:none; max-height:none; margin:0; padding:0; border:0; overflow:visible; color:inherit; background:transparent; }
   .album-quick-index-backdrop { position:fixed; z-index:220; inset:0; padding:0; border:0; background:transparent; }
   .album-quick-index-popover { position:fixed; z-index:221; display:flex; width:max-content; max-width:min(calc(100vw - 24px),var(--quick-index-max-width)); max-height:var(--quick-index-max-height); flex-direction:column; padding:12px; overflow:auto; box-sizing:border-box; transform:translate(-50%,-50%); }
   .album-quick-index-label-grid { display:grid; grid-template-columns:repeat(var(--quick-index-columns),2em); gap:4px; font-size:var(--font-title); }

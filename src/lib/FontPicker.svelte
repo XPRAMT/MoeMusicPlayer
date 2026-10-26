@@ -193,7 +193,8 @@
       {:else if catalog.failure && catalog.fonts.length === 0}
         <p class="font-picker-status" role="alert">{catalog.failure}</p>
       {/if}
-      <!-- The library's virtual list: same group rows (0.7× height, 1 px line below) and quick index panel. -->
+      <!-- The library's virtual list: same group rows (0.7× height, 1 px line below), quick index panel and rows
+           (`track-row virtual-track-row`: padding, body font size, 1 px line below, hover and selected overlays). -->
       <PagedVirtualList
         totalCount={rows.length}
         revision={listRevision}
@@ -210,7 +211,7 @@
         columnCount={1}
         gridTemplate="minmax(0,1fr)"
         className="font-picker-list"
-        rowClassName="font-picker-row"
+        rowClassName="track-row virtual-track-row font-picker-row"
         listName="fonts"
         onRange={() => {}}
         onPlay={(row: PickerRow) => onChange(row.family)}
@@ -309,32 +310,19 @@
     font-size: var(--font-caption);
   }
 
-  /* Rows are PagedVirtualList's (rowClassName); the name is this component's. */
-  :global(.paged-virtual-row.font-picker-row) {
-    display: flex;
-    align-items: center;
-    color: var(--text);
-  }
-
-  :global(.paged-virtual-row.font-picker-row:hover) {
-    background: rgba(var(--text-rgb), 0.06);
-  }
-
-  :global(.paged-virtual-row.font-picker-row.selected) {
-    color: var(--accent);
-    background: rgba(var(--text-rgb), 0.08);
-  }
-
-  :global(.paged-virtual-viewport:focus-visible .paged-virtual-row.font-picker-row.active) {
-    box-shadow: inset 2px 0 0 var(--line);
+  /* Rows are the library's track rows (app.css `.track-row`): padding, font size, divider, hover and selected
+     overlays all come from there. Only the name cell is this component's. */
+  /* The library lists are frameless (fillAvailable); this one keeps a bounded height, so drop the bounded frame's
+     own border, radius and tint to look the same. */
+  .font-picker-panel :global(.paged-virtual-frame) {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
 
   .font-picker-row-name {
     min-width: 0;
     overflow: hidden;
-    padding: 0 12px;
-    font-size: var(--font-title);
-    font-weight: 400;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
