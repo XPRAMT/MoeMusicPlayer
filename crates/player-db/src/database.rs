@@ -40,7 +40,7 @@ use crate::locator;
 mod font_cache;
 pub use font_cache::{CachedFontFace, FontFileStamp};
 
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -667,6 +667,22 @@ CREATE TABLE IF NOT EXISTS font_faces (
     PRIMARY KEY (path, face_index)
 );
 "#;
+
+/// The font cache records which parse produced each file (`parse_version`; rows from v22 are 0, so the next refresh
+/// reparses them) and which faces the pickers do not offer (`hidden`, ADR 0042). Each `(table, column, statement)`
+/// runs only when the column is missing: the v22 tables are created `IF NOT EXISTS`, so they may already have it.
+const SCHEMA_V23: &[(&str, &str, &str)] = &[
+    (
+        "font_files",
+        "parse_version",
+        "ALTER TABLE font_files ADD COLUMN parse_version INTEGER NOT NULL DEFAULT 0",
+    ),
+    (
+        "font_faces",
+        "hidden",
+        "ALTER TABLE font_faces ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+    ),
+];
 
 const SCHEMA_V21: &str = r#"
 DROP TABLE IF EXISTS track_embedded_lyrics;
@@ -2186,6 +2202,22 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V22)?;
             tx.pragma_update(None, "user_version", 22)?;
+            tx.commit()?;
+            version = 22;
+        }
+        if version == 22 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for (table, column, statement) in SCHEMA_V23 {
+                let present: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
+                    [table, column],
+                    |row| row.get(0),
+                )?;
+                if present == 0 {
+                    tx.execute(statement, [])?;
+                }
+            }
+            tx.pragma_update(None, "user_version", 23)?;
             tx.commit()?;
         }
         connection.execute_batch(

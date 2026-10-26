@@ -30,6 +30,19 @@ pub struct FontFamily {
     pub group: FontGroup,
     /// Regular upright face first, then by weight.
     pub faces: Vec<FamilyFace>,
+    /// Every face is hidden (`FaceInfo::hidden`): the family is kept so a saved setting naming it still resolves, but
+    /// the pickers do not offer it.
+    #[serde(skip)]
+    pub hidden: bool,
+}
+
+/// The families the pickers offer.
+pub fn visible_families(catalog: &[FontFamily]) -> Vec<FontFamily> {
+    catalog
+        .iter()
+        .filter(|family| !family.hidden)
+        .cloned()
+        .collect()
 }
 
 /// How far a face is from the regular upright one (the face a family is represented by).
@@ -48,6 +61,7 @@ pub fn build_catalog(
         family: String,
         names: Vec<LocalizedName>,
         scripts: Scripts,
+        hidden: bool,
         faces: Vec<(FamilyFace, Vec<LocalizedName>)>,
     }
     let mut by_key: HashMap<String, usize> = HashMap::new();
@@ -66,12 +80,14 @@ pub fn build_catalog(
                 family: family.clone(),
                 names: Vec::new(),
                 scripts: Scripts::default(),
+                hidden: true,
                 faces: Vec::new(),
             });
             building.len() - 1
         });
         let entry = &mut building[index];
         entry.scripts = entry.scripts.union(face.scripts);
+        entry.hidden &= face.hidden;
         let member = FamilyFace {
             path,
             face_index: face.face_index,
@@ -115,6 +131,7 @@ pub fn build_catalog(
                     display_name,
                     group,
                     faces: entry.faces.into_iter().map(|(face, _)| face).collect(),
+                    hidden: entry.hidden,
                 },
             )
         })
@@ -155,6 +172,7 @@ mod tests {
             weight,
             italic,
             scripts: Scripts(scripts),
+            hidden: false,
         }
     }
 
@@ -250,6 +268,29 @@ mod tests {
         );
         assert!(catalog.iter().all(|f| !f.family.starts_with('@')));
         assert_eq!(catalog.len(), 6);
+    }
+
+    #[test]
+    fn a_family_is_hidden_only_when_every_face_is() {
+        let hidden = |path: &str, family: &str| {
+            let mut info = face(0, &[(0x0409, family)], 400, false, 0);
+            info.hidden = true;
+            (path.to_owned(), info)
+        };
+        let mut faces = sample();
+        faces.push(hidden("mingliub.ttc", "MingLiU-ExtB"));
+        faces.push(hidden("odd.ttf", "Arial"));
+        let catalog = build_catalog(faces, FontRegion::Taiwan, |a, b| a.cmp(b));
+        let ext_b = catalog.iter().find(|f| f.family == "MingLiU-ExtB").unwrap();
+        assert!(ext_b.hidden, "kept for resolving a saved setting");
+        let arial = catalog.iter().find(|f| f.family == "Arial").unwrap();
+        assert!(!arial.hidden);
+        assert_eq!(arial.faces.len(), 3);
+        let visible = visible_families(&catalog);
+        assert_eq!(visible.len(), catalog.len() - 1);
+        assert!(visible.iter().all(|f| f.family != "MingLiU-ExtB"));
+        let json = serde_json::to_value(&catalog[0]).unwrap();
+        assert!(json.get("hidden").is_none());
     }
 
     #[test]

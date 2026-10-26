@@ -1,13 +1,17 @@
 //! One font file's faces: names, writing systems, weight and style (ADR 0042).
 
 use crate::names::LocalizedName;
-use crate::scripts::{detect_scripts, Scripts};
+use crate::scripts::{assess_coverage, is_cjk_mark, legacy_encoding_scripts, Coverage, Scripts};
 use crate::sfnt;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::Path;
 use ttf_parser::{cmap, name, name_id, os2, PlatformId};
+
+/// The version of what `read_font_file` derives from a font file. A cache made by another version is stale and its
+/// files are reparsed (2: threshold coverage tests, legacy-encoding character maps, hidden faces).
+pub const PARSE_VERSION: u32 = 2;
 
 /// Largest `name` / `OS/2` table read.
 const MAX_NAME_TABLE: u32 = 4 << 20;
@@ -37,6 +41,10 @@ pub struct FaceInfo {
     pub weight: u16,
     pub italic: bool,
     pub scripts: Scripts,
+    /// Not offered in the pickers (it cannot show ordinary text in the writing systems it has glyphs of), though a
+    /// saved setting naming it still resolves.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// The faces of the font file at `path` (faces without a usable family name are left out).
@@ -121,28 +129,70 @@ pub fn face_from_tables(
             )
         })
         .unwrap_or((400, false));
-    let scripts = cmap_table
-        .and_then(cmap::Table::parse)
-        .map(|cmap| {
-            let subtables: Vec<_> = cmap
-                .subtables
-                .into_iter()
-                .filter(|subtable| subtable.is_unicode())
-                .collect();
-            detect_scripts(|c| {
-                subtables
-                    .iter()
-                    .any(|subtable| subtable.glyph_index(u32::from(c)).is_some_and(|g| g.0 != 0))
-            })
-        })
-        .unwrap_or_default();
+    let coverage = cmap_table.map(cmap_coverage).unwrap_or_default();
     Some(FaceInfo {
         face_index,
         names,
         weight,
         italic,
-        scripts,
+        scripts: coverage.scripts,
+        hidden: coverage.hidden,
     })
+}
+
+/// The `(platform id, encoding id)` of every subtable record of a raw `cmap` table.
+fn cmap_encodings(data: &[u8]) -> Vec<(u16, u16)> {
+    let be_u16 = |at: usize| {
+        data.get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
+    let count = be_u16(2).unwrap_or(0) as usize;
+    (0..count)
+        .map_while(|i| Some((be_u16(4 + 8 * i)?, be_u16(6 + 8 * i)?)))
+        .collect()
+}
+
+/// What a raw `cmap` table covers: its Unicode subtables when it has any, else its legacy encodings (ADR 0042).
+fn cmap_coverage(data: &[u8]) -> Coverage {
+    let unicode: Vec<cmap::Subtable> = cmap::Table::parse(data)
+        .map(|table| {
+            let subtables = table.subtables;
+            (0..subtables.len())
+                .filter_map(|index| subtables.get(index))
+                .filter(|subtable| subtable.is_unicode())
+                .collect()
+        })
+        .unwrap_or_default();
+    if unicode.is_empty() {
+        return Coverage {
+            scripts: legacy_encoding_scripts(&cmap_encodings(data)),
+            hidden: false,
+        };
+    }
+    let has_code = |code: u32| {
+        unicode
+            .iter()
+            .any(|subtable| subtable.glyph_index(code).is_some_and(|g| g.0 != 0))
+    };
+    assess_coverage(
+        |c| has_code(u32::from(c)),
+        || {
+            // Per subtable (a format-4 and a format-12 subtable list the same characters).
+            let mut most = 0;
+            for subtable in &unicode {
+                let mut marks = 0;
+                subtable.codepoints(|code| {
+                    if is_cjk_mark(code)
+                        && subtable.glyph_index(code).is_some_and(|glyph| glyph.0 != 0)
+                    {
+                        marks += 1;
+                    }
+                });
+                most = most.max(marks);
+            }
+            most
+        },
+    )
 }
 
 /// Test helpers that build `name`, `cmap` and `OS/2` tables.
@@ -193,6 +243,44 @@ pub mod testing {
         out.extend_from_slice(&10u16.to_be_bytes());
         out.extend_from_slice(&12u32.to_be_bytes());
         out.extend_from_slice(&sub);
+        out
+    }
+
+    /// A `cmap` whose only subtable is a format-0 table under the legacy encoding `(platform, encoding)`.
+    pub fn legacy_cmap_table(platform: u16, encoding: u16) -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in [0u16, 1, platform, encoding] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&12u32.to_be_bytes());
+        out.extend_from_slice(&legacy_subtable());
+        out
+    }
+
+    /// A format-0 subtable mapping bytes 0x20 and up to glyph 1.
+    fn legacy_subtable() -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in [0u16, 262, 0] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend((0..=255u8).map(|byte| u8::from(byte >= 0x20)));
+        out
+    }
+
+    /// Two subtables: `unicode` as in `cmap_table`, then a legacy one under `(platform, encoding)`.
+    pub fn cmap_with_legacy(unicode: &str, platform: u16, encoding: u16) -> Vec<u8> {
+        let unicode = cmap_table(unicode);
+        let unicode_sub = &unicode[12..];
+        let mut out = Vec::new();
+        for value in [0u16, 2, 3, 10] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&20u32.to_be_bytes());
+        out.extend_from_slice(&platform.to_be_bytes());
+        out.extend_from_slice(&encoding.to_be_bytes());
+        out.extend_from_slice(&(20 + unicode_sub.len() as u32).to_be_bytes());
+        out.extend_from_slice(unicode_sub);
+        out.extend_from_slice(&legacy_subtable());
         out
     }
 
@@ -248,11 +336,72 @@ mod tests {
     #[test]
     fn weight_style_and_scripts_come_from_os2_and_cmap() {
         let name = name_table(&[(1, 0x0409, "Kana Sans")]);
-        let cmap = cmap_table("Aaあのをアンヴ");
+        let cmap = cmap_table("Aaあいうえおのをアイウエオンヴ日本人一大年中出時行会見");
         let os2 = os2_table(700, true);
         let face = face_from_tables(0, &name, Some(&cmap), Some(&os2)).unwrap();
         assert_eq!((face.weight, face.italic), (700, true));
         assert_eq!(face.scripts, Scripts(Scripts::JAPANESE));
+    }
+
+    #[test]
+    fn fonts_without_a_unicode_character_map_are_classified_by_their_encoding() {
+        let name = name_table(&[(1, 0x0804, "长城粗圆体")]);
+        let scripts = |cmap: Vec<u8>| {
+            let face = face_from_tables(0, &name, Some(&cmap), None).unwrap();
+            assert!(!face.hidden);
+            face.scripts
+        };
+        assert_eq!(
+            scripts(legacy_cmap_table(3, 3)),
+            Scripts(Scripts::SIMPLIFIED)
+        );
+        assert_eq!(
+            scripts(legacy_cmap_table(3, 4)),
+            Scripts(Scripts::TRADITIONAL)
+        );
+        assert_eq!(scripts(legacy_cmap_table(3, 2)), Scripts(Scripts::JAPANESE));
+        assert_eq!(scripts(legacy_cmap_table(3, 5)), Scripts(0), "Wansung");
+        assert_eq!(
+            scripts(legacy_cmap_table(1, 2)),
+            Scripts(Scripts::TRADITIONAL)
+        );
+        // With a Unicode subtable the legacy one is ignored.
+        assert_eq!(scripts(cmap_with_legacy("Aa", 3, 4)), Scripts(0));
+        assert_eq!(
+            scripts(cmap_with_legacy(
+                "的一是不了人我在有他这们中大来上国个到说时体边吗书东",
+                3,
+                4
+            )),
+            Scripts(Scripts::SIMPLIFIED)
+        );
+    }
+
+    #[test]
+    fn faces_that_cannot_show_ordinary_text_are_hidden() {
+        let name = name_table(&[(1, 0x0409, "Hidden?")]);
+        let face =
+            |chars: &str| face_from_tables(0, &name, Some(&cmap_table(chars)), None).unwrap();
+        // Extension B only (細明體-ExtB).
+        let ext_b: String = (0x20000..0x20040).filter_map(char::from_u32).collect();
+        assert!(face(&format!("Aa{ext_b}")).hidden);
+        // EUDC supplement (外字集): Bopomofo, a few common characters, rare ideographs, private-use glyphs.
+        assert!(face("Aa的人ㄅㄆㄇㄈㄉㄊ丂丄丅丆丌丏丒丗丠丣\u{E000}\u{E001}").hidden);
+        // Bopomofo letters and Latin (精靈文).
+        assert!(
+            face("Aaㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦㄧㄨㄩ")
+                .hidden
+        );
+        // A Latin font with a few stray CJK glyphs, private-use or compatibility-ideograph icons, plain Latin, Hangul
+        // with a stray ideograph: listed.
+        assert!(!face("Aa・卍卐\u{20000}").hidden);
+        let icons: String = (0xF900..0xF940).filter_map(char::from_u32).collect();
+        assert!(!face(&format!("Aa\u{E000}\u{F0000}{icons}")).hidden);
+        assert!(!face("AaBbCc").hidden);
+        assert!(!face("Aa가나다라마바사아자차카타파하一").hidden);
+        let traditional = face("的一是不了人我在有他這們中大來上國個到說時體邊嗎妳戶ㄅㄆㄇㄈㄉㄊ");
+        assert!(!traditional.hidden);
+        assert_eq!(traditional.scripts, Scripts(Scripts::TRADITIONAL));
     }
 
     #[test]
@@ -265,8 +414,14 @@ mod tests {
             ]
         };
         let bytes = build_font(&[
-            face("Han TC", "體邊說們這嗎妳戶ㄅㄆㄇㄈ"),
-            face("Han SC", "体边说们这吗书东"),
+            face(
+                "Han TC",
+                "的一是不了人我在有他這們中大來上國個到說時體邊嗎妳戶ㄅㄆㄇㄈ",
+            ),
+            face(
+                "Han SC",
+                "的一是不了人我在有他这们中大来上国个到说时体边吗书东",
+            ),
         ]);
         let directory = std::env::temp_dir().join(format!("player-fonts-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();

@@ -13,10 +13,12 @@ mod region;
 mod scripts;
 mod sfnt;
 
-pub use catalog::{build_catalog, FamilyFace, FontFamily};
+pub use catalog::{build_catalog, visible_families, FamilyFace, FontFamily};
 pub use diff::{diff_files, FileDiff, FileStamp};
 pub use enumerate::{android_font_directories, file_stamp, system_font_files};
 pub use names::{canonical_name, language_preference, pick_name, LocalizedName};
-pub use parse::{face_from_tables, read_font_file, FaceInfo, FaceNames};
+pub use parse::{face_from_tables, read_font_file, FaceInfo, FaceNames, PARSE_VERSION};
 pub use region::{font_group, group_order, system_region, FontGroup, FontRegion};
-pub use scripts::{detect_scripts, Scripts};
+pub use scripts::{
+    assess_coverage, detect_scripts, is_cjk_mark, legacy_encoding_scripts, Coverage, Scripts,
+};

@@ -45,13 +45,24 @@ fn main() {
         files.len(),
         catalog.len()
     );
+    // Families the pickers do not offer print as `Hidden`; the last line counts the families of each group.
+    let label = |family: &player_fonts::FontFamily| {
+        if family.hidden {
+            "Hidden".to_owned()
+        } else {
+            format!("{:?}", family.group)
+        }
+    };
+    let mut counts = std::collections::BTreeMap::new();
     for family in &catalog {
         println!(
-            "{:?}\t{}\t[{}]\t{} face(s)",
-            family.group,
+            "{}\t{}\t[{}]\t{} face(s)",
+            label(family),
             family.display_name,
             family.family,
             family.faces.len()
         );
+        *counts.entry(label(family)).or_insert(0) += 1;
     }
+    println!("groups: {counts:?}");
 }

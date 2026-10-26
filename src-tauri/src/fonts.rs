@@ -39,6 +39,7 @@ fn to_cached(path: &str, face: &FaceInfo) -> CachedFontFace {
         weight: face.weight,
         italic: face.italic,
         scripts: face.scripts.0,
+        hidden: face.hidden,
     }
 }
 
@@ -52,6 +53,7 @@ fn from_cached(face: CachedFontFace) -> Option<(String, FaceInfo)> {
             weight: face.weight,
             italic: face.italic,
             scripts: Scripts(face.scripts),
+            hidden: face.hidden,
         },
     ))
 }
@@ -61,14 +63,22 @@ fn to_db_stamp(stamp: &FileStamp) -> FontFileStamp {
         path: stamp.path.clone(),
         size_bytes: stamp.size_bytes,
         modified_at_utc_ms: stamp.modified_ms,
+        parse_version: player_fonts::PARSE_VERSION,
     }
 }
 
+/// A cached file as `diff_files` compares it. A file parsed by another `PARSE_VERSION` gets a modification time no
+/// file has, so it counts as changed and is reparsed (and still counts as removed when it is gone).
 fn from_db_stamp(stamp: FontFileStamp) -> FileStamp {
+    let current = stamp.parse_version == player_fonts::PARSE_VERSION;
     FileStamp {
         path: stamp.path,
         size_bytes: stamp.size_bytes,
-        modified_ms: stamp.modified_at_utc_ms,
+        modified_ms: if current {
+            stamp.modified_at_utc_ms
+        } else {
+            i64::MIN
+        },
     }
 }
 
@@ -81,7 +91,8 @@ fn database(state: &crate::AppState) -> Result<&Database, String> {
     })
 }
 
-/// The cached fonts as the picker lists them in `region` (the app's natural collation within a group).
+/// The cached fonts in `region` order (the app's natural collation within a group), hidden families included: they
+/// still resolve a saved setting, and `player_fonts::visible_families` leaves them out of the pickers.
 fn cached_catalog(database: &Database, region: FontRegion) -> Result<Vec<FontFamily>, String> {
     let faces = database
         .font_cache_faces()
@@ -196,6 +207,7 @@ async fn refresh(app: AppHandle, region: FontRegion, was_empty: bool) -> Result<
     if changed || was_empty {
         let fonts = crate::run_database_work(app.clone(), move |state| {
             cached_catalog(database(state)?, region)
+                .map(|catalog| player_fonts::visible_families(&catalog))
         })
         .await?;
         allow_font_files(&app, &fonts);
@@ -223,6 +235,7 @@ pub async fn fonts_list(app: AppHandle) -> Result<FontList, String> {
     let region = FontRegion::from_code(&region);
     let fonts = crate::run_database_work(app.clone(), move |state| {
         cached_catalog(database(state)?, region)
+            .map(|catalog| player_fonts::visible_families(&catalog))
     })
     .await?;
     allow_font_files(&app, &fonts);
@@ -250,7 +263,7 @@ pub async fn fonts_list(app: AppHandle) -> Result<FontList, String> {
 }
 
 /// The cached family named `family` (the stored setting), with its face files; `None` when it is not (or no longer)
-/// installed. Reads only the cache, never the font files.
+/// installed. A family the pickers hide still resolves. Reads only the cache, never the font files.
 pub fn resolve_family(state: &crate::AppState, family: &str) -> Result<Option<FontFamily>, String> {
     let wanted = family.trim().to_lowercase();
     if wanted.is_empty() {
@@ -335,9 +348,10 @@ mod tests {
             weight: 700,
             italic: true,
             scripts: Scripts(Scripts::TRADITIONAL | Scripts::JAPANESE),
+            hidden: true,
         };
         let row = to_cached("C:/Windows/Fonts/msjhbd.ttc", &face);
-        assert_eq!(row.scripts, 5);
+        assert_eq!((row.scripts, row.hidden), (5, true));
         assert_eq!(
             from_cached(row),
             Some(("C:/Windows/Fonts/msjhbd.ttc".to_owned(), face))
@@ -349,6 +363,7 @@ mod tests {
             weight: 400,
             italic: false,
             scripts: 0,
+            hidden: false,
         };
         assert_eq!(from_cached(broken), None);
         let stamp = FileStamp {
@@ -357,6 +372,16 @@ mod tests {
             modified_ms: 9,
         };
         assert_eq!(from_db_stamp(to_db_stamp(&stamp)), stamp);
+        // Parsed by an earlier version: changed for `diff_files`, so it is reparsed; gone: removed.
+        let mut stale = to_db_stamp(&stamp);
+        stale.parse_version = 0;
+        let cached = vec![from_db_stamp(stale)];
+        let diff = player_fonts::diff_files(&cached, std::slice::from_ref(&stamp));
+        assert_eq!((diff.to_parse, diff.unchanged), (vec![stamp.clone()], 0));
+        assert_eq!(
+            player_fonts::diff_files(&cached, &[]).removed,
+            vec!["a.ttf".to_owned()]
+        );
     }
 
     #[test]
@@ -365,6 +390,7 @@ mod tests {
             family: "Arial".into(),
             display_name: "Arial".into(),
             group: FontGroup::Latin,
+            hidden: false,
             faces: vec![
                 FamilyFace {
                     path: "/system/fonts/a.ttf".into(),

@@ -1,5 +1,5 @@
-//! The installed-font cache of the font pickers (ADR 0042, schema v22): per font file its size and modification time,
-//! per face its parsed names and metadata. Only names and numbers, never font bytes; the files are the truth and the
+//! The installed-font cache of the font pickers (ADR 0042, schema v22, v23): per font file its size, modification
+//! time and the parse version that read it, per face its parsed names and metadata. Only names and numbers, never font bytes; the files are the truth and the
 //! cache is rebuilt from them (`font_cache_apply`).
 
 use super::{Database, DatabaseError};
@@ -11,6 +11,9 @@ pub struct FontFileStamp {
     pub path: String,
     pub size_bytes: u64,
     pub modified_at_utc_ms: i64,
+    /// `player_fonts::PARSE_VERSION` of the parse that produced the file's faces (0: before v23). A file read by
+    /// another version is reparsed.
+    pub parse_version: u32,
 }
 
 /// One cached face of a font file.
@@ -24,6 +27,8 @@ pub struct CachedFontFace {
     pub italic: bool,
     /// `player_fonts::Scripts` bits.
     pub scripts: u8,
+    /// Not offered in the pickers (`player_fonts::FaceInfo::hidden`), kept so a saved setting still resolves.
+    pub hidden: bool,
 }
 
 impl Database {
@@ -31,12 +36,15 @@ impl Database {
     pub fn font_cache_files(&self) -> Result<Vec<FontFileStamp>, DatabaseError> {
         let connection = self.lock()?;
         let mut statement = connection
-            .prepare("SELECT path, size_bytes, modified_at_utc_ms FROM font_files ORDER BY path")?;
+            .prepare(
+            "SELECT path, size_bytes, modified_at_utc_ms, parse_version FROM font_files ORDER BY path",
+        )?;
         let rows = statement.query_map([], |row| {
             Ok(FontFileStamp {
                 path: row.get(0)?,
                 size_bytes: row.get::<_, i64>(1)?.max(0) as u64,
                 modified_at_utc_ms: row.get(2)?,
+                parse_version: row.get::<_, i64>(3)?.clamp(0, i64::from(u32::MAX)) as u32,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -46,7 +54,7 @@ impl Database {
     pub fn font_cache_faces(&self) -> Result<Vec<CachedFontFace>, DatabaseError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare(
-            "SELECT path, face_index, names_json, weight, italic, scripts FROM font_faces
+            "SELECT path, face_index, names_json, weight, italic, scripts, hidden FROM font_faces
              ORDER BY path, face_index",
         )?;
         let rows = statement.query_map([], |row| {
@@ -57,6 +65,7 @@ impl Database {
                 weight: row.get::<_, i64>(3)?.clamp(0, i64::from(u16::MAX)) as u16,
                 italic: row.get::<_, i64>(4)? != 0,
                 scripts: row.get::<_, i64>(5)?.clamp(0, 255) as u8,
+                hidden: row.get::<_, i64>(6)? != 0,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -80,24 +89,28 @@ impl Database {
         }
         for (stamp, faces) in parsed {
             tx.execute(
-                "INSERT INTO font_files (path, size_bytes, modified_at_utc_ms) VALUES (?1, ?2, ?3)",
+                "INSERT INTO font_files (path, size_bytes, modified_at_utc_ms, parse_version)
+                 VALUES (?1, ?2, ?3, ?4)",
                 params![
                     stamp.path,
                     i64::try_from(stamp.size_bytes).unwrap_or(i64::MAX),
-                    stamp.modified_at_utc_ms
+                    stamp.modified_at_utc_ms,
+                    i64::from(stamp.parse_version)
                 ],
             )?;
             for face in faces {
                 tx.execute(
-                    "INSERT OR REPLACE INTO font_faces (path, face_index, names_json, weight, italic, scripts)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT OR REPLACE INTO font_faces
+                         (path, face_index, names_json, weight, italic, scripts, hidden)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![
                         stamp.path,
                         i64::from(face.face_index),
                         face.names_json,
                         i64::from(face.weight),
                         i64::from(face.italic),
-                        i64::from(face.scripts)
+                        i64::from(face.scripts),
+                        i64::from(face.hidden)
                     ],
                 )?;
             }
@@ -116,6 +129,7 @@ mod tests {
             path: path.to_owned(),
             size_bytes: size,
             modified_at_utc_ms: 7,
+            parse_version: 2,
         }
     }
 
@@ -127,6 +141,7 @@ mod tests {
             weight: 700,
             italic: index == 1,
             scripts: 5,
+            hidden: false,
         }
     }
 
@@ -171,6 +186,54 @@ mod tests {
             db.font_cache_faces().unwrap(),
             vec![face("a.ttc", 0, "A0 new")]
         );
+    }
+
+    #[test]
+    fn hidden_faces_and_parse_versions_round_trip() {
+        let db = Database::open_in_memory().expect("database");
+        let mut ext_b = face("mingliub.ttc", 0, "MingLiU-ExtB");
+        ext_b.hidden = true;
+        let shown = face("mingliub.ttc", 1, "Visible");
+        db.font_cache_apply(
+            &[],
+            &[(stamp("mingliub.ttc", 5), vec![ext_b.clone(), shown.clone()])],
+        )
+        .unwrap();
+        let faces = db.font_cache_faces().unwrap();
+        assert_eq!(faces, vec![ext_b, shown.clone()]);
+        assert_eq!(db.font_cache_files().unwrap()[0].parse_version, 2);
+        // Reparsed by a later version: the flag follows the new parse.
+        let mut newer = stamp("mingliub.ttc", 5);
+        newer.parse_version = 3;
+        db.font_cache_apply(&[], &[(newer.clone(), vec![shown.clone()])])
+            .unwrap();
+        assert_eq!(db.font_cache_files().unwrap(), vec![newer]);
+        assert_eq!(db.font_cache_faces().unwrap(), vec![shown]);
+    }
+
+    #[test]
+    fn migrating_to_v23_marks_the_cached_fonts_stale() {
+        let db = Database::open_in_memory().expect("database");
+        {
+            let connection = db.lock().unwrap();
+            connection
+                .execute_batch("DROP TABLE font_faces; DROP TABLE font_files;")
+                .unwrap();
+            connection.execute_batch(super::super::SCHEMA_V22).unwrap();
+            connection
+                .execute_batch(
+                    "INSERT INTO font_files VALUES ('old.ttf', 1, 2);
+                     INSERT INTO font_faces VALUES ('old.ttf', 0, '{}', 400, 0, 0);",
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 22).unwrap();
+        }
+        db.migrate().expect("migrate v22 to v23");
+        db.migrate().expect("again: nothing to do");
+        let files = db.font_cache_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].parse_version, 0, "parsed before v23: stale");
+        assert!(!db.font_cache_faces().unwrap()[0].hidden);
     }
 
     #[test]
