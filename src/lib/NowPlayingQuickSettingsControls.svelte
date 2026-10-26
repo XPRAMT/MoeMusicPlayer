@@ -107,6 +107,7 @@
         mainOpacityPercent: lyrics.mainOpacityPercent,
         secondaryOpacityPercent: lyrics.secondaryOpacityPercent,
         fontWeight: lyrics.fontWeight,
+        fontFamily: lyrics.fontFamily,
       }}
       onChange={(patch) => onLyricsChange({
         ...(patch.showTranslation !== undefined ? { showTranslation: patch.showTranslation } : {}),
@@ -116,6 +117,8 @@
         ...(patch.mainOpacityPercent !== undefined ? { mainOpacityPercent: patch.mainOpacityPercent } : {}),
         ...(patch.secondaryOpacityPercent !== undefined ? { secondaryOpacityPercent: patch.secondaryOpacityPercent } : {}),
         ...(patch.fontWeight !== undefined ? { fontWeight: patch.fontWeight } : {}),
+        // null is a choice too (「預設字型」).
+        ...('fontFamily' in patch ? { fontFamily: patch.fontFamily ?? null } : {}),
       })}
       idPrefix={lyricsIdPrefix}
       fontAriaLabel={tr("歌詞字體大小")}

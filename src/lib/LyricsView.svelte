@@ -33,6 +33,8 @@
     type ScrollGlide,
   } from './lyrics-scroll-glide';
   import { frozenRowWidth } from './lyrics-layout-freeze.js';
+  import { APP_FONT_STACK_CSS, fontFamilyCss } from './font-picker.js';
+  import { isAndroidWebView } from './font-faces.js';
   import { effectiveCandidateFilter, filterLyricsCandidates, getCandidatePresentation } from './lyrics-candidate-preview.js';
   import {
     DEFAULT_LYRICS_PREFERENCES,
@@ -184,6 +186,7 @@
   $effect(() => {
     if (!lyricsRoot) return;
     void preferences.fontWeight; // re-measure when the weight changes
+    void lyricFontFamily; // or the font
     measureInkLineHeights();
     void document.fonts?.ready.then(() => measureInkLineHeights());
   });
@@ -264,6 +267,8 @@
   });
 
   let preferences = $derived(normalizeLyricsPreferences(lyricsPreferences));
+  // The playing page's own font (ADR 0042); unset: the interface font. A missing font falls through to the stack.
+  const lyricFontFamily = $derived(fontFamilyCss(preferences.fontFamily, APP_FONT_STACK_CSS, { android: isAndroidWebView() }));
 
   $effect(() => {
     if (viewState.phase === 'loading' || viewState.phase === 'idle') return;
@@ -859,7 +864,7 @@
   data-active-cue-index={displayTimedIndex}
   data-current-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
-  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-primary-weight:${preferences.fontWeight};--lyric-auxiliary-weight:${lyricsAuxiliaryWeight(preferences.fontWeight)};--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
+  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-font-family:${lyricFontFamily};--lyric-primary-weight:${preferences.fontWeight};--lyric-auxiliary-weight:${lyricsAuxiliaryWeight(preferences.fontWeight)};--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">{tr("播放歌曲後會在此顯示歌詞。")}</p>
@@ -1068,6 +1073,7 @@
   .lyrics-view {
     position: relative;
     display: flex;
+    font-family: var(--lyric-font-family, inherit);
     min-width: 0;
     min-height: 0;
     flex: 1 1 auto;

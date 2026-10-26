@@ -1,5 +1,8 @@
 :root {
-  font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+  /* The main interface font (ADR 0042): `--app-font-family` is set on <html> when one is chosen. */
+  --app-default-font: 'Segoe UI', 'Microsoft JhengHei', sans-serif;
+  --app-font-stack: var(--app-font-family, var(--app-default-font));
+  font-family: var(--app-font-stack);
   color: var(--text);
   background: var(--page);
   color-scheme: var(--color-scheme);

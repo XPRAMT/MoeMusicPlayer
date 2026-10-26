@@ -5,10 +5,11 @@
   import type { Snippet } from 'svelte';
   import { tr } from './i18n.js';
   import type { LyricsLookSettings } from './ipc';
+  import FontPicker from './FontPicker.svelte';
   import { LYRICS_FONT_WEIGHT } from './lyrics-preferences.js';
   import { LYRICS_MAIN_OPACITY_PERCENT, LYRICS_SECONDARY_OPACITY_PERCENT, TASKBAR_LYRICS_FONT_SIZE_PX, TASKBAR_LYRICS_TRANSLATION_SCALE_PERCENT } from './taskbar-lyrics-settings.js';
 
-  type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight'>
+  type LookFields = Pick<LyricsLookSettings, 'showTranslation' | 'fontSizePx' | 'translationScalePercent' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight' | 'fontFamily'>
     & Partial<Pick<LyricsLookSettings, 'align' | 'useCustomColor' | 'customColor' | 'animation' | 'hideWhenPaused'>>;
 
   let {
@@ -120,6 +121,7 @@
       oninput={(event) => onChange({ translationScalePercent: Number(event.currentTarget.value) })}
     />
   </label>
+  <FontPicker idPrefix="{idPrefix}-font" value={settings.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} />
   <label class="lyrics-preference-range">
     <span><strong>{tr("字體粗細")}</strong><output>{settings.fontWeight}</output></span>
     <input

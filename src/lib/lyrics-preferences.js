@@ -1,4 +1,5 @@
 ﻿/** @typedef {import('./ipc').LyricsPreferences} LyricsPreferences */
+import { normalizeFontFamily } from './font-picker.js';
 
 export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   showTranslation: true,
@@ -8,6 +9,8 @@ export const DEFAULT_LYRICS_PREFERENCES = Object.freeze({
   primaryFontSizePx: 20,
   auxiliaryScalePercent: 90,
   fontWeight: 500,
+  /** The playing page's lyrics font (ADR 0042); null: the default font. */
+  fontFamily: null,
   lineGapPx: 10,
   textEffect: 'shadow',
   simplifiedToTraditional: true,
@@ -74,6 +77,7 @@ export function normalizeLyricsPreferences(value) {
     ),
     auxiliaryScalePercent: normalizeAuxiliaryScale(candidate),
     fontWeight: normalizeLyricsFontWeight(candidate.fontWeight),
+    fontFamily: normalizeFontFamily(candidate.fontFamily),
     lineGapPx: normalizeInteger(
       candidate.lineGapPx,
       LYRICS_PREFERENCE_LIMITS.lineGapPx.min,

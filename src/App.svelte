@@ -214,6 +214,9 @@
   import LyricsView from './lib/LyricsView.svelte';
   import NowPlayingQuickSettingsControls from './lib/NowPlayingQuickSettingsControls.svelte';
   import LyricsLookSettings from './lib/LyricsLookSettings.svelte';
+  import FontPicker from './lib/FontPicker.svelte';
+  import { DEFAULT_INTERFACE_FONT_STACK, fontFamilyCss, normalizeFontFamily } from './lib/font-picker.js';
+  import { ensureAndroidFontFaces } from './lib/font-faces.js';
   import type { FloatingLyricsAndroidStatus, FloatingLyricsSettings } from './lib/ipc';
   import {
     DEFAULT_FLOATING_LYRICS_SETTINGS,
@@ -615,6 +618,11 @@
   const LANGUAGE_NAMES: Record<string, string> = { 'zh-TW': '繁體中文', 'zh-CN': '简体中文', ja: '日本語', en: 'English' };
   let languageChoice = $state<LanguageChoice>(getLanguageChoice());
   let languageError = $state<string | null>(null);
+  /** The main interface's font (ADR 0042); null: the default font. */
+  let interfaceFontFamily = $state<string | null>(null);
+  let interfaceFontError = $state<string | null>(null);
+  let interfaceFontRevision = 0;
+  let interfaceFontQueue: Promise<void> = Promise.resolve();
   let taskbarLyricsSettings = $state<TaskbarLyricsSettings>({ ...DEFAULT_TASKBAR_LYRICS_SETTINGS });
   let taskbarLyricsError = $state<string | null>(null);
   /** Connected monitors for the custom monitor choice (ADR 0031), refreshed when they change. */
@@ -1629,6 +1637,7 @@
         loadTaskbarLyricsSettings(),
         loadFloatingLyricsSettings(),
         loadLanguage(),
+        loadInterfaceFont(),
         loadCoverZoom(),
         loadShortcutSettings(),
         loadNowPlayingAppearancePreferences(),
@@ -1911,6 +1920,20 @@
   // this page is in the background); it gets the lyrics, with the per-track delay folded into one offset, whenever
   // they change.
   let isAndroidPlatform = $derived(capabilities?.platform === 'android');
+  // The main interface font (ADR 0042) on <html>: a font that is not installed falls through to the default stack.
+  $effect(() => {
+    const root = document.documentElement;
+    if (interfaceFontFamily) root.style.setProperty('--app-font-family', fontFamilyCss(interfaceFontFamily, DEFAULT_INTERFACE_FONT_STACK, { android: isAndroidPlatform }));
+    else root.style.removeProperty('--app-font-family');
+  });
+  // Android WebView reaches a font only through @font-face: register the chosen families' files from the font cache
+  // (no scan at startup; a family not in the cache draws in the default font).
+  $effect(() => {
+    if (!isAndroidPlatform || !isTauri()) return;
+    for (const family of [interfaceFontFamily, lyricsPreferences.fontFamily]) {
+      if (family) void invokeCommand('fonts_resolve', { family }).then(ensureAndroidFontFaces).catch(() => {});
+    }
+  });
   let visibleLyricsSettingsTab = $derived(normalizeLyricsSettingsTab(lyricsSettingsTab, isWindowsPlatform));
   let floatingLyricsEnabled = $derived(floatingLyricsSettings.enabled);
   $effect(() => {
@@ -2564,6 +2587,34 @@
     } catch {
       // Keep the language this page loaded with.
     }
+  }
+
+  async function loadInterfaceFont(): Promise<void> {
+    const revision = interfaceFontRevision;
+    try {
+      const saved = normalizeFontFamily(await invokeCommand('settings_get_interface_font', {}));
+      if (revision === interfaceFontRevision) interfaceFontFamily = saved;
+    } catch {
+      // Keep the default font.
+    }
+  }
+
+  /** Applies at once (live preview) and saves the latest choice. */
+  function setInterfaceFont(family: string | null): void {
+    const next = normalizeFontFamily(family);
+    interfaceFontFamily = next;
+    interfaceFontError = null;
+    const revision = ++interfaceFontRevision;
+    if (!isTauri()) return;
+    interfaceFontQueue = interfaceFontQueue.catch(() => undefined).then(async () => {
+      if (revision !== interfaceFontRevision) return;
+      try {
+        const saved = await invokeCommand('settings_set_interface_font', { family: next });
+        if (revision === interfaceFontRevision) interfaceFontFamily = normalizeFontFamily(saved);
+      } catch (error) {
+        if (revision === interfaceFontRevision) interfaceFontError = getErrorText(error);
+      }
+    });
   }
 
   async function chooseLanguage(next: LanguageChoice): Promise<void> {
@@ -4423,6 +4474,16 @@
                 {/if}
                 {#if mainBackgroundError}
                   <p class="theme-save-status error" role="alert">{mainBackgroundError}</p>
+                {/if}
+                <div class="settings-panel-header language-heading">
+                  <div>
+                    <h3>{tr("字型")}</h3>
+                    <p>{tr("主介面文字使用的字型；選擇後立即套用。")}</p>
+                  </div>
+                </div>
+                <FontPicker idPrefix="{scope}interface-font" label={tr("主介面字型")} value={interfaceFontFamily} onChange={setInterfaceFont} />
+                {#if interfaceFontError}
+                  <p class="theme-save-status error" role="alert">{interfaceFontError}</p>
                 {/if}
                 <div class="settings-panel-header language-heading">
                   <div>

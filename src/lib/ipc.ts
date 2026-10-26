@@ -237,6 +237,8 @@ export interface TaskbarLyricsSettings {
   secondaryOpacityPercent: number;
   /** Weight of the original text (100 to 1000, step 50 in the UI); translation rows are 50 lighter. Saved apart per tab. */
   fontWeight: number;
+  /** Font family (ADR 0042); null: the default font. Saved apart per tab. */
+  fontFamily: string | null;
   /** none: one line at a time; continuous: all lines in one strip that scrolls with playback (ADR 0032). */
   animation: LyricsAnimation;
   /** 「暫停時隱藏」: fade the window out while paused or stopped (not during track changes, buffering or seeking). Saved apart per tab. */
@@ -247,7 +249,29 @@ export type LyricsAnimation = 'none' | 'continuous';
 
 /** The look options shared by the taskbar and floating lyrics. */
 export type LyricsLookSettings = Pick<TaskbarLyricsSettings,
-  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight' | 'animation' | 'hideWhenPaused'>;
+  'align' | 'fontSizePx' | 'translationScalePercent' | 'useCustomColor' | 'customColor' | 'showTranslation' | 'textEffect' | 'mainOpacityPercent' | 'secondaryOpacityPercent' | 'fontWeight' | 'fontFamily' | 'animation' | 'hideWhenPaused'>;
+
+/** One face file of an installed font family (ADR 0042). */
+export interface FontFaceFile {
+  path: string;
+  faceIndex: number;
+  weight: number;
+  italic: boolean;
+}
+
+/** One entry of the font pickers (ADR 0042): `family` is the stored name, `displayName` the OS region's localized one. */
+export interface FontFamilyEntry {
+  family: string;
+  displayName: string;
+  group: 'traditional' | 'simplified' | 'japanese' | 'latin';
+  faces: FontFaceFile[];
+}
+
+/** `fonts_list`: the cached fonts; `refreshing` means `fonts-list-updated` follows with the refreshed list. */
+export interface FontList {
+  fonts: FontFamilyEntry[];
+  refreshing: boolean;
+}
 
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
 export interface FloatingLyricsSettings extends LyricsLookSettings {
@@ -761,6 +785,8 @@ export interface LyricsPreferences {
   auxiliaryScalePercent: number;
   /** Weight of the original text (100 to 1000); translation and romanization are 50 lighter. */
   fontWeight: number;
+  /** Font family of the playing page's lyrics (ADR 0042); null: the default font. */
+  fontFamily: string | null;
   lineGapPx: number;
   textEffect: LyricsTextEffect;
   simplifiedToTraditional: boolean;
@@ -1012,6 +1038,22 @@ interface IpcContract {
   settings_get_language: {
     args: Record<string, never>;
     result: LanguageChoice;
+  };
+  settings_get_interface_font: {
+    args: Record<string, never>;
+    result: string | null;
+  };
+  settings_set_interface_font: {
+    args: { family: string | null };
+    result: string | null;
+  };
+  fonts_list: {
+    args: Record<string, never>;
+    result: FontList;
+  };
+  fonts_resolve: {
+    args: { family: string };
+    result: FontFamilyEntry | null;
   };
   settings_set_language: {
     args: { language: LanguageChoice };

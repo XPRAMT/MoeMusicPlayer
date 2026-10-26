@@ -938,5 +938,12 @@
   "信任的憑證（SHA-256）": "Trusted certificate (SHA-256)",
   "信任這個伺服器的憑證？": "Trust this server's certificate?",
   "伺服器無法連線": "Server unreachable",
-  "無法播放這首歌": "This song cannot be played"
+  "無法播放這首歌": "This song cannot be played",
+  "主介面文字使用的字型；選擇後立即套用。": "The font of the main interface; a choice applies at once.",
+  "主介面字型": "Interface font",
+  "字型": "Font",
+  "搜尋字型": "Search fonts",
+  "搜尋字型…": "Search fonts…",
+  "預設字型": "Default font",
+  "讀取字型中…": "Loading fonts…"
 }
