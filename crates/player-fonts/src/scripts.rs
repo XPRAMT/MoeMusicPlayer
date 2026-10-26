@@ -21,9 +21,9 @@ const COMMON_MIN: usize = 18;
 /// Of the distinctive forms (`han_forms`: the 200 most frequent Simplified characters outside Big5 and their
 /// Traditional forms outside GB2312) at least this many (90 %) for that writing system.
 const FORMS_MIN: usize = 180;
-/// Bopomofo ㄅ and the neutral-tone mark ˙: every Big5 and HKSCS font has them, Japanese and Korean fonts do not. This
-/// is what tells a Traditional Chinese font from a Japanese one with old forms (Meiryo, Yu Gothic, JIS X 0213).
-const BOPOMOFO: &[char] = &['ㄅ', '˙'];
+/// Bopomofo ㄅ: every Big5 and HKSCS font has it, Japanese and Korean fonts do not. This is what tells a Traditional
+/// Chinese font from a Japanese one with old forms (Meiryo, Yu Gothic, JIS X 0213).
+const BOPOMOFO: &[char] = &['ㄅ'];
 
 /// Kana.
 const KANA: &[char] = &[
@@ -212,9 +212,9 @@ mod tests {
             Scripts(0)
         );
         assert_eq!(detect_scripts(without(TC, "的一是不")), Scripts(0));
-        // ㄅ and ˙ are both needed.
+        // ㄅ is needed; the neutral-tone mark ˙ is not (Zpix, 仓耳今楷 lack it).
         assert_eq!(detect_scripts(without(TC, "ㄅ")), Scripts(0));
-        assert_eq!(detect_scripts(without(TC, "˙")), Scripts(0));
+        assert!(!TC.iter().any(|set| set.contains(&'˙')));
     }
 
     #[test]

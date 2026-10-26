@@ -11,8 +11,8 @@ use ttf_parser::{cmap, name, name_id, os2, PlatformId};
 
 /// The version of what `read_font_file` derives from a font file. A cache made by another version is stale and its
 /// files are reparsed (2: threshold coverage tests, legacy-encoding character maps, hidden faces; 3: the 200
-/// distinctive Traditional / Simplified forms and ㄅ ˙).
-pub const PARSE_VERSION: u32 = 3;
+/// distinctive Traditional / Simplified forms and ㄅ ˙; 4: ㄅ alone).
+pub const PARSE_VERSION: u32 = 4;
 
 /// Largest `name` / `OS/2` table read.
 const MAX_NAME_TABLE: u32 = 4 << 20;
@@ -304,10 +304,10 @@ mod tests {
     use crate::han_forms::{SIMPLIFIED_FORMS, TRADITIONAL_FORMS};
     use crate::sfnt::build_font;
 
-    /// A Traditional Chinese font's characters: the common ones, the 200 Traditional forms, ㄅ and ˙.
+    /// A Traditional Chinese font's characters: the common ones, the 200 Traditional forms and ㄅ.
     fn traditional_chars() -> String {
         format!(
-            "的一是不了人我在有他這們中大來上國個到說時{}ㄅ˙",
+            "的一是不了人我在有他這們中大來上國個到說時{}ㄅ",
             TRADITIONAL_FORMS.iter().collect::<String>()
         )
     }
