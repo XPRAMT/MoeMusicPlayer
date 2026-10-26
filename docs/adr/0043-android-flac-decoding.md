@@ -23,4 +23,5 @@ The first attempt (a `MediaCodecSelector` that put software FLAC decoders ahead 
 
 - FLAC playback on Android no longer depends on the device's decoders; decoding costs CPU in the app (FLAC decoding is cheap) and every byte goes through JNI, as for DSD and WavPack.
 - Unit tests decode fixtures encoded by the reference `flac` encoder (16-bit stereo 44.1 kHz with a SEEKTABLE and 1152-sample blocks, 24-bit stereo 96 kHz, 24-bit mono 48 kHz without SEEKTABLE, 16-bit 6-channel) and compare against Symphonia's decode with the STREAMINFO MD5 verified; seeks forward and backward, the WAV header and byte-range reads are checked.
-- Not yet verified on a device: playback, seeking and gapless transitions of 16- and 24-bit FLAC on the G8142 and the other test devices, local and remote; multichannel FLAC through `AudioTrack` float output.
+- Verified on a device by the user: hi-res (24-bit) local FLAC plays on the G8142.
+- Not yet verified on a device: seeking and gapless transitions on the G8142; FLAC on the other test devices; remote FLAC; multichannel FLAC through `AudioTrack` float output.
