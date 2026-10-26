@@ -1058,7 +1058,7 @@
                 use:appTooltip={tr('從這句開始播放（{0}）', [seekLabel])}
                 onclick={() => seekToBrowsedLine(timelineIndex)}
               >
-                <IconPlayerPlay size={14} stroke={2} aria-hidden="true" />
+                <IconPlayerPlay size={22} stroke={2} aria-hidden="true" />
               </button>
             {/if}
             {#if row.line.text?.trim()}
@@ -1300,9 +1300,9 @@
      rows never reflow when it appears. The rows are border-box, so their measured heights, the karaoke word widths and
      the cover-zoom frozen width all include the gutter as they are. */
   .timed-lyrics-viewport {
-    --lyric-browse-button: 20px;
-    --lyric-browse-inset: 3px;
-    --lyric-browse-gutter: calc(var(--lyric-browse-inset) + var(--lyric-browse-button) + 4px);
+    --lyric-browse-button: 22px;
+    --lyric-browse-inset: 1px;
+    --lyric-browse-gutter: 24px;
   }
 
   .timed-lyrics-viewport .lyric-line {
