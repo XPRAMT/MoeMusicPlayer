@@ -18,6 +18,7 @@
 
 - 內容可解析就算有，純文字也算（純文字會贏過旁檔）；看起來像字幕卻解析不出任何行（`LyricsContent::Unusable`）算沒有，往下一個來源找。
 - 手動選擇照舊固定。本機手動選擇只存來源參照，每次重讀。
+- 「移除歌詞」（使用者核准的意義）只關掉第 3 步：這首歌不再自動線上搜尋。資料庫存的仍是原本的空白手動列（`cleared:` 候選，`lyrics_service.rs` 的 `save_cleared_sentinel`），沒有遷移；每次載入照第 1、2 步讀檔案當下的內嵌與旁檔，有就照常顯示（狀態 `ready`），都沒有才回 `cleared`：不顯示、不自動搜尋，播放頁收起歌詞欄（`lyricsRemoved`）。移除後命令直接回傳這次載入的結果，所以檔案自己有歌詞時畫面照常顯示它們。手動搜尋照常可用，手動選擇取代這個狀態。理由：使用者移除的是線上找到的歌詞，檔案後來加入的內嵌歌詞或旁檔應該照常出現（檔案是真相）。
 - 歌詞選擇清單的本機候選也依這個順序排：內嵌在前，旁檔在後。
 - 所有平台同一個順序，每次都讀檔案當下內容（ADR 0040）：Windows `find_lyrics`／`find_all_lyrics`、Android `android_find_all_lyrics`、遠端 `remote_lyric_texts`；資料庫只提供旁檔的位置（`track_lyric_sidecars`）。
 
@@ -266,7 +267,8 @@ ADR 0034 的繪製器是 Windows.UI.Composition，以音訊時鐘每幀提交，
 - `src-tauri`：
   - 服務層的內嵌字幕與 Unusable 改用旁檔；
   - yrc 取代 LRC；
-  - 逐字旗標。
+  - 逐字旗標；
+  - 「移除歌詞」：`a_cleared_track_shows_its_embedded_lyrics_without_searching_online`、`a_cleared_track_shows_its_sidecar`、`a_cleared_track_without_local_lyrics_is_not_searched_until_the_user_searches`（經 `search_loaded_track`，以固定傳輸檢查沒有任何線上請求；手動搜尋與選擇仍可用），JS `tests/lyrics-controller.test.mjs`。
 - 行結束時間：`player-core` 的 `every_format_reads_its_line_end`、`merged_extra_rows_keep_the_main_line_end`；`player-lyrics-rules` 的 `a_line_without_word_times_ends_at_its_own_end_time`；`player-lyrics-native` 的 `a_line_with_its_own_end_is_swept_as_one_word_and_word_timed_lines_are_unchanged`；`src-tauri` `native_lyrics` 的 `lyrics_data_carries_each_lines_own_end`；Kotlin `aLineWithItsOwnEndEndsThereInsteadOfAtItsCap`、`aLineWithItsOwnEndAndNoWordTimesIsSweptAsOneWord`；JS `tests/lyrics-word-highlight.test.mjs`（起訖行掃色、沒有結束不掃、逐字行不變）、`tests/lyrics-import.test.mjs`、`tests/taskbar-lyrics-data.test.mjs`、`tests/floating-lyrics-settings.test.mjs`。
 - 原生與 Android 規則：`crates/player-lyrics-rules` 的 `words.rs`／`glide.rs` 單元測試（含 `a_line_without_word_times_ends_at_its_cap_before_a_long_interlude`）與共用向量（`stripGlide`、`lineCap`、`knotLineEnds`、`finalArrivalWithEnd`、`wholeLineWord`、`karaokeGlide`、`glide`、`centreMask`、`sung`；由 Rust `cargo run -p player-lyrics-rules --example generate_vectors` 產生，`shared_vectors.rs` 檢查提交的檔案與產生器輸出逐位元相同），JS `tests/lyrics-rules-vectors.test.mjs`（只比對播放頁仍在執行的 JS：選句、偏移、捲動與卡拉 OK 曲線）、Kotlin `LyricsRulesVectorsTest`；三邊都有卡拉 OK 邊界的逐幀連續性測試；`player-lyrics-native` 的 `plan.rs` 測試逐字計畫（`word_timed_plans_follow_the_glide_and_keep_every_cell_whole`：節點曲線、譯文跟著同一位移、沒有行淡化；`a_last_line_without_words_glides_to_the_terminal_knot_in_a_word_timed_song`）；共用向量 `stripGlide` 每例帶 `finalArrivalMs`，每行帶 `capMs`（含上述歌曲、終點被曲目結尾截斷、逐字最後一行忽略估計、純行級、長度上限的各例）；Kotlin `aLastLineWithoutWordTimesGlidesToItsLastGlyphInAWordTimedSong`、`aLineWithoutWordTimesEndsAtItsCapBeforeALongInterludeInALineTimedSong`。
 - 前端：`tests/lyrics-word-highlight.test.mjs` 檢查時間計算、簡繁、掃色 keyframes 與 `@property`、沒有 fill／filter、減少動態時改用換色、羅馬音逐字與顯示順序。
