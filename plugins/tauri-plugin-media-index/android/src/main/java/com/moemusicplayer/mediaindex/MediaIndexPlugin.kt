@@ -722,6 +722,32 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * The output devices for Settings → playback (ADR 0044): the attached devices, the one the saved choice
+     * (`preference`, from settings.json) matches, the one the player is pinned to and routed to, and the AudioTrack format.
+     */
+    @Command
+    fun audioOutputStatus(invoke: Invoke) {
+        val saved = AudioOutputRules.preferenceOf(JSONObject(invoke.getArgs().toString()).optJSONObject("preference"))
+        activity.runOnUiThread {
+            try {
+                invoke.resolve(JSObject(PlaybackService.audioOutputStatus(activity, saved).toString()))
+            } catch (error: Exception) {
+                invoke.reject("Could not read the output devices: ${error.message}")
+            }
+        }
+    }
+
+    /** The user chose another output device: the playback service pins the player to it whenever it is attached. */
+    @Command
+    fun setAudioOutputPreference(invoke: Invoke) {
+        val preference = AudioOutputRules.preferenceOf(JSONObject(invoke.getArgs().toString()).optJSONObject("preference"))
+        activity.runOnUiThread {
+            PlaybackService.applyOutputPreference(preference)
+            invoke.resolve(JSObject())
+        }
+    }
+
     /** Overlay permission and lock state; also shows the overlay when the permission was just granted. */
     @Command
     fun floatingLyricsStatus(invoke: Invoke) {

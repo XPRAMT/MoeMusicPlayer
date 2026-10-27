@@ -19,6 +19,9 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.AudioTrackAudioOutputProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
@@ -60,6 +63,8 @@ class PlaybackService : MediaSessionService() {
     private lateinit var pollThread: HandlerThread
     private lateinit var pollHandler: Handler
     private var exoPlayer: ExoPlayer? = null
+    /** The chosen output device and what the AudioTrack really uses (ADR 0044). */
+    @Volatile private var outputRouter: AudioOutputRouter? = null
     private var session: MediaSession? = null
     private var sessionPlayer: Player? = null
     private val commandInFlight = AtomicBoolean(false)
@@ -156,6 +161,13 @@ class PlaybackService : MediaSessionService() {
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .setAudioProcessorChain(FloatAwareAudioProcessorChain())
+                    // The default AudioTrack provider, watched so the settings page can show where the track is
+                    // really routed (ADR 0044).
+                    .setAudioOutputProvider(
+                        RouteObservingOutputProvider(AudioTrackAudioOutputProvider.Builder(context).build()) { track ->
+                            outputRouter?.observeTrack(track)
+                        },
+                    )
                     .build()
         }.setEnableAudioFloatOutput(true)
             // For the formats Media3 still decodes with MediaCodec (MP3, AAC, Vorbis, Opus…), a decoder that fails to
@@ -209,6 +221,22 @@ class PlaybackService : MediaSessionService() {
         })
         player.addListener(clockListener)
         exoPlayer = player
+        val router = AudioOutputRouter(this, mainHandler) { device -> player.setPreferredAudioDevice(device) }
+        outputRouter = router
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioTrackInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                audioTrackConfig: AudioSink.AudioTrackConfig,
+            ) = router.onTrackInitialized(audioTrackConfig)
+
+            override fun onAudioTrackReleased(
+                eventTime: AnalyticsListener.EventTime,
+                audioTrackConfig: AudioSink.AudioTrackConfig,
+            ) = router.onTrackReleased()
+        })
+        // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
+        router.setPreference(readOutputPreference())
+        router.start()
         val forwarding = QueueAwarePlayer(player)
         sessionPlayer = forwarding
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -349,6 +377,8 @@ class PlaybackService : MediaSessionService() {
             ack.put("error", "Android playback service stopped while loading")
             sendAck(ack)
         }
+        outputRouter?.stop()
+        outputRouter = null
         pollHandler.removeCallbacksAndMessages(null)
         pollThread.quitSafely()
         session?.let { removeSession(it) }
@@ -459,6 +489,8 @@ class PlaybackService : MediaSessionService() {
                         mediaItemBuilder.setMimeType("audio/wav")
                     }
                     val mediaItem = mediaItemBuilder.build()
+                    // A service that started before the settings were read picks the choice up here, before any sound.
+                    outputRouter?.setPreference(readOutputPreference())
                     endedEventLoadInstance = null
                     stopped = false
                     loadInstance = loadFence.begin(commandId, trackId)
@@ -969,7 +1001,17 @@ class PlaybackService : MediaSessionService() {
         })
     }
 
+    /** The output device choice the Rust side keeps (ADR 0044). */
+    private fun readOutputPreference(): PreferenceReading = try {
+        AudioOutputRules.parsePreference(nativeOutputDevicePreference())
+    } catch (_: UnsatisfiedLinkError) {
+        PreferenceReading.Unknown
+    } catch (_: RuntimeException) {
+        PreferenceReading.Unknown
+    }
+
     private external fun nativePollPlaybackCommand(): String?
+    private external fun nativeOutputDevicePreference(): String?
     private external fun nativeOnPlaybackEvent(json: String)
 
     private fun JSONObject.optStringOrNull(key: String): String? =
@@ -984,6 +1026,15 @@ class PlaybackService : MediaSessionService() {
             service.publishClock(true)
             service.ensureClockPolling()
         }
+
+        /** Main thread. The user chose another output device (ADR 0044); a service that is not running reads it when it starts. */
+        internal fun applyOutputPreference(preference: OutputDevicePreference?) {
+            activeInstance?.outputRouter?.setPreference(PreferenceReading.Known(preference))
+        }
+
+        /** Main thread. The output devices for the settings page; [saved] is the choice in settings.json. */
+        internal fun audioOutputStatus(context: android.content.Context, saved: OutputDevicePreference?): JSONObject =
+            activeInstance?.outputRouter?.status(saved) ?: AudioOutputRouter.idleStatus(context, saved)
 
         private const val CLOCK_POLL_MS = 40L
 

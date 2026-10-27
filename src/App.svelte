@@ -234,6 +234,7 @@
   } from './lib/floating-lyrics-settings.js';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lib/lyrics-timing-offset.js';
   import OutputDevicesSettings from './lib/OutputDevicesSettings.svelte';
+  import AndroidOutputDevicesSettings from './lib/AndroidOutputDevicesSettings.svelte';
   import OpacityCalculation from './lib/OpacityCalculation.svelte';
   import WindowTitlebar from './lib/WindowTitlebar.svelte';
   import AboutPage from './lib/AboutPage.svelte';
@@ -4619,6 +4620,8 @@
                 {#if outputExclusive}
                   <p class="dsd-setting-hint">{tr("獨佔模式不使用 DSEE HX；裝置不接受檔案的取樣率時，播放器會自動轉換成裝置接受的最接近取樣率。")}</p>
                 {/if}
+                {:else if capabilities?.platform === 'android'}
+                <AndroidOutputDevicesSettings />
                 {/if}
                 <div class="settings-panel-header">
                   <div>

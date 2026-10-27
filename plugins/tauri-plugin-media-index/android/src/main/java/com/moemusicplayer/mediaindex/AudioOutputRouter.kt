@@ -1,0 +1,230 @@
+package com.moemusicplayer.mediaindex
+
+import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.AudioRouting
+import android.media.AudioTrack
+import android.os.Build
+import android.os.Handler
+import android.util.Log
+import androidx.media3.common.util.Clock
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.audio.AudioOutput
+import androidx.media3.exoplayer.audio.AudioOutputProvider
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.AudioTrackAudioOutput
+import org.json.JSONArray
+import org.json.JSONObject
+import java.lang.ref.WeakReference
+
+/**
+ * The output device of the playback service (ADR 0044): keeps the user's choice, follows the attached devices through
+ * an [AudioDeviceCallback] and pins the player to the chosen device whenever it is attached (system default otherwise),
+ * and remembers what the AudioTrack really opened and where it is routed. Main thread (the player's thread) only,
+ * except [observeTrack], which Media3 calls from its playback thread.
+ */
+@UnstableApi
+internal class AudioOutputRouter(
+    context: Context,
+    private val handler: Handler,
+    /** Pin the player to a device (`ExoPlayer.setPreferredAudioDevice`), null for the system's choice. */
+    private val pin: (AudioDeviceInfo?) -> Unit,
+) {
+    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private var preference: OutputDevicePreference? = null
+    private var pinnedId: Int? = null
+    private var pinApplied = false
+    private var registered = false
+    @Volatile private var trackOutput: AudioSink.AudioTrackConfig? = null
+    @Volatile private var routedDevice: AudioDeviceInfo? = null
+    private var observedTrack: WeakReference<AudioTrack>? = null
+
+    private val deviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = reconcile()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = reconcile()
+    }
+
+    private val routingListener = AudioRouting.OnRoutingChangedListener { router ->
+        routedDevice = router.routedDevice
+    }
+
+    fun start() {
+        if (registered) return
+        registered = true
+        // The callback is also called at once with every attached device, which applies the choice.
+        audioManager?.registerAudioDeviceCallback(deviceCallback, handler)
+        reconcile()
+    }
+
+    fun stop() {
+        if (registered) audioManager?.unregisterAudioDeviceCallback(deviceCallback)
+        registered = false
+        forgetTrack()
+    }
+
+    /** A choice read from the Rust side; "not known yet" keeps the current one. */
+    fun setPreference(reading: PreferenceReading) {
+        if (reading !is PreferenceReading.Known) return
+        if (reading.preference == preference && pinApplied) return
+        preference = reading.preference
+        reconcile()
+    }
+
+    /** Pin the player to the chosen device if it is attached, else let the system choose; only when that changes. */
+    fun reconcile() {
+        val attached = outputDevices()
+        val target = AudioOutputRules.find(preference, attached.map(::factsOf))
+            ?.let { facts -> attached.firstOrNull { it.id == facts.id } }
+        if (pinApplied && target?.id == pinnedId) return
+        pinApplied = true
+        pinnedId = target?.id
+        try {
+            pin(target)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "Could not set the preferred audio device", error)
+        }
+    }
+
+    /** `AnalyticsListener.onAudioTrackInitialized` (main thread). */
+    fun onTrackInitialized(config: AudioSink.AudioTrackConfig) {
+        trackOutput = config
+    }
+
+    /** `AnalyticsListener.onAudioTrackReleased` (main thread). */
+    fun onTrackReleased() {
+        trackOutput = null
+        forgetTrack()
+    }
+
+    /** The AudioTrack Media3 just created: follow where it is routed. Media3's playback thread. */
+    fun observeTrack(track: AudioTrack) {
+        handler.post {
+            forgetTrack()
+            observedTrack = WeakReference(track)
+            try {
+                track.addOnRoutingChangedListener(routingListener, handler)
+                routedDevice = track.routedDevice
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "Could not follow the audio routing", error)
+            }
+        }
+    }
+
+    private fun forgetTrack() {
+        observedTrack?.get()?.let { track ->
+            try {
+                track.removeOnRoutingChangedListener(routingListener)
+            } catch (_: RuntimeException) {
+                // The track is already gone.
+            }
+        }
+        observedTrack = null
+        routedDevice = null
+    }
+
+    /** The status the settings page shows; [saved] is the choice in `settings.json`. */
+    fun status(saved: OutputDevicePreference?): JSONObject {
+        val attached = outputDevices()
+        val routed = routedDevice?.takeIf { trackOutput != null }?.let(::factsOf)
+            ?: systemMediaRoute(audioManager, attached)
+        return statusJson(attached.map(::factsOf), saved, pinnedId, routed, trackOutput)
+    }
+
+    private fun outputDevices(): List<AudioDeviceInfo> =
+        audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
+
+    companion object {
+        private const val TAG = "MoeMediaIndex"
+
+        fun factsOf(device: AudioDeviceInfo): OutputDeviceFacts = OutputDeviceFacts(
+            id = device.id,
+            type = device.type,
+            productName = device.productName?.toString() ?: "",
+            address = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) device.address ?: "" else "",
+            sampleRates = device.sampleRates?.toList() ?: emptyList(),
+            channelCounts = device.channelCounts?.toList() ?: emptyList(),
+            encodings = device.encodings?.toList() ?: emptyList(),
+        )
+
+        /** The status while the playback service is not running: the attached devices only. */
+        fun idleStatus(context: Context, saved: OutputDevicePreference?): JSONObject {
+            val audioManager = context.getSystemService(AudioManager::class.java)
+            val attached = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
+            return statusJson(attached.map(::factsOf), saved, null, systemMediaRoute(audioManager, attached), null)
+        }
+
+        /**
+         * Where the system sends media now (Android 13+), as one of the attached devices; null before Android 13 or when
+         * it is none of them.
+         */
+        private fun systemMediaRoute(audioManager: AudioManager?, attached: List<AudioDeviceInfo>): OutputDeviceFacts? {
+            if (audioManager == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+            return try {
+                val attributes = android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+                val route = audioManager.getAudioDevicesForAttributes(attributes).firstOrNull() ?: return null
+                attached.firstOrNull { it.type == route.type && (it.address ?: "") == route.address }
+                    ?.let(::factsOf)
+            } catch (_: RuntimeException) {
+                null
+            }
+        }
+
+        private fun statusJson(
+            attached: List<OutputDeviceFacts>,
+            saved: OutputDevicePreference?,
+            pinnedId: Int?,
+            routed: OutputDeviceFacts?,
+            output: AudioSink.AudioTrackConfig?,
+        ): JSONObject {
+            val listed = AudioOutputRules.userDevices(attached)
+            return JSONObject().apply {
+                put("devices", JSONArray(listed.map(AudioOutputRules::deviceJson)))
+                put("chosenId", AudioOutputRules.find(saved, attached)?.id ?: JSONObject.NULL)
+                put("pinnedId", pinnedId ?: JSONObject.NULL)
+                put("routed", routed?.let(AudioOutputRules::deviceJson) ?: JSONObject.NULL)
+                put(
+                    "output",
+                    output?.let {
+                        JSONObject().apply {
+                            put("encoding", it.encoding)
+                            put("sampleRate", it.sampleRate)
+                            put("channelCount", AudioOutputRules.channelCountOfMask(it.channelConfig))
+                            put("offload", it.offload)
+                        }
+                    } ?: JSONObject.NULL,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Media3's AudioTrack provider with one addition: every AudioTrack it creates is handed to [onTrack], so the router can
+ * read where the track is really routed (`AudioTrack.getRoutedDevice`). Everything else is the default provider's.
+ */
+@UnstableApi
+internal class RouteObservingOutputProvider(
+    private val delegate: AudioOutputProvider,
+    private val onTrack: (AudioTrack) -> Unit,
+) : AudioOutputProvider by delegate {
+    override fun getAudioOutput(config: AudioOutputProvider.OutputConfig): AudioOutput {
+        val output = delegate.getAudioOutput(config)
+        (output as? AudioTrackAudioOutput)?.let { audioOutput ->
+            try {
+                onTrack(audioOutput.audioTrack)
+            } catch (_: RuntimeException) {
+                // Only the routing display depends on it.
+            }
+        }
+        return output
+    }
+
+    override fun setClock(clock: Clock) = delegate.setClock(clock)
+
+    override fun hasPendingReleases(): Boolean = delegate.hasPendingReleases()
+}

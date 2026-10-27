@@ -292,6 +292,49 @@ export interface FloatingLyricsSettings extends LyricsLookSettings {
   position: { x: number; y: number } | null;
 }
 
+/** The Android output device the user chose (ADR 0044): kind + product name (+ Bluetooth address), since
+ *  `AudioDeviceInfo` ids change on every plug. */
+export interface AndroidOutputDevice {
+  kind: string;
+  productName: string;
+  address?: string | null;
+}
+
+/** One attached Android output device as `AudioDeviceInfo` describes it (empty lists mean "any"). */
+export interface AndroidOutputDeviceInfo {
+  id: number;
+  type: number;
+  kind: string;
+  productName: string;
+  address: string;
+  sampleRates: number[];
+  channelCounts: number[];
+  encodings: number[];
+  /** What is stored when this device is chosen (null: a device that cannot be chosen). */
+  identity: AndroidOutputDevice | null;
+}
+
+/** What the AudioTrack of the player opened (Media3 `AudioSink.AudioTrackConfig`). */
+export interface AndroidAudioTrackOutput {
+  encoding: number;
+  sampleRate: number;
+  channelCount: number;
+  offload: boolean;
+}
+
+/** Answer of `android_audio_output_status` (ADR 0044). */
+export interface AndroidAudioOutputStatus {
+  devices: AndroidOutputDeviceInfo[];
+  /** The attached device the saved choice is (null: the system default is chosen, or the chosen one is not attached). */
+  chosenId: number | null;
+  /** The device the player is pinned to (the chosen one, attached), or null for the system's choice. */
+  pinnedId: number | null;
+  /** The device that actually plays: the AudioTrack's routed device, else the system's route for media. */
+  routed: AndroidOutputDeviceInfo | null;
+  /** The open AudioTrack's format, or null when none is open. */
+  output: AndroidAudioTrackOutput | null;
+}
+
 /** Answer of `floating_lyrics_android('floatingLyricsStatus')`. */
 export interface FloatingLyricsAndroidStatus {
   canDrawOverlays: boolean;
@@ -1127,6 +1170,18 @@ interface IpcContract {
   audio_output_device_status: {
     args: Record<string, never>;
     result: AudioOutputDeviceStatus[];
+  };
+  settings_get_android_output_device: {
+    args: Record<string, never>;
+    result: AndroidOutputDevice | null;
+  };
+  settings_set_android_output_device: {
+    args: { device: AndroidOutputDevice | null };
+    result: AndroidOutputDevice | null;
+  };
+  android_audio_output_status: {
+    args: Record<string, never>;
+    result: AndroidAudioOutputStatus | null;
   };
   settings_get_output_volume_sync: {
     args: Record<string, never>;

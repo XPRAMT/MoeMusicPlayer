@@ -815,87 +815,6 @@
     cursor: pointer;
   }
 
-  /* Many devices scroll inside the list (at most half the window, on the settings page and in the quick-settings
-     drawer alike) instead of stretching the whole panel; dvh follows the window as it is resized. */
-  .output-device-list {
-    display: grid;
-    gap: 8px;
-    align-content: start;
-    max-height: 50vh;
-    max-height: 50dvh;
-    overflow-y: auto;
-    /* No overscroll containment: at the top or bottom the wheel or a drag goes on to scroll the settings page or the
-       quick-settings drawer (native scroll chaining). */
-    padding-right: 4px;
-  }
-
-  .output-device {
-    display: grid;
-    gap: 8px;
-    padding: 12px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: rgba(var(--text-rgb), 0.025);
-  }
-
-  /* The same look as a chosen option elsewhere in the settings (.layout-choice-button.chosen). */
-  .output-device.is-playing {
-    border-color: rgba(var(--accent-rgb), 0.64);
-    background: rgba(var(--accent-rgb), 0.09);
-  }
-
-  .output-device.is-missing .output-device-name {
-    opacity: 0.6;
-  }
-
-  .output-device-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .output-device-toggle {
-    display: flex;
-    flex: 1 1 auto;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    cursor: pointer;
-  }
-
-  .output-device-dot {
-    flex: 0 0 auto;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--line);
-  }
-
-  .output-device-name small.output-device-takeover {
-    color: var(--status-warning);
-  }
-
-  .output-device-dot.is-ok { background: var(--status-success); }
-  .output-device-dot.is-warn { background: var(--status-warning); }
-  .output-device-dot.is-error { background: var(--status-danger); }
-
-  .output-device-name {
-    display: grid;
-    min-width: 0;
-  }
-
-  .output-device-name strong,
-  .output-device-name small {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .output-device-name small {
-    color: var(--text-soft);
-    font-size: var(--font-caption);
-  }
-
   .output-device-controls {
     display: flex;
     flex-wrap: wrap;
@@ -943,21 +862,6 @@
   .icon-step {
     min-width: 30px;
     padding-inline: 0;
-  }
-
-  .output-device-path {
-    margin: 0;
-    padding-left: 28px;
-    color: var(--text-soft);
-    font-size: var(--font-caption);
-    overflow-wrap: anywhere;
-  }
-
-  .output-device-path.is-warn { color: var(--status-warning); }
-  .output-device-path.is-error { color: var(--status-danger); }
-
-  .output-device-note {
-    opacity: 0.9;
   }
 
   .channel-matrix-panel {
@@ -1036,8 +940,7 @@
   }
 
   @media (max-width: 520px) {
-    .output-device-controls,
-    .output-device-path {
+    .output-device-controls {
       padding-left: 0;
     }
   }

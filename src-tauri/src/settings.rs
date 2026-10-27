@@ -2240,6 +2240,71 @@ pub struct AppSettings {
     /// Font family of the main interface (Settings → main, ADR 0042); `None`: the default font.
     #[serde(default)]
     pub interface_font_family: Option<String>,
+    /// The output device chosen on Android (Settings → playback, ADR 0044); `None`: the system default.
+    #[serde(default, deserialize_with = "deserialize_android_output_device")]
+    pub android_output_device: Option<AndroidOutputDevice>,
+}
+
+/// An Android output device as the user chose it (ADR 0044). `AudioDeviceInfo` ids change every time a device is
+/// plugged in, so a device is known by its kind (a group of `AudioDeviceInfo` types, e.g. `usb`, `wired`, `bluetooth`)
+/// and product name, plus the address for Bluetooth devices (two headsets of the same model).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidOutputDevice {
+    pub kind: String,
+    pub product_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+const ANDROID_OUTPUT_KIND_MAX_CHARS: usize = 32;
+const ANDROID_OUTPUT_NAME_MAX_CHARS: usize = 256;
+const ANDROID_OUTPUT_ADDRESS_MAX_CHARS: usize = 64;
+
+/// The chosen device as it is stored: a kind of plain ASCII letters, a trimmed product name and an address only when
+/// there is one. A device must be told apart by its name or its address: with neither (or a kind or name that is too
+/// long) it is no choice at all, i.e. the system default.
+pub fn normalize_android_output_device(
+    device: Option<AndroidOutputDevice>,
+) -> Option<AndroidOutputDevice> {
+    let device = device?;
+    let kind = device.kind.trim();
+    if kind.is_empty()
+        || kind.chars().count() > ANDROID_OUTPUT_KIND_MAX_CHARS
+        || !kind.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let product_name = device.product_name.trim();
+    if product_name.chars().count() > ANDROID_OUTPUT_NAME_MAX_CHARS {
+        return None;
+    }
+    let address = device
+        .address
+        .map(|address| address.trim().to_owned())
+        .filter(|address| {
+            !address.is_empty() && address.chars().count() <= ANDROID_OUTPUT_ADDRESS_MAX_CHARS
+        });
+    if product_name.is_empty() && address.is_none() {
+        return None;
+    }
+    Some(AndroidOutputDevice {
+        kind: kind.to_owned(),
+        product_name: product_name.to_owned(),
+        address,
+    })
+}
+
+/// A stored choice that cannot be read is the system default, never a settings error.
+fn lenient_android_output_device(value: Option<serde_json::Value>) -> Option<AndroidOutputDevice> {
+    normalize_android_output_device(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
+fn deserialize_android_output_device<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AndroidOutputDevice>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(lenient_android_output_device(value))
 }
 
 impl Default for AppSettings {
@@ -2280,6 +2345,7 @@ impl Default for AppSettings {
             floating_lyrics: FloatingLyricsSettings::default(),
             language: UiLanguage::default(),
             interface_font_family: None,
+            android_output_device: None,
         }
     }
 }
@@ -2775,6 +2841,7 @@ struct RawSettings {
     floating_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
     interface_font_family: Option<serde_json::Value>,
+    android_output_device: Option<serde_json::Value>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2854,6 +2921,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         floating_lyrics: lenient_floating_lyrics(raw.floating_lyrics),
         language: lenient_language(raw.language),
         interface_font_family: lenient_font_family(raw.interface_font_family.as_ref()),
+        android_output_device: lenient_android_output_device(raw.android_output_device),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -4761,6 +4829,108 @@ mod tests {
         assert_eq!(typed.font_family, None);
         let value = serde_json::to_value(&floating).unwrap();
         assert_eq!(value["fontFamily"], "Arial");
+    }
+
+    #[test]
+    fn the_android_output_device_defaults_to_the_system_default_and_keeps_only_a_usable_choice() {
+        assert_eq!(AppSettings::default().android_output_device, None);
+        let usb = AndroidOutputDevice {
+            kind: "usb".into(),
+            product_name: " FiiO KA3 ".into(),
+            address: Some("  ".into()),
+        };
+        assert_eq!(
+            normalize_android_output_device(Some(usb)),
+            Some(AndroidOutputDevice {
+                kind: "usb".into(),
+                product_name: "FiiO KA3".into(),
+                address: None,
+            })
+        );
+        let blank_name = AndroidOutputDevice {
+            kind: "usb".into(),
+            product_name: "   ".into(),
+            address: None,
+        };
+        assert_eq!(normalize_android_output_device(Some(blank_name)), None);
+        // A Bluetooth device whose name is hidden is still told apart by its address.
+        let unnamed = AndroidOutputDevice {
+            kind: "bluetooth".into(),
+            product_name: String::new(),
+            address: Some("AA:BB:CC:DD:EE:FF".into()),
+        };
+        assert_eq!(
+            normalize_android_output_device(Some(unnamed.clone())),
+            Some(unnamed)
+        );
+        let odd_kind = AndroidOutputDevice {
+            kind: "usb device".into(),
+            product_name: "DAC".into(),
+            address: None,
+        };
+        assert_eq!(normalize_android_output_device(Some(odd_kind)), None);
+        assert_eq!(
+            lenient_android_output_device(Some(serde_json::json!(3))),
+            None
+        );
+        assert_eq!(lenient_android_output_device(None), None);
+        let bluetooth = lenient_android_output_device(Some(serde_json::json!({
+            "kind": "bluetooth",
+            "productName": "WH-1000XM5",
+            "address": "AA:BB:CC:DD:EE:FF"
+        })))
+        .unwrap();
+        assert_eq!(bluetooth.address.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
+        let value = serde_json::to_value(AndroidOutputDevice {
+            kind: "usb".into(),
+            product_name: "DAC".into(),
+            address: None,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"kind": "usb", "productName": "DAC"})
+        );
+    }
+
+    #[test]
+    fn the_android_output_device_survives_a_restart_and_an_unreadable_one_is_dropped() {
+        let directory = test_directory("android-output-device");
+        let path = directory.join("settings.json");
+        {
+            let store =
+                SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+            store
+                .update(|settings| {
+                    settings.android_output_device = Some(AndroidOutputDevice {
+                        kind: "usb".into(),
+                        product_name: "USB DAC".into(),
+                        address: None,
+                    });
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        assert_eq!(
+            reopened
+                .snapshot()
+                .unwrap()
+                .android_output_device
+                .map(|device| device.product_name),
+            Some("USB DAC".into())
+        );
+        drop(reopened);
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["androidOutputDevice"]["kind"], "usb");
+        persisted["androidOutputDevice"] = serde_json::json!({"kind": 5});
+        let typed: AppSettings = serde_json::from_value(persisted.clone()).unwrap();
+        assert_eq!(typed.android_output_device, None);
+        std::fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
+        let broken = SettingsStore::open(&path, AppSettings::default()).expect("reopen broken");
+        assert_eq!(broken.snapshot().unwrap().android_output_device, None);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

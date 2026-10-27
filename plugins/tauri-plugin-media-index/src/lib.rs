@@ -206,6 +206,18 @@ impl<R: Runtime> MediaIndex<R> {
         self.platform.floating_lyrics(command, payload)
     }
 
+    /// Android output devices (ADR 0044): `audioOutputStatus` (the attached devices, the device the player is routed to
+    /// and the format its AudioTrack opened) or `setAudioOutputPreference` (the chosen device, applied by the playback
+    /// service), answered by the Kotlin plugin.
+    #[cfg(target_os = "android")]
+    pub fn audio_output(
+        &self,
+        command: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.platform.audio_output(command, payload)
+    }
+
     /// The system font files (`SystemFonts.getAvailableFonts()`, API 29+) and the system region
     /// (`Locale.getDefault().getCountry()`), for the font pickers (ADR 0042).
     #[cfg(target_os = "android")]

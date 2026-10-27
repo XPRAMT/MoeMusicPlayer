@@ -86,6 +86,9 @@ mod android_folder_browser;
 mod android_legacy_backup_cleanup;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
+mod android_output;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(test, allow(dead_code))]
 mod android_playback;
 mod favorites;
 mod lyrics_provider;
@@ -7531,6 +7534,86 @@ fn settings_set_interface_font(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn settings_get_android_output_device(
+    state: State<'_, AppState>,
+) -> Result<Option<settings::AndroidOutputDevice>, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_output_device)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the Android output device (ADR 0044; `None`: the system default) and hand it to the playback service, which
+/// pins the player to it whenever it is attached. Kept (and harmless) on other platforms.
+#[tauri::command]
+async fn settings_set_android_output_device(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: Option<settings::AndroidOutputDevice>,
+) -> Result<Option<settings::AndroidOutputDevice>, String> {
+    let device = settings::normalize_android_output_device(device);
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.android_output_device = device;
+            Ok(())
+        })
+        .map(|stored| stored.android_output_device)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        android_output::set_preference(saved.as_ref());
+        let payload = serde_json::json!({ "preference": saved });
+        // A service that is not running reads the choice when it starts; a failed push is picked up at the next load.
+        let pushed = tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output("setAudioOutputPreference", payload)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        if let Err(error) = pushed {
+            eprintln!("無法把播放裝置交給 Android 播放服務：{error}");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+    Ok(saved)
+}
+
+/// The Android output devices for Settings → playback (ADR 0044): the attached devices with what each accepts, the
+/// device the player is routed to and the format its AudioTrack opened. Null on other platforms.
+#[tauri::command]
+async fn android_audio_output_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let saved = state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_output_device)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        // The service matches the saved choice against the attached devices (the identity rule lives in Kotlin).
+        let payload = serde_json::json!({ "preference": saved });
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output("audioOutputStatus", payload)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, saved);
+        Ok(serde_json::Value::Null)
+    }
+}
+
 /// Persist the interface language and tell every window (each reloads itself to apply it).
 #[tauri::command]
 fn settings_set_language(
@@ -12817,6 +12900,9 @@ pub fn run() {
             settings_set_library_source_scope,
             settings_get_output_volume_sync,
             settings_set_output_volume_sync,
+            settings_get_android_output_device,
+            settings_set_android_output_device,
+            android_audio_output_status,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
@@ -13045,6 +13131,8 @@ pub fn run() {
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
             #[cfg(target_os = "android")]
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
+            #[cfg(target_os = "android")]
+            android_output::set_preference(initial_settings.android_output_device.as_ref());
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
                 // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).

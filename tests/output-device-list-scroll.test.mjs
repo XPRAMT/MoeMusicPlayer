@@ -12,7 +12,9 @@ function rule(source, selector) {
 }
 
 test('the output device list scrolls inside at most half the window', () => {
-  const list = rule(component, '.output-device-list');
+  // The row styles are shared by the Windows and the Android list, so they live in app.css (ADR 0044).
+  const shared = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
+  const list = rule(shared, '.output-device-list');
   assert.match(list, /max-height:\s*50vh;/);
   assert.match(list, /max-height:\s*50dvh;/);
   assert.ok(list.indexOf('50vh') < list.indexOf('50dvh'), 'the dvh value comes last and wins where supported');
