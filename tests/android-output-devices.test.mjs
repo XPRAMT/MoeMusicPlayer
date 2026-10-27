@@ -59,20 +59,21 @@ test('the playing row is one path line: source → mixer（系統混音） → c
   const track = (sampleRate, mixerSampleRate) => ({ encoding: 4, sampleRate, channelCount: 2, offload: false, mixerSampleRate });
   // RedMagic: the mixer runs at 48 kHz, LDAC streams 96 kHz.
   assert.equal(describeOutputPath(track(96000, 48000), bt(ldac)), '96 kHz → 48 kHz（系統混音） → 96 kHz（LDAC 990 kbps）．2 聲道');
-  // Xperia: the mixer runs at the source rate, so that step is no conversion and is left out.
-  assert.equal(describeOutputPath(track(96000, 96000), bt(ldac)), '96 kHz → 96 kHz（LDAC 990 kbps）．2 聲道');
+  // Xperia: the mixer runs at the source rate; the step is still shown.
+  assert.equal(describeOutputPath(track(96000, 96000), bt(ldac)), '96 kHz → 96 kHz（系統混音） → 96 kHz（LDAC 990 kbps）．2 聲道');
   // Wired headphones resampled by the mixer.
   assert.equal(describeOutputPath(track(44100, 48000)), '44.1 kHz → 48 kHz（系統混音）．2 聲道');
-  // No conversion at all.
-  assert.equal(describeOutputPath(track(96000, 96000)), '96 kHz．2 聲道');
-  // The mixer rate unknown: the step is left out, never guessed.
-  assert.equal(describeOutputPath(track(44100, null)), '44.1 kHz．2 聲道');
-  assert.equal(describeOutputPath(track(44100, 0)), '44.1 kHz．2 聲道');
-  assert.equal(describeOutputPath(track(44100, undefined), bt(ldac)), '44.1 kHz → 96 kHz（LDAC 990 kbps）．2 聲道');
+  // Speaker or wired at the same rate: the mixer step is always there.
+  assert.equal(describeOutputPath(track(48000, 48000)), '48 kHz → 48 kHz（系統混音）．2 聲道');
+  // The mixer rate unknown: the step stays without a number, never a guessed one.
+  assert.equal(describeOutputPath(track(44100, null)), '44.1 kHz → （系統混音）．2 聲道');
+  assert.equal(describeOutputPath(track(44100, 0)), '44.1 kHz → （系統混音）．2 聲道');
+  assert.equal(describeOutputPath(track(96000, undefined), bt({ ...ldac, ldacKbps: null })), '96 kHz → （系統混音） → 96 kHz（LDAC）．2 聲道');
   // The codec not reported yet: the step is 藍牙 without a rate.
   assert.equal(describeOutputPath(track(96000, 48000), bt(null)), '96 kHz → 48 kHz（系統混音） → （藍牙）．2 聲道');
   assert.equal(describeOutputPath(null, bt(ldac)), null);
   assert.doesNotMatch(describeOutputPath(track(96000, 96000)) ?? '', /位元|bit-perfect/);
+  assert.ok(!/^\d[^→]*．/.test(describeOutputPath(track(96000, 96000)) ?? ''), 'never the rate alone');
 });
 
 test('a codec step names the codec and LDAC quality', () => {
@@ -80,7 +81,7 @@ test('a codec step names the codec and LDAC quality', () => {
   assert.equal(codecStepName({ ...ldac, ldacKbps: null, ldacAdaptive: true }), 'LDAC 最佳效果');
   assert.equal(codecStepName({ codec: 'AAC', sampleRate: 44100, bitsPerSample: 16, channels: 2, ldacKbps: null, ldacAdaptive: false }), 'AAC');
   const sbc = { codec: 'SBC', sampleRate: null, bitsPerSample: null, channels: null, ldacKbps: null, ldacAdaptive: false };
-  assert.equal(describeOutputPath({ encoding: 2, sampleRate: 48000, channelCount: 2, offload: false, mixerSampleRate: 48000 }, bt(sbc)), '48 kHz → （SBC）．2 聲道');
+  assert.equal(describeOutputPath({ encoding: 2, sampleRate: 48000, channelCount: 2, offload: false, mixerSampleRate: 48000 }, bt(sbc)), '48 kHz → 48 kHz（系統混音） → （SBC）．2 聲道');
 });
 
 test('the system default row comes first and shows what plays when nothing is chosen', () => {
@@ -88,7 +89,7 @@ test('the system default row comes first and shows what plays when nothing is ch
   assert.deepEqual(rows.map((row) => row.key), ['system', 'device-57', 'device-2']);
   assert.equal(rows[0].chosen, true);
   assert.equal(rows[0].sub, '目前是：內建喇叭');
-  assert.equal(rows[0].path?.text, '48 kHz．2 聲道');
+  assert.equal(rows[0].path?.text, '48 kHz → （系統混音）．2 聲道');
   assert.equal(rows[0].path?.tone, 'ok');
   assert.equal(rows[1].chosen, false);
   assert.equal(rows[1].path, null);
@@ -106,7 +107,7 @@ test('the chosen device carries the actual output; playing elsewhere is a warnin
   assert.equal(rows[0].sub, '跟隨 Android 的預設播放裝置');
   assert.equal(rows[0].path, null);
   assert.equal(rows[1].chosen, true);
-  assert.equal(rows[1].path?.text, '48 kHz．2 聲道');
+  assert.equal(rows[1].path?.text, '48 kHz → （系統混音）．2 聲道');
   assert.equal(rows[1].path?.tone, 'ok');
   assert.equal(rows[1].capabilities, '', 'the playing row has the path line instead of 支援');
   const notPlaying = buildAndroidRows({ devices: [usb, speaker], chosenId: 57, pinnedId: 57, routed: usb, output: null }, saved);
@@ -115,7 +116,7 @@ test('the chosen device carries the actual output; playing elsewhere is a warnin
   assert.equal(rows.length, 3, 'no missing row while it is attached');
   const elsewhere = buildAndroidRows({ devices: [usb, speaker], chosenId: 57, pinnedId: 57, routed: speaker, output }, saved);
   assert.equal(elsewhere[1].path?.tone, 'warn');
-  assert.equal(elsewhere[1].path?.text, '目前由 內建喇叭 播放：48 kHz．2 聲道');
+  assert.equal(elsewhere[1].path?.text, '目前由 內建喇叭 播放：48 kHz → （系統混音）．2 聲道');
 });
 
 test('a chosen device that is unplugged shows which device plays instead, and can be dropped', () => {

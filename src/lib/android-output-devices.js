@@ -133,12 +133,12 @@ export function codecStepName(codec) {
  * The sample-rate path of the row that plays, one line like the Windows list: the AudioTrack rate → the Android
  * mixer rate（系統混音） → the Bluetooth codec rate（codec）．N 聲道, e.g.
  * 「96 kHz → 48 kHz（系統混音） → 96 kHz（LDAC 990 kbps）．2 聲道」.
- * - The mixer step is shown only when its rate is known and differs from the AudioTrack rate (an equal rate is no
- *   conversion); an unknown mixer rate is left out, never guessed.
+ * - The mixer step is always there, also at the AudioTrack's own rate, because every track goes through the mixer;
+ *   an unknown mixer rate keeps the step without a number, 「（系統混音）」, never a guessed one.
  * - A Bluetooth route always ends with the codec step, even at the same rate, because it names the codec; before the
  *   stack has reported the codec (or without the permission) the step is 「（藍牙）」 with no rate.
- * - Without any step it is the rate alone: 「96 kHz．2 聲道」. Bit depth is not part of the path (as on Windows), and
- *   nothing here claims what the device receives bit for bit.
+ * - Bit depth is not part of the path (as on Windows), and nothing here claims what the device receives bit for
+ *   bit.
  * @param {AndroidAudioTrackOutput | null | undefined} output
  * @param {{ bluetooth: boolean, codec: import('./ipc').AndroidBluetoothCodec | null }} [route]
  * @returns {string | null} null when no AudioTrack is open
@@ -147,7 +147,7 @@ export function describeOutputPath(output, route = { bluetooth: false, codec: nu
   if (!output) return null;
   const steps = [formatSampleRate(output.sampleRate)];
   const mixer = output.mixerSampleRate;
-  if (mixer && mixer > 0 && mixer !== output.sampleRate) steps.push(`${formatSampleRate(mixer)}（${tr('系統混音')}）`);
+  steps.push(mixer && mixer > 0 ? `${formatSampleRate(mixer)}（${tr('系統混音')}）` : `（${tr('系統混音')}）`);
   if (route.bluetooth) {
     const codec = route.codec;
     if (codec) {
