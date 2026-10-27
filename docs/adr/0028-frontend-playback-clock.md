@@ -65,6 +65,17 @@ playback-state events, so the poll did two jobs at once: animating the position 
   gradient stops, which forced one style recalculation and one layout every frame (measured on the Release player at
   120 Hz while playing: 244 layouts and 245 style recalculations in 2 s, 196 ms of main-thread task time, against 4,
   31 and 40 ms with animations paused).
+- Dock edge timeline geometry (`data-timeline-style="edge"`): the 3 px line is its own band, an `.app-shell`
+  grid row (`--dock-timeline-band` = `--dock-edge-progress-track`, 0 for the other styles) between the content area
+  and the dock, so the content ends at the band top and nothing of the timeline (paint or hit) overlaps it — a wide
+  track list's horizontal scrollbar sits fully above the line. The click target (`.progress-slider`) is the band plus
+  `--dock-edge-progress-hit-below` (10 px) down into the dock (13 px in all), never upward; the 10 px painted thumb
+  may overhang the band visually but its rail does not take pointer events. The time labels start
+  `--dock-edge-progress-label-top` (11.5 px) below the dock top. The dock keeps its own height (`--dock-height`), so
+  fixed elements placed from it are unchanged; the narrow nav panel adds the band (`--nav-panel-dock-overhang` =
+  `--dock-timeline-band`) and so stops at the line's top. Why not an absolutely positioned line over the dock top
+  with a hit band centred on it (the first version): the line and the upper half of the hit area lay on the bottom
+  of the content area and covered its horizontal scrollbar. Test `tests/dock-timeline-band.test.mjs`.
 - Lyrics (Now Playing and taskbar) read the same clock and are woken by a timer at the next line start instead of
   recomputing per sample. The taskbar window no longer polls: the main window forwards each sample as
   `taskbar-lyrics-playback`, and the taskbar window asks with `taskbar-lyrics-playback-request` when it opens.

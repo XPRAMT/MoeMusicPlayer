@@ -86,12 +86,10 @@ test('progress slider publishes playhead percent for the edge glow gradient', ()
   assert.doesNotMatch(css, /@property --progress-ratio|--progress-pct|playback-progress-run/);
   assert.match(css, /\.progress-band \{[^}]*width: 300%;/);
   assert.match(css, /\.progress-track \{/);
-  assert.match(css, /--dock-edge-progress-row:\s*10px/);
-  assert.match(css, /--dock-edge-progress-hit:\s*20px/);
-  assert.match(css, /\.progress-slider \{[^}]*inset: calc\(0\.5 \* \(var\(--dock-progress-row\) - var\(--dock-progress-hit\)\)\) 0;/);
-  assert.match(css, /grid-template-rows: var\(--dock-progress-row\) auto;/);
   assert.match(css, /--dock-edge-progress-track:\s*3px/);
-  assert.match(css, /margin-top:\s*calc\(-0\.5 \* var\(--dock-progress-row\) - 0\.5 \* var\(--dock-progress-track\)\)/);
+  assert.match(css, /--dock-edge-progress-hit-below:\s*10px/);
+  assert.match(css, /\.player-dock\[data-timeline-style="edge"\] \.progress-slider \{[^}]*inset: 0 0 calc\(-1 \* var\(--dock-edge-progress-hit-below\)\);/);
+  assert.match(css, /grid-template-rows: var\(--dock-progress-track\) auto;/);
   assert.match(css, /\.progress-track \{[^}]*transform:\s*translateY\(-50%\)/);
 });
 

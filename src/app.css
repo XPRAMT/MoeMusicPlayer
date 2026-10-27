@@ -140,22 +140,29 @@ input:focus-visible {
 
 .app-shell {
   --sidebar-width: 252px;
-  /* Edge-timeline geometry, shared by the dock and the narrow nav panel clearance. */
-  /* Timeline layout band (track + time labels are placed from it) and the larger invisible click
-     area, both centered on the 3px track; the click area grows past the band without moving anything. */
-  --dock-edge-progress-row: 10px;
-  --dock-edge-progress-hit: 20px;
+  /* Edge-timeline geometry (ADR 0028), shared by the dock and the narrow nav panel clearance. The 3px line is
+     its own layout band (grid row 2) between the content area and the dock, so nothing of the timeline
+     overlaps the content; its click area is the band plus --dock-edge-progress-hit-below into the dock,
+     never upward. The time labels start --dock-edge-progress-label-top below the dock top. */
   --dock-edge-progress-track: 3px;
+  --dock-edge-progress-hit-below: 10px;
+  --dock-edge-progress-label-top: 11.5px;
+  /* Height of the timeline band row: the track with the edge timeline, otherwise nothing. */
+  --dock-timeline-band: 0px;
   width: 100%;
   height: 100dvh;
   min-height: 0;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) var(--dock-timeline-band) auto;
   overflow: hidden;
   background: var(--page);
   isolation: isolate;
   padding: var(--android-safe-top) var(--android-safe-right) var(--android-safe-bottom) var(--android-safe-left);
+}
+
+.app-shell:has(> .player-dock[data-timeline-style="edge"]) {
+  --dock-timeline-band: var(--dock-edge-progress-track);
 }
 
 
@@ -3742,7 +3749,8 @@ input:focus-visible {
   --dock-pad-x: clamp(18px, 3vw, 38px);
   min-height: var(--dock-height);
   grid-column: 1 / -1;
-  grid-row: 2;
+  /* Row 2 is the edge-timeline band (zero height for the other timeline styles). */
+  grid-row: 3;
   /* Equal side columns + auto center: favorite…volume stay window-centered as one group. */
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
@@ -3982,11 +3990,9 @@ input:focus-visible {
   justify-self: center;
 }
 
-/* Edge progress: 3px painted track stays on/above the dock top (不侵入底欄);
-   20px click hit is track-center ±10px and may extend into the dock. */
+/* Edge progress: the 3px painted track fills the timeline band right above the dock (.app-shell grid row 2);
+   the click area is the band plus --dock-edge-progress-hit-below down into the dock, never up into the content. */
 .player-dock[data-timeline-style="edge"] {
-  --dock-progress-hit: var(--dock-edge-progress-hit);
-  --dock-progress-row: var(--dock-edge-progress-row);
   --dock-progress-track: var(--dock-edge-progress-track);
   height: var(--dock-height);
   min-height: var(--dock-height);
@@ -4003,7 +4009,8 @@ input:focus-visible {
 
 .player-dock[data-timeline-style="edge"] .progress-row {
   position: absolute;
-  top: 0;
+  /* Starts at the band top (the band is exactly one track high, directly above the dock). */
+  top: calc(-1 * var(--dock-progress-track));
   /* Track bleeds full dock width; time labels keep dock-pad inset (not window-flush). */
   left: calc(-1 * var(--dock-pad-x));
   right: calc(-1 * var(--dock-pad-x));
@@ -4013,14 +4020,14 @@ input:focus-visible {
   width: auto;
   max-width: none;
   height: auto;
-  /* Hit top = track-center − 5px; track bottom lands on the dock top. */
-  margin-top: calc(-0.5 * var(--dock-progress-row) - 0.5 * var(--dock-progress-track));
+  margin-top: 0;
   padding: 0;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: var(--dock-progress-row) auto;
+  /* Row 1 = the band (track); row 2 = time labels, --dock-edge-progress-label-top below the dock top. */
+  grid-template-rows: var(--dock-progress-track) auto;
   align-items: center;
   column-gap: 0;
-  row-gap: 8px;
+  row-gap: var(--dock-edge-progress-label-top);
   pointer-events: none;
   grid-column: 1 / -1;
   grid-row: auto;
@@ -4037,15 +4044,15 @@ input:focus-visible {
   grid-column: 1 / -1;
   grid-row: 1;
   width: 100%;
-  height: var(--dock-progress-row);
-  min-height: var(--dock-progress-row);
+  height: var(--dock-progress-track);
+  min-height: var(--dock-progress-track);
 }
 
 .player-dock[data-timeline-style="edge"] .progress-slider {
   position: absolute;
-  /* Click area = --dock-progress-hit (20px) centered on the track: reaches 5px past the 10px band on
-     each side (about 8.5px into the dock: above the controls and the time labels, over the top of the dock cover). */
-  inset: calc(0.5 * (var(--dock-progress-row) - var(--dock-progress-hit))) 0;
+  /* Click area = the band + --dock-edge-progress-hit-below into the dock (above the controls and the time labels,
+     over the top of the dock cover); its top is the band top, so it never reaches into the content area. */
+  inset: 0 0 calc(-1 * var(--dock-edge-progress-hit-below));
   width: 100%;
   height: auto;
   margin: 0;
@@ -4346,8 +4353,7 @@ input:focus-visible {
   min-width: 0;
 }
 
-/* 3px painted track centered in the hit band; hit placement keeps this line
-   on/above the dock top while the lower half of the hit may enter the dock. */
+/* 3px painted track centered in .progress-hit (the edge timeline's band is exactly one track high). */
 .progress-track {
   position: absolute;
   top: 50%;
@@ -4780,9 +4786,9 @@ input:focus-visible {
     --sidebar-pad-x: 14px;
     position: fixed;
     z-index: 45;
-    /* Flush under the title bar and against the left edge; ends above the dock and exactly at the
-       top of the visible edge-timeline line (which overhangs the dock top). */
-    --nav-panel-dock-overhang: 0px;
+    /* Flush under the title bar and against the left edge; ends exactly at the top of the edge-timeline
+       band (the .app-shell row between the content and the dock; zero high for the other styles). */
+    --nav-panel-dock-overhang: var(--dock-timeline-band);
     /* Android: background extends under the status bar; content starts below it. */
     top: var(--window-titlebar-height);
     padding-top: calc(var(--sidebar-brand-inset) + var(--android-safe-top, 0px));
@@ -4798,12 +4804,6 @@ input:focus-visible {
     visibility: hidden;
     opacity: 0;
     pointer-events: none;
-  }
-  /* Edge timeline: the row starts hit/2 + track/2 above the dock top and the painted line is centered
-     in the hit band, so the visible line spans [-track, 0] — its bottom lands on the dock top. The panel
-     ends at the line's top; the invisible hit area may sit under the panel edge. */
-  .app-shell:has(.player-dock[data-timeline-style="edge"]) .sidebar.floating-surface {
-    --nav-panel-dock-overhang: var(--dock-edge-progress-track);
   }
   .app-shell .sidebar.floating-surface.nav-panel-open {
     visibility: visible;

@@ -27,10 +27,9 @@ test('floating panels share Quick Settings surface tokens', async () => {
   assert.match(app, /class="sleep-timer-popover floating-surface"/);
   assert.doesNotMatch(css.match(/\.sleep-timer-popover \{[^}]*\}/)?.[0] ?? '', /background|backdrop-filter/);
   assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*position: fixed;[^}]*top: var\(--window-titlebar-height\);[^}]*padding-top: calc\(var\(--sidebar-brand-inset\) \+ var\(--android-safe-top, 0px\)\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\) \+ var\(--nav-panel-dock-overhang\)\);[^}]*left: 0;[^}]*border-radius: 0;/s);
-  // Edge timeline overhang is derived from the shared progress tokens, not a literal.
-  assert.match(css, /\.app-shell:has\(\.player-dock\[data-timeline-style="edge"\]\) \.sidebar\.floating-surface \{\s*--nav-panel-dock-overhang: var\(--dock-edge-progress-track\);/);
-  assert.match(css, /margin-top: calc\(-0\.5 \* var\(--dock-progress-row\) - 0\.5 \* var\(--dock-progress-track\)\);/);
-  assert.match(css, /--dock-progress-hit: var\(--dock-edge-progress-hit\);/);
+  // The panel ends at the top of the edge-timeline band (derived from the band row, not a literal).
+  assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*--nav-panel-dock-overhang: var\(--dock-timeline-band\);/s);
+  assert.match(css, /\.app-shell:has\(> \.player-dock\[data-timeline-style="edge"\]\) \{\s*--dock-timeline-band: var\(--dock-edge-progress-track\);/);
 
   assert.match(app, /class="now-playing-quick-settings-drawer floating-surface"/);
   assert.match(app, /class="volume-popover floating-surface"/);
