@@ -954,7 +954,6 @@
   "預設（{0}）": "Default ({0})",
   "{0} 位元": "{0}-bit",
   "{0}（{1}）": "{0} ({1})",
-  "32 位元浮點": "32-bit float",
   "內建喇叭": "Built-in speaker",
   "有線耳機": "Wired headphones",
   "位元深度不限": "any bit depth",
@@ -967,7 +966,6 @@
   "硬體解碼": "hardware decoding",
   "跟隨 Android 的預設播放裝置": "Follows Android's default playback device",
   "線路輸出": "Line out",
-  "編碼 {0}": "encoding {0}",
   "選擇要輸出的裝置；拔除後改由系統預設播放，重新接上時自動切回。音訊經 Android 系統混音器輸出，系統可能再轉換取樣率，不是 bit-perfect。": "Choose the device to play on. When it is unplugged the system default plays instead, and the player switches back when it is plugged in again. Audio goes through the Android system mixer, which may still change the sample rate, so it is not bit-perfect.",
   "聲道數不限": "any channel count",
   "藍牙": "Bluetooth",
@@ -977,11 +975,10 @@
   "MoeMusicPlayer 需要「附近的裝置」權限，才能讀取藍牙耳機目前使用的編碼（例如 LDAC）與取樣率；不會搜尋或連線到其他裝置。": "MoeMusicPlayer needs the Nearby devices permission to read the codec (such as LDAC) and sample rate your Bluetooth headphones use. It does not scan for or connect to other devices.",
   "尚未授予「附近的裝置」權限。": "The Nearby devices permission has not been granted.",
   "按下「前往授權」後，Android 會詢問是否允許；若系統不再詢問，會開啟本程式的設定頁，請在「權限」中允許「附近的裝置」，再返回本程式。": "After you press Go to permission, Android asks whether to allow it. If it no longer asks, the app's settings page opens: allow Nearby devices under Permissions, then come back to the app.",
-  "播放器輸出：{0} → {1}": "Player output: {0} → {1}",
-  "播放器輸出：{0}": "Player output: {0}",
-  "最佳效果（自動）": "best effort (adaptive)",
-  "系統宣告：{0}": "Declared by the system: {0}",
-  "藍牙編碼：{0}": "Bluetooth codec: {0}",
   "需要「附近的裝置」權限": "Nearby devices permission needed",
-  "需要『附近的裝置』權限才能讀取藍牙編碼": "The Nearby devices permission is needed to read the Bluetooth codec"
+  "需要『附近的裝置』權限才能讀取藍牙編碼": "The Nearby devices permission is needed to read the Bluetooth codec",
+  "{0} 最佳效果": "{0} best effort",
+  "支援 {0}": "Supports {0}",
+  "目前由 {0} 播放：{1}": "Now playing on {0}: {1}",
+  "系統混音": "system mixer"
 }

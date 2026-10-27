@@ -149,6 +149,12 @@ internal object AudioOutputRules {
     /** The channel count of an AudioTrack channel mask (`AudioFormat.CHANNEL_OUT_*`): one bit per channel. */
     fun channelCountOfMask(mask: Int): Int = Integer.bitCount(mask)
 
+    /**
+     * The mixer rate `AudioTrack.getNativeOutputSampleRate` reported: a positive rate, else null (an error or 0 is
+     * "not known", never a guessed number).
+     */
+    fun mixerRateOf(reported: Int?): Int? = reported?.takeIf { it > 0 }
+
     /** Read the choice the Rust side keeps: a Java null is "not known yet", `null` the system default. */
     fun parsePreference(json: String?): PreferenceReading {
         if (json == null) return PreferenceReading.Unknown

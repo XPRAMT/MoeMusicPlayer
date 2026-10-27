@@ -165,4 +165,12 @@ class AudioOutputRulesTest {
         assertEquals(2, AudioOutputRules.channelCountOfMask(12)) // CHANNEL_OUT_STEREO
         assertEquals(6, AudioOutputRules.channelCountOfMask(252)) // CHANNEL_OUT_5POINT1
     }
+
+    @Test
+    fun mixerRateIsKnownOnlyWhenPositive() {
+        assertEquals(48000, AudioOutputRules.mixerRateOf(48000))
+        assertEquals(null, AudioOutputRules.mixerRateOf(0))
+        assertEquals(null, AudioOutputRules.mixerRateOf(-1))
+        assertEquals(null, AudioOutputRules.mixerRateOf(null))
+    }
 }

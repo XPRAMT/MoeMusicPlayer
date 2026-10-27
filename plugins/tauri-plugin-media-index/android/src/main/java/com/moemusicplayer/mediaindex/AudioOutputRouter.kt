@@ -39,6 +39,8 @@ internal class AudioOutputRouter(
     private var registered = false
     @Volatile private var trackOutput: AudioSink.AudioTrackConfig? = null
     @Volatile private var routedDevice: AudioDeviceInfo? = null
+    /** The rate the Android mixer runs at for the stream's output (null: unknown). */
+    @Volatile private var mixerRate: Int? = null
     private var observedTrack: WeakReference<AudioTrack>? = null
 
     private val deviceCallback = object : AudioDeviceCallback() {
@@ -48,6 +50,7 @@ internal class AudioOutputRouter(
 
     private val routingListener = AudioRouting.OnRoutingChangedListener { router ->
         routedDevice = router.routedDevice
+        mixerRate = readMixerRate()
     }
 
     fun start() {
@@ -90,11 +93,13 @@ internal class AudioOutputRouter(
     /** `AnalyticsListener.onAudioTrackInitialized` (main thread). */
     fun onTrackInitialized(config: AudioSink.AudioTrackConfig) {
         trackOutput = config
+        mixerRate = readMixerRate()
     }
 
     /** `AnalyticsListener.onAudioTrackReleased` (main thread). */
     fun onTrackReleased() {
         trackOutput = null
+        mixerRate = null
         forgetTrack()
     }
 
@@ -106,6 +111,7 @@ internal class AudioOutputRouter(
             try {
                 track.addOnRoutingChangedListener(routingListener, handler)
                 routedDevice = track.routedDevice
+                mixerRate = readMixerRate()
             } catch (error: RuntimeException) {
                 Log.w(TAG, "Could not follow the audio routing", error)
             }
@@ -129,8 +135,21 @@ internal class AudioOutputRouter(
         val attached = outputDevices()
         val routed = routedDevice?.takeIf { trackOutput != null }?.let(::factsOf)
             ?: systemMediaRoute(audioManager, attached)
-        return statusJson(attached.map(::factsOf), saved, pinnedId, routed, trackOutput)
+        return statusJson(attached.map(::factsOf), saved, pinnedId, routed, trackOutput, mixerRate)
     }
+
+    /**
+     * The rate of the mixer output media goes to (`AudioTrack.getNativeOutputSampleRate(STREAM_MUSIC)`, public API; it
+     * follows the stream's current route). Null when it fails or reports 0.
+     */
+    private fun readMixerRate(): Int? = AudioOutputRules.mixerRateOf(
+        try {
+            @Suppress("DEPRECATION")
+            AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC)
+        } catch (_: RuntimeException) {
+            null
+        },
+    )
 
     private fun outputDevices(): List<AudioDeviceInfo> =
         audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
@@ -152,7 +171,7 @@ internal class AudioOutputRouter(
         fun idleStatus(context: Context, saved: OutputDevicePreference?): JSONObject {
             val audioManager = context.getSystemService(AudioManager::class.java)
             val attached = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
-            return statusJson(attached.map(::factsOf), saved, null, systemMediaRoute(audioManager, attached), null)
+            return statusJson(attached.map(::factsOf), saved, null, systemMediaRoute(audioManager, attached), null, null)
         }
 
         /**
@@ -180,6 +199,7 @@ internal class AudioOutputRouter(
             pinnedId: Int?,
             routed: OutputDeviceFacts?,
             output: AudioSink.AudioTrackConfig?,
+            mixerRate: Int?,
         ): JSONObject {
             val listed = AudioOutputRules.userDevices(attached)
             return JSONObject().apply {
@@ -195,6 +215,7 @@ internal class AudioOutputRouter(
                             put("sampleRate", it.sampleRate)
                             put("channelCount", AudioOutputRules.channelCountOfMask(it.channelConfig))
                             put("offload", it.offload)
+                            put("mixerSampleRate", mixerRate ?: JSONObject.NULL)
                         }
                     } ?: JSONObject.NULL,
                 )

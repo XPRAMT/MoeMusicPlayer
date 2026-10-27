@@ -4,8 +4,9 @@ import test from 'node:test';
 
 import {
   buildAndroidRows,
-  describePlayerOutput,
-  describeCapabilities,
+  codecStepName,
+  describeOutputPath,
+  describeSupport,
   deviceLabel,
   sameChoice,
 } from '../src/lib/android-output-devices.js';
@@ -41,26 +42,45 @@ test('a device is its name and kind; the built-in speaker and an unnamed device 
   assert.equal(deviceLabel({ kind: 'mystery', productName: 'X' }), 'X（其他裝置）');
 });
 
-test('what a device takes reads like the Windows rows, and an empty list is "any"', () => {
-  assert.equal(describeCapabilities(usb), '44.1／48／96 kHz．2 聲道．16／24 位元／浮點');
-  assert.equal(describeCapabilities(speaker), '格式不限');
-  assert.equal(
-    describeCapabilities({ sampleRates: [48000], channelCounts: [], encodings: [] }),
-    '48 kHz．聲道數不限．位元深度不限',
-  );
-  assert.equal(
-    describeCapabilities({ sampleRates: [], channelCounts: [1, 2], encodings: [22] }),
-    '取樣率不限．1／2 聲道．32 位元',
-  );
+test('an idle row says what the device supports, like the Windows 預設格式 line', () => {
+  assert.equal(describeSupport(usb), '支援 44.1–96 kHz．2 聲道．16／24 位元／浮點');
+  assert.equal(describeSupport({ sampleRates: [96000, 44100], channelCounts: [2], encodings: [2, 21] }), '支援 44.1–96 kHz．2 聲道．16／24 位元');
+  assert.equal(describeSupport(speaker), '格式不限');
+  assert.equal(describeSupport({ sampleRates: [48000], channelCounts: [], encodings: [] }), '支援 48 kHz．聲道數不限．位元深度不限');
+  assert.equal(describeSupport({ sampleRates: [], channelCounts: [1, 2], encodings: [22] }), '支援 取樣率不限．1／2 聲道．32 位元');
   // Only compressed encodings (passthrough): no bit depth to show.
-  assert.equal(describeCapabilities({ sampleRates: [48000], channelCounts: [2], encodings: [5] }), '48 kHz．2 聲道');
+  assert.equal(describeSupport({ sampleRates: [48000, 48000], channelCounts: [2], encodings: [5] }), '支援 48 kHz．2 聲道');
 });
 
-test('the actual output names the format the AudioTrack opened and where it is routed', () => {
-  assert.equal(describePlayerOutput(output, usb), '播放器輸出：48 kHz．24 位元．2 聲道 → KA3');
-  assert.equal(describePlayerOutput({ ...output, encoding: 4, sampleRate: 44100 }, null), '播放器輸出：44.1 kHz．32 位元浮點．2 聲道');
-  assert.equal(describePlayerOutput(null, usb), '音訊輸出尚未開啟。');
-  assert.doesNotMatch(describePlayerOutput(output, usb), /位元完美|bit-perfect/);
+const ldac = { codec: 'LDAC', sampleRate: 96000, bitsPerSample: 32, channels: 2, ldacKbps: 990, ldacAdaptive: false };
+const bt = (codec) => ({ bluetooth: true, codec });
+
+test('the playing row is one path line: source → mixer（系統混音） → codec．channels', () => {
+  const track = (sampleRate, mixerSampleRate) => ({ encoding: 4, sampleRate, channelCount: 2, offload: false, mixerSampleRate });
+  // RedMagic: the mixer runs at 48 kHz, LDAC streams 96 kHz.
+  assert.equal(describeOutputPath(track(96000, 48000), bt(ldac)), '96 kHz → 48 kHz（系統混音） → 96 kHz（LDAC 990 kbps）．2 聲道');
+  // Xperia: the mixer runs at the source rate, so that step is no conversion and is left out.
+  assert.equal(describeOutputPath(track(96000, 96000), bt(ldac)), '96 kHz → 96 kHz（LDAC 990 kbps）．2 聲道');
+  // Wired headphones resampled by the mixer.
+  assert.equal(describeOutputPath(track(44100, 48000)), '44.1 kHz → 48 kHz（系統混音）．2 聲道');
+  // No conversion at all.
+  assert.equal(describeOutputPath(track(96000, 96000)), '96 kHz．2 聲道');
+  // The mixer rate unknown: the step is left out, never guessed.
+  assert.equal(describeOutputPath(track(44100, null)), '44.1 kHz．2 聲道');
+  assert.equal(describeOutputPath(track(44100, 0)), '44.1 kHz．2 聲道');
+  assert.equal(describeOutputPath(track(44100, undefined), bt(ldac)), '44.1 kHz → 96 kHz（LDAC 990 kbps）．2 聲道');
+  // The codec not reported yet: the step is 藍牙 without a rate.
+  assert.equal(describeOutputPath(track(96000, 48000), bt(null)), '96 kHz → 48 kHz（系統混音） → （藍牙）．2 聲道');
+  assert.equal(describeOutputPath(null, bt(ldac)), null);
+  assert.doesNotMatch(describeOutputPath(track(96000, 96000)) ?? '', /位元|bit-perfect/);
+});
+
+test('a codec step names the codec and LDAC quality', () => {
+  assert.equal(codecStepName(ldac), 'LDAC 990 kbps');
+  assert.equal(codecStepName({ ...ldac, ldacKbps: null, ldacAdaptive: true }), 'LDAC 最佳效果');
+  assert.equal(codecStepName({ codec: 'AAC', sampleRate: 44100, bitsPerSample: 16, channels: 2, ldacKbps: null, ldacAdaptive: false }), 'AAC');
+  const sbc = { codec: 'SBC', sampleRate: null, bitsPerSample: null, channels: null, ldacKbps: null, ldacAdaptive: false };
+  assert.equal(describeOutputPath({ encoding: 2, sampleRate: 48000, channelCount: 2, offload: false, mixerSampleRate: 48000 }, bt(sbc)), '48 kHz → （SBC）．2 聲道');
 });
 
 test('the system default row comes first and shows what plays when nothing is chosen', () => {
@@ -68,11 +88,15 @@ test('the system default row comes first and shows what plays when nothing is ch
   assert.deepEqual(rows.map((row) => row.key), ['system', 'device-57', 'device-2']);
   assert.equal(rows[0].chosen, true);
   assert.equal(rows[0].sub, '目前是：內建喇叭');
-  assert.equal(rows[0].path?.text, '播放器輸出：48 kHz．24 位元．2 聲道 → 內建喇叭');
+  assert.equal(rows[0].path?.text, '48 kHz．2 聲道');
   assert.equal(rows[0].path?.tone, 'ok');
   assert.equal(rows[1].chosen, false);
   assert.equal(rows[1].path, null);
-  assert.equal(rows[1].capabilities, "系統宣告：44.1／48／96 kHz．2 聲道．16／24 位元／浮點");
+  assert.equal(rows[1].capabilities, '支援 44.1–96 kHz．2 聲道．16／24 位元／浮點');
+  // Nothing playing: no path line, every device row says what it supports.
+  const idle = buildAndroidRows({ devices: [usb, speaker], chosenId: null, pinnedId: null, routed: speaker, output: null }, null);
+  assert.equal(idle[0].path, null);
+  assert.equal(idle[0].sub, '目前是：內建喇叭');
 });
 
 test('the chosen device carries the actual output; playing elsewhere is a warning', () => {
@@ -82,10 +106,16 @@ test('the chosen device carries the actual output; playing elsewhere is a warnin
   assert.equal(rows[0].sub, '跟隨 Android 的預設播放裝置');
   assert.equal(rows[0].path, null);
   assert.equal(rows[1].chosen, true);
+  assert.equal(rows[1].path?.text, '48 kHz．2 聲道');
   assert.equal(rows[1].path?.tone, 'ok');
+  assert.equal(rows[1].capabilities, '', 'the playing row has the path line instead of 支援');
+  const notPlaying = buildAndroidRows({ devices: [usb, speaker], chosenId: 57, pinnedId: 57, routed: usb, output: null }, saved);
+  assert.equal(notPlaying[1].path, null);
+  assert.equal(notPlaying[1].capabilities, '支援 44.1–96 kHz．2 聲道．16／24 位元／浮點');
   assert.equal(rows.length, 3, 'no missing row while it is attached');
   const elsewhere = buildAndroidRows({ devices: [usb, speaker], chosenId: 57, pinnedId: 57, routed: speaker, output }, saved);
   assert.equal(elsewhere[1].path?.tone, 'warn');
+  assert.equal(elsewhere[1].path?.text, '目前由 內建喇叭 播放：48 kHz．2 聲道');
 });
 
 test('a chosen device that is unplugged shows which device plays instead, and can be dropped', () => {
@@ -140,36 +170,21 @@ const headset = {
   encodings: [2],
   identity: { kind: 'bluetooth', productName: 'WF-1000XM6', address: 'AA:BB:CC:DD:EE:FF' },
 };
-const ldac = { codec: 'LDAC', sampleRate: 96000, bitsPerSample: 32, channels: 2, ldacKbps: 990, ldacAdaptive: false };
-
-test('the Bluetooth codec line names the codec, its rate and bits, and LDAC quality', async () => {
-  const { describeBluetoothCodec } = await import('../src/lib/android-output-devices.js');
-  assert.equal(describeBluetoothCodec(ldac), '藍牙編碼：LDAC．96 kHz．32 位元．990 kbps');
-  assert.equal(
-    describeBluetoothCodec({ ...ldac, ldacKbps: null, ldacAdaptive: true }),
-    '藍牙編碼：LDAC．96 kHz．32 位元．最佳效果（自動）',
-  );
-  assert.equal(
-    describeBluetoothCodec({ codec: 'AAC', sampleRate: 44100, bitsPerSample: 16, channels: 2, ldacKbps: null, ldacAdaptive: false }),
-    '藍牙編碼：AAC．44.1 kHz．16 位元',
-  );
-  assert.equal(
-    describeBluetoothCodec({ codec: 'SBC', sampleRate: null, bitsPerSample: null, channels: null, ldacKbps: null, ldacAdaptive: false }),
-    '藍牙編碼：SBC',
-  );
-});
-
-test('a Bluetooth row shows the codec, asks for 附近的裝置 when needed, and says nothing otherwise', () => {
-  const base = { devices: [headset, speaker], chosenId: null, pinnedId: null, routed: headset, output };
+test('a Bluetooth route puts the codec in the path; a missing permission keeps its own line', () => {
+  const playing = { ...output, sampleRate: 96000, mixerSampleRate: 48000 };
+  const base = { devices: [headset, speaker], chosenId: null, pinnedId: null, routed: headset, output: playing };
   const known = buildAndroidRows({ ...base, bluetoothPermission: 'granted', bluetoothCodecs: { 'AA:BB:CC:DD:EE:FF': ldac } }, null);
-  assert.equal(known[1].capabilities, '系統宣告：48 kHz．2 聲道．16 位元');
-  assert.deepEqual(known[1].bluetooth, { text: '藍牙編碼：LDAC．96 kHz．32 位元．990 kbps', needsPermission: false });
-  assert.equal(known[0].path?.text, '播放器輸出：48 kHz．24 位元．2 聲道 → WF-1000XM6');
+  assert.equal(known[0].path?.text, '96 kHz → 48 kHz（系統混音） → 96 kHz（LDAC 990 kbps）．2 聲道');
+  assert.equal(known[1].capabilities, '支援 48 kHz．2 聲道．16 位元');
+  assert.equal(known[1].bluetooth, null, 'no separate codec line');
   assert.equal(known[2].bluetooth, null, 'the speaker has no codec line');
   const needed = buildAndroidRows({ ...base, bluetoothPermission: 'needed' }, null);
   assert.deepEqual(needed[1].bluetooth, { text: '需要『附近的裝置』權限才能讀取藍牙編碼', needsPermission: true });
-  // Not reported yet, or Android 12 and older: no line.
-  assert.equal(buildAndroidRows({ ...base, bluetoothPermission: 'granted', bluetoothCodecs: {} }, null)[1].bluetooth, null);
+  assert.equal(needed[0].path?.text, '96 kHz → 48 kHz（系統混音） → （藍牙）．2 聲道');
+  // Not reported yet, or Android 12 and older: 藍牙 without a rate, no permission line.
+  const pending = buildAndroidRows({ ...base, bluetoothPermission: 'granted', bluetoothCodecs: {} }, null);
+  assert.equal(pending[0].path?.text, '96 kHz → 48 kHz（系統混音） → （藍牙）．2 聲道');
+  assert.equal(pending[1].bluetooth, null);
   assert.equal(buildAndroidRows({ ...base, bluetoothPermission: 'unavailable' }, null)[1].bluetooth, null);
   assert.equal(buildAndroidRows(base, null)[1].bluetooth, null);
 });

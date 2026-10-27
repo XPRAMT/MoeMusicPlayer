@@ -320,6 +320,8 @@ export interface AndroidAudioTrackOutput {
   sampleRate: number;
   channelCount: number;
   offload: boolean;
+  /** The Android mixer's rate for the stream's route (`AudioTrack.getNativeOutputSampleRate`); null when unknown. */
+  mixerSampleRate?: number | null;
 }
 
 /** Answer of `android_audio_output_status` (ADR 0044). */

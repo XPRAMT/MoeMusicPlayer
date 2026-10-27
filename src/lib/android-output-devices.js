@@ -2,6 +2,7 @@
 // identity rule (which devices are listed, what is stored, which device a stored choice is) lives in the Kotlin
 // `AudioOutputRules`; this file only turns its answer into rows.
 import { tr } from './i18n.js';
+import { formatSampleRate } from './output-format.js';
 
 /**
  * @typedef {import('./ipc').AndroidOutputDevice} AndroidOutputDevice
@@ -59,7 +60,7 @@ export function deviceLabel(device) {
 }
 
 /**
- * 44100 -> "44.1"; the unit is added once for the whole list.
+ * 44100 -> "44.1"; the unit is added once for a range.
  * @param {number} hz
  */
 function kilohertz(hz) {
@@ -81,30 +82,32 @@ function bitDepths(encodings) {
 }
 
 /**
- * What a device takes, in the row style of the Windows list: "44.1／48／96 kHz．2 聲道．16／24 位元". An empty list from
- * Android means "any" (the platform converts), shown as 不限.
+ * The declared sample rates as a range ("44.1–96 kHz"), or the one rate ("48 kHz").
+ * @param {number[]} rates sorted, without duplicates, not empty
+ */
+function rateRange(rates) {
+  const low = rates[0];
+  const high = rates[rates.length - 1];
+  return low === high ? formatSampleRate(low) : `${kilohertz(low)}–${formatSampleRate(high)}`;
+}
+
+/**
+ * What a device declares it takes (`AudioDeviceInfo`), one line for a row that is not playing, in the style of the
+ * Windows 「預設格式 …」 line: 「支援 44.1–96 kHz．2 聲道．16／24 位元」. An empty list from Android means "any" (the
+ * platform converts): 「格式不限」 when nothing is declared.
  * @param {Pick<AndroidOutputDeviceInfo, 'sampleRates' | 'channelCounts' | 'encodings'>} device
  */
-export function describeCapabilities(device) {
+export function describeSupport(device) {
   const rates = [...new Set(device.sampleRates)].sort((a, b) => a - b);
   const channels = [...new Set(device.channelCounts)].sort((a, b) => a - b);
   if (!rates.length && !channels.length && !device.encodings.length) return tr('格式不限');
   const depths = device.encodings.length ? bitDepths(device.encodings) : tr('位元深度不限');
-  return [
-    rates.length ? `${rates.map(kilohertz).join('／')} kHz` : tr('取樣率不限'),
+  const parts = [
+    rates.length ? rateRange(rates) : tr('取樣率不限'),
     channels.length ? tr('{0} 聲道', [channels.join('／')]) : tr('聲道數不限'),
     depths,
   ].filter(Boolean).join('．');
-}
-
-/**
- * One AudioTrack encoding in words.
- * @param {number} encoding
- */
-function encodingLabel(encoding) {
-  if (encoding === ENCODING_PCM_FLOAT) return tr('32 位元浮點');
-  const bits = PCM_BITS[encoding];
-  return bits ? tr('{0} 位元', [bits]) : tr('編碼 {0}', [encoding]);
+  return tr('支援 {0}', [parts]);
 }
 
 /**
@@ -117,62 +120,81 @@ export function deviceName(device) {
 }
 
 /**
- * What the device declares it takes (`AudioDeviceInfo`), labelled so it is not taken for what the device receives:
- * 「系統宣告：48 kHz．2 聲道．16 位元」.
- * @param {Pick<AndroidOutputDeviceInfo, 'sampleRates' | 'channelCounts' | 'encodings'>} device
- */
-export function describeDeclaration(device) {
-  return tr('系統宣告：{0}', [describeCapabilities(device)]);
-}
-
-/**
- * What the player hands to Android and where Android routes it: 「播放器輸出：44.1 kHz．32 位元浮點．2 聲道 →
- * WF-1000XM6」 (the AudioTrack format). The system mixer and a Bluetooth codec may still convert it, so it is never
- * called what the device receives, nor bit-perfect.
- * @param {AndroidAudioTrackOutput | null | undefined} output
- * @param {AndroidOutputDeviceInfo | null | undefined} routed
- */
-export function describePlayerOutput(output, routed) {
-  if (!output) return tr('音訊輸出尚未開啟。');
-  const format = [
-    `${kilohertz(output.sampleRate)} kHz`,
-    encodingLabel(output.encoding),
-    tr('{0} 聲道', [output.channelCount]),
-  ];
-  if (output.offload) format.push(tr('硬體解碼'));
-  const text = format.join('．');
-  return routed ? tr('播放器輸出：{0} → {1}', [text, deviceName(routed)]) : tr('播放器輸出：{0}', [text]);
-}
-
-/**
- * The codec a Bluetooth headset streams with: 「藍牙編碼：LDAC．96 kHz．32 位元．990 kbps」 (LDAC adds its quality:
- * the bitrate, or 最佳效果（自動） for the adaptive setting).
+ * The name of a Bluetooth codec step: 「LDAC 990 kbps」, 「LDAC 最佳效果」 (the adaptive setting), 「AAC」.
  * @param {import('./ipc').AndroidBluetoothCodec} codec
  */
-export function describeBluetoothCodec(codec) {
-  const parts = [codec.codec];
-  if (codec.sampleRate) parts.push(`${kilohertz(codec.sampleRate)} kHz`);
-  if (codec.bitsPerSample) parts.push(tr('{0} 位元', [codec.bitsPerSample]));
-  if (codec.ldacKbps) parts.push(`${codec.ldacKbps} kbps`);
-  else if (codec.ldacAdaptive) parts.push(tr('最佳效果（自動）'));
-  return tr('藍牙編碼：{0}', [parts.join('．')]);
+export function codecStepName(codec) {
+  if (codec.ldacKbps) return `${codec.codec} ${codec.ldacKbps} kbps`;
+  if (codec.ldacAdaptive) return tr('{0} 最佳效果', [codec.codec]);
+  return codec.codec;
 }
 
 /**
- * The Bluetooth codec line of a device row: the codec when the stack has reported it, a request for 「附近的裝置」
- * when that permission is missing, nothing otherwise (not Bluetooth, Android 12 or older, or not reported yet).
+ * The sample-rate path of the row that plays, one line like the Windows list: the AudioTrack rate → the Android
+ * mixer rate（系統混音） → the Bluetooth codec rate（codec）．N 聲道, e.g.
+ * 「96 kHz → 48 kHz（系統混音） → 96 kHz（LDAC 990 kbps）．2 聲道」.
+ * - The mixer step is shown only when its rate is known and differs from the AudioTrack rate (an equal rate is no
+ *   conversion); an unknown mixer rate is left out, never guessed.
+ * - A Bluetooth route always ends with the codec step, even at the same rate, because it names the codec; before the
+ *   stack has reported the codec (or without the permission) the step is 「（藍牙）」 with no rate.
+ * - Without any step it is the rate alone: 「96 kHz．2 聲道」. Bit depth is not part of the path (as on Windows), and
+ *   nothing here claims what the device receives bit for bit.
+ * @param {AndroidAudioTrackOutput | null | undefined} output
+ * @param {{ bluetooth: boolean, codec: import('./ipc').AndroidBluetoothCodec | null }} [route]
+ * @returns {string | null} null when no AudioTrack is open
+ */
+export function describeOutputPath(output, route = { bluetooth: false, codec: null }) {
+  if (!output) return null;
+  const steps = [formatSampleRate(output.sampleRate)];
+  const mixer = output.mixerSampleRate;
+  if (mixer && mixer > 0 && mixer !== output.sampleRate) steps.push(`${formatSampleRate(mixer)}（${tr('系統混音')}）`);
+  if (route.bluetooth) {
+    const codec = route.codec;
+    if (codec) {
+      const name = codecStepName(codec);
+      steps.push(codec.sampleRate ? `${formatSampleRate(codec.sampleRate)}（${name}）` : `（${name}）`);
+    } else {
+      steps.push(`（${tr('藍牙')}）`);
+    }
+  }
+  const parts = [steps.join(' → '), tr('{0} 聲道', [output.channelCount])];
+  if (output.offload) parts.push(tr('硬體解碼'));
+  return parts.join('．');
+}
+
+/**
+ * The codec the stack reported for a device, by its address.
+ * @param {AndroidOutputDeviceInfo} device
+ * @param {AndroidAudioOutputStatus | null} status
+ */
+function codecOf(device, status) {
+  if (status?.bluetoothPermission !== 'granted') return null;
+  return status.bluetoothCodecs?.[device.address.trim().toUpperCase()] ?? null;
+}
+
+/**
+ * The path line of the playing row, for the device the track is routed to; null when no AudioTrack is open.
+ * @param {AndroidAudioOutputStatus | null} status
+ */
+function playingPath(status) {
+  const routed = status?.routed ?? null;
+  const bluetooth = routed?.kind === 'bluetooth';
+  return describeOutputPath(status?.output ?? null, {
+    bluetooth,
+    codec: bluetooth && routed ? codecOf(routed, status) : null,
+  });
+}
+
+/**
+ * The 「附近的裝置」 line of a Bluetooth row: shown when the permission is missing (the codec cannot be read without
+ * it), nothing otherwise (the codec itself is part of the playing row's path).
  * @param {AndroidOutputDeviceInfo} device
  * @param {AndroidAudioOutputStatus | null} status
  * @returns {{ text: string, needsPermission: boolean } | null}
  */
 export function bluetoothCodecLine(device, status) {
-  if (device.kind !== 'bluetooth') return null;
-  if (status?.bluetoothPermission === 'needed') {
-    return { text: tr('需要『附近的裝置』權限才能讀取藍牙編碼'), needsPermission: true };
-  }
-  if (status?.bluetoothPermission !== 'granted') return null;
-  const codec = status.bluetoothCodecs?.[device.address.trim().toUpperCase()];
-  return codec ? { text: describeBluetoothCodec(codec), needsPermission: false } : null;
+  if (device.kind !== 'bluetooth' || status?.bluetoothPermission !== 'needed') return null;
+  return { text: tr('需要『附近的裝置』權限才能讀取藍牙編碼'), needsPermission: true };
 }
 
 /**
@@ -195,9 +217,9 @@ export function sameChoice(a, b) {
 export function buildAndroidRows(status, saved) {
   const devices = status?.devices ?? [];
   const routed = status?.routed ?? null;
-  const output = status?.output ?? null;
   const chosenId = saved ? (status?.chosenId ?? null) : null;
   const missing = Boolean(saved) && chosenId === null;
+  const path = playingPath(status);
   /** @type {AndroidOutputRow[]} */
   const rows = [{
     key: 'system',
@@ -208,12 +230,20 @@ export function buildAndroidRows(status, saved) {
     connected: true,
     capabilities: '',
     bluetooth: null,
-    path: !saved ? { text: describePlayerOutput(output, routed), tone: output ? 'ok' : 'idle' } : null,
+    path: !saved && path ? { text: path, tone: 'ok' } : null,
   }];
   for (const device of devices) {
     const chosen = device.id === chosenId;
+    const playing = chosen && path !== null;
     // The chosen device is attached but the track plays elsewhere: pinning did not take (yet).
-    const elsewhere = chosen && output && routed && routed.id !== device.id;
+    const elsewhere = playing && routed !== null && routed.id !== device.id;
+    /** @type {RowPath | null} */
+    let rowPath = null;
+    if (playing && path !== null) {
+      rowPath = elsewhere && routed
+        ? { text: tr('目前由 {0} 播放：{1}', [deviceLabel(routed), path]), tone: 'warn' }
+        : { text: path, tone: 'ok' };
+    }
     rows.push({
       key: `device-${device.id}`,
       identity: device.identity,
@@ -221,11 +251,9 @@ export function buildAndroidRows(status, saved) {
       sub: null,
       chosen,
       connected: true,
-      capabilities: describeDeclaration(device),
+      capabilities: playing ? '' : describeSupport(device),
       bluetooth: bluetoothCodecLine(device, status),
-      path: chosen
-        ? { text: describePlayerOutput(output, routed), tone: elsewhere ? 'warn' : output ? 'ok' : 'idle' }
-        : null,
+      path: rowPath,
     });
   }
   if (missing && saved) {
