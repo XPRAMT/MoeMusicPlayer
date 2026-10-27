@@ -10,7 +10,7 @@
   } from './playback-scrubber';
   import { playbackSeekKeyStepMs } from './shortcuts.js';
   import { progressRun, type ProgressMotion } from './progress-run.js';
-  import { msUntilBufferingCue } from './buffering-cue.js';
+  import { bufferingCueVisible } from './buffering-cue.js';
   import type { TimelineStyle } from './ipc';
   import {
     estimatePlaybackPosition,
@@ -38,7 +38,7 @@
     timelineStyle?: TimelineStyle;
     /** Playback clock (ADR 0028). Without it the bar shows `positionMs` as is. */
     clock?: PlaybackClock | null;
-    /** Snapshot state; `buffering` for at least BUFFERING_CUE_DELAY_MS pulses the thumb (the only buffering cue). */
+    /** Snapshot state; `buffering` pulses the thumb (the only buffering cue). */
     playbackState?: string | null;
     onSeek: (positionMs: number) => boolean | void | Promise<boolean | void>;
   } = $props();
@@ -66,21 +66,9 @@
     const timer = setTimeout(() => { secondTick += 1; }, wait + 5);
     return () => clearTimeout(timer);
   });
-  // Buffering pulse: one timer per buffering spell, started when the state becomes `buffering`, cancelled (and the
-  // pulse stopped) on any state change. The pulse itself is a CSS animation on `.progress-thumb` (app.css).
-  let bufferingCue = $state(false);
-  $effect(() => {
-    const wait = msUntilBufferingCue(playbackState, 0);
-    if (wait === null) {
-      bufferingCue = false;
-      return;
-    }
-    const timer = setTimeout(() => { bufferingCue = true; }, wait);
-    return () => {
-      clearTimeout(timer);
-      bufferingCue = false;
-    };
-  });
+  // Buffering pulse: on while the state is `buffering`, off the moment it changes. The pulse itself is a CSS animation
+  // on `.progress-thumb` (app.css).
+  const bufferingCue = $derived(bufferingCueVisible(playbackState));
   const hasDraft = $derived(draftTrackId === trackId && draftPositionMs !== null);
   const displayedPositionMs = $derived(
     playbackSeekDisplayPosition(

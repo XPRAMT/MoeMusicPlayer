@@ -43,13 +43,13 @@ playback-state events, so the poll did two jobs at once: animating the position 
   by ratio × 100%), so both are percentage based and width changes need no recalculation (no ResizeObserver). It
   restarts only when `jumpId`, the play state or `runKey` (stall freeze/resume) changes or a drag ends, so smooth
   corrections never make it jump.
-- Buffering cue (user-approved): when the snapshot state has been `buffering` (today only Android reports it) for at
-  least 500 ms (`BUFFERING_CUE_DELAY_MS`, `src/lib/buffering-cue.js`; one timer started on the state change and
-  cancelled on the next, no polling), `.progress-row[data-buffering]` makes the thumb (`.progress-thumb`, not its
-  mover) pulse `filter: brightness()` 1 → 0.9 → 1 over 1000 ms, ease-in-out, infinite; it stops at once when the state
-  changes. The 500 ms delay keeps the short buffering after an ordinary seek from flashing it. This is the only
-  buffering cue: no text, label or tooltip changes, and the play button keeps its pause icon. The 1 s period is a
-  user-approved exception to the 200 ms animation rule; `prefers-reduced-motion: reduce` turns the pulse off. The
+- Buffering cue (user-approved): while the snapshot state is `buffering` (today only Android reports it;
+  `bufferingCueVisible`, `src/lib/buffering-cue.js`), `.progress-row[data-buffering]` makes the thumb
+  (`.progress-thumb`, not its mover) pulse `filter: brightness()` 1 → 0.9 → 1 over 1000 ms, ease-in-out, infinite. It
+  starts as soon as the state is seen and stops the moment it changes, with no delay or timer: the pulse is subtle
+  enough that the short buffering after an ordinary seek may show it, and the user wanted it to react at once. This is
+  the only buffering cue: no text, label or tooltip changes, and the play button keeps its pause icon. The 1 s period
+  is a user-approved exception to the 200 ms animation rule; `prefers-reduced-motion: reduce` turns the pulse off. The
   mover's transform run is untouched. Test `tests/buffering-cue.test.mjs`.
   Why not an animated `@property --progress-ratio` (the first version): that custom property fed `left` and the
   gradient stops, which forced one style recalculation and one layout every frame (measured on the Release player at
