@@ -157,19 +157,22 @@ export function buildAndroidRows(status, saved) {
   }];
   for (const device of devices) {
     const chosen = device.id === chosenId;
+    // Only a playing track's route says where the chosen device's track goes; the system's route (while paused) does
+    // not follow the player's pinned device, so it must not raise 「目前由 … 播放」.
+    const trackRoute = status?.routedFrom === 'system' ? null : routed;
     // The chosen row shows the path whenever a track is open (Android plays on the chosen device once it is pinned);
     // unknown routing (no routed device reported) does not make it idle.
     const playing = chosen && path !== null;
     // The chosen device is attached but the track plays elsewhere: pinning did not take (yet). The same device can be
     // reported under another id (Android lists some devices twice), so the identity decides, not the id.
-    const elsewhere = playing && routed !== null && !isSameDevice(routed, device);
+    const elsewhere = playing && trackRoute !== null && !isSameDevice(trackRoute, device);
     /** @type {RowPath | null} */
     let rowPath = null;
     if (playing && path !== null) {
       // Without a routing report the track plays where the player is pinned: this device (its codec step included).
-      const own = routed === null ? playingPath(status, device) ?? path : path;
-      rowPath = elsewhere && routed
-        ? { text: tr('目前由 {0} 播放：{1}', [deviceLabel(routed), path]), tone: 'warn' }
+      const own = trackRoute === null ? playingPath(status, device) ?? path : path;
+      rowPath = elsewhere && trackRoute
+        ? { text: tr('目前由 {0} 播放：{1}', [deviceLabel(trackRoute), path]), tone: 'warn' }
         : { text: own, tone: 'ok' };
     }
     rows.push({

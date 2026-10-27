@@ -140,9 +140,20 @@ internal class AudioOutputRouter(
     /** The status the settings page shows; [saved] is the choice in `settings.json`. */
     fun status(saved: OutputDevicePreference?): JSONObject {
         val attached = outputDevices()
-        val routed = routedDevice?.takeIf { trackOutput != null }?.let(::factsOf)
-            ?: systemMediaRoute(audioManager, attached)
-        return statusJson(attached.map(::factsOf), saved, pinnedId, routed, trackOutput, mixerRate)
+        val trackRoute = routedDevice?.takeIf { trackOutput != null }
+        // AudioTrack.playState is what the track itself does now (Media3 pauses the track on pause and stop), so it
+        // is the most direct answer to "is this route live"; a paused track's route can be stale.
+        val trackPlaying = try {
+            observedTrack?.get()?.playState == AudioTrack.PLAYSTATE_PLAYING
+        } catch (_: RuntimeException) {
+            false
+        }
+        val source = AudioOutputRules.routeSource(trackPlaying, trackRoute != null, Build.VERSION.SDK_INT)
+        val routed = when (source) {
+            AudioOutputRules.RouteSource.TRACK -> trackRoute?.let(::factsOf)
+            AudioOutputRules.RouteSource.SYSTEM -> systemMediaRoute(audioManager, attached)
+        }
+        return statusJson(attached.map(::factsOf), saved, pinnedId, routed, trackOutput, mixerRate, source)
     }
 
     /**
@@ -178,7 +189,15 @@ internal class AudioOutputRouter(
         fun idleStatus(context: Context, saved: OutputDevicePreference?): JSONObject {
             val audioManager = context.getSystemService(AudioManager::class.java)
             val attached = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
-            return statusJson(attached.map(::factsOf), saved, null, systemMediaRoute(audioManager, attached), null, null)
+            return statusJson(
+                attached.map(::factsOf),
+                saved,
+                null,
+                systemMediaRoute(audioManager, attached),
+                null,
+                null,
+                AudioOutputRules.RouteSource.SYSTEM,
+            )
         }
 
         /**
@@ -207,6 +226,7 @@ internal class AudioOutputRouter(
             routed: OutputDeviceFacts?,
             output: AudioSink.AudioTrackConfig?,
             mixerRate: Int?,
+            source: AudioOutputRules.RouteSource,
         ): JSONObject {
             val listed = AudioOutputRules.userDevices(attached)
             return JSONObject().apply {
@@ -214,6 +234,8 @@ internal class AudioOutputRouter(
                 put("chosenId", AudioOutputRules.find(saved, attached)?.id ?: JSONObject.NULL)
                 put("pinnedId", pinnedId ?: JSONObject.NULL)
                 put("routed", routed?.let(AudioOutputRules::deviceJson) ?: JSONObject.NULL)
+                // "track": where the playing AudioTrack goes; "system": the system's media route (paused or no track).
+                put("routedFrom", if (source == AudioOutputRules.RouteSource.TRACK) "track" else "system")
                 put(
                     "output",
                     output?.let {

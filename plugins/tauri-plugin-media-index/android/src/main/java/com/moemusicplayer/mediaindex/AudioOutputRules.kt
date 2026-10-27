@@ -155,6 +155,22 @@ internal object AudioOutputRules {
      */
     fun mixerRateOf(reported: Int?): Int? = reported?.takeIf { it > 0 }
 
+    /** Where "the device that plays now" is read from. */
+    enum class RouteSource { TRACK, SYSTEM }
+
+    /**
+     * Which route to report. A playing AudioTrack's routed device is the truth. A paused (or stopped) track is not
+     * re-routed by Android when a device comes or goes, so from Android 13 (API 33) on the system's route for media
+     * (`getAudioDevicesForAttributes`) is used instead, also with no track at all. Before Android 13 there is nothing
+     * else to ask: the track's route stays, and a new device shows once playback starts.
+     */
+    fun routeSource(trackPlaying: Boolean, hasTrackRoute: Boolean, apiLevel: Int): RouteSource = when {
+        trackPlaying && hasTrackRoute -> RouteSource.TRACK
+        apiLevel >= 33 -> RouteSource.SYSTEM
+        hasTrackRoute -> RouteSource.TRACK
+        else -> RouteSource.SYSTEM
+    }
+
     /** Read the choice the Rust side keeps: a Java null is "not known yet", `null` the system default. */
     fun parsePreference(json: String?): PreferenceReading {
         if (json == null) return PreferenceReading.Unknown

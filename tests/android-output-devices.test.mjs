@@ -193,3 +193,17 @@ test('the chosen Bluetooth row shows the path while a track plays, whatever the 
   const other = buildAndroidRows({ ...base, routed: speaker }, saved);
   assert.equal(other[1].path?.tone, 'warn');
 });
+
+test('while paused the system route names 「目前是」 but never warns that the chosen device plays elsewhere', () => {
+  const paused = { ...output, sampleRate: 96000, mixerSampleRate: 48000 };
+  // Nothing chosen, paused, a headset just connected: 「目前是」 follows the system's media route.
+  const followed = buildAndroidRows({ devices: [headset, speaker], chosenId: null, pinnedId: null, routed: headset, routedFrom: 'system', output: paused }, null);
+  assert.equal(followed[0].sub, '目前是：WF-1000XM6（藍牙）');
+  // The headset is chosen and pinned; the system's route (the speaker) does not follow the pin: no warning.
+  const pinned = buildAndroidRows({ devices: [headset, speaker], chosenId: 31, pinnedId: 31, routed: speaker, routedFrom: 'system', output: paused }, headset.identity);
+  assert.equal(pinned[1].path?.tone, 'ok');
+  assert.equal(pinned[1].path?.text, '96 kHz → 48 kHz（系統） → （藍牙）．2 聲道');
+  // A playing track routed elsewhere still warns.
+  const playing = buildAndroidRows({ devices: [headset, speaker], chosenId: 31, pinnedId: 31, routed: speaker, routedFrom: 'track', output: paused }, headset.identity);
+  assert.equal(playing[1].path?.tone, 'warn');
+});

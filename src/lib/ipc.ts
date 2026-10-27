@@ -335,6 +335,8 @@ export interface AndroidAudioOutputStatus {
   pinnedId: number | null;
   /** The device that actually plays: the AudioTrack's routed device, else the system's route for media. */
   routed: AndroidOutputDeviceInfo | null;
+  /** `track`: the playing AudioTrack's route; `system`: the system's media route (paused, stopped or no track). */
+  routedFrom?: 'track' | 'system';
   /** The open AudioTrack's format, or null when none is open. */
   output: AndroidAudioTrackOutput | null;
   /** 「附近的裝置」 for the Bluetooth codec: held, to ask for, or nothing to read (before Android 13). */
