@@ -50,3 +50,17 @@ test('edge timeline hit area is the band plus 10px down into the dock, never up 
 test('narrow nav panel stops at the top of the timeline band', () => {
   assert.match(css, /\.app-shell \.sidebar\.floating-surface \{[^}]*--nav-panel-dock-overhang: var\(--dock-timeline-band\);[^}]*bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\) \+ var\(--nav-panel-dock-overhang\)\);/s);
 });
+
+test('the pinned 設定 button sits flush on the timeline band (no sidebar bottom padding)', () => {
+  // Wide sidebar: bottom padding 0, so the button's bottom edge is the sidebar's bottom edge,
+  // which is the top of the timeline band row.
+  assert.match(rule('.sidebar'), /padding: var\(--sidebar-brand-inset\) var\(--sidebar-pad-x\) 0;/);
+  assert.doesNotMatch(css, /\.sidebar \{[^}]*padding-bottom: (?!0[;\s])/s);
+  // The button keeps its own 8 px top padding; only the gap below it is gone.
+  assert.match(rule('.sidebar-settings'), /margin-top: auto;[^}]*padding-top: 8px;/s);
+  // Narrow floating nav panel: same 0 px gap above its bottom edge (which already clears the
+  // Android nav bar through --android-safe-bottom in `bottom`).
+  const panel = css.match(/\.app-shell \.sidebar\.floating-surface \{([^}]*)\}/)?.[1] ?? '';
+  assert.match(panel, /padding-bottom: 0;/);
+  assert.match(panel, /bottom: calc\(var\(--dock-height\) \+ var\(--android-safe-bottom, 0px\) \+ var\(--nav-panel-dock-overhang\)\);/);
+});

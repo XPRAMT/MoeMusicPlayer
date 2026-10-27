@@ -760,7 +760,8 @@ input:focus-visible {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  padding: var(--sidebar-brand-inset) var(--sidebar-pad-x) 21px;
+  /* No bottom padding: the pinned 設定 button's bottom edge sits flush on the dock timeline band. */
+  padding: var(--sidebar-brand-inset) var(--sidebar-pad-x) 0;
   border-right: var(--divider-width) solid var(--divider-color);
 }
 
@@ -4796,7 +4797,7 @@ input:focus-visible {
     left: 0;
     width: min(calc(300px + var(--android-safe-left, 0px)), calc(100vw - var(--android-safe-right, 0px) - 16px));
     padding-left: calc(var(--sidebar-pad-x) + var(--android-safe-left, 0px));
-    padding-bottom: 12px;
+    padding-bottom: 0;
     border-top: 0;
     border-bottom: 0;
     border-left: 0;
@@ -5009,10 +5010,7 @@ input:focus-visible {
 }
 
 @media (max-height: 680px) and (min-width: 621px) {
-  .sidebar {
-    --sidebar-brand-inset: 19px;
-    padding-bottom: 14px;
-  }
+  .sidebar { --sidebar-brand-inset: 19px; }
   .sidebar-rule { margin-top: 15px; margin-bottom: 12px; }
   .sidebar-bottom { gap: 8px; padding-top: 12px; }
   :root { --chrome-bar-height: 58px; }
