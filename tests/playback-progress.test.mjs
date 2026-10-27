@@ -72,7 +72,7 @@ test('progress slider remains visible and is not collapsed with volume-state hid
   assert.match(css, /\.progress-slider,\s*\.volume-slider\s*\{/);
   assert.doesNotMatch(css, /\.progress-slider,\s*\.volume-state\s*\{\s*display:\s*none;/);
   assert.match(progressSource, /class="progress-slider"/);
-  assert.match(progressSource, /<div class="progress-row" data-timeline-style=\{timelineStyle\}>/);
+  assert.match(progressSource, /<div class="progress-row" data-timeline-style=\{timelineStyle\}[ >]/);
 });
 
 test('progress slider publishes playhead percent for the edge glow gradient', () => {

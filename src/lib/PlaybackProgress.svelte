@@ -10,6 +10,7 @@
   } from './playback-scrubber';
   import { playbackSeekKeyStepMs } from './shortcuts.js';
   import { progressRun, type ProgressMotion } from './progress-run.js';
+  import { msUntilBufferingCue } from './buffering-cue.js';
   import type { TimelineStyle } from './ipc';
   import {
     estimatePlaybackPosition,
@@ -26,6 +27,7 @@
     isSending = false,
     timelineStyle = 'edge',
     clock = null,
+    playbackState = null,
     onSeek,
   }: {
     positionMs: number;
@@ -36,6 +38,8 @@
     timelineStyle?: TimelineStyle;
     /** Playback clock (ADR 0028). Without it the bar shows `positionMs` as is. */
     clock?: PlaybackClock | null;
+    /** Snapshot state; `buffering` for at least BUFFERING_CUE_DELAY_MS pulses the thumb (the only buffering cue). */
+    playbackState?: string | null;
     onSeek: (positionMs: number) => boolean | void | Promise<boolean | void>;
   } = $props();
 
@@ -61,6 +65,21 @@
     if (wait === null) return;
     const timer = setTimeout(() => { secondTick += 1; }, wait + 5);
     return () => clearTimeout(timer);
+  });
+  // Buffering pulse: one timer per buffering spell, started when the state becomes `buffering`, cancelled (and the
+  // pulse stopped) on any state change. The pulse itself is a CSS animation on `.progress-thumb` (app.css).
+  let bufferingCue = $state(false);
+  $effect(() => {
+    const wait = msUntilBufferingCue(playbackState, 0);
+    if (wait === null) {
+      bufferingCue = false;
+      return;
+    }
+    const timer = setTimeout(() => { bufferingCue = true; }, wait);
+    return () => {
+      clearTimeout(timer);
+      bufferingCue = false;
+    };
   });
   const hasDraft = $derived(draftTrackId === trackId && draftPositionMs !== null);
   const displayedPositionMs = $derived(
@@ -194,7 +213,7 @@
 
 <svelte:window onpointerup={finishPointerSeek} onpointercancel={cancelDraft} />
 
-<div class="progress-row" data-timeline-style={timelineStyle}>
+<div class="progress-row" data-timeline-style={timelineStyle} data-buffering={bufferingCue ? 'true' : undefined}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
   <div class="progress-hit" use:progressRun={progressMotion}>
     <div class="progress-track" aria-hidden="true"><div class="progress-band"></div></div>

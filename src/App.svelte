@@ -5833,6 +5833,7 @@
         isSending={isSendingPlaybackCommand}
         timelineStyle={nowPlayingAppearancePreferences.timelineStyle}
         clock={playbackClock}
+        playbackState={playback?.state ?? null}
         onSeek={commitPlaybackSeek}
       />
       {#if playbackError || playback?.lastError}<span class="dock-error" role="status">{playbackError ?? playback?.lastError}</span>{/if}
