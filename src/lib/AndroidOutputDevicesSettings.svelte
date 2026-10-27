@@ -98,6 +98,52 @@
     });
   }
 
+  // ---- 「附近的裝置」 for the Bluetooth codec (ADR 0044; the explanation first, the request only on 「前往授權」) ----
+  // The panel belongs to the copy whose button was pressed (it is an interaction, not shown data), so each copy has
+  // its own dialog; what the list shows still lives in the shared state.
+  let permissionDialog = $state<HTMLDialogElement>();
+  let permissionPanelOpen = $state(false);
+  let permissionBusy = $state(false);
+  let permissionDeniedMessage = $state<string | null>(null);
+
+  function openPermissionPanel(): void {
+    permissionDeniedMessage = null;
+    permissionPanelOpen = true;
+  }
+
+  function closePermissionPanel(): void {
+    permissionPanelOpen = false;
+    permissionDeniedMessage = null;
+  }
+
+  async function authorizeBluetooth(): Promise<void> {
+    if (permissionBusy) return;
+    permissionBusy = true;
+    permissionDeniedMessage = null;
+    try {
+      const result = await invokeCommand('android_request_bluetooth_connect', {});
+      if (result?.granted) {
+        permissionPanelOpen = false;
+      } else if (!result?.openedSettings) {
+        permissionDeniedMessage = tr('尚未授予「附近的裝置」權限。');
+      } else {
+        permissionPanelOpen = false;
+      }
+    } catch (error) {
+      permissionDeniedMessage = getErrorText(error);
+    } finally {
+      permissionBusy = false;
+      void refreshStatus();
+    }
+  }
+
+  $effect(() => {
+    const dialog = permissionDialog;
+    if (!dialog) return;
+    if (permissionPanelOpen && !dialog.open) dialog.showModal();
+    else if (!permissionPanelOpen && dialog.open) dialog.close();
+  });
+
   function onVisibility(): void {
     if (document.visibilityState === 'visible' && isPrimary()) void refreshStatus();
   }
@@ -156,9 +202,42 @@
       {#if row.capabilities}
         <p class="output-device-path is-idle">{row.capabilities}</p>
       {/if}
+      {#if row.bluetooth}
+        <p class="output-device-path" class:is-warn={row.bluetooth.needsPermission}>
+          {row.bluetooth.text}
+          {#if row.bluetooth.needsPermission}
+            <button type="button" class="soft-button output-device-permission" onclick={openPermissionPanel}>{tr('前往授權')}</button>
+          {/if}
+        </p>
+      {/if}
       {#if row.path?.text}
         <p class="output-device-path is-{row.path.tone}">{row.path.text}</p>
       {/if}
     </div>
   {/each}
 </div>
+
+<dialog
+  bind:this={permissionDialog}
+  class="update-dialog floating-surface"
+  aria-labelledby="bluetooth-permission-title"
+  aria-describedby="bluetooth-permission-description"
+  oncancel={(event) => { event.preventDefault(); closePermissionPanel(); }}
+>
+  <div class="update-dialog-content">
+    <h2 id="bluetooth-permission-title">{tr('需要「附近的裝置」權限')}</h2>
+    <p id="bluetooth-permission-description">{tr('MoeMusicPlayer 需要「附近的裝置」權限，才能讀取藍牙耳機目前使用的編碼（例如 LDAC）與取樣率；不會搜尋或連線到其他裝置。')}</p>
+    <p>{tr('按下「前往授權」後，Android 會詢問是否允許；若系統不再詢問，會開啟本程式的設定頁，請在「權限」中允許「附近的裝置」，再返回本程式。')}</p>
+    {#if permissionDeniedMessage}<p class="error-text" role="alert">{permissionDeniedMessage}</p>{/if}
+    <div class="update-dialog-actions">
+      <button class="soft-button" type="button" disabled={permissionBusy} onclick={closePermissionPanel}>{tr('取消')}</button>
+      <button class="soft-button" type="button" disabled={permissionBusy} onclick={() => void authorizeBluetooth()}>{permissionBusy ? tr('授權中') : tr('前往授權')}</button>
+    </div>
+  </div>
+</dialog>
+
+<style>
+  .output-device-permission {
+    margin-left: 8px;
+  }
+</style>

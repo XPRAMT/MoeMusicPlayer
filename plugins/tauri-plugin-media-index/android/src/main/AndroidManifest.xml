@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Floating lyrics (ADR 0032): granted by the user in the system settings page, never by the app. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 「附近的裝置」 (Android 12+): the Bluetooth codec of the output devices (ADR 0044); asked for only after the
+         explanation panel of Settings → playback. Not used to scan for or connect to devices. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application>
         <service

@@ -237,6 +237,8 @@ class PlaybackService : MediaSessionService() {
         // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
         router.setPreference(readOutputPreference())
         router.start()
+        // Listen for the Bluetooth codec from the start, so a headset that connects while the app runs is known.
+        BluetoothCodecWatch.ensure(this)
         val forwarding = QueueAwarePlayer(player)
         sessionPlayer = forwarding
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -1033,8 +1035,14 @@ class PlaybackService : MediaSessionService() {
         }
 
         /** Main thread. The output devices for the settings page; [saved] is the choice in settings.json. */
-        internal fun audioOutputStatus(context: android.content.Context, saved: OutputDevicePreference?): JSONObject =
-            activeInstance?.outputRouter?.status(saved) ?: AudioOutputRouter.idleStatus(context, saved)
+        internal fun audioOutputStatus(context: android.content.Context, saved: OutputDevicePreference?): JSONObject {
+            val status = activeInstance?.outputRouter?.status(saved) ?: AudioOutputRouter.idleStatus(context, saved)
+            // The Bluetooth codec of each A2DP device, when the stack has told us (needs BLUETOOTH_CONNECT).
+            BluetoothCodecWatch.ensure(context)
+            status.put("bluetoothPermission", BluetoothCodecWatch.permissionState(context))
+            status.put("bluetoothCodecs", JSONObject(BluetoothCodecWatch.snapshot() as Map<*, *>))
+            return status
+        }
 
         private const val CLOCK_POLL_MS = 40L
 

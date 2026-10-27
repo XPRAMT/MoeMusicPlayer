@@ -100,8 +100,23 @@ internal object AudioOutputRules {
         if (identity.kind != preference.kind || identity.productName != preference.productName.trim()) return false
         val wanted = preference.address?.trim()?.takeIf { it.isNotEmpty() } ?: return true
         val actual = identity.address ?: return true
-        return wanted.equals(actual, ignoreCase = true)
+        return sameAddress(wanted, actual)
     }
+
+    /**
+     * Whether two Bluetooth addresses are one device. Without BLUETOOTH_CONNECT, Android hides all but the last two
+     * bytes (`XX:XX:XX:XX:AB:CD`); a choice saved that way still matches the full address once the permission is
+     * granted (and the other way round), by those last two bytes.
+     */
+    fun sameAddress(a: String, b: String): Boolean {
+        val left = a.trim().uppercase()
+        val right = b.trim().uppercase()
+        if (left == right) return true
+        if (!isAnonymized(left) && !isAnonymized(right)) return false
+        return left.length >= 5 && right.length >= 5 && left.takeLast(5) == right.takeLast(5)
+    }
+
+    private fun isAnonymized(address: String): Boolean = address.startsWith("XX:")
 
     /** The attached device to pin the player to, or null for the system's choice. */
     fun find(preference: OutputDevicePreference?, devices: List<OutputDeviceFacts>): OutputDeviceFacts? =

@@ -7599,17 +7599,38 @@ async fn android_audio_output_status(
     {
         // The service matches the saved choice against the attached devices (the identity rule lives in Kotlin).
         let payload = serde_json::json!({ "preference": saved });
-        return tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             app.media_index()
                 .audio_output("audioOutputStatus", payload)
                 .map_err(|error| error.to_string())
         })
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
     }
     #[cfg(not(target_os = "android"))]
     {
         let _ = (app, saved);
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// Ask for 「附近的裝置」 (BLUETOOTH_CONNECT) so the output device list can show the Bluetooth codec (ADR 0044); only
+/// after the explanation panel. Answers `{ granted, openedSettings }`; null on other platforms.
+#[tauri::command]
+async fn android_request_bluetooth_connect(app: AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output("requestBluetoothConnectPermission", serde_json::json!({}))
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
         Ok(serde_json::Value::Null)
     }
 }
@@ -12903,6 +12924,7 @@ pub fn run() {
             settings_get_android_output_device,
             settings_set_android_output_device,
             android_audio_output_status,
+            android_request_bluetooth_connect,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,

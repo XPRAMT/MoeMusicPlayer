@@ -333,6 +333,21 @@ export interface AndroidAudioOutputStatus {
   routed: AndroidOutputDeviceInfo | null;
   /** The open AudioTrack's format, or null when none is open. */
   output: AndroidAudioTrackOutput | null;
+  /** 「附近的裝置」 for the Bluetooth codec: held, to ask for, or nothing to read (before Android 13). */
+  bluetoothPermission?: 'granted' | 'needed' | 'unavailable';
+  /** The codec of each A2DP device the Bluetooth stack reported, by upper-case address. */
+  bluetoothCodecs?: Record<string, AndroidBluetoothCodec>;
+}
+
+/** The codec a Bluetooth headset streams with (from the stack's codec broadcast). */
+export interface AndroidBluetoothCodec {
+  codec: string;
+  sampleRate: number | null;
+  bitsPerSample: number | null;
+  channels: number | null;
+  /** LDAC's bitrate for its quality setting; null for adaptive ("best effort") or other codecs. */
+  ldacKbps: number | null;
+  ldacAdaptive: boolean;
 }
 
 /** Answer of `floating_lyrics_android('floatingLyricsStatus')`. */
@@ -1182,6 +1197,10 @@ interface IpcContract {
   android_audio_output_status: {
     args: Record<string, never>;
     result: AndroidAudioOutputStatus | null;
+  };
+  android_request_bluetooth_connect: {
+    args: Record<string, never>;
+    result: { granted: boolean; openedSettings: boolean } | null;
   };
   settings_get_output_volume_sync: {
     args: Record<string, never>;

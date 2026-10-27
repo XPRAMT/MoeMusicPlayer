@@ -115,6 +115,18 @@ class AudioOutputRulesTest {
     }
 
     @Test
+    fun aChoiceSavedWithAHiddenAddressStillMatchesOnceThePermissionShowsIt() {
+        // Without BLUETOOTH_CONNECT, Android shows only the last two bytes.
+        val hidden = OutputDevicePreference("bluetooth", "WF-1000XM6", "XX:XX:XX:XX:AB:CD")
+        assertTrue(AudioOutputRules.matches(hidden, device(1, TYPE_BLUETOOTH_A2DP, "WF-1000XM6", "11:22:33:44:AB:CD")))
+        assertFalse(AudioOutputRules.matches(hidden, device(2, TYPE_BLUETOOTH_A2DP, "WF-1000XM6", "11:22:33:44:EF:01")))
+        val full = OutputDevicePreference("bluetooth", "WF-1000XM6", "11:22:33:44:AB:CD")
+        assertTrue(AudioOutputRules.matches(full, device(3, TYPE_BLUETOOTH_A2DP, "WF-1000XM6", "XX:XX:XX:XX:ab:cd")))
+        assertTrue(AudioOutputRules.sameAddress("aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF"))
+        assertFalse(AudioOutputRules.sameAddress("AA:BB:CC:DD:EE:FF", "11:22:33:44:EE:FF"))
+    }
+
+    @Test
     fun thePreferenceFromRustReadsUnknownDefaultOrADevice() {
         assertEquals(PreferenceReading.Unknown, AudioOutputRules.parsePreference(null))
         assertEquals(PreferenceReading.Known(null), AudioOutputRules.parsePreference("null"))

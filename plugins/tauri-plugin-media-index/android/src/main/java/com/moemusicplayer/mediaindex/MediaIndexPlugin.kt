@@ -127,6 +127,12 @@ class CopyUriToFileArgs {
             strings = [Manifest.permission.READ_MEDIA_IMAGES],
             alias = "mediaImages",
         ),
+        // 「附近的裝置」 (Android 12+): read the Bluetooth codec of the output devices (ADR 0044). Asked for only after
+        // the explanation panel of Settings → playback, when the user presses 「前往授權」.
+        Permission(
+            strings = [Manifest.permission.BLUETOOTH_CONNECT],
+            alias = "bluetoothConnect",
+        ),
     ],
 )
 class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
@@ -727,6 +733,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
      * (`preference`, from settings.json) matches, the one the player is pinned to and routed to, and the AudioTrack format.
      */
     @Command
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     fun audioOutputStatus(invoke: Invoke) {
         val saved = AudioOutputRules.preferenceOf(JSONObject(invoke.getArgs().toString()).optJSONObject("preference"))
         activity.runOnUiThread {
@@ -738,8 +745,46 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * Ask for 「附近的裝置」 (BLUETOOTH_CONNECT) to read the Bluetooth codec. When the system will not show its prompt any
+     * more, the app's settings page is opened instead. Before Android 13 there is no codec to read: nothing is asked.
+     */
+    @Command
+    fun requestBluetoothConnectPermission(invoke: Invoke) {
+        if (!BluetoothCodecWatch.supported() || BluetoothCodecWatch.permissionGranted(activity)) {
+            BluetoothCodecWatch.ensure(activity)
+            invoke.resolve(JSObject().put("granted", BluetoothCodecWatch.permissionGranted(activity)).put("openedSettings", false))
+            return
+        }
+        requestPermissionForAlias("bluetoothConnect", invoke, "onBluetoothConnectPermissionResult")
+    }
+
+    @PermissionCallback
+    private fun onBluetoothConnectPermissionResult(invoke: Invoke) {
+        val granted = BluetoothCodecWatch.permissionGranted(activity)
+        var openedSettings = false
+        if (granted) {
+            BluetoothCodecWatch.ensure(activity)
+        } else if (!activity.shouldShowRequestPermissionRationale(Manifest.permission.BLUETOOTH_CONNECT)) {
+            // The prompt did not appear (or was refused with "don't ask again"): only the settings page is left.
+            try {
+                activity.runOnUiThread {
+                    activity.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(Uri.parse("package:${activity.packageName}")),
+                    )
+                }
+                openedSettings = true
+            } catch (error: Exception) {
+                Log.i(LOG_TAG, "could not open the app settings: $error")
+            }
+        }
+        invoke.resolve(JSObject().put("granted", granted).put("openedSettings", openedSettings))
+    }
+
     /** The user chose another output device: the playback service pins the player to it whenever it is attached. */
     @Command
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     fun setAudioOutputPreference(invoke: Invoke) {
         val preference = AudioOutputRules.preferenceOf(JSONObject(invoke.getArgs().toString()).optJSONObject("preference"))
         activity.runOnUiThread {
