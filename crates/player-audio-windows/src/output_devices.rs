@@ -290,9 +290,194 @@ pub(crate) fn find_output_device(id: &str) -> Option<rodio::cpal::Device> {
     rodio::cpal::default_host().device_by_id(&device_id)
 }
 
+/// The rates the settings page asks every device about (ADR 0020 "Supported rates").
+pub const PROBED_RATES: [u32; 8] = [
+    44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000,
+];
+
+/// The rates a device can be opened at by this player: the shared-mode mix rate (what shared mode always plays at)
+/// and every probed rate exclusive mode accepts at the device's channel count in any of its containers. Sorted, without
+/// duplicates; only the mix rate when the device accepts none of them (or could not be asked).
+#[cfg(windows)]
+pub(crate) fn supported_rates(
+    probe: &mut impl crate::exclusive::format::FormatProbe,
+    channels: u16,
+    mix_rate: u32,
+) -> Vec<u32> {
+    use crate::exclusive::format::{Container, StreamFormat};
+    let mut rates: Vec<u32> = PROBED_RATES
+        .iter()
+        .copied()
+        .filter(|&rate| {
+            Container::PREFERENCE.iter().any(|&container| {
+                probe.supports(&StreamFormat {
+                    rate,
+                    channels: channels.max(1),
+                    container,
+                })
+            })
+        })
+        .collect();
+    if mix_rate > 0 {
+        rates.push(mix_rate);
+    }
+    rates.sort_unstable();
+    rates.dedup();
+    rates
+}
+
+/// Probed rates per device, kept until a device notification (`device_notify`) or until the device's mix format
+/// changes, so the settings page's device-list polls never ask the hardware again.
+#[cfg(windows)]
+#[derive(Debug, Default)]
+pub(crate) struct RateCache {
+    generation: u64,
+    by_id: std::collections::HashMap<String, (u32, u16, Vec<u32>)>,
+}
+
+#[cfg(windows)]
+impl RateCache {
+    /// The cached rates of `id`, when they were probed in this device generation with the same mix format.
+    pub(crate) fn get(
+        &mut self,
+        id: &str,
+        generation: u64,
+        mix_rate: u32,
+        channels: u16,
+    ) -> Option<Vec<u32>> {
+        if generation != self.generation {
+            self.by_id.clear();
+            self.generation = generation;
+            return None;
+        }
+        self.by_id
+            .get(id)
+            .filter(|(rate, count, _)| *rate == mix_rate && *count == channels)
+            .map(|(_, _, rates)| rates.clone())
+    }
+
+    pub(crate) fn insert(
+        &mut self,
+        id: &str,
+        generation: u64,
+        mix_rate: u32,
+        channels: u16,
+        rates: Vec<u32>,
+    ) {
+        if generation != self.generation {
+            self.by_id.clear();
+            self.generation = generation;
+        }
+        self.by_id
+            .insert(id.to_owned(), (mix_rate, channels, rates));
+    }
+}
+
+/// The rates a listed device can be opened at (see `supported_rates`), from the cache or probed now. Asks the hardware,
+/// so only the settings page's device-list command calls it, on a blocking worker, never the audio thread.
+#[cfg(windows)]
+pub fn device_supported_rates(device: &OutputDeviceInfo) -> Vec<u32> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<RateCache>> = Mutex::new(None);
+
+    let generation = crate::device_notify::device_change_generation();
+    let lock = || {
+        CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    if let Some(rates) = lock().get_or_insert_with(RateCache::default).get(
+        &device.id,
+        generation,
+        device.sample_rate,
+        device.channels,
+    ) {
+        return rates;
+    }
+    // Probe without holding the lock (a slow driver must not block another device's lookup).
+    let rates = match crate::exclusive::endpoint::WasapiEndpoint::new(Some(&device.id)) {
+        Ok(mut endpoint) => supported_rates(&mut endpoint, device.channels, device.sample_rate),
+        Err(_) => supported_rates(&mut NoProbe, device.channels, device.sample_rate),
+    };
+    lock().get_or_insert_with(RateCache::default).insert(
+        &device.id,
+        generation,
+        device.sample_rate,
+        device.channels,
+        rates.clone(),
+    );
+    rates
+}
+
+/// A device that could not be asked: only its mix rate is known.
+#[cfg(windows)]
+struct NoProbe;
+
+#[cfg(windows)]
+impl crate::exclusive::format::FormatProbe for NoProbe {
+    fn supports(&mut self, _format: &crate::exclusive::format::StreamFormat) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    struct ListedRates(Vec<u32>);
+
+    #[cfg(windows)]
+    impl crate::exclusive::format::FormatProbe for ListedRates {
+        fn supports(&mut self, format: &crate::exclusive::format::StreamFormat) -> bool {
+            format.channels == 2
+                && format.container == crate::exclusive::format::Container::Int16
+                && self.0.contains(&format.rate)
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn supported_rates_are_the_accepted_probed_rates_and_the_mix_rate_sorted() {
+        let mut probe = ListedRates(vec![96_000, 44_100, 192_000, 22_050]);
+        assert_eq!(
+            supported_rates(&mut probe, 2, 48_000),
+            vec![44_100, 48_000, 96_000, 192_000]
+        );
+        // Accepting the mix rate does not list it twice.
+        let mut probe = ListedRates(vec![48_000]);
+        assert_eq!(supported_rates(&mut probe, 2, 48_000), vec![48_000]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_device_that_accepts_nothing_falls_back_to_its_mix_rate() {
+        let mut probe = ListedRates(Vec::new());
+        assert_eq!(supported_rates(&mut probe, 2, 44_100), vec![44_100]);
+        assert!(supported_rates(&mut probe, 2, 0).is_empty());
+        // Wrong channel count: nothing accepted.
+        let mut probe = ListedRates(vec![96_000]);
+        assert_eq!(supported_rates(&mut probe, 6, 48_000), vec![48_000]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_rate_cache_keeps_a_device_until_the_generation_or_its_mix_format_changes() {
+        let mut cache = RateCache::default();
+        assert_eq!(cache.get("a", 0, 48_000, 2), None);
+        cache.insert("a", 0, 48_000, 2, vec![44_100, 48_000]);
+        assert_eq!(cache.get("a", 0, 48_000, 2), Some(vec![44_100, 48_000]));
+        assert_eq!(cache.get("b", 0, 48_000, 2), None);
+        // The user changed the default format in Windows' sound settings.
+        assert_eq!(cache.get("a", 0, 96_000, 2), None);
+        assert_eq!(cache.get("a", 0, 48_000, 8), None);
+        // A device notification drops everything.
+        assert_eq!(cache.get("a", 1, 48_000, 2), None);
+        cache.insert("a", 1, 48_000, 2, vec![48_000]);
+        assert_eq!(cache.get("a", 1, 48_000, 2), Some(vec![48_000]));
+        cache.insert("b", 2, 48_000, 2, vec![48_000]);
+        assert_eq!(cache.get("a", 2, 48_000, 2), None);
+    }
 
     fn route(source: Option<u8>, gain: u8) -> ChannelRoute {
         ChannelRoute {

@@ -7130,6 +7130,9 @@ struct AudioOutputDevice {
     is_default: bool,
     channels: u16,
     sample_rate: u32,
+    /// The rates the device can be opened at: its shared-mode mix rate and the probed rates exclusive mode accepts
+    /// (ADR 0020 "Supported rates"; probed once per device and device notification).
+    supported_rates: Vec<u32>,
 }
 
 /// What a chosen device is doing right now (`id` is `None` for the system default).
@@ -7155,6 +7158,9 @@ async fn audio_list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
             player_audio_windows::output_devices::list_output_devices()
                 .into_iter()
                 .map(|device| AudioOutputDevice {
+                    supported_rates: player_audio_windows::output_devices::device_supported_rates(
+                        &device,
+                    ),
                     id: device.id,
                     name: device.name,
                     is_default: device.is_default,
