@@ -86,11 +86,12 @@ function codecOf(device, status) {
 }
 
 /**
- * The path line of the playing row, for the device the track is routed to; null when no AudioTrack is open.
+ * The path line of the playing row, for the device the track plays on (`device`, by default the routed one); null when
+ * no AudioTrack is open.
  * @param {AndroidAudioOutputStatus | null} status
+ * @param {AndroidOutputDeviceInfo | null} [routed]
  */
-function playingPath(status) {
-  const routed = status?.routed ?? null;
+function playingPath(status, routed = status?.routed ?? null) {
   const bluetooth = routed?.kind === 'bluetooth';
   return describeAndroidPath(status?.output ?? null, {
     bluetooth,
@@ -108,6 +109,15 @@ function playingPath(status) {
 export function bluetoothCodecLine(device, status) {
   if (device.kind !== 'bluetooth' || status?.bluetoothPermission !== 'needed') return null;
   return { text: tr('需要『附近的裝置』權限才能讀取藍牙編碼'), needsPermission: true };
+}
+
+/**
+ * Whether two listed devices are one device: the same id, or the same identity (`AudioOutputRules.identityOf`).
+ * @param {AndroidOutputDeviceInfo} a
+ * @param {AndroidOutputDeviceInfo} b
+ */
+function isSameDevice(a, b) {
+  return a.id === b.id || (a.identity != null && b.identity != null && sameChoice(a.identity, b.identity));
 }
 
 /**
@@ -147,15 +157,20 @@ export function buildAndroidRows(status, saved) {
   }];
   for (const device of devices) {
     const chosen = device.id === chosenId;
+    // The chosen row shows the path whenever a track is open (Android plays on the chosen device once it is pinned);
+    // unknown routing (no routed device reported) does not make it idle.
     const playing = chosen && path !== null;
-    // The chosen device is attached but the track plays elsewhere: pinning did not take (yet).
-    const elsewhere = playing && routed !== null && routed.id !== device.id;
+    // The chosen device is attached but the track plays elsewhere: pinning did not take (yet). The same device can be
+    // reported under another id (Android lists some devices twice), so the identity decides, not the id.
+    const elsewhere = playing && routed !== null && !isSameDevice(routed, device);
     /** @type {RowPath | null} */
     let rowPath = null;
     if (playing && path !== null) {
+      // Without a routing report the track plays where the player is pinned: this device (its codec step included).
+      const own = routed === null ? playingPath(status, device) ?? path : path;
       rowPath = elsewhere && routed
         ? { text: tr('目前由 {0} 播放：{1}', [deviceLabel(routed), path]), tone: 'warn' }
-        : { text: path, tone: 'ok' };
+        : { text: own, tone: 'ok' };
     }
     rows.push({
       key: `device-${device.id}`,

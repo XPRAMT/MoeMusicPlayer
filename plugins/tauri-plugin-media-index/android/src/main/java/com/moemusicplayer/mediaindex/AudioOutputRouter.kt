@@ -37,6 +37,7 @@ internal class AudioOutputRouter(
     private var pinnedId: Int? = null
     private var pinApplied = false
     private var registered = false
+    private val liveTrack = LiveTrackOutput<AudioSink.AudioTrackConfig>()
     @Volatile private var trackOutput: AudioSink.AudioTrackConfig? = null
     @Volatile private var routedDevice: AudioDeviceInfo? = null
     /** The rate the Android mixer runs at for the stream's output (null: unknown). */
@@ -92,12 +93,18 @@ internal class AudioOutputRouter(
 
     /** `AnalyticsListener.onAudioTrackInitialized` (main thread). */
     fun onTrackInitialized(config: AudioSink.AudioTrackConfig) {
-        trackOutput = config
+        liveTrack.initialized(config)
+        trackOutput = liveTrack.current
         mixerRate = readMixerRate()
+        Log.i(TAG, "AudioTrack initialized: ${config.sampleRate} Hz, encoding ${config.encoding}, offload ${config.offload}")
     }
 
     /** `AnalyticsListener.onAudioTrackReleased` (main thread). */
     fun onTrackReleased() {
+        // A release reported after the next track opened is the old track's: the live one keeps playing.
+        val none = liveTrack.released()
+        Log.i(TAG, "AudioTrack released; another still open: ${!none}")
+        if (!none) return
         trackOutput = null
         mixerRate = null
         forgetTrack()

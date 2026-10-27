@@ -170,3 +170,26 @@ test('the permission is asked for only from the explanation panel', () => {
   const manifest = readFileSync(new URL('../plugins/tauri-plugin-media-index/android/src/main/AndroidManifest.xml', import.meta.url), 'utf8');
   assert.match(manifest, /android\.permission\.BLUETOOTH_CONNECT/);
 });
+
+test('the chosen Bluetooth row shows the path while a track plays, whatever the routing report says', () => {
+  const saved = headset.identity;
+  const playing = { ...output, sampleRate: 96000, mixerSampleRate: 48000 };
+  const codecs = { bluetoothPermission: 'granted', bluetoothCodecs: { 'AA:BB:CC:DD:EE:FF': { ...ldac, ldacKbps: null } } };
+  const base = { devices: [headset, speaker], chosenId: 31, pinnedId: 31, output: playing, ...codecs };
+  // Routed to the chosen device: its row has the path, the system default row only its subtitle.
+  const routed = buildAndroidRows({ ...base, routed: headset }, saved);
+  assert.equal(routed[1].path?.text, '96 kHz → 48 kHz（系統） → 96 kHz（LDAC）．2 聲道');
+  assert.equal(routed[1].path?.tone, 'ok');
+  assert.equal(routed[1].capabilities, '');
+  assert.equal(routed[0].path, null);
+  // No routed device reported: the chosen, attached device still carries the path (it is where the player is pinned).
+  const unknown = buildAndroidRows({ ...base, routed: null }, saved);
+  assert.equal(unknown[1].path?.text, '96 kHz → 48 kHz（系統） → 96 kHz（LDAC）．2 聲道');
+  assert.equal(unknown[1].capabilities, '');
+  // The same headset reported under another id is not "playing elsewhere".
+  const twin = buildAndroidRows({ ...base, routed: { ...headset, id: 32 } }, saved);
+  assert.equal(twin[1].path?.tone, 'ok');
+  // Another device really plays: a warning naming it.
+  const other = buildAndroidRows({ ...base, routed: speaker }, saved);
+  assert.equal(other[1].path?.tone, 'warn');
+});
