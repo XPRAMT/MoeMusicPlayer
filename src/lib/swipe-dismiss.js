@@ -75,7 +75,10 @@ export function getSwipeActionsFor(options, pointerType) {
   return pointerType === 'mouse' ? options.mouseActions ?? {} : getSwipeActions(options);
 }
 
-/** A mouse drag starts a swipe only with the primary button, and not on an element that uses the drag itself (the zoomed cover pans). @param {{ pointerType: string, button: number }} event @param {boolean} onDraggableTarget */
+/** Elements that use a mouse drag themselves: the enlarged cover pans (a shrunk cover keeps the swipe). */
+export const SWIPE_MOUSE_DRAG_OWNER_SELECTOR = '[data-cover-pannable]';
+
+/** A mouse drag starts a swipe only with the primary button, and not on an element that uses the drag itself (the enlarged cover pans). @param {{ pointerType: string, button: number }} event @param {boolean} onDraggableTarget */
 export function isSwipeMouseStart(event, onDraggableTarget) {
   return event.pointerType === 'mouse' && event.button === 0 && !onDraggableTarget;
 }
@@ -137,7 +140,7 @@ export function swipeDismiss(node, params) {
     if (options.enabled === false || !event.isPrimary) return;
     const target = event.target instanceof Element ? event.target : null;
     if (event.pointerType === 'mouse') {
-      if (!options.mouseActions || !isSwipeMouseStart(event, target?.closest('[data-cover-zoomed]') != null)) return;
+      if (!options.mouseActions || !isSwipeMouseStart(event, target?.closest(SWIPE_MOUSE_DRAG_OWNER_SELECTOR) != null)) return;
     } else if (!isSwipePointer(event.pointerType)) return;
     if (target?.closest(SWIPE_IGNORE_SELECTOR)) return;
     pointerKind = event.pointerType;

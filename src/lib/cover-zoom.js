@@ -110,6 +110,14 @@ export function coverVisualRect(geometry, state) {
 }
 
 /**
+ * A mouse drag pans the cover only while it is enlarged; shrunk or at rest it is a swipe (next / previous / close).
+ * Marked on the stage as `data-cover-pannable`, which `swipeDismiss` reads. @param {number} scale
+ */
+export function isCoverPannable(scale) {
+  return scale > COVER_ZOOM_REST;
+}
+
+/**
  * Second tap close enough in time and place to the first.
  * @param {{ x: number, y: number, t: number } | null} previous @param {{ x: number, y: number, t: number }} next
  */
@@ -287,6 +295,9 @@ export function coverZoom(node, params) {
     // (track change), which would drop a class added from here.
     if (state.scale !== COVER_ZOOM_REST) node.dataset.coverZoomed = '';
     else delete node.dataset.coverZoomed;
+    // Only an enlarged cover owns a mouse drag (it pans); shrunk or at rest, the drag is the page's swipe.
+    if (isCoverPannable(state.scale)) node.dataset.coverPannable = '';
+    else delete node.dataset.coverPannable;
     if (notify) options.onZoom?.(state, size);
   }
 
@@ -560,7 +571,7 @@ export function coverZoom(node, params) {
       for (const id of pointers.keys()) {
         try { node.setPointerCapture(id); } catch { /* gone */ }
       }
-    } else if (pointers.size === 1 && event.pointerType === 'mouse' && state.scale > COVER_ZOOM_REST) {
+    } else if (pointers.size === 1 && event.pointerType === 'mouse' && isCoverPannable(state.scale)) {
       pan = { x: event.clientX, y: event.clientY, ox: state.x, oy: state.y, cx: event.clientX, cy: event.clientY, moved: false, dirty: false };
       try { node.setPointerCapture(event.pointerId); } catch { /* gone */ }
     }
@@ -688,6 +699,7 @@ export function coverZoom(node, params) {
       node.removeEventListener('click', click, true);
       node.style.transform = '';
       delete node.dataset.coverZoomed;
+      delete node.dataset.coverPannable;
     }
   };
 }

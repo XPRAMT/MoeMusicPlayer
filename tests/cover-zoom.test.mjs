@@ -46,6 +46,15 @@ test('identity renders no transform; zoomed renders translate and scale', () => 
   assert.match(coverZoomTransform({ scale: 2, x: 10, y: -5 }), /translate\(10\.00px, -5\.00px\) scale\(2\.0000\)/);
 });
 
+test('only an enlarged cover is pannable by mouse; shrunk and rest keep the swipe', async () => {
+  const { isCoverPannable, COVER_ZOOM_REST } = await import('../src/lib/cover-zoom.js');
+  assert.equal(isCoverPannable(COVER_ZOOM_MIN), false);
+  assert.equal(isCoverPannable(0.8), false);
+  assert.equal(isCoverPannable(COVER_ZOOM_REST), false);
+  assert.equal(isCoverPannable(1.01), true);
+  assert.equal(isCoverPannable(COVER_ZOOM_MAX), true);
+});
+
 test('double tap needs two close taps in time and place', () => {
   assert.equal(isDoubleTap(null, { x: 0, y: 0, t: 0 }), false);
   assert.equal(isDoubleTap({ x: 0, y: 0, t: 0 }, { x: 5, y: 5, t: 200 }), true);
@@ -171,6 +180,7 @@ test('wheel steps and pinch moves are coalesced into one apply and one rect read
     assert.equal(zooms.length, 1);
     assert.ok(Math.abs(zooms[0].scale - Math.exp(0.45)) < 1e-9, 'the three factors multiplied');
     assert.equal('coverZoomed' in node.dataset, true);
+    assert.equal('coverPannable' in node.dataset, true);
     // The layout the scale change caused is committed in a microtask of the same frame (before paint): the anchor is
     // re-pinned there with one more read and at most one more write, not in a later frame.
     assert.equal(frames.length, 0, 'no follow-up frame');
@@ -258,6 +268,7 @@ test('reset commits the final layout and the compensating glide in the same task
     assert.deepEqual(events, [['zoom', 1], ['settle']]);
     assert.equal(node.style.transform, '');
     assert.equal('coverZoomed' in node.dataset, false);
+    assert.equal('coverPannable' in node.dataset, false);
     assert.equal('coverResetting' in node.dataset, true);
     assert.equal(animations.length, 0);
     await Promise.resolve(); await Promise.resolve();

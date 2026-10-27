@@ -68,6 +68,59 @@ test('a mouse drag only uses mouseActions and never starts on a zoomed cover or 
   assert.equal(isSwipeMouseStart({ pointerType: 'touch', button: 0 }, false), false);
 });
 
+test('a mouse drag on a shrunk or resting cover swipes; only an enlarged cover keeps the drag to pan', async () => {
+  const { coverZoom } = await import('../src/lib/cover-zoom.js');
+  const { swipeDismiss } = await import('../src/lib/swipe-dismiss.js');
+  const hadElement = 'Element' in globalThis;
+  class FakeElement {}
+  if (!hadElement) globalThis.Element = FakeElement;
+  globalThis.requestAnimationFrame = () => 1;
+  globalThis.cancelAnimationFrame = () => {};
+  const listen = (target) => {
+    const listeners = new Map();
+    target.addEventListener = (type, handler) => listeners.set(type, handler);
+    target.removeEventListener = (type) => listeners.delete(type);
+    return listeners;
+  };
+  try {
+    for (const [scale, swipes] of [[0.6, true], [1, true], [2, false]]) {
+      const stage = Object.assign(new globalThis.Element(), {
+        style: {}, dataset: {}, offsetWidth: 200, offsetHeight: 200,
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 200, height: 200 }),
+        setPointerCapture() {}, dispatchEvent: () => true,
+      });
+      // Matches any `[data-…]` attribute selector against the dataset, so the test sees which marker swipe-dismiss reads.
+      stage.closest = (selector) => {
+        const name = /^\[data-([a-z-]+)\]$/.exec(selector)?.[1];
+        const key = name?.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        return key && key in stage.dataset ? stage : null;
+      };
+      listen(stage);
+      const zoom = coverZoom(stage, { initial: { scale, x: 0, y: 0 } });
+      // The layout marker stays on for any non-rest scale; the pan marker only while enlarged.
+      assert.equal('coverZoomed' in stage.dataset, scale !== 1, `zoomed marker at ${scale}`);
+      assert.equal('coverPannable' in stage.dataset, scale > 1, `pannable marker at ${scale}`);
+
+      const view = { style: {}, offsetWidth: 800, offsetHeight: 600, classList: { add() {}, remove() {} }, setPointerCapture() {} };
+      const viewListeners = listen(view);
+      let next = 0;
+      const swipe = swipeDismiss(view, { follow: false, mouseActions: { left: () => { next += 1; } } });
+      const ev = (x, t) => ({ pointerType: 'mouse', button: 0, isPrimary: true, pointerId: 1, clientX: x, clientY: 100, timeStamp: t, target: stage, type: 'pointerup', cancelable: true, preventDefault() {} });
+      viewListeners.get('pointerdown')(ev(400, 0));
+      viewListeners.get('pointermove')(ev(300, 10));
+      viewListeners.get('pointerup')(ev(100, 20));
+      assert.equal(next, swipes ? 1 : 0, `mouse swipe at scale ${scale}`);
+      swipe.destroy();
+      zoom.destroy();
+      assert.equal('coverPannable' in stage.dataset, false);
+    }
+  } finally {
+    if (!hadElement) delete globalThis.Element;
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  }
+});
+
 test('locked swipe resolves its direction from the locked axis sign', () => {
   assert.equal(resolveSwipeDirection('x', -40, 10), 'left');
   assert.equal(resolveSwipeDirection('x', 40, -10), 'right');
