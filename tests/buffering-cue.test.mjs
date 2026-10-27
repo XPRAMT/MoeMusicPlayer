@@ -15,7 +15,7 @@ test('the cue shows exactly while the state is buffering', () => {
   }
 });
 
-test('the pulse is a 1000 ms brightness 1 -> 0.9 animation on the thumb only', () => {
+test('the pulse is a 1000 ms brightness 1 -> 0.7 animation on the thumb only', () => {
   const rule = css.match(/\.progress-row\[data-buffering\] \.progress-thumb \{([^}]*)\}/);
   assert.ok(rule, 'thumb buffering rule');
   assert.match(rule[1], /animation:\s*progress-thumb-buffering\s+1000ms\s+ease-in-out\s+infinite/);
@@ -24,7 +24,7 @@ test('the pulse is a 1000 ms brightness 1 -> 0.9 animation on the thumb only', (
   const props = [...keyframes[1].matchAll(/([a-z-]+)\s*:/g)].map((match) => match[1]);
   assert.deepEqual([...new Set(props)], ['filter']);
   assert.match(keyframes[1], /brightness\(1\)/);
-  assert.match(keyframes[1], /brightness\(0\.9\)/);
+  assert.match(keyframes[1], /brightness\(0\.7\)/);
   // Only the thumb uses the keyframes.
   const users = [...css.matchAll(/([^{}]+)\{[^{}]*progress-thumb-buffering[^{}]*\}/g)].map((match) => match[1].trim());
   assert.deepEqual(users, ['.progress-row[data-buffering] .progress-thumb']);

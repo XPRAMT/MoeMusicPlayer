@@ -45,7 +45,7 @@ playback-state events, so the poll did two jobs at once: animating the position 
   corrections never make it jump.
 - Buffering cue (user-approved): while the snapshot state is `buffering` (today only Android reports it;
   `bufferingCueVisible`, `src/lib/buffering-cue.js`), `.progress-row[data-buffering]` makes the thumb
-  (`.progress-thumb`, not its mover) pulse `filter: brightness()` 1 → 0.9 → 1 over 1000 ms, ease-in-out, infinite. It
+  (`.progress-thumb`, not its mover) pulse `filter: brightness()` 1 → 0.7 → 1 over 1000 ms, ease-in-out, infinite. It
   starts as soon as the state is seen and stops the moment it changes, with no delay or timer: the pulse is subtle
   enough that the short buffering after an ordinary seek may show it, and the user wanted it to react at once. This is
   the only buffering cue: no text, label or tooltip changes, and the play button keeps its pause icon. The 1 s period
