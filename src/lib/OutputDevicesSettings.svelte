@@ -50,7 +50,7 @@
     describeExclusiveFallback,
     describeMirrorPath,
     describeOutputFormat,
-    formatSampleRate,
+    formatSupportedFormats,
   } from './output-format.js';
   import {
     OUTPUT_DELAY_MAX_MS,
@@ -451,14 +451,16 @@
       };
     }
     if (!rowEnabled(rows, index)) {
+      // Every rate the device can be opened at; only its mix rate when it could not be asked (ADR 0020).
+      const rates = row.supportedRates.length ? row.supportedRates : [row.sampleRate];
       const format = row.connected && row.sampleRate
-        ? tr('預設格式 {0}．{1} 聲道', [formatSampleRate(row.sampleRate), row.channels])
+        ? formatSupportedFormats(rates, [row.channels])
         : row.connected ? '' : tr('裝置未連線');
       return { text: format, note: null, tone: 'idle' };
     }
     if (s.exclusive) {
       // Exclusive mode opens the device when a track plays; what it opened is in the playback format.
-      const fallback = describeExclusiveFallback(outputFormat);
+      const fallback = describeExclusiveFallback(outputFormat, statusFor(s.statuses, row.id)?.channels ?? null);
       if (fallback) return { text: fallback.text, note: fallback.notice, tone: 'error' };
       const described = describeExclusive(outputFormat);
       if (!described) return { text: tr('獨佔模式：播放時才會開啟這個裝置'), note: null, tone: 'idle' };
@@ -469,17 +471,16 @@
     if (status.state === 'lost') {
       return { text: tr('已中斷，每 5 秒重試'), note: status.message, tone: 'error' };
     }
-    const channels = status.channels ? tr('{0} 聲道', [status.channels]) : '';
     if (isMainStream(s.statuses, row.id)) {
-      const described = describeOutputFormat(outputFormat);
+      const described = describeOutputFormat(outputFormat, status.channels);
       return {
-        text: [described.text, channels].filter(Boolean).join('．'),
+        text: described.text,
         note: status.message ?? described.notice,
         tone: status.message || described.notice ? 'warn' : 'ok',
       };
     }
     return {
-      text: [describeMirrorPath(outputFormat, status.deviceRateHz, status.converted), channels].filter(Boolean).join('．'),
+      text: describeMirrorPath(outputFormat, status.deviceRateHz, status.converted, status.channels),
       note: null,
       tone: 'ok',
     };

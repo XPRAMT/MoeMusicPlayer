@@ -1,5 +1,8 @@
 ﻿import { tr } from './i18n.js';
 import { formatDsdName } from './dsd-settings.js';
+// The output path of a playback device, one line in the same format on Windows and Android (ADR 0020, ADR 0044):
+// the file's own rate, then each step the samples go through as 「取樣率（步驟）」 joined by 「 → 」, then 「．N 聲道」.
+// Steps a platform does not have are simply not there. Both device lists build every path and idle line here.
 /**
  * @typedef {{
  *   mode: 'windowsBuiltin' | 'highQuality',
@@ -16,6 +19,18 @@ import { formatDsdName } from './dsd-settings.js';
  * }} OutputFormat
  */
 /** @typedef {{ text: string, notice: string | null }} OutputFormatStatus */
+/** @typedef {{ rateHz: number | null, name: string }} PathStep */
+
+/** DSEE HX's output rate when the backend does not say. */
+const DSEE_DEFAULT_RATE_HZ = 96_000;
+
+/**
+ * 44100 -> "44.1", 96000 -> "96" (no unit).
+ * @param {number} hz
+ */
+function kilohertz(hz) {
+  return String(Number((hz / 1000).toFixed(3)));
+}
 
 /**
  * 44100 -> "44.1 kHz", 96000 -> "96 kHz", 22050 -> "22.05 kHz".
@@ -23,116 +38,146 @@ import { formatDsdName } from './dsd-settings.js';
  * @returns {string}
  */
 export function formatSampleRate(hz) {
-  return `${Number((hz / 1000).toFixed(3))} kHz`;
+  return `${kilohertz(hz)} kHz`;
 }
 
 /**
- * Describe the Windows output's sample-rate path for the playback settings.
- * @param {OutputFormat | null | undefined} format
- * @returns {OutputFormatStatus}
+ * The one path line: 「44.1 kHz → 48 kHz（FFT） → 48 kHz（系統）．2 聲道」. A step without a known rate is its name
+ * alone (「（藍牙）」); `extras` follow the channels (「24bit」「位元完美」「硬體解碼」).
+ * @param {string} first the file's own rate (or 「DSD64」), without brackets
+ * @param {PathStep[]} steps
+ * @param {number | null | undefined} channels
+ * @param {(string | null | false | undefined)[]} [extras]
  */
-export function describeOutputFormat(format) {
-  if (!format) return { text: tr('音訊輸出尚未開啟。'), notice: null };
-  const output = formatSampleRate(format.outputRateHz);
-  const device = formatSampleRate(format.deviceRateHz);
-  if (format.sourceRateHz == null) {
-    return { text: tr("尚未載入曲目（輸出 {0}）", [output]), notice: null };
-  }
-  const source = formatSampleRate(format.sourceRateHz);
+export function formatOutputPath(first, steps, channels, extras = []) {
+  const path = [first, ...steps.map((step) => (step.rateHz ? `${formatSampleRate(step.rateHz)}（${step.name}）` : `（${step.name}）`))]
+    .join(' → ');
+  return [path, channels ? tr('{0} 聲道', [channels]) : null, ...extras].filter(Boolean).join('．');
+}
+
+/**
+ * What an idle device takes: every sample rate, then the channel counts, no bit depth: 「44.1, 48, 88.2, 96 kHz．2 聲道」.
+ * Nothing known at all is 「格式不限」 (Android converts anything); a missing half says so.
+ * @param {number[]} rates
+ * @param {number[]} channels
+ */
+export function formatSupportedFormats(rates, channels) {
+  const sortedRates = [...new Set(rates.filter((rate) => rate > 0))].sort((a, b) => a - b);
+  const sortedChannels = [...new Set(channels.filter((count) => count > 0))].sort((a, b) => a - b);
+  if (!sortedRates.length && !sortedChannels.length) return tr('格式不限');
+  return [
+    sortedRates.length ? `${sortedRates.map(kilohertz).join(', ')} kHz` : tr('取樣率不限'),
+    sortedChannels.length ? tr('{0} 聲道', [sortedChannels.join(', ')]) : tr('聲道數不限'),
+  ].join('．');
+}
+
+/**
+ * The player's own steps of a Windows track: DSEE HX, then the rate conversion to the output rate (rubato's FFT, or the
+ * basic converter when FFT cannot take the format), and the rate the stream carries after them.
+ * @param {OutputFormat} format with a track loaded
+ * @returns {{ steps: PathStep[], carried: number }}
+ */
+function playerSteps(format) {
+  /** @type {PathStep[]} */
+  const steps = [];
+  let carried = /** @type {number} */ (format.sourceRateHz);
   if (format.dseeHx === 'active') {
-    const enhancedRate = format.dseeOutputRateHz ?? 96_000;
-    const enhanced = `${source} → ${formatSampleRate(enhancedRate)}（DSEE HX）`;
-    if (format.conversion === 'windows') {
-      return { text: tr("{0}，再交由 Windows 轉換為 {1}", [enhanced, device]), notice: format.dseeNotice };
-    }
-    if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== enhancedRate) {
-      return { text: tr("{0} → {1}（高品質）", [enhanced, output]), notice: format.dseeNotice };
-    }
-    return { text: enhanced, notice: format.dseeNotice };
+    carried = format.dseeOutputRateHz ?? DSEE_DEFAULT_RATE_HZ;
+    steps.push({ rateHz: carried, name: 'DSEE HX' });
   }
-  const status = describeSampleRatePath(format, source, output, device);
-  if (format.dseeHx === 'bypassed' || format.dseeHx === 'unavailable') {
-    return { text: status.text, notice: format.dseeNotice ?? status.notice };
+  if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== carried) {
+    steps.push({ rateHz: format.outputRateHz, name: format.conversion === 'basic' ? tr('基本轉換') : 'FFT' });
+    carried = format.outputRateHz;
   }
-  return status;
+  return { steps, carried };
 }
 
 /**
+ * Why a Windows shared-mode track is converted the way it is, when that needs saying.
  * @param {OutputFormat} format
- * @param {string} source
- * @param {string} output
- * @param {string} device
+ * @returns {string | null}
+ */
+function sharedNotice(format) {
+  if (format.dseeHx === 'active') return format.dseeNotice;
+  const source = formatSampleRate(/** @type {number} */ (format.sourceRateHz));
+  const output = formatSampleRate(format.outputRateHz);
+  /** @type {string | null} */
+  let notice = null;
+  if (format.conversion === 'highQuality' && format.mode === 'windowsBuiltin') {
+    notice = format.fallbackReason
+      ? tr("Windows 無法以 {0} 開啟共享模式輸出，已改用 {1} 並以高品質轉換。", [source, output])
+      : tr("輸出裝置未以 {0} 開啟，暫以高品質轉換。", [source]);
+  } else if (format.conversion === 'basic') {
+    notice = tr('高品質轉換器無法處理此格式，已改用基本轉換。');
+  }
+  if (format.dseeHx === 'bypassed' || format.dseeHx === 'unavailable') return format.dseeNotice ?? notice;
+  return notice;
+}
+
+/**
+ * The Windows main stream in shared mode: 「44.1 kHz → 48 kHz（FFT） → 48 kHz（系統）．2 聲道」. The 系統 rate is what
+ * the Windows audio engine runs at, so a conversion done by Windows is that step alone.
+ * @param {OutputFormat | null | undefined} format
+ * @param {number | null} [channels] the device stream's channel count
  * @returns {OutputFormatStatus}
  */
-function describeSampleRatePath(format, source, output, device) {
-  switch (format.conversion) {
-    case 'highQuality': {
-      const notice = format.mode === 'windowsBuiltin'
-        ? format.fallbackReason
-          ? tr("Windows 無法以 {0} 開啟共享模式輸出，已改用 {1} 並以高品質轉換。", [source, output])
-          : tr("輸出裝置未以 {0} 開啟，暫以高品質轉換。", [source])
-        : null;
-      return { text: tr("{0} → {1}（高品質）", [source, output]), notice };
-    }
-    case 'windows':
-      return { text: tr("{0}（交由 Windows 轉換為 {1}）", [source, device]), notice: null };
-    case 'basic':
-      return {
-        text: tr("{0} → {1}（基本轉換）", [source, output]),
-        notice: tr('高品質轉換器無法處理此格式，已改用基本轉換。'),
-      };
-    default:
-      return { text: tr("原生 {0}（未轉換）", [source]), notice: null };
+export function describeOutputFormat(format, channels = null) {
+  if (!format) return { text: tr('音訊輸出尚未開啟。'), notice: null };
+  if (format.sourceRateHz == null) {
+    return { text: tr("尚未載入曲目（輸出 {0}）", [formatSampleRate(format.outputRateHz)]), notice: null };
   }
+  const { steps } = playerSteps(format);
+  steps.push({ rateHz: format.deviceRateHz, name: tr('系統') });
+  return { text: formatOutputPath(formatSampleRate(format.sourceRateHz), steps, channels), notice: sharedNotice(format) };
 }
 
 /**
- * The sample-rate path of a synced (non-main) device: the track's path up to the rate the stream carries, then the
- * rate conversion for this device when its rate differs.
- * @param {OutputFormat | null | undefined} format  the main stream's format (the track's path)
- * @param {number | null} deviceRateHz  the rate this device runs at
- * @param {boolean} converted  the device's rate differs from the stream's
+ * A synced (non-main) Windows device: the track's steps, then this device's own FFT conversion when its rate differs
+ * from the stream's, then its own 系統 rate.
+ * @param {OutputFormat | null | undefined} format the main stream's format (the track's path)
+ * @param {number | null} deviceRateHz the rate this device runs at
+ * @param {boolean} converted the device's rate differs from the stream's
+ * @param {number | null} [channels]
  * @returns {string}
  */
-export function describeMirrorPath(format, deviceRateHz, converted) {
-  const device = deviceRateHz == null ? null : formatSampleRate(deviceRateHz);
+export function describeMirrorPath(format, deviceRateHz, converted, channels = null) {
   if (!format || format.sourceRateHz == null) {
-    return device ? tr("尚未載入曲目（輸出 {0}）", [device]) : tr('尚未載入曲目');
+    return deviceRateHz == null ? tr('尚未載入曲目') : tr("尚未載入曲目（輸出 {0}）", [formatSampleRate(deviceRateHz)]);
   }
-  const steps = [formatSampleRate(format.sourceRateHz)];
-  if (format.dseeHx === 'active') {
-    steps.push(`${formatSampleRate(format.dseeOutputRateHz ?? 96_000)}（DSEE HX）`);
-  }
-  const carried = format.dseeHx === 'active' ? (format.dseeOutputRateHz ?? 96_000) : format.sourceRateHz;
-  if ((format.conversion === 'highQuality' || format.conversion === 'basic') && format.outputRateHz !== carried) {
-    steps.push(`${formatSampleRate(format.outputRateHz)}（${tr('高品質')}）`);
-  }
-  if (converted && device) steps.push(`${device}（${tr('高品質')}）`);
-  if (steps.length === 1) return tr("原生 {0}（未轉換）", [steps[0]]);
-  return steps.join(' → ');
+  const { steps, carried } = playerSteps(format);
+  const device = deviceRateHz ?? carried;
+  if (converted && device !== carried) steps.push({ rateHz: device, name: 'FFT' });
+  steps.push({ rateHz: device, name: tr('系統') });
+  return formatOutputPath(formatSampleRate(format.sourceRateHz), steps, channels);
 }
 
 /**
- * Describe the exclusive-mode stream (one device, the samples as the file has them when nothing had to change).
+ * The exclusive-mode stream: 「96 kHz → 96 kHz（獨佔）．2 聲道．24bit．位元完美」; what kept it from being bit-perfect
+ * is the notice. DSD as DoP starts at the DSD rate: 「DSD64 → 176.4 kHz（DoP） → 176.4 kHz（獨佔）．2 聲道．24bit」.
  * @param {OutputFormat | null | undefined} format
- * @returns {OutputFormatStatus | null}  null when the output is not in exclusive mode
+ * @returns {OutputFormatStatus | null} null when the output is not in exclusive mode
  */
 export function describeExclusive(format) {
   const exclusive = format?.exclusive;
   if (!format || !exclusive) return null;
-  const rate = formatSampleRate(format.outputRateHz);
+  const bits = `${exclusive.bits}bit`;
+  const exclusiveStep = { rateHz: format.outputRateHz, name: tr('獨佔') };
   if (exclusive.dopDsdRateHz) {
     // DSD as DoP: every bit of the file goes to the DAC; the player's gain and volume do not apply.
-    return { text: tr("獨佔．DoP．{0} → {1}", [formatDsdName(exclusive.dopDsdRateHz), rate]), notice: null };
+    const steps = [{ rateHz: format.outputRateHz, name: 'DoP' }, exclusiveStep];
+    return { text: formatOutputPath(formatDsdName(exclusive.dopDsdRateHz), steps, exclusive.channels, [bits]), notice: null };
   }
+  const resampled = format.sourceRateHz != null && format.sourceRateHz !== format.outputRateHz;
+  const steps = resampled ? [{ rateHz: format.outputRateHz, name: 'FFT' }, exclusiveStep] : [exclusiveStep];
+  const first = formatSampleRate(format.sourceRateHz ?? format.outputRateHz);
+  const text = formatOutputPath(first, steps, exclusive.channels, [bits, exclusive.bitPerfect && tr('位元完美')]);
   const fallbackNote = exclusive.dopFallback ? tr("DoP 無法使用，已轉成 PCM：{0}", [exclusive.dopFallback]) : null;
   const withNote = (/** @type {string | null} */ notice) => [notice, fallbackNote].filter(Boolean).join('；') || null;
-  const head = tr("獨佔．{0}-bit {1}", [exclusive.bits, rate]);
-  if (exclusive.bitPerfect) return { text: `${head}．${tr('位元完美')}`, notice: withNote(null) };
+  if (exclusive.bitPerfect) return { text, notice: withNote(null) };
   /** @type {string[]} */
   const reasons = [];
-  if (format.sourceRateHz != null && format.sourceRateHz !== format.outputRateHz) {
-    reasons.push(tr("裝置不接受 {0}，已轉換為 {1}", [formatSampleRate(format.sourceRateHz), rate]));
+  if (resampled) {
+    reasons.push(tr("裝置不接受 {0}，已轉換為 {1}", [formatSampleRate(/** @type {number} */ (format.sourceRateHz)), formatSampleRate(format.outputRateHz)]));
   }
   if (exclusive.sourceChannels !== exclusive.channels) {
     reasons.push(tr("裝置不接受 {0} 聲道，已混成 {1} 聲道", [exclusive.sourceChannels, exclusive.channels]));
@@ -140,19 +185,54 @@ export function describeExclusive(format) {
   if (exclusive.volumeApplied) {
     reasons.push(tr('播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出'));
   }
-  return { text: head, notice: withNote(reasons.length ? `${reasons.join('；')}（${tr('不是位元完美')}）` : null) };
+  return { text, notice: withNote(reasons.length ? `${reasons.join('；')}（${tr('不是位元完美')}）` : null) };
 }
 
 /**
- * Describe an output that is in exclusive mode but plays the current track in shared mode, and why.
+ * An output that is in exclusive mode but plays the current track in shared mode, and why.
  * @param {OutputFormat | null | undefined} format
- * @returns {OutputFormatStatus | null}  null when exclusive mode played the track itself
+ * @param {number | null} [channels]
+ * @returns {OutputFormatStatus | null} null when exclusive mode played the track itself
  */
-export function describeExclusiveFallback(format) {
+export function describeExclusiveFallback(format, channels = null) {
   if (!format?.exclusiveFallback) return null;
-  const shared = describeOutputFormat(format);
+  const shared = describeOutputFormat(format, channels);
   return {
     text: tr("已改用共享模式：{0}", [shared.text]),
     notice: tr("獨佔模式無法播放這首：{0}", [format.exclusiveFallback]),
   };
+}
+
+/**
+ * The name of an Android Bluetooth codec step: 「LDAC 990 kbps」, 「LDAC 最佳效果」 (the adaptive setting), 「AAC」.
+ * @param {import('./ipc').AndroidBluetoothCodec} codec
+ */
+export function codecStepName(codec) {
+  if (codec.ldacKbps) return `${codec.codec} ${codec.ldacKbps} kbps`;
+  if (codec.ldacAdaptive) return tr('{0} 最佳效果', [codec.codec]);
+  return codec.codec;
+}
+
+/**
+ * The Android playing row: the AudioTrack rate → the mixer rate（系統） → the Bluetooth codec rate（codec）．N 聲道, e.g.
+ * 「96 kHz → 48 kHz（系統） → 96 kHz（LDAC）．2 聲道」.
+ * - An unreadable mixer rate leaves the 系統 step out (never a guessed number).
+ * - A Bluetooth route ends with the codec step, also at the same rate, because it names the codec; before the stack
+ *   has reported the codec (or without the permission) the step is 「（藍牙）」 with no rate.
+ * - Nothing here claims what the device receives bit for bit.
+ * @param {import('./ipc').AndroidAudioTrackOutput | null | undefined} output
+ * @param {{ bluetooth: boolean, codec: import('./ipc').AndroidBluetoothCodec | null }} [route]
+ * @returns {string | null} null when no AudioTrack is open
+ */
+export function describeAndroidPath(output, route = { bluetooth: false, codec: null }) {
+  if (!output) return null;
+  /** @type {PathStep[]} */
+  const steps = [];
+  const mixer = output.mixerSampleRate;
+  if (mixer && mixer > 0) steps.push({ rateHz: mixer, name: tr('系統') });
+  if (route.bluetooth) {
+    const codec = route.codec;
+    steps.push(codec ? { rateHz: codec.sampleRate || null, name: codecStepName(codec) } : { rateHz: null, name: tr('藍牙') });
+  }
+  return formatOutputPath(formatSampleRate(output.sampleRate), steps, output.channelCount, [output.offload && tr('硬體解碼')]);
 }

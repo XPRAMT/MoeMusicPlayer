@@ -188,3 +188,12 @@ test('a device poll that found nothing new is recognised as the same list', () =
   assert.equal(sameDeviceList([speakers, earbuds], [speakers]), false);
   assert.equal(sameDeviceList([speakers], [{ ...speakers, isDefault: false }]), false);
 });
+
+test('a row carries the rates its device can be opened at, and a changed probe is a new list', () => {
+  const probed = { ...speakers, supportedRates: [44_100, 48_000, 96_000] };
+  const rows = buildDeviceRows([], [probed]);
+  assert.deepEqual(rows[0].supportedRates, [44_100, 48_000, 96_000], 'the system default row is the default device');
+  assert.deepEqual(rows[1].supportedRates, [44_100, 48_000, 96_000]);
+  assert.deepEqual(buildDeviceRows([], [speakers])[1].supportedRates, []);
+  assert.equal(sameDeviceList([probed], [{ ...probed, supportedRates: [48_000] }]), false);
+});

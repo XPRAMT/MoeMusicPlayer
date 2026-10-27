@@ -9,8 +9,8 @@ export const OUTPUT_MAX_SOURCE_CHANNELS = 8;
 /**
  * @typedef {{ source: number | null, gainPercent: number }} ChannelRoute
  * @typedef {{ id: string | null, name: string, enabled: boolean, delayMs: number, channelMap: ChannelRoute[] | null }} OutputDeviceEntry
- * @typedef {{ id: string, name: string, isDefault: boolean, channels: number, sampleRate: number }} AudioOutputDevice
- * @typedef {{ key: string, id: string | null, name: string, connected: boolean, isDefault: boolean, channels: number, sampleRate: number, entry: OutputDeviceEntry | null }} DeviceRow
+ * @typedef {{ id: string, name: string, isDefault: boolean, channels: number, sampleRate: number, supportedRates?: number[] }} AudioOutputDevice
+ * @typedef {{ key: string, id: string | null, name: string, connected: boolean, isDefault: boolean, channels: number, sampleRate: number, supportedRates: number[], entry: OutputDeviceEntry | null }} DeviceRow
  */
 
 const LABELS = Object.freeze({
@@ -94,6 +94,7 @@ export function buildDeviceRows(entries, devices) {
     isDefault: true,
     channels: current?.channels ?? 2,
     sampleRate: current?.sampleRate ?? 0,
+    supportedRates: current?.supportedRates ?? [],
     entry: saved.get(null) ?? null,
   }];
   for (const device of devices) {
@@ -105,6 +106,7 @@ export function buildDeviceRows(entries, devices) {
       isDefault: device.isDefault,
       channels: device.channels,
       sampleRate: device.sampleRate,
+      supportedRates: device.supportedRates ?? [],
       entry: saved.get(device.id) ?? null,
     });
   }
@@ -118,6 +120,7 @@ export function buildDeviceRows(entries, devices) {
         isDefault: false,
         channels: entry.channelMap?.length || 2,
         sampleRate: 0,
+        supportedRates: [],
         entry,
       });
     }
@@ -418,6 +421,7 @@ export function sameDeviceList(a, b) {
   return a.length === b.length && a.every((device, index) => {
     const other = b[index];
     return device.id === other.id && device.name === other.name && device.isDefault === other.isDefault
-      && device.channels === other.channels && device.sampleRate === other.sampleRate;
+      && device.channels === other.channels && device.sampleRate === other.sampleRate
+      && (device.supportedRates ?? []).join() === (other.supportedRates ?? []).join();
   });
 }

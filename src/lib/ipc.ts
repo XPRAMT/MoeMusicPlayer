@@ -184,6 +184,8 @@ export interface AudioOutputDevice {
   isDefault: boolean;
   channels: number;
   sampleRate: number;
+  /** The rates the device can be opened at (its mix rate and the rates exclusive mode accepts), ascending. */
+  supportedRates?: number[];
 }
 
 /** A playback device's real Windows volume (what Windows' volume mixer shows). */
