@@ -968,5 +968,6 @@
   "{0} 最佳效果": "{0} best effort",
   "目前由 {0} 播放：{1}": "Now playing on {0}: {1}",
   "系統": "System",
-  "基本轉換": "Basic conversion"
+  "基本轉換": "Basic conversion",
+  "由藍牙編碼決定": "Set by the Bluetooth codec"
 }

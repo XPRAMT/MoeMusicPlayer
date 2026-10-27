@@ -57,14 +57,16 @@ export function formatOutputPath(first, steps, channels, extras = []) {
 
 /**
  * What an idle device takes: every sample rate, then the channel counts, no bit depth: 「44.1, 48, 88.2, 96 kHz．2 聲道」.
- * Nothing known at all is 「格式不限」 (Android converts anything); a missing half says so.
+ * Nothing known at all is 「格式不限」 (Android converts anything), or `unspecified` when the caller knows better; a
+ * missing half says so.
  * @param {number[]} rates
  * @param {number[]} channels
+ * @param {string} [unspecified] the line when nothing is known
  */
-export function formatSupportedFormats(rates, channels) {
+export function formatSupportedFormats(rates, channels, unspecified = tr('格式不限')) {
   const sortedRates = [...new Set(rates.filter((rate) => rate > 0))].sort((a, b) => a - b);
   const sortedChannels = [...new Set(channels.filter((count) => count > 0))].sort((a, b) => a - b);
-  if (!sortedRates.length && !sortedChannels.length) return tr('格式不限');
+  if (!sortedRates.length && !sortedChannels.length) return unspecified;
   return [
     sortedRates.length ? `${sortedRates.map(kilohertz).join(', ')} kHz` : tr('取樣率不限'),
     sortedChannels.length ? tr('{0} 聲道', [sortedChannels.join(', ')]) : tr('聲道數不限'),

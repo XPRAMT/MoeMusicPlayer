@@ -57,11 +57,13 @@ export function deviceLabel(device) {
 /**
  * What a device declares it takes (`AudioDeviceInfo`), the line of a row that is not playing, in the Windows list's
  * format: every sample rate, then the channel counts (「44.1, 48, 96 kHz．2 聲道」). An empty list from Android means
- * "any" (the platform converts): 「格式不限」 when nothing is declared.
- * @param {Pick<AndroidOutputDeviceInfo, 'sampleRates' | 'channelCounts'>} device
+ * "any" (the platform converts): 「格式不限」 when nothing is declared, and for a Bluetooth device (Bluetooth, LE Audio,
+ * hearing aid) 「由藍牙編碼決定」, because the codec the stack negotiates sets its format.
+ * @param {Pick<AndroidOutputDeviceInfo, 'sampleRates' | 'channelCounts'> & { kind?: string }} device
  */
 export function describeSupport(device) {
-  return formatSupportedFormats(device.sampleRates, device.channelCounts);
+  const wireless = device.kind === 'bluetooth' || device.kind === 'bleAudio' || device.kind === 'hearingAid';
+  return formatSupportedFormats(device.sampleRates, device.channelCounts, wireless ? tr('由藍牙編碼決定') : undefined);
 }
 
 /**

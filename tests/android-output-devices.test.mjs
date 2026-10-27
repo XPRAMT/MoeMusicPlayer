@@ -43,6 +43,11 @@ test('a device is its name and kind; the built-in speaker and an unnamed device 
 test('an idle row lists every declared rate and the channels, in the Windows list format, no bit depth', () => {
   assert.equal(describeSupport(usb), '44.1, 48, 96 kHz．2 聲道');
   assert.equal(describeSupport(speaker), '格式不限');
+  for (const kind of ['bluetooth', 'bleAudio', 'hearingAid']) {
+    assert.equal(describeSupport({ kind, sampleRates: [], channelCounts: [] }), '由藍牙編碼決定', kind);
+  }
+  assert.equal(describeSupport({ kind: 'bluetooth', sampleRates: [48000], channelCounts: [2] }), '48 kHz．2 聲道', 'declared values still win');
+  assert.equal(describeSupport({ kind: 'usb', sampleRates: [], channelCounts: [] }), '格式不限');
   assert.equal(describeSupport({ sampleRates: [48000], channelCounts: [] }), '48 kHz．聲道數不限');
   assert.equal(describeSupport({ sampleRates: [], channelCounts: [1, 2] }), '取樣率不限．1, 2 聲道');
 });

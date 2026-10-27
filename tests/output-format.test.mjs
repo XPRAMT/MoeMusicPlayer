@@ -157,5 +157,6 @@ test('an idle device lists every supported rate then the channels, no bit depth'
   assert.equal(formatSupportedFormats([48_000], [2]), '48 kHz．2 聲道');
   assert.equal(formatSupportedFormats([176_400, 352_800], [8, 2]), '176.4, 352.8 kHz．2, 8 聲道');
   assert.equal(formatSupportedFormats([], []), '格式不限');
+  assert.equal(formatSupportedFormats([], [], '由藍牙編碼決定'), '由藍牙編碼決定');
   assert.doesNotMatch(formatSupportedFormats([44_100], [2]), /位元|bit/);
 });
