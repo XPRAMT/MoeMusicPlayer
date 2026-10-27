@@ -2,10 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  BUFFERING_POLL_MS,
+  BUFFERING_PULSE_DELAY_MS,
   BUFFERING_PULSE_PERIOD_MS,
   bufferingCueVisible,
+  bufferingPulseStartMs,
   bufferingPulseStopMs,
+  msUntilBufferingPulse,
   nextBufferingPulse,
+  playbackPollIntervalMs,
 } from '../src/lib/buffering-cue.js';
 
 const css = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -69,12 +74,48 @@ test('the pulsing flag only stops at a cycle boundary and carries on when buffer
   assert.equal(nextBufferingPulse(true, { type: 'state', buffering: false, reducedMotion: true }), false);
 });
 
-test('the shared progress bar stops the pulse only on animationiteration, without timers', () => {
+test('the pulse waits for 250 ms of continuous buffering', () => {
+  assert.equal(BUFFERING_PULSE_DELAY_MS, 250);
+  // Buffering 0.2 s: never pulses.
+  assert.equal(bufferingPulseStartMs(0, 200), null);
+  assert.equal(bufferingPulseStartMs(1000, 1249), null);
+  // Buffering 0.3 s: starts at 0.25 s and still plays its full cycle, stopping at 1.25 s.
+  const start = bufferingPulseStartMs(0, 300);
+  assert.equal(start, 250);
+  assert.equal(bufferingPulseStopMs(start, 300), 1250);
+  // Exactly 250 ms counts.
+  assert.equal(bufferingPulseStartMs(0, 250), 250);
+  // One timer from the first sight of buffering.
+  assert.equal(msUntilBufferingPulse('buffering', 1000, 1000), 250);
+  assert.equal(msUntilBufferingPulse('buffering', 1000, 1100), 150);
+  assert.equal(msUntilBufferingPulse('buffering', 1000, 1400), 0);
+  assert.equal(msUntilBufferingPulse('playing', 1000, 1000), null);
+  assert.equal(msUntilBufferingPulse(null, 1000, 1000), null);
+});
+
+test('the snapshot poll runs every 100 ms only while buffering', () => {
+  assert.equal(BUFFERING_POLL_MS, 100);
+  assert.equal(playbackPollIntervalMs('buffering', 500), 100);
+  for (const state of ['playing', 'paused', 'stopped', 'empty', null, undefined]) {
+    assert.equal(playbackPollIntervalMs(state, 500), 500, String(state));
+  }
+});
+
+test('the app keeps one poll and switches its interval with the state', () => {
+  assert.match(appSource, /const desiredPlaybackPollMs = \$derived\(playbackPollIntervalMs\(playback\?\.state, PLAYBACK_POLL_MS\)\)/);
+  assert.match(appSource, /function startPlaybackPoll\(intervalMs: number\): void \{\s*if \(playbackPollTimer !== undefined\) clearInterval\(playbackPollTimer\);/);
+  assert.equal((appSource.match(/playbackPollTimer = setInterval\(/g) ?? []).length, 1);
+});
+
+test('the shared progress bar gates the pulse with one timer and stops it only on animationiteration', () => {
   assert.match(appSource, /<PlaybackProgress[\s\S]*?playbackState=\{playback\?\.state \?\? null\}/);
   assert.match(progressSource, /const buffering = \$derived\(bufferingCueVisible\(playbackState\)\)/);
+  assert.match(progressSource, /msUntilBufferingPulse\('buffering', since, since\)/);
+  assert.match(progressSource, /return \(\) => clearTimeout\(timer\);\s*\}\);\s*let pulsing/);
+  assert.match(progressSource, /type: 'state', buffering: start/);
   assert.match(progressSource, /<span class="progress-thumb" onanimationiteration=\{handlePulseCycleEnd\}><\/span>/);
   assert.match(progressSource, /event\.animationName !== 'progress-thumb-buffering'/);
-  assert.match(progressSource, /type: 'cycle-end', buffering/);
-  assert.doesNotMatch(progressSource, /setInterval|requestAnimationFrame|BUFFERING_CUE_DELAY_MS/);
+  assert.match(progressSource, /type: 'cycle-end', buffering \}/);
+  assert.doesNotMatch(progressSource, /setInterval|requestAnimationFrame/);
   assert.match(progressSource, /data-buffering=\{pulsing \? 'true' : undefined\}/);
 });

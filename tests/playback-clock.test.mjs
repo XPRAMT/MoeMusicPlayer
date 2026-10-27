@@ -201,3 +201,27 @@ test('playbackProgressRun runs linearly to the end only while playing', () => {
   assert.deepEqual(playbackProgressRun(correctPlaybackClock(null, sample(2500, false), 0), 0), { ratio: 0.25, remainingMs: null });
   assert.deepEqual(playbackProgressRun(correctPlaybackClock(null, sample(2500, true, 'a', null), 0), 0), { ratio: 0, remainingMs: null });
 });
+
+test('100 ms samples while buffering never feed the stall check', () => {
+  // Buffering samples are not "playing" (App: isPlaying && state === 'playing'), so the clock just stays parked.
+  let clock = correctPlaybackClock(null, sample(1000), 0);
+  clock = correctPlaybackClock(clock, sample(1500, false), 500);
+  const parkedJump = clock.jumpId;
+  for (let at = 600; at <= 1200; at += 100) {
+    clock = correctPlaybackClock(clock, sample(1500, false), at);
+    assert.equal(clock.frozen, false);
+    assert.equal(clock.jumpId, parkedJump);
+    assert.equal(estimatePlaybackPosition(clock, at), 1500);
+  }
+  // Playing again 100 ms after the last buffering sample jumps (state change), not a stall judgement.
+  clock = correctPlaybackClock(clock, sample(1500), 1300);
+  assert.equal(clock.jumpId, parkedJump + 1);
+  assert.equal(clock.frozen, false);
+  // Back at 500 ms the stall check works as before: a sample that did not move freezes the clock.
+  const resumed = correctPlaybackClock(clock, sample(1600), 1800);
+  assert.equal(resumed.frozen, true);
+  // And normal progress at 500 ms stays running.
+  const running = correctPlaybackClock(clock, sample(2000), 1800);
+  assert.equal(running.frozen, false);
+  assert.equal(playbackClockRunning(running), true);
+});

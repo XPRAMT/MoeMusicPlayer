@@ -143,6 +143,7 @@
     type PlaybackClock,
     type TaskbarLyricsPlayback,
   } from './lib/playback-clock';
+  import { playbackPollIntervalMs } from './lib/buffering-cue.js';
   import { getPlaybackControlTooltips } from './lib/playback-control-tooltips.js';
   import { appTooltip } from './lib/app-tooltip.js';
   import { dockMarquee } from './lib/dock-marquee.js';
@@ -865,6 +866,7 @@
   let lyricsPreferencesSaveTimer: ReturnType<typeof setTimeout> | undefined;
   const PLAYBACK_POLL_MS = 500;
   let playbackPollTimer: ReturnType<typeof setInterval> | undefined;
+  let playbackPollActiveMs = PLAYBACK_POLL_MS;
   let livePlayCountTimer: ReturnType<typeof setInterval> | undefined;
   let livePlayCountTracker = createLivePlayCountState();
   const livePlayCountCache = new Map<string, number>();
@@ -1576,11 +1578,7 @@
     if (isTauri()) {
       // Backstop sample (ADR 0028): the clock advances the bar between samples; commands, focus, visibility and
       // device changes take a sample at once. It keeps running while minimized so the taskbar lyrics stay fed.
-      playbackPollTimer = setInterval(() => {
-        if (playbackReady && !isSendingPlaybackCommand && !isSeeking) {
-          void loadPlaybackSnapshot(false);
-        }
-      }, PLAYBACK_POLL_MS);
+      startPlaybackPoll(playbackPollIntervalMs(playback?.state, PLAYBACK_POLL_MS));
       livePlayCountTimer = setInterval(() => {
         publishLivePlayCount();
       }, 1000);
@@ -3426,6 +3424,27 @@
       default: return tr('Windows 音樂資料夾');
     }
   }
+
+  /** The one backstop poll (ADR 0028), restarted only when its interval changes. */
+  function startPlaybackPoll(intervalMs: number): void {
+    if (playbackPollTimer !== undefined) clearInterval(playbackPollTimer);
+    playbackPollActiveMs = intervalMs;
+    playbackPollTimer = setInterval(() => {
+      if (playbackReady && !isSendingPlaybackCommand && !isSeeking) {
+        void loadPlaybackSnapshot(false);
+      }
+    }, intervalMs);
+  }
+
+  // While the state is `buffering` the poll runs every 100 ms (buffering-cue.js), so the buffering pulse's 250 ms
+  // grace period sees a short spell end in time; it returns to 500 ms as soon as the state changes.
+  const desiredPlaybackPollMs = $derived(playbackPollIntervalMs(playback?.state, PLAYBACK_POLL_MS));
+  $effect(() => {
+    const intervalMs = desiredPlaybackPollMs;
+    untrack(() => {
+      if (playbackPollTimer !== undefined && intervalMs !== playbackPollActiveMs) startPlaybackPoll(intervalMs);
+    });
+  });
 
   async function loadPlaybackSnapshot(clearError = true): Promise<void> {
     if (!playbackReady || isLoadingPlaybackSnapshot) return;

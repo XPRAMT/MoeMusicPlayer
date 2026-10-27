@@ -43,19 +43,24 @@ playback-state events, so the poll did two jobs at once: animating the position 
   by ratio × 100%), so both are percentage based and width changes need no recalculation (no ResizeObserver). It
   restarts only when `jumpId`, the play state or `runKey` (stall freeze/resume) changes or a drag ends, so smooth
   corrections never make it jump.
-- Buffering cue (user-approved): while the snapshot state is `buffering` (today only Android reports it;
-  `bufferingCueVisible`, `src/lib/buffering-cue.js`), `.progress-row[data-buffering]` makes the thumb
-  (`.progress-thumb`, not its mover) pulse `filter: brightness()` 1 → 0.8 → 1 over 1000 ms, ease-in-out, infinite. It
-  starts as soon as the state is seen, with no delay: the pulse is subtle enough that the short buffering after an
-  ordinary seek may show it, and the user wanted it to react at once. Every started cycle plays to its end, so it never
-  snaps from a dimmed frame: a "pulsing" flag (`nextBufferingPulse`) is set on buffering and cleared only at a cycle
-  boundary (`animationiteration` on the thumb) when buffering is over, i.e. at the end of the cycle running when
-  buffering ends (`bufferingPulseStopMs`: 0.3 s of buffering still pulses one full second, 2.4 s stops at 3 s);
-  buffering again during that last cycle just carries on without restarting. No timers, no per-frame JS. This is the
-  only buffering cue: no text, label or tooltip changes, and the play button keeps its pause icon. The 1 s period is a
-  user-approved exception to the 200 ms animation rule; `prefers-reduced-motion: reduce` turns the pulse off (and,
-  having no cycle boundary, the flag clears at once). The mover's transform run is untouched. Test
-  `tests/buffering-cue.test.mjs`.
+- Buffering cue (user-approved): when the snapshot state is `buffering` (today only Android reports it;
+  `src/lib/buffering-cue.js`), the thumb (`.progress-thumb`, not its mover) pulses `filter: brightness()`
+  1 → 0.8 → 1 over 1000 ms, ease-in-out, infinite (`.progress-row[data-buffering]`), but only after buffering has been
+  seen continuously for 250 ms (`BUFFERING_PULSE_DELAY_MS`, counted with performance.now() from the first buffering
+  sample; one timer, cancelled when the state changes), so the short buffering after an ordinary seek does not show it.
+  A 500 ms poll would see almost every spell last at least one poll, so while the state is `buffering` the same poll
+  timer is restarted at 100 ms (`playbackPollIntervalMs`, `BUFFERING_POLL_MS`) and goes back to 500 ms as soon as the
+  state changes; no second poll, and minimized windows keep polling as before. Buffering samples are not "playing"
+  (`isPlaying && state === 'playing'`), so they park the clock and never reach the stall check; the playing sample
+  after them jumps and the next one comes 500 ms later, so `STALL_MIN_WALL_MS` keeps working
+  (`tests/playback-clock.test.mjs`). Every started cycle plays to its end, so it never snaps from a dimmed frame: a
+  "pulsing" flag (`nextBufferingPulse`) is set once the 250 ms have passed and cleared only at a cycle boundary
+  (`animationiteration` on the thumb) when buffering is over (`bufferingPulseStartMs`/`bufferingPulseStopMs`: 0.2 s of
+  buffering never pulses; 0.3 s starts at 0.25 s and stops at 1.25 s); buffering again during that last cycle just
+  carries on without restarting. No per-frame JS. This is the only buffering cue: no text, label or tooltip changes,
+  and the play button keeps its pause icon. The 1 s period is a user-approved exception to the 200 ms animation rule;
+  `prefers-reduced-motion: reduce` turns the pulse off (and, having no cycle boundary, the flag clears at once). The
+  mover's transform run is untouched. Test `tests/buffering-cue.test.mjs`.
   Why not an animated `@property --progress-ratio` (the first version): that custom property fed `left` and the
   gradient stops, which forced one style recalculation and one layout every frame (measured on the Release player at
   120 Hz while playing: 244 layouts and 245 style recalculations in 2 s, 196 ms of main-thread task time, against 4,

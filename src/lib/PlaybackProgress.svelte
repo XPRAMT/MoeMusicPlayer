@@ -10,7 +10,7 @@
   } from './playback-scrubber';
   import { playbackSeekKeyStepMs } from './shortcuts.js';
   import { progressRun, type ProgressMotion } from './progress-run.js';
-  import { bufferingCueVisible, nextBufferingPulse } from './buffering-cue.js';
+  import { bufferingCueVisible, msUntilBufferingPulse, nextBufferingPulse } from './buffering-cue.js';
   import type { TimelineStyle } from './ipc';
   import {
     estimatePlaybackPosition,
@@ -66,16 +66,29 @@
     const timer = setTimeout(() => { secondTick += 1; }, wait + 5);
     return () => clearTimeout(timer);
   });
-  // Buffering pulse: starts as soon as the state is `buffering`; once buffering ends it stops only at the end of the
-  // running cycle (animationiteration), so a started cycle always completes. The pulse is a CSS animation on
-  // `.progress-thumb` (app.css); no timers, no per-frame JS.
+  // Buffering pulse: starts once `buffering` has been seen continuously for BUFFERING_PULSE_DELAY_MS (one timer from
+  // the first sight, cancelled when the state changes; the shell samples every 100 ms meanwhile). Once buffering ends it
+  // stops only at the end of the running cycle (animationiteration), so a started cycle always completes, and buffering
+  // again during that cycle carries on. The pulse is a CSS animation on `.progress-thumb` (app.css); no per-frame JS.
   const buffering = $derived(bufferingCueVisible(playbackState));
+  let bufferingLongEnough = $state(false);
+  $effect(() => {
+    if (!buffering) {
+      bufferingLongEnough = false;
+      return;
+    }
+    const since = performance.now();
+    const timer = setTimeout(() => {
+      bufferingLongEnough = true;
+    }, msUntilBufferingPulse('buffering', since, since) ?? 0);
+    return () => clearTimeout(timer);
+  });
   let pulsing = $state(false);
   $effect(() => {
-    const isBuffering = buffering;
+    const start = bufferingLongEnough;
     const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     untrack(() => {
-      pulsing = nextBufferingPulse(pulsing, { type: 'state', buffering: isBuffering, reducedMotion });
+      pulsing = nextBufferingPulse(pulsing, { type: 'state', buffering: start, reducedMotion });
     });
   });
   function handlePulseCycleEnd(event: AnimationEvent): void {
