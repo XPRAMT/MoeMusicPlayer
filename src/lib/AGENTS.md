@@ -9,7 +9,7 @@
 - 重用既有元件、CSS token 與共用樣式，不另造相同用途的按鈕／浮板／列表。字級使用既有 token；不得任意新增數值字級。
 - 所有 App 內提示用 `appTooltip` action 與 `.app-tooltip.floating-surface`；不要新增原生 HTML `title`。保留 hover／focus 語意與 ARIA 描述。
 - 浮出控件與彈窗沿用快速設定面板 `.floating-surface` 的背景、模糊、線色和陰影；其遮罩、焦點圈限、捲動及關閉行為依各元件需求。
-- 鍵盤焦點框：全 App 只有一種外框 `outline: var(--focus-ring)`（`:root` 的 `--focus-ring`＝1px、主色 70% 不透明度），`:where(:focus-visible)` 為預設，`button`／`input`（offset 3px）、列表列（`.paged-virtual-row`，`outline-offset: -1px` 畫在列內）與各元件的焦點規則都用它，只各自決定 `outline-offset`；新的焦點外框不得另寫寬度或顏色（非外框的焦點表現如背景變化不在此限）。滑鼠／觸控不顯示（`:focus:not(:focus-visible)`）（`tests/focus-outline.test.mjs`）。
+- 鍵盤焦點框：全 App 只有一種外框 `outline: var(--focus-ring)`（`:root` 的 `--focus-ring`＝1px、主色 70% 不透明度），`:where(:focus-visible)` 為預設，`button`／`input`（offset 1px）、列表列（`.paged-virtual-row`，`outline-offset: -1px` 畫在列內）與各元件的焦點規則都用它，只各自決定 `outline-offset`；新的焦點外框不得另寫寬度或顏色（非外框的焦點表現如背景變化不在此限）。滑鼠／觸控不顯示（`:focus:not(:focus-visible)`）（`tests/focus-outline.test.mjs`）。
 - **貼邊內容避開系統列（四邊）**：只有一套機制——`MainActivity` 把 WindowInsets（systemBars｜displayCutout｜tappableElement，旋轉與導覽模式改變時重送）經 `moe:android-insets` 交給 App，設成 `--android-safe-left/top/right/bottom`（Windows 為 0）；`.app-shell` 以四個變數內距，所以格線內的主頁頂欄、播放頁頂欄、側欄、快速設定抽屜、`.locate-fab`、底欄自動避開。`position: fixed`（窄版導覽面板、`.playback-notice` 等）須自己加這些變數；以 JS 夾在視窗內的浮板與提示（`getPopoverHorizontalShiftPx`、`getVolumePopoverLeftShiftPx`、`getAppTooltipPosition`）傳入 `safe-viewport.js` 的 `readSafeInsets()`。背景與封面背景仍貼滿全螢幕。橫向側邊導覽列下的按鈕被截通常是內容溢出（例如播放頁頂欄工具群必須 `flex: 0 0 auto`，由標題換行讓位），不得另加第二層內距（`tests/android-safe-insets.test.mjs`）。
 - 內容分隔線統一 1 CSS px 的 `--divider-width` 與 `--divider-color`；元件／按鈕邊框用 `--line`。不要重複繪製線條或在共用 token 外再疊透明度。
 - 清單標題與資料列使用相同 grid template，em 欄寬容器固定 `--font-body`。數值欄標題／內容置中，文字欄靠左；音訊格式欄標題與內容整組置中。標題排序命中區涵蓋整個欄位。

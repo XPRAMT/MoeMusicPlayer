@@ -65,8 +65,8 @@ test('every focus outline under src/ uses the shared ring', async () => {
 test('keyboard focus defaults to the ring with zero specificity; mouse/touch focus shows nothing', async () => {
   const css = await appCss();
   assert.match(css, /:where\(:focus-visible\)\s*\{\s*outline: var\(--focus-ring\);\s*\}/);
-  // Buttons and inputs keep their 3px offset.
-  assert.match(css, /button:focus-visible,\s*input:focus-visible\s*\{\s*outline: var\(--focus-ring\);\s*outline-offset: 3px;/);
+  // Buttons and inputs keep their 1px offset.
+  assert.match(css, /button:focus-visible,\s*input:focus-visible\s*\{\s*outline: var\(--focus-ring\);\s*outline-offset: 1px;/);
   assert.match(css, /:focus:not\(:focus-visible\)\s*\{\s*outline: none;/);
 });
 
