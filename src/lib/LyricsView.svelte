@@ -7,7 +7,7 @@
   import { seekPlayback } from './ipc';
   import { formatDuration } from './format';
   import { appTooltip } from './app-tooltip.js';
-  import { browseButtonIndex, browseCueAction, browseHoldAfterScroll, browseSeekPositionMs, findBrowseCentreRow } from './lyrics-browse.js';
+  import { browseButtonIndex, browseButtonOpacity, browseCueAction, browseHoldAfterScroll, browseSeekPositionMs, findBrowseCentreRow } from './lyrics-browse.js';
   import type {
     LyricLine,
     LyricsCandidate,
@@ -972,7 +972,7 @@
   data-active-cue-index={displayTimedIndex}
   data-current-cue-index={activeTimedIndex}
   data-layout-revision={layoutRevision}
-  style={`--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-font-family:${lyricFontFamily};--lyric-primary-weight:${preferences.fontWeight};--lyric-auxiliary-weight:${lyricsAuxiliaryWeight(preferences.fontWeight)};--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
+  style={`--lyric-browse-opacity:${browseButtonOpacity(preferences.secondaryOpacityPercent)};--lyric-cue-ms:${cueAnimationDurationMs > 0 ? cueAnimationDurationMs : LYRIC_CUE_LEAD_MS}ms;--lyric-primary-font-size:${preferences.primaryFontSizePx}px;--lyric-auxiliary-font-size:${lyricsAuxiliaryFontSizePx(preferences)}px;--lyric-font-family:${lyricFontFamily};--lyric-primary-weight:${preferences.fontWeight};--lyric-auxiliary-weight:${lyricsAuxiliaryWeight(preferences.fontWeight)};--lyric-primary-line-height:${inkLineHeights.primary};--lyric-auxiliary-line-height:${inkLineHeights.auxiliary}`}
 >
   {#if !trackId}
     <p class="lyrics-placeholder" role="status">{tr("播放歌曲後會在此顯示歌詞。")}</p>
@@ -1320,6 +1320,8 @@
     line-height: 1;
     cursor: pointer;
     transform: translateY(-50%);
+    /* The Now Playing 次要透明度; hover and focus feedback leave it as it is. */
+    opacity: var(--lyric-browse-opacity, 0.5);
     animation: lyric-browse-seek-in 200ms ease-out;
   }
 
@@ -1337,9 +1339,9 @@
     outline-offset: -1px;
   }
 
+  /* No `to`: the fade ends at the button's own opacity (`--lyric-browse-opacity`). */
   @keyframes lyric-browse-seek-in {
     from { opacity: 0; }
-    to { opacity: 1; }
   }
 
   @media (prefers-reduced-motion: reduce) {

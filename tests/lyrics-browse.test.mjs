@@ -1,6 +1,6 @@
 ﻿import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BROWSE_HOLD_MS, browseButtonIndex, browseCueAction, browseHoldAfterScroll, browseSeekPositionMs, findBrowseCentreRow } from '../src/lib/lyrics-browse.js';
+import { BROWSE_HOLD_MS, browseButtonIndex, browseButtonOpacity, browseCueAction, browseHoldAfterScroll, browseSeekPositionMs, findBrowseCentreRow } from '../src/lib/lyrics-browse.js';
 import { buildLyricsLayout, buildTimedLyricTimeline } from '../src/lib/lyrics-window.js';
 
 const preferences = { primaryFontSizePx: 20, auxiliaryScalePercent: 90, showTranslation: false, showRomanization: false, primaryLineHeight: 1, auxiliaryLineHeight: 1 };
@@ -48,6 +48,16 @@ test('a line whose seek target is at or past the end of the track gets no play b
   assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000, durationMs: 0 }), 5);
   assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000, durationMs: Number.NaN }), 5);
   assert.equal(browseButtonIndex({ ...base, seekPositionMs: 229_000 }), 5);
+});
+
+test('the play button opacity is the 次要透明度 setting', () => {
+  assert.equal(browseButtonOpacity(50), 0.5);
+  assert.equal(browseButtonOpacity(80), 0.8);
+  assert.equal(browseButtonOpacity(100), 1);
+  assert.equal(browseButtonOpacity(0), 0.01, 'clamped to the setting range');
+  assert.equal(browseButtonOpacity(150), 1);
+  assert.equal(browseButtonOpacity(undefined), 0.5, 'default');
+  assert.equal(browseButtonOpacity(Number.NaN), 0.5);
 });
 
 test('a seek lands where the line becomes current: its start shifted by the display offset, never before it', () => {

@@ -1,7 +1,21 @@
 ﻿// Browse and seek on the Now Playing synced lyrics (ADR 0029): while the user scrolls the lyrics, the line at the
 // centre of the viewport (when it is not the current line) offers a play button that seeks to that line. Pure
 // functions; LyricsView owns the state and the DOM.
+import { DEFAULT_LYRICS_PREFERENCES, LYRICS_PREFERENCE_LIMITS } from './lyrics-preferences.js';
 import { findLyricsRowAtOffset } from './lyrics-window.js';
+
+/**
+ * The play button's opacity: the Now Playing 次要透明度 (`secondaryOpacityPercent`, 1–100) as a 0–1 value; a
+ * missing or invalid value uses the default.
+ * @param {unknown} secondaryOpacityPercent
+ */
+export function browseButtonOpacity(secondaryOpacityPercent) {
+  const { min, max } = LYRICS_PREFERENCE_LIMITS.secondaryOpacityPercent;
+  const percent = typeof secondaryOpacityPercent === 'number' && Number.isFinite(secondaryOpacityPercent)
+    ? Math.max(min, Math.min(max, Math.round(secondaryOpacityPercent)))
+    : DEFAULT_LYRICS_PREFERENCES.secondaryOpacityPercent;
+  return percent / 100;
+}
 
 /**
  * Timeline index of the row under the viewport's vertical centre (the head spacer above the first row excluded),

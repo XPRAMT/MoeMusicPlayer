@@ -44,7 +44,10 @@ The smooth scroll's length was chosen by the browser, so it could not be made to
   translation or romanization has it in the middle of its lines and a row with only the original text on that line. The gutter is the button plus a 1 px
   inset from the row edge and 1 px before the text, so the button never covers text, centred text stays centred and
   rows never reflow when it appears; rows are border-box, so the row measurements, karaoke widths and the cover-zoom
-  frozen width include the gutter unchanged. It fades in over 200 ms (no fade with reduced motion).
+  frozen width include the gutter unchanged. It fades in over 200 ms (no fade with reduced motion). Its opacity is the
+  Now Playing secondary opacity setting (`secondaryOpacityPercent` → `--lyric-browse-opacity` on the view, set with
+  the other lyric style variables; the fade ends there); hover and focus keep their background and focus ring and do
+  not change it.
 - The button seeks to the moment the line becomes current: `ceil(startMs - display offset)`, clamped at 0
   (`browseSeekPositionMs`); no `LYRIC_CUE_LEAD_MS`. The seek goes through the shell (`onSeek` →
   `commitPlaybackSeek` → `seekPlayback`), browsing ends at once, and the jump lands instantly as any seek. A line
