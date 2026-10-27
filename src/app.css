@@ -4422,9 +4422,10 @@ input:focus-visible {
     0 0 4px rgba(var(--accent-rgb), 0.35);
 }
 
-/* Buffering cue (ADR 0028): the only one. While buffering (`data-buffering`, buffering-cue.js) the thumb's
-   brightness pulses 1 -> 0.7 -> 1 once per second (user-approved exception to the 200 ms animation rule). Filter on
-   the thumb only; the mover's transform run (progress-run.js) is untouched. */
+/* Buffering cue (ADR 0028): the only one. While pulsing (`data-buffering`, buffering-cue.js) the thumb's brightness
+   runs 1 -> 0.8 -> 1 once per second (user-approved exception to the 200 ms animation rule). It stops only at a cycle
+   end (animationiteration in PlaybackProgress.svelte). Filter on the thumb only; the mover's transform run
+   (progress-run.js) is untouched. */
 .progress-row[data-buffering] .progress-thumb {
   animation: progress-thumb-buffering 1000ms ease-in-out infinite;
 }
@@ -4436,7 +4437,7 @@ input:focus-visible {
   }
 
   50% {
-    filter: brightness(0.7);
+    filter: brightness(0.8);
   }
 }
 

@@ -10,7 +10,7 @@
   } from './playback-scrubber';
   import { playbackSeekKeyStepMs } from './shortcuts.js';
   import { progressRun, type ProgressMotion } from './progress-run.js';
-  import { bufferingCueVisible } from './buffering-cue.js';
+  import { bufferingCueVisible, nextBufferingPulse } from './buffering-cue.js';
   import type { TimelineStyle } from './ipc';
   import {
     estimatePlaybackPosition,
@@ -66,9 +66,22 @@
     const timer = setTimeout(() => { secondTick += 1; }, wait + 5);
     return () => clearTimeout(timer);
   });
-  // Buffering pulse: on while the state is `buffering`, off the moment it changes. The pulse itself is a CSS animation
-  // on `.progress-thumb` (app.css).
-  const bufferingCue = $derived(bufferingCueVisible(playbackState));
+  // Buffering pulse: starts as soon as the state is `buffering`; once buffering ends it stops only at the end of the
+  // running cycle (animationiteration), so a started cycle always completes. The pulse is a CSS animation on
+  // `.progress-thumb` (app.css); no timers, no per-frame JS.
+  const buffering = $derived(bufferingCueVisible(playbackState));
+  let pulsing = $state(false);
+  $effect(() => {
+    const isBuffering = buffering;
+    const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    untrack(() => {
+      pulsing = nextBufferingPulse(pulsing, { type: 'state', buffering: isBuffering, reducedMotion });
+    });
+  });
+  function handlePulseCycleEnd(event: AnimationEvent): void {
+    if (event.animationName !== 'progress-thumb-buffering') return;
+    pulsing = nextBufferingPulse(pulsing, { type: 'cycle-end', buffering });
+  }
   const hasDraft = $derived(draftTrackId === trackId && draftPositionMs !== null);
   const displayedPositionMs = $derived(
     playbackSeekDisplayPosition(
@@ -201,7 +214,7 @@
 
 <svelte:window onpointerup={finishPointerSeek} onpointercancel={cancelDraft} />
 
-<div class="progress-row" data-timeline-style={timelineStyle} data-buffering={bufferingCue ? 'true' : undefined}>
+<div class="progress-row" data-timeline-style={timelineStyle} data-buffering={pulsing ? 'true' : undefined}>
   <span class="progress-time progress-time-elapsed">{formatDuration(displayedPositionMs)}</span>
   <div class="progress-hit" use:progressRun={progressMotion}>
     <div class="progress-track" aria-hidden="true"><div class="progress-band"></div></div>
@@ -219,7 +232,7 @@
       onchange={commitDraft}
       onblur={commitDraft}
     />
-    <div class="progress-thumb-rail" aria-hidden="true"><div class="progress-thumb-mover"><span class="progress-thumb"></span></div></div>
+    <div class="progress-thumb-rail" aria-hidden="true"><div class="progress-thumb-mover"><span class="progress-thumb" onanimationiteration={handlePulseCycleEnd}></span></div></div>
   </div>
   <span class="progress-time progress-time-duration">{formatDuration(durationMs)}</span>
 </div>

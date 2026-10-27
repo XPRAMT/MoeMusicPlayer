@@ -81,7 +81,7 @@ test('progress slider publishes playhead percent for the edge glow gradient', ()
   assert.match(progressSource, /class="progress-hit" use:progressRun=\{progressMotion\}/);
   assert.match(progressSource, /ratio: run\.ratio/);
   assert.match(progressSource, /class="progress-track"[^>]*><div class="progress-band">/);
-  assert.match(progressSource, /class="progress-thumb-mover"><span class="progress-thumb">/);
+  assert.match(progressSource, /class="progress-thumb-mover"><span class="progress-thumb"[ >]/);
   // No registered custom property is animated any more (it cost a style recalc + layout every frame).
   assert.doesNotMatch(css, /@property --progress-ratio|--progress-pct|playback-progress-run/);
   assert.match(css, /\.progress-band \{[^}]*width: 300%;/);
