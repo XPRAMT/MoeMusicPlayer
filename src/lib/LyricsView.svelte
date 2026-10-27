@@ -19,7 +19,7 @@
   import { createLyricsController } from './lyrics-controller.js';
   import { lyricsForDisplay } from './lyrics-traditional.js';
   import { karaokeLineAnimation, karaokeWordsOf, LYRIC_LINE_ANIMATION, wordTexts } from './lyrics-word-highlight.js';
-  import { estimatePlaybackPosition, msUntilPlaybackPosition, type PlaybackClock } from './playback-clock';
+  import { estimatePlaybackPosition, msUntilPlaybackPosition, playbackClockRunning, type PlaybackClock } from './playback-clock';
   import {
     LYRIC_CUE_LEAD_MS,
     LYRIC_OFFSET_GLIDE_MS,
@@ -361,7 +361,8 @@
   // Word highlight (ADR 0041 D10): only the current line with word timing (or its own end time) is split into words, and one CSS
   // animation moves a single accent edge over it (`karaokeLine`). Recomputed only on a line change, seek, play/pause
   // or offset change; the clock's regular samples do not touch it, so no style is written while a line plays.
-  let wordsPlaying = $derived(effectivePlaybackState === 'playing' && (playbackClock ? playbackClock.playing : isPlaying));
+  // A clock frozen by a stall (ADR 0028) stops the sweep too, and it restarts from the frozen position on resume.
+  let wordsPlaying = $derived(effectivePlaybackState === 'playing' && (playbackClock ? playbackClockRunning(playbackClock) : isPlaying));
   let currentLineWords = $derived.by(() => {
     const index = visibleActiveTimedIndex;
     const line = index >= 0 ? timedLines[index]?.line : undefined;

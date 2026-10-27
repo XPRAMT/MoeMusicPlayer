@@ -77,13 +77,16 @@
   );
   // Compositor run of the bar (progress-run.js): from the current ratio to 1 in the remaining time, linear, transform
   // only, so it costs no style, layout or paint work per frame. It restarts only when the clock jumps (seek, new track,
-  // play/pause, deviation > 250 ms) or a drag ends; smooth corrections leave it running. `run.name` alternates so that a
+  // play/pause, deviation > 250 ms), a stall freezes or resumes the clock (`runKey`, parked while frozen) or a drag
+  // ends; smooth corrections leave it running. `run.name` alternates so that a
   // restart at identical numbers is still a change. Linear and sub-pixel (the user chose smoothness over snapping).
   let run = $state<{ ratio: number; remainingMs: number | null; name: string }>({ ratio: 0, remainingMs: null, name: 'playback-progress-run-a' });
   $effect(() => {
     const current = clock;
     current?.jumpId;
     current?.playing;
+    // A stall freezes the clock (ADR 0028): `runKey` parks the run at the frozen ratio and restarts it on resume.
+    current?.runKey;
     if (hasDraft) return;
     const next = playbackProgressRun(current, performance.now());
     const name = untrack(() => run.name) === 'playback-progress-run-a' ? 'playback-progress-run-b' : 'playback-progress-run-a';

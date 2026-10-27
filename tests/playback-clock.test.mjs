@@ -7,6 +7,7 @@ import {
   msUntilPlaybackPosition,
   nextCuePosition,
   playbackClockPastEnd,
+  playbackClockRunning,
   playbackProgressRun,
 } from '../src/lib/playback-clock.ts';
 import { playbackSeekDisplayPosition } from '../src/lib/playback-scrubber.ts';
@@ -93,6 +94,99 @@ test('msUntilPlaybackPosition wakes at the target, including during convergence'
     const wait = msUntilPlaybackPosition(converging, 500, target);
     assert.ok(Math.abs(estimatePlaybackPosition(converging, 500 + wait) - target) < 1e-6, `target ${target}`);
   }
+});
+
+test('a stalled stream freezes the clock instead of a 0.5 s sawtooth, then it catches up', () => {
+  // The backend says "playing" while the position is stuck at 1000 (a remote stream waiting for data).
+  const samples = [[0, 1000], [500, 1000], [1000, 1000], [1500, 1000], [2000, 1200], [2500, 1700], [3000, 2200], [3500, 2700]];
+  let clock = null;
+  let last = -Infinity;
+  const jumpIds = new Set();
+  let runKeys = 0;
+  for (const [at, position] of samples) {
+    const previousRunKey = clock?.runKey;
+    clock = correctPlaybackClock(clock, sample(position), at);
+    if (previousRunKey !== undefined && clock.runKey !== previousRunKey) runKeys += 1;
+    jumpIds.add(clock.jumpId);
+    // Sample densely between polls: the shown position never goes back.
+    for (let t = at; t < at + 500; t += 10) {
+      const shown = estimatePlaybackPosition(clock, t);
+      assert.ok(shown >= last - 1e-9, `moved back at ${t}: ${shown} < ${last}`);
+      last = shown;
+    }
+  }
+  assert.equal(jumpIds.size, 1, 'a stall never bumps jumpId');
+  assert.equal(runKeys, 2, 'one freeze and one resume');
+  assert.equal(clock.frozen, false);
+  // Caught up: from the last sample it runs with the real position again.
+  assert.ok(Math.abs(estimatePlaybackPosition(clock, 3500 + CONVERGE_MS) - (2700 + CONVERGE_MS)) < 1);
+});
+
+test('a frozen clock reports the frozen position and is not running', () => {
+  const clock = correctPlaybackClock(correctPlaybackClock(null, sample(1000), 0), sample(1000), 500);
+  assert.equal(clock.frozen, true);
+  assert.equal(clock.playing, true);
+  assert.equal(playbackClockRunning(clock), false);
+  assert.equal(estimatePlaybackPosition(clock, 500), 1500, 'held where it was shown, not 1000');
+  assert.equal(estimatePlaybackPosition(clock, 5000), 1500);
+  assert.equal(msUntilPlaybackPosition(clock, 600, 2000), null);
+  assert.equal(playbackClockPastEnd(clock, 1e9), false);
+  assert.deepEqual(playbackProgressRun(clock, 600), { ratio: 0.15, remainingMs: null });
+  // Still stuck: the same object, so nothing reruns.
+  assert.equal(correctPlaybackClock(clock, sample(1000), 1000), clock);
+  // Still behind but moving again within JUMP_DEVIATION_MS: resumes from 1500 slower than 1, never back.
+  const resumed = correctPlaybackClock(clock, sample(1300), 1500);
+  assert.equal(resumed.frozen, false);
+  assert.equal(resumed.jumpId, clock.jumpId);
+  assert.equal(resumed.runKey, clock.runKey + 1);
+  assert.equal(estimatePlaybackPosition(resumed, 1500), 1500);
+  assert.ok(resumed.rate > 0 && resumed.rate < 1);
+  assert.equal(playbackProgressRun(resumed, 1500).remainingMs, 8500);
+});
+
+test('frozen and stuck while far behind waits; a real catch-up resumes at rate 1', () => {
+  let clock = correctPlaybackClock(correctPlaybackClock(null, sample(1000), 0), sample(1000), 500); // frozen at 1500
+  clock = correctPlaybackClock(clock, sample(1100), 1000); // creeping (100 in 500 ms): still waiting
+  assert.equal(clock.frozen, true);
+  clock = correctPlaybackClock(clock, sample(1510), 1100); // short wall time but caught up
+  assert.equal(clock.frozen, false);
+  assert.equal(clock.rate, 1);
+  assert.equal(estimatePlaybackPosition(clock, 1600), 2000);
+});
+
+test('genuine jumps still jump while playing, frozen or not', () => {
+  const clock = correctPlaybackClock(null, sample(1000), 0);
+  const frozen = correctPlaybackClock(clock, sample(1000), 500);
+  for (const base of [clock, frozen]) {
+    const ahead = correctPlaybackClock(base, sample(3000), 500);
+    assert.equal(ahead.jumpId, base.jumpId + 1, 'ahead by more than JUMP_DEVIATION_MS');
+    assert.equal(estimatePlaybackPosition(ahead, 500), 3000);
+    assert.equal(correctPlaybackClock(base, sample(100, true, 'b'), 1000).jumpId, base.jumpId + 1, 'new track');
+    assert.equal(correctPlaybackClock(base, sample(1000, false), 1000).jumpId, base.jumpId + 1, 'pause');
+    assert.equal(correctPlaybackClock(base, sample(1000, true, 'a', 20_000), 1000).jumpId, base.jumpId + 1, 'duration');
+    assert.equal(correctPlaybackClock(base, sample(1000), 1000, { force: true }).jumpId, base.jumpId + 1, 'force');
+  }
+  // Moved back far (an external seek), not a stall: jumps back at once.
+  const back = correctPlaybackClock(clock, sample(200), 500);
+  assert.equal(back.jumpId, clock.jumpId + 1);
+  assert.equal(estimatePlaybackPosition(back, 500), 200);
+  const backWhileFrozen = correctPlaybackClock(frozen, sample(200), 1000);
+  assert.equal(backWhileFrozen.jumpId, frozen.jumpId + 1);
+  assert.equal(backWhileFrozen.frozen, false);
+  // Stuck but the estimate is far more than STALL_HOLD_MAX_MS ahead (a long gap between samples): jumps.
+  assert.equal(correctPlaybackClock(clock, sample(1000), 3000).jumpId, clock.jumpId + 1);
+  // A short gap between samples is never judged a stall.
+  assert.equal(correctPlaybackClock(clock, sample(1000), 200).frozen, false);
+});
+
+test('ignored samples keep the same clock but still record the sample for stall detection', () => {
+  let clock = correctPlaybackClock(null, sample(1000), 0);
+  const same = correctPlaybackClock(clock, sample(1500), 500);
+  assert.equal(same, clock);
+  // Stuck from here: the stall is judged against the 1500 sample at 500, not the 1000 one at 0.
+  clock = correctPlaybackClock(same, sample(1500), 1000);
+  assert.equal(clock.frozen, true);
+  assert.equal(estimatePlaybackPosition(clock, 1000), 2000);
 });
 
 test('nextCuePosition finds the next line start after the offset', () => {
