@@ -6,7 +6,7 @@
 // the pulse alone; no text changes.
 export const BUFFERING_PULSE_PERIOD_MS = 1000;
 /** Buffering must have been seen continuously this long before the pulse starts. */
-export const BUFFERING_PULSE_DELAY_MS = 250;
+export const BUFFERING_PULSE_DELAY_MS = 1000;
 /** Snapshot interval while the state is `buffering`. */
 export const BUFFERING_POLL_MS = 100;
 

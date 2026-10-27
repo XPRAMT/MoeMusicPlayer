@@ -74,21 +74,21 @@ test('the pulsing flag only stops at a cycle boundary and carries on when buffer
   assert.equal(nextBufferingPulse(true, { type: 'state', buffering: false, reducedMotion: true }), false);
 });
 
-test('the pulse waits for 250 ms of continuous buffering', () => {
-  assert.equal(BUFFERING_PULSE_DELAY_MS, 250);
-  // Buffering 0.2 s: never pulses.
-  assert.equal(bufferingPulseStartMs(0, 200), null);
-  assert.equal(bufferingPulseStartMs(1000, 1249), null);
-  // Buffering 0.3 s: starts at 0.25 s and still plays its full cycle, stopping at 1.25 s.
-  const start = bufferingPulseStartMs(0, 300);
-  assert.equal(start, 250);
-  assert.equal(bufferingPulseStopMs(start, 300), 1250);
-  // Exactly 250 ms counts.
-  assert.equal(bufferingPulseStartMs(0, 250), 250);
+test('the pulse waits for 1 s of continuous buffering', () => {
+  assert.equal(BUFFERING_PULSE_DELAY_MS, 1000);
+  // Buffering 0.8 s: never pulses.
+  assert.equal(bufferingPulseStartMs(0, 800), null);
+  assert.equal(bufferingPulseStartMs(1000, 1999), null);
+  // Buffering 1.3 s: starts at 1.0 s and still plays its full cycle, stopping at 2.0 s.
+  const start = bufferingPulseStartMs(0, 1300);
+  assert.equal(start, 1000);
+  assert.equal(bufferingPulseStopMs(start, 1300), 2000);
+  // Exactly 1 s counts.
+  assert.equal(bufferingPulseStartMs(0, 1000), 1000);
   // One timer from the first sight of buffering.
-  assert.equal(msUntilBufferingPulse('buffering', 1000, 1000), 250);
-  assert.equal(msUntilBufferingPulse('buffering', 1000, 1100), 150);
-  assert.equal(msUntilBufferingPulse('buffering', 1000, 1400), 0);
+  assert.equal(msUntilBufferingPulse('buffering', 1000, 1000), 1000);
+  assert.equal(msUntilBufferingPulse('buffering', 1000, 1300), 700);
+  assert.equal(msUntilBufferingPulse('buffering', 1000, 2400), 0);
   assert.equal(msUntilBufferingPulse('playing', 1000, 1000), null);
   assert.equal(msUntilBufferingPulse(null, 1000, 1000), null);
 });

@@ -46,17 +46,17 @@ playback-state events, so the poll did two jobs at once: animating the position 
 - Buffering cue (user-approved): when the snapshot state is `buffering` (today only Android reports it;
   `src/lib/buffering-cue.js`), the thumb (`.progress-thumb`, not its mover) pulses `filter: brightness()`
   1 → 0.8 → 1 over 1000 ms, ease-in-out, infinite (`.progress-row[data-buffering]`), but only after buffering has been
-  seen continuously for 250 ms (`BUFFERING_PULSE_DELAY_MS`, counted with performance.now() from the first buffering
+  seen continuously for 1 s (`BUFFERING_PULSE_DELAY_MS`, counted with performance.now() from the first buffering
   sample; one timer, cancelled when the state changes), so the short buffering after an ordinary seek does not show it.
-  A 500 ms poll would see almost every spell last at least one poll, so while the state is `buffering` the same poll
+  A 500 ms poll sees a spell end up to 500 ms late (a 0.6 s spell could look like 1 s), so while it is `buffering` the poll
   timer is restarted at 100 ms (`playbackPollIntervalMs`, `BUFFERING_POLL_MS`) and goes back to 500 ms as soon as the
   state changes; no second poll, and minimized windows keep polling as before. Buffering samples are not "playing"
   (`isPlaying && state === 'playing'`), so they park the clock and never reach the stall check; the playing sample
   after them jumps and the next one comes 500 ms later, so `STALL_MIN_WALL_MS` keeps working
   (`tests/playback-clock.test.mjs`). Every started cycle plays to its end, so it never snaps from a dimmed frame: a
-  "pulsing" flag (`nextBufferingPulse`) is set once the 250 ms have passed and cleared only at a cycle boundary
-  (`animationiteration` on the thumb) when buffering is over (`bufferingPulseStartMs`/`bufferingPulseStopMs`: 0.2 s of
-  buffering never pulses; 0.3 s starts at 0.25 s and stops at 1.25 s); buffering again during that last cycle just
+  "pulsing" flag (`nextBufferingPulse`) is set once that second has passed and cleared only at a cycle boundary
+  (`animationiteration` on the thumb) when buffering is over (`bufferingPulseStartMs`/`bufferingPulseStopMs`: 0.8 s of
+  buffering never pulses; 1.3 s starts at 1.0 s and stops at 2.0 s); buffering again during that last cycle just
   carries on without restarting. No per-frame JS. This is the only buffering cue: no text, label or tooltip changes,
   and the play button keeps its pause icon. The 1 s period is a user-approved exception to the 200 ms animation rule;
   `prefers-reduced-motion: reduce` turns the pulse off (and, having no cycle boundary, the flag clears at once). The

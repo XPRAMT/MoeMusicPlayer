@@ -3436,7 +3436,7 @@
     }, intervalMs);
   }
 
-  // While the state is `buffering` the poll runs every 100 ms (buffering-cue.js), so the buffering pulse's 250 ms
+  // While the state is `buffering` the poll runs every 100 ms (buffering-cue.js), so the buffering pulse's 1 s
   // grace period sees a short spell end in time; it returns to 500 ms as soon as the state changes.
   const desiredPlaybackPollMs = $derived(playbackPollIntervalMs(playback?.state, PLAYBACK_POLL_MS));
   $effect(() => {
