@@ -26,6 +26,7 @@
   import { scrollChain } from './scroll-chain.js';
   import { appTooltip } from './app-tooltip.js';
   import { buildAndroidRows, sameChoice } from './android-output-devices.js';
+  import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
 
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
@@ -178,16 +179,27 @@
 
 <div class="output-device-list" role="radiogroup" aria-label={tr('播放裝置')} aria-busy={s.loading} use:scrollChain>
   {#each rows as row (row.key)}
-    <div class="output-device" class:is-playing={row.chosen} class:is-missing={!row.connected}>
+    {@const locked = !row.connected || (row.key !== 'system' && row.identity === null)}
+    <!-- The card is the control: its radio is out of sight and keeps the keyboard (Tab, arrows, Space, Enter). -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="output-device"
+      class:is-playing={row.chosen}
+      class:is-missing={!row.connected}
+      class:is-locked={locked}
+      onclick={chooseCardOnClick}
+    >
       <div class="output-device-head">
         <label class="output-device-toggle">
           <input
+            class="output-device-input"
             type="radio"
             name="android-output-device"
             checked={row.chosen}
-            disabled={!row.connected || (row.key !== 'system' && row.identity === null)}
+            disabled={locked}
             aria-label={row.label}
             onchange={() => choose(row.identity)}
+            onkeydown={chooseCardOnEnter}
           />
           <span class="output-device-dot is-{row.path?.tone ?? 'idle'}" aria-hidden="true"></span>
           <span class="output-device-name" use:appTooltip={row.label}>

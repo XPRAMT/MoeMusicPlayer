@@ -2664,12 +2664,38 @@ input:focus-visible {
 }
 
 .output-device {
+  position: relative;
   display: grid;
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(var(--text-rgb), 0.025);
+  cursor: pointer;
+}
+
+.output-device.is-locked {
+  cursor: default;
+}
+
+/* The card is the control (output-device-card.js): its checkbox or radio stays for the keyboard and screen readers,
+   out of sight, and the card shows its keyboard focus. */
+.output-device-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.output-device:has(.output-device-input:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
 }
 
 /* The same look as a chosen option elsewhere in the settings (.layout-choice-button.chosen). */
@@ -2694,7 +2720,7 @@ input:focus-visible {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  cursor: pointer;
+  cursor: inherit;
 }
 
 .output-device-dot {

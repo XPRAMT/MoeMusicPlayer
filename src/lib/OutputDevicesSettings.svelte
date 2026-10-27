@@ -52,6 +52,7 @@
     describeOutputFormat,
     formatSupportedFormats,
   } from './output-format.js';
+  import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
   import {
     OUTPUT_DELAY_MAX_MS,
     OUTPUT_MAX_SOURCE_CHANNELS,
@@ -638,15 +639,26 @@
     {@const path = pathInfo(index)}
     {@const volume = volumeOf(index)}
     {@const label = row.id === null ? tr('系統預設') : row.name || tr('未知的裝置')}
-    <div class="output-device" class:is-playing={playing} class:is-missing={!row.connected} role="listitem">
+    <!-- The card is the control: its checkbox is out of sight and keeps the keyboard (Tab, Space, Enter). -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="output-device"
+      class:is-playing={playing}
+      class:is-missing={!row.connected}
+      class:is-locked={lastPlaying}
+      role="listitem"
+      onclick={chooseCardOnClick}
+    >
       <div class="output-device-head">
         <label class="output-device-toggle">
           <input
+            class="output-device-input"
             type="checkbox"
             checked={playing}
             disabled={lastPlaying}
             aria-label={label}
             onchange={(event) => toggle(index, event.currentTarget.checked)}
+            onkeydown={chooseCardOnEnter}
           />
           <span class="output-device-dot is-{path.tone}" aria-hidden="true"></span>
           <span class="output-device-name" use:appTooltip={label}>
