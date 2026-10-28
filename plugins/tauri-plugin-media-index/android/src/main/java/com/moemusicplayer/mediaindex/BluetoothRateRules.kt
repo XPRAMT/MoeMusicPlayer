@@ -69,14 +69,17 @@ internal object BluetoothRateRules {
 
     /**
      * The `SAMPLE_RATE_*` flag to switch the codec to for a track of [trackHz]: the exact rate when the codec offers it,
-     * else the nearest offered rate of the track's family (44.1 kHz or 48 kHz), else the nearest offered rate; a tie
-     * goes to the lower rate. Null when the codec offers none or the track rate is unknown.
+     * else (a track above every offered rate) the highest offered rate, else the nearest offered rate of the track's
+     * family (44.1 kHz or 48 kHz), else the nearest offered rate; a tie goes to the lower rate. Null when the codec offers none or the track rate is unknown.
      */
     fun pickRate(trackHz: Int, selectableMask: Int): Int? {
         if (trackHz <= 0) return null
         val offered = ratesIn(selectableMask)
         if (offered.isEmpty()) return null
         offered.firstOrNull { it.second == trackHz }?.let { return it.first }
+        // Above everything the codec offers: its highest rate. The system mixer picks that same rate for such a track
+        // (it resamples once); a lower family rate would resample twice and keep less bandwidth.
+        offered.maxByOrNull { it.second }?.let { if (trackHz > it.second) return it.first }
         val wanted = family(trackHz)
         val pool = if (wanted == null) offered else offered.filter { family(it.second) == wanted }.ifEmpty { offered }
         return pool.minWith(compareBy({ kotlin.math.abs(it.second - trackHz) }, { it.second })).first

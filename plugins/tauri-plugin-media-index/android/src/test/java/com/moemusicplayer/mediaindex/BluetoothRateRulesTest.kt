@@ -24,15 +24,26 @@ class BluetoothRateRulesTest {
         assertEquals(192_000, hz(BluetoothRateRules.pickRate(192_000, all)))
     }
 
-    @Test fun otherwiseTheNearestRateOfTheSameFamilyWins() {
-        // 176.4 kHz on LDAC: 88.2 kHz (same family) rather than 96 kHz.
-        assertEquals(88_200, hz(BluetoothRateRules.pickRate(176_400, ldac)))
-        // 192 kHz on LDAC: 96 kHz.
+    @Test fun aTrackAboveEveryOfferedRateGetsTheHighestOfferedRate() {
+        // The system mixer picks that same rate, so the audio is resampled once and keeps the most bandwidth.
+        assertEquals(96_000, hz(BluetoothRateRules.pickRate(176_400, ldac)))
         assertEquals(96_000, hz(BluetoothRateRules.pickRate(192_000, ldac)))
-        // 88.2 kHz on SBC (44.1 and 48 kHz): 44.1 kHz.
-        assertEquals(44_100, hz(BluetoothRateRules.pickRate(88_200, sbc)))
-        // 96 kHz on SBC: 48 kHz.
+        // SBC and AAC (44.1 and 48 kHz): 48 kHz.
+        assertEquals(48_000, hz(BluetoothRateRules.pickRate(88_200, sbc)))
         assertEquals(48_000, hz(BluetoothRateRules.pickRate(96_000, sbc)))
+        // aptX HD (48 kHz at most).
+        val aptxHd = BluetoothRateRules.RATE_44100 or BluetoothRateRules.RATE_48000
+        assertEquals(48_000, hz(BluetoothRateRules.pickRate(96_000, aptxHd)))
+        assertEquals(48_000, hz(BluetoothRateRules.pickRate(176_400, aptxHd)))
+    }
+
+    @Test fun otherwiseTheNearestRateOfTheSameFamilyWins() {
+        // 32 kHz (48 kHz family) on LDAC: 48 kHz, not 44.1 kHz.
+        assertEquals(48_000, hz(BluetoothRateRules.pickRate(32_000, ldac)))
+        // 22.05 kHz below the lowest rate: 44.1 kHz (same family).
+        assertEquals(44_100, hz(BluetoothRateRules.pickRate(22_050, ldac)))
+        // 88.2 kHz on a codec with 44.1, 48 and 96 kHz (not 88.2): between rates, the nearest of its family is 44.1 kHz.
+        assertEquals(44_100, hz(BluetoothRateRules.pickRate(88_200, BluetoothRateRules.RATE_44100 or BluetoothRateRules.RATE_48000 or BluetoothRateRules.RATE_96000)))
     }
 
     @Test fun withoutAFamilyMemberTheNearestRateWins() {
@@ -233,13 +244,13 @@ class BluetoothRateRulesTest {
         assertEquals(1_000_000, BluetoothRateRules.rateRequest(7, 5, 2).codecPriority)
     }
 
-    @Test fun aDsdFileConvertedToPcmFollowsWithTheConverterRateAndPicksTheFamilyRate() {
+    @Test fun aDsdFileConvertedToPcmFollowsWithTheConverterRateAndPicksTheHighestOfferedRate() {
         // The library holds the DSD bit rate; the AudioTrack runs at 176.4 kHz.
         val converted = BluetoothRateRules.trackRate(2_822_400, isDsd = true, nativeDsd = false)
         assertEquals(BluetoothRateRules.TrackRate(176_400, false), converted)
-        // LDAC offers 44.1/48/88.2/96 kHz: 176.4 kHz has no exact match, so the nearest of its 44.1 kHz family, 88.2 kHz.
+        // LDAC offers 44.1/48/88.2/96 kHz: 176.4 kHz is above all of them, so 96 kHz (what the system mixer picks too).
         val ldacMask = BluetoothRateRules.RATE_44100 or BluetoothRateRules.RATE_48000 or BluetoothRateRules.RATE_88200 or BluetoothRateRules.RATE_96000
-        assertEquals(BluetoothRateRules.RATE_88200, BluetoothRateRules.pickRate(converted.trackHz!!, ldacMask))
+        assertEquals(BluetoothRateRules.RATE_96000, BluetoothRateRules.pickRate(converted.trackHz!!, ldacMask))
         val plan = BluetoothRateRules.plan(
             BluetoothRateRules.Input(
                 true, true, true, MixerRateRules.Source.ROOT, false, "AA:BB:CC:DD:EE:FF",
@@ -247,7 +258,7 @@ class BluetoothRateRulesTest {
                 state = BluetoothCodecState(4, BluetoothRateRules.RATE_44100, ldacMask),
             ),
         )
-        assertEquals(BluetoothRateRules.Plan.Switch(BluetoothRateRules.RATE_88200), plan)
+        assertEquals(BluetoothRateRules.Plan.Switch(BluetoothRateRules.RATE_96000), plan)
     }
 
     @Test fun nativeDsdPassthroughStillSkipsAndWavPackDsdFollowsLikeAnyConvertedDsd() {

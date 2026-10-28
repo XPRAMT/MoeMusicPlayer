@@ -17,8 +17,9 @@ At every track change, when the setting is on and the track goes to an A2DP devi
 Input: the track's sample rate (Rust sends `metadata.sampleRate` with the load command, the library's value; absent when unknown) and the union of `SAMPLE_RATE_*` flags the codec offers (`BluetoothCodecStatus.codecsSelectableCapabilities`, the entries of the current codec type, OR the current rate). Order:
 
 1. The exact rate, when offered.
-2. Else the nearest offered rate of the track's family (44.1 kHz family: multiples of 11 025 Hz; 48 kHz family: multiples of 8 000 Hz), so an integer-ratio step is preferred (176.4 kHz on LDAC gives 88.2 kHz, not 96 kHz).
-3. Else the nearest offered rate overall.
+2. Else, when the track is above every offered rate, the highest offered rate (the system mixer picks the same one; one resample only).
+3. Else the nearest offered rate of the track's family (44.1 kHz family: multiples of 11 025 Hz; 48 kHz family: multiples of 8 000 Hz), so an integer-ratio step is preferred (88.2 kHz on a codec with 44.1, 48 and 96 kHz gives 44.1 kHz).
+4. Else the nearest offered rate overall.
 Ties go to the lower rate. Null when the codec offers nothing or the track rate is unknown (no switch).
 
 ### When it may run (pure, `BluetoothRateRules.plan`)
@@ -103,4 +104,4 @@ The stack's codec broadcast is not sticky: nothing arrives when the app starts, 
 
 ## A DSD file converted to PCM follows
 
-A DSD file (DSF or WavPack-DSD) that is converted to PCM is a normal PCM track over Bluetooth. Its rate is the converter's output, 176400 Hz on Android (`BluetoothRateRules.DSD_PCM_OUTPUT_HZ`), not the DSD bit rate the library holds (2.8224 MHz and so on), so the service passes that rate and `dsd = false` (`BluetoothRateRules.trackRate`); only a native passthrough load is skipped (`SkipReason.DSD`). Earlier every DSD track was skipped, so the codec stayed at the previous track's rate while the mixer ran at the converter's. `pickRate` then chooses from the codec's selectable rates: no exact match for 176.4 kHz on LDAC (44.1, 48, 88.2, 96 kHz), so the nearest rate of the same 44.1 kHz family, 88.2 kHz, which is an integer-ratio step (96 kHz would not be).
+A DSD file (DSF or WavPack-DSD) that is converted to PCM is a normal PCM track over Bluetooth. Its rate is the converter's output, 176400 Hz on Android (`BluetoothRateRules.DSD_PCM_OUTPUT_HZ`), not the DSD bit rate the library holds (2.8224 MHz and so on), so the service passes that rate and `dsd = false` (`BluetoothRateRules.trackRate`); only a native passthrough load is skipped (`SkipReason.DSD`). Earlier every DSD track was skipped, so the codec stayed at the previous track's rate while the mixer ran at the converter's. `pickRate` then chooses from the codec's selectable rates: 176.4 kHz is above everything LDAC offers (44.1, 48, 88.2, 96 kHz), so it gets the codec's highest rate, 96 kHz. That is the rate the system mixer already picks for such a track (the path line showed 「176.4 kHz → 96 kHz（系統）」); pinning the codec lower (the 44.1 kHz family's 88.2 kHz) would resample twice, 176.4 → 96 kHz in the mixer and 96 → 88.2 kHz in the Bluetooth path, and keep less bandwidth.
