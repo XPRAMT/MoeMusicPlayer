@@ -291,6 +291,69 @@ class UsbExclusiveRulesTest {
         assertEquals("encoding 5 is not linear PCM", UsbExclusiveRules.explain(facts.copy(encoding = 5)))
     }
 
+    private fun ask(
+        enabled: Boolean = true,
+        chosen: OutputDevicePreference? = null,
+        devices: List<UsbExclusiveRules.UsbDeviceFacts> = listOf(sonyUsb),
+        permitted: Set<String> = emptySet(),
+        refused: Set<String> = emptySet(),
+        foreground: Boolean = true,
+        inFlight: Boolean = false,
+    ) = UsbExclusiveRules.AskFacts(UsbExclusiveRules.Wish(enabled, chosen), devices, permitted, refused, foreground, inFlight)
+
+    @Test
+    fun anUnpermittedTargetIsAskedForInTheExclusiveModeInTheForeground() {
+        assertEquals(sonyUsb.key, UsbExclusiveRules.autoRequestTarget(ask()))
+        // A chosen USB device: that one, not the first.
+        assertEquals(
+            ka3Usb.key,
+            UsbExclusiveRules.autoRequestTarget(ask(chosen = OutputDevicePreference("usb", "KA3", null), devices = listOf(sonyUsb, ka3Usb))),
+        )
+    }
+
+    @Test
+    fun nothingIsAskedWhenThereIsNothingToAsk() {
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(enabled = false)))
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(devices = emptyList())))
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(permitted = setOf(sonyUsb.key))))
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(chosen = OutputDevicePreference("speaker", "Phone", null))))
+        // The permission of a device the choice does not play on is not asked.
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(chosen = OutputDevicePreference("usb", "Sony Audio", null), devices = listOf(sonyUsb, ka3Usb), permitted = setOf(sonyUsb.key))))
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(inFlight = true)))
+    }
+
+    @Test
+    fun theRequestWaitsForTheForeground() {
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(foreground = false)))
+        // Back in the foreground, the same facts ask.
+        assertEquals(sonyUsb.key, UsbExclusiveRules.autoRequestTarget(ask(foreground = true)))
+    }
+
+    @Test
+    fun aRefusedDeviceIsNotAskedAgainUntilItIsAttachedAgain() {
+        val refused = UsbExclusiveRules.refusedAfterAnswer(emptySet(), sonyUsb.key, granted = false)
+        assertEquals(setOf(sonyUsb.key), refused)
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(refused = refused)))
+        // Still attached: the refusal stays.
+        assertEquals(refused, UsbExclusiveRules.pruneRefused(refused, listOf(sonyUsb, ka3Usb)))
+        // Unplugged: forgotten, so attached again it is asked.
+        val afterUnplug = UsbExclusiveRules.pruneRefused(refused, listOf(ka3Usb))
+        assertEquals(emptySet<String>(), afterUnplug)
+        assertEquals(sonyUsb.key, UsbExclusiveRules.autoRequestTarget(ask(refused = afterUnplug)))
+        // Another device is not affected by a refusal of the first.
+        assertEquals(
+            ka3Usb.key,
+            UsbExclusiveRules.autoRequestTarget(ask(chosen = OutputDevicePreference("usb", "KA3", null), devices = listOf(sonyUsb, ka3Usb), refused = refused)),
+        )
+    }
+
+    @Test
+    fun aGrantForgetsTheRefusalAndStopsTheAsking() {
+        val refused = setOf(sonyUsb.key)
+        assertEquals(emptySet<String>(), UsbExclusiveRules.refusedAfterAnswer(refused, sonyUsb.key, granted = true))
+        assertNull(UsbExclusiveRules.autoRequestTarget(ask(permitted = setOf(sonyUsb.key), refused = refused)))
+    }
+
     @Test
     fun theSourceKeepsOnlyRealBitDepths() {
         assertEquals(UsbExclusiveRules.Source(16, false), UsbExclusiveRules.sourceOf(16, false))

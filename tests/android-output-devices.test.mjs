@@ -10,7 +10,6 @@ import {
   describeSupport,
   deviceLabel,
   exclusiveHint,
-  exclusiveSwitchNeedsPanel,
   exclusiveTargetDevice,
   sameChoice,
   usbExclusivePath,
@@ -304,24 +303,24 @@ test('a track the USB output cannot play keeps the Android path with the reason'
   assert.equal(speakerChosen[1].path, null);
 });
 
-test('USB exclusive is off by default on both sides, and turned on only through its explanation panel', () => {
+test('USB exclusive is off by default on both sides, and turned on by the mode button alone', () => {
   assert.equal(DEFAULT_ANDROID_USB_EXCLUSIVE, false);
   const settings = readFileSync(new URL('../src-tauri/src/settings.rs', import.meta.url), 'utf8');
   assert.match(settings, /android_usb_exclusive: false,/);
   assert.match(settings, /#\[serde\(default\)\]\s+pub android_usb_exclusive: bool,/);
   const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
+  // The permission is requested straight from the card's 「前往授權」; there is no explanation panel or dialog any more.
   assert.equal(component.match(/android_request_usb_exclusive_permission/g)?.length, 1);
-  const request = component.indexOf("invokeCommand('android_request_usb_exclusive_permission'");
-  assert.ok(request > component.indexOf('async function authorizeUsbExclusive()'), 'only inside the panel action');
-  assert.match(component, /onclick=\{\(\) => void authorizeUsbExclusive\(\)\}/);
+  assert.ok(component.indexOf("invokeCommand('android_request_usb_exclusive_permission'") > component.indexOf('async function requestUsbPermission()'));
+  assert.match(component, /onclick=\{\(\) => void requestUsbPermission\(\)\}/);
+  assert.doesNotMatch(component, /<dialog\s+bind:this=\{usbExclusiveDialog\}|openUsbExclusivePanel|authorizeUsbExclusive|exclusiveSwitchNeedsPanel|usb-exclusive-title/);
   // The mode buttons replace the per-card switch; the P0 development test is gone.
   assert.doesNotMatch(component, /USB 獨佔（App 直接驅動，不經過系統）|toggleUsbExclusive|type="checkbox"/);
   assert.doesNotMatch(component, /試播|android_usb_exclusive_start/);
-  // 獨佔 decides by exclusiveSwitchNeedsPanel (panel, or save at once); 共享 saves at once.
-  const setMode = component.slice(component.indexOf('function setMode('), component.indexOf('function openUsbExclusivePanel('));
-  assert.match(setMode, /if \(!exclusive\) \{[\s\S]*saveUsbExclusive\(false\)[\s\S]*exclusiveSwitchNeedsPanel\(s\.status\)\) openUsbExclusivePanel\(\);\s*else void saveUsbExclusive\(true\);/);
-  const authorize = component.slice(component.indexOf('async function authorizeUsbExclusive('));
-  assert.ok(authorize.indexOf('android_request_usb_exclusive_permission') < authorize.indexOf('saveUsbExclusive(true)'));
+  // Both modes are saved at once, with no gate on the permission (the service asks the system dialog by itself).
+  const setMode = component.slice(component.indexOf('function setMode('), component.indexOf('/** The card'));
+  assert.match(setMode, /void saveUsbExclusive\(exclusive\);/);
+  assert.doesNotMatch(setMode, /status|Panel|android_request_usb_exclusive_permission/);
 });
 
 test('the two output modes and the header follow the Windows page, in Android words', () => {
@@ -334,10 +333,10 @@ test('the two output modes and the header follow the Windows page, in Android wo
   assert.deepEqual(exclusive, {
     exclusive: true,
     title: '獨佔',
-    description: '接上 USB 音訊裝置時由本程式直接驅動，不經 Android 系統，取樣率與位元深度照檔案原樣送出（位元完美）。其他 App 與通知音會改從其他裝置出聲；藍牙與內建喇叭不支援，照常以共享方式播放。',
+    description: 'USB 音訊裝置由本程式直接輸出（位元完美）；其他 App 與通知音改從別處出聲，系統音量無效。',
   });
   assert.match(androidOutputHeader(false), /^選擇要輸出的裝置；[\s\S]*不是位元完美。$/);
-  assert.match(androidOutputHeader(true), /^選「系統預設」或 USB 音訊裝置時，播放到 USB 音訊裝置由本程式獨佔/);
+  assert.match(androidOutputHeader(true), /^選「系統預設」或 USB 音訊裝置時，由本程式獨佔輸出/);
   assert.notEqual(androidOutputHeader(true), androidOutputHeader(false));
 });
 
@@ -426,16 +425,4 @@ test('the exclusive mode hints of the routing table', () => {
   );
   assert.equal(rows[0].hint?.text, '獨佔模式：沒有 USB 音訊裝置，以共享方式播放');
   assert.equal(rows[1].hint, null);
-});
-
-test('switching to 獨佔 opens the panel only for an attached USB device without permission', () => {
-  const withRoute = (route) => ({ exclusive: { route } });
-  assert.equal(exclusiveSwitchNeedsPanel(withRoute({ usbDevice: { productName: 'KA3', permitted: true }, noUsbDevice: false })), false);
-  assert.equal(exclusiveSwitchNeedsPanel(withRoute({ usbDevice: null, noUsbDevice: true })), false);
-  assert.equal(exclusiveSwitchNeedsPanel(withRoute({ usbDevice: { productName: 'KA3', permitted: false }, noUsbDevice: false })), true);
-  // Not known yet: the panel is the fallback.
-  assert.equal(exclusiveSwitchNeedsPanel(null), true);
-  assert.equal(exclusiveSwitchNeedsPanel({}), true);
-  assert.equal(exclusiveSwitchNeedsPanel({ exclusive: {} }), true);
-  assert.equal(exclusiveSwitchNeedsPanel(withRoute({})), true);
 });

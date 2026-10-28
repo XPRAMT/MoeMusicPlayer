@@ -22,7 +22,7 @@ export function androidOutputModes() {
     {
       exclusive: true,
       title: tr('獨佔'),
-      description: tr('接上 USB 音訊裝置時由本程式直接驅動，不經 Android 系統，取樣率與位元深度照檔案原樣送出（位元完美）。其他 App 與通知音會改從其他裝置出聲；藍牙與內建喇叭不支援，照常以共享方式播放。'),
+      description: tr('USB 音訊裝置由本程式直接輸出（位元完美）；其他 App 與通知音改從別處出聲，系統音量無效。'),
     },
   ];
 }
@@ -33,7 +33,7 @@ export function androidOutputModes() {
  */
 export function androidOutputHeader(exclusive) {
   return exclusive
-    ? tr('選「系統預設」或 USB 音訊裝置時，播放到 USB 音訊裝置由本程式獨佔（有多台時用第一台）；選內建喇叭、藍牙等其他裝置時，立即改到那台以共享方式播放。拔除 USB 音訊裝置後改由系統預設以共享方式播放。')
+    ? tr('選「系統預設」或 USB 音訊裝置時，由本程式獨佔輸出（有多台時用第一台）；選其他裝置則以共享方式播放。')
     : tr('選擇要輸出的裝置；拔除後改由系統預設播放，重新接上時自動切回。音訊經 Android 系統混音器輸出，系統可能再轉換取樣率，不是位元完美。');
 }
 
@@ -210,22 +210,6 @@ export function exclusiveTargetDevice(status, saved) {
   const usbRows = devices.filter((device) => device.kind === 'usb');
   const name = (target.productName ?? '').trim().toLowerCase();
   return usbRows.find((device) => name && (device.productName ?? '').trim().toLowerCase() === name) ?? usbRows[0] ?? null;
-}
-
-/**
- * Whether switching 共享 → 獨佔 opens the explanation panel (ADR 0047): only when the route's USB device is attached and
- * its permission is not yet granted. A granted device or no USB audio device attached saves the mode at once; a status
- * not loaded yet, or without a route, is not known to need nothing, so the panel is the fallback.
- * @param {AndroidAudioOutputStatus | null | undefined} status
- * @returns {boolean}
- */
-export function exclusiveSwitchNeedsPanel(status) {
-  const route = status?.exclusive?.route;
-  if (!route) return true;
-  if (route.noUsbDevice) return false;
-  const target = route.usbDevice;
-  if (!target) return true;
-  return target.permitted !== true;
 }
 
 /**

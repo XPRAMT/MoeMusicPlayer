@@ -167,6 +167,39 @@ internal object UsbExclusiveRules {
     fun usbDevicesChanged(wish: Wish, before: List<UsbDeviceFacts>, after: List<UsbDeviceFacts>): Boolean =
         wish.usb && target(wish, before) != target(wish, after)
 
+    /**
+     * Everything the automatic USB permission request depends on (ADR 0047): the [wish], the attached [devices], the keys
+     * of the devices the app may already open ([permitted]), those whose prompt was answered "no" since they were attached
+     * ([refused]), whether the app is in the foreground and whether a prompt is on screen now ([inFlight]).
+     */
+    data class AskFacts(
+        val wish: Wish,
+        val devices: List<UsbDeviceFacts>,
+        val permitted: Set<String>,
+        val refused: Set<String>,
+        val foreground: Boolean,
+        val inFlight: Boolean,
+    )
+
+    /**
+     * The USB device to ask Android's permission dialog for now, or null: only in the foreground, with no prompt open,
+     * for the device the routing table plays on ([target]) when it is not permitted and was not refused since it was
+     * attached. In the background the request waits for the foreground (the caller checks again then).
+     */
+    fun autoRequestTarget(facts: AskFacts): String? {
+        if (!facts.foreground || facts.inFlight) return null
+        val key = target(facts.wish, facts.devices) ?: return null
+        return key.takeUnless { it in facts.permitted || it in facts.refused }
+    }
+
+    /** A refusal is remembered only while its device stays attached: unplugged and plugged in again, it is asked again. */
+    fun pruneRefused(refused: Set<String>, devices: List<UsbDeviceFacts>): Set<String> =
+        refused.filterTo(HashSet()) { key -> devices.any { it.key == key } }
+
+    /** The refusals after the user answered the prompt for [key]: a grant forgets it, a "no" remembers it. */
+    fun refusedAfterAnswer(refused: Set<String>, key: String, granted: Boolean): Set<String> =
+        if (granted) refused - key else refused + key
+
     /** One attached USB device as `UsbManager` lists it. */
     data class UsbDeviceFacts(val key: String, val productName: String?)
 

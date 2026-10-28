@@ -39,7 +39,6 @@
     androidOutputHeader,
     androidOutputModes,
     buildAndroidRows,
-    exclusiveSwitchNeedsPanel,
     sameChoice,
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
@@ -118,13 +117,11 @@
     });
   }
 
-  // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Switching to 獨佔 opens the explanation panel only when
-  // an attached USB device is not yet permitted (`exclusiveSwitchNeedsPanel`); only its 「前往授權」 asks for USB
-  // permission (ADR 0039), and the mode is saved after it. With the permission already granted, or no USB audio device
-  // attached (the card asks once one is attached), the mode is saved at once. Cancel leaves the mode 共享. Switching to 共享 hands the device back at once. ----
-  let usbExclusiveDialog = $state<HTMLDialogElement>();
-  let usbExclusivePanelOpen = $state(false);
-  let usbExclusiveMessage = $state<string | null>(null);
+  // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Both buttons save at once; there is no panel of ours. In
+  // 獨佔 the playback service asks Android's USB permission dialog by itself whenever the USB audio device the choice plays
+  // on is attached and not permitted (the mode choice is the request, the system dialog the consent, so ADR 0039's panel
+  // rule is not applied). A refused device is asked again only by the card's 「前往授權」 (`requestUsbPermission`). ----
+  let usbPermissionAsking = $state(false);
 
   async function saveUsbExclusive(enabled: boolean): Promise<void> {
     usbExclusive.busy = true;
@@ -141,57 +138,27 @@
   }
 
   function setMode(exclusive: boolean): void {
-    if (!isTauri() || usbExclusive.busy) return;
-    if (!exclusive) {
-      usbExclusivePanelOpen = false;
-      if (usbExclusive.enabled) void saveUsbExclusive(false);
-      return;
-    }
-    if (usbExclusive.enabled) return;
-    // The panel only when an attached USB device still lacks permission; otherwise the mode is saved at once.
-    if (exclusiveSwitchNeedsPanel(s.status)) openUsbExclusivePanel();
-    else void saveUsbExclusive(true);
+    if (!isTauri() || usbExclusive.busy || usbExclusive.enabled === exclusive) return;
+    void saveUsbExclusive(exclusive);
   }
 
-  /** The panel, from the 獨佔 button or from a card's 「前往授權」 (the permission of a USB device attached later). */
-  function openUsbExclusivePanel(): void {
-    usbExclusiveMessage = null;
-    usbExclusivePanelOpen = true;
-  }
-
-  async function authorizeUsbExclusive(): Promise<void> {
-    if (!usbExclusivePanelOpen || usbExclusive.busy || !isTauri()) return;
-    usbExclusive.busy = true;
-    usbExclusiveMessage = null;
-    let proceed = false;
+  /** The card's 「前往授權」: Android's USB permission dialog for the device the routing table plays the choice on. */
+  async function requestUsbPermission(): Promise<void> {
+    if (usbPermissionAsking || !isTauri()) return;
+    usbPermissionAsking = true;
+    usbExclusive.failure = null;
     try {
-      // The device the routing table plays the choice on: the chosen USB device, or the first one for the system
-      // default (no name). The Kotlin side applies a grant to the playing track at once.
+      // The chosen USB device, or the first one for the system default (no name). The Kotlin side applies a grant to the
+      // playing track at once.
       const productName = s.saved?.kind === 'usb' ? s.saved.productName : null;
-      const answer = await invokeCommand('android_request_usb_exclusive_permission', { productName });
-      // No USB audio device attached: nothing to ask now; the mode still applies (shared until one is attached).
-      proceed = Boolean(answer?.granted) || answer?.found === false;
-      if (!proceed) usbExclusiveMessage = tr('尚未取得 USB 權限。');
+      await invokeCommand('android_request_usb_exclusive_permission', { productName });
     } catch (error) {
-      usbExclusiveMessage = getErrorText(error);
+      usbExclusive.failure = getErrorText(error);
     } finally {
-      usbExclusive.busy = false;
-    }
-    if (!proceed) return;
-    usbExclusivePanelOpen = false;
-    if (usbExclusive.enabled) {
+      usbPermissionAsking = false;
       void refreshStatus();
-      return;
     }
-    await saveUsbExclusive(true);
   }
-
-  $effect(() => {
-    const dialog = usbExclusiveDialog;
-    if (!dialog) return;
-    if (usbExclusivePanelOpen && !dialog.open) dialog.showModal();
-    else if (!usbExclusivePanelOpen && dialog.open) dialog.close();
-  });
 
   // ---- 「附近的裝置」 for the Bluetooth codec (ADR 0044; the explanation first, the request only on 「前往授權」) ----
   // The panel belongs to the copy whose button was pressed (it is an interaction, not shown data), so each copy has
@@ -342,7 +309,7 @@
         <p class="output-device-path is-idle" class:is-warn={row.hint.needsPermission}>
           {row.hint.text}
           {#if row.hint.needsPermission}
-            <button type="button" class="soft-button output-device-permission" onclick={openUsbExclusivePanel}>{tr('前往授權')}</button>
+            <button type="button" class="soft-button output-device-permission" disabled={usbPermissionAsking} onclick={() => void requestUsbPermission()}>{usbPermissionAsking ? tr('授權中') : tr('前往授權')}</button>
           {/if}
         </p>
       {/if}
@@ -365,26 +332,6 @@
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" disabled={permissionBusy} onclick={closePermissionPanel}>{tr('取消')}</button>
       <button class="soft-button" type="button" disabled={permissionBusy} onclick={() => void authorizeBluetooth()}>{permissionBusy ? tr('授權中') : tr('前往授權')}</button>
-    </div>
-  </div>
-</dialog>
-
-<dialog
-  bind:this={usbExclusiveDialog}
-  class="update-dialog floating-surface"
-  aria-labelledby="usb-exclusive-title"
-  aria-describedby="usb-exclusive-description"
-  oncancel={(event) => { event.preventDefault(); usbExclusivePanelOpen = false; }}
->
-  <div class="update-dialog-content">
-    <h2 id="usb-exclusive-title">{tr('獨佔模式')}</h2>
-    <p id="usb-exclusive-description">{tr('切換到獨佔模式後，播放到 USB 音訊裝置時，本程式會直接驅動它，不經過 Android 音訊系統，以檔案的取樣率與位元深度原樣輸出。這段期間其他 App 與通知音會改從手機或平板的喇叭播放，系統音量鍵對這台裝置沒有作用。藍牙與內建喇叭不支援獨佔，照常以共享方式播放。')}</p>
-    <p>{tr('位元完美輸出需要把本程式的音量調到 100%；低於 100% 時會先調整音量再送出。裝置可能沒有硬體音量，請先調低 USB 音訊裝置或耳機的音量。')}</p>
-    <p>{tr('按下「前往授權」後，Android 會詢問是否允許本程式存取 USB 音訊裝置；目前沒有接上 USB 音訊裝置時，會先切換為獨佔模式，接上後再授權。')}</p>
-    {#if usbExclusiveMessage}<p class="error-text" role="alert">{usbExclusiveMessage}</p>{/if}
-    <div class="update-dialog-actions">
-      <button class="soft-button" type="button" disabled={usbExclusive.busy} onclick={() => { usbExclusivePanelOpen = false; }}>{tr('取消')}</button>
-      <button class="soft-button" type="button" disabled={usbExclusive.busy} onclick={() => void authorizeUsbExclusive()}>{usbExclusive.busy ? tr('授權中') : tr('前往授權')}</button>
     </div>
   </div>
 </dialog>

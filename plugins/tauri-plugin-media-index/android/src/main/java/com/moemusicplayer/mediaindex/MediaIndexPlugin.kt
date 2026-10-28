@@ -141,6 +141,11 @@ class CopyUriToFileArgs {
 class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     private val resolver = activity.contentResolver
     private val appContext = activity.applicationContext
+
+    init {
+        // Follows whether the app is in the foreground, for the automatic USB permission request (ADR 0047).
+        UsbPermissionAsk.install(activity)
+    }
     private val io = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "moe-media-index").apply { isDaemon = true }
     }
@@ -823,8 +828,9 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     /**
      * USB permission for the USB audio device the exclusive mode plays on: the one named `productName` (a chosen USB
      * output; the only USB audio device when the name matches none), or the first USB audio device when the name is
-     * empty (the system default), only after the exclusive mode explanation panel (ADR 0039, ADR 0047). Answers
-     * `{ granted, found }`; a grant applies to the playing track at once.
+     * empty (the system default), on the click of the card's 「前往授權」 (ADR 0047; the same request the app makes by
+     * itself, [UsbPermissionAsk], which asks a refused device again here). Answers `{ granted, found }`; a grant
+     * applies to the playing track at once.
      */
     @Command
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
@@ -839,10 +845,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.resolve(JSObject().put("granted", false).put("found", false))
                 return@runOnUiThread
             }
-            val pending = if (usb.hasPermission(device)) emptyList() else listOf(device)
-            UsbAudioReader.askInTurn(activity.applicationContext, usb, Handler(Looper.getMainLooper()), pending) {
-                val granted = usb.hasPermission(device)
-                if (granted) PlaybackService.usbPermissionGranted()
+            UsbPermissionAsk.request(activity.applicationContext, usb, device) { granted ->
                 invoke.resolve(JSObject().put("granted", granted).put("found", true))
             }
         }
