@@ -13,7 +13,26 @@ const finished = {
   interface: 1,
   alt: 6,
   highSpeed: true,
-  feedback: { min: 5.5124, max: 5.5128, avg: 5.51262, accepted: 29990, rejected: 0 },
+  clockOrder: 'altThenClock',
+  feedback: { min: 5.5124, max: 5.5128, avg: 5.51262, accepted: 7480, rejected: 20, shift: 0, rescales: 0, firstRaw: 5.5126 },
+  feedbackUrbs: {
+    reaped: 7500,
+    withData: 7500,
+    zeroLength: 0,
+    packetStatus: [],
+    urbStatus: [],
+    firstPackets: ['9C 58 05 00'],
+  },
+  dataPackets: {
+    reaped: 3750,
+    urbStatus: [{ status: 0, name: null, count: 3750 }],
+    packetStatus: [{ status: 0, name: null, count: 30000 }],
+    packets: 30000,
+    lengthMismatch: 0,
+    requestedBytes: 5292000,
+    actualBytes: 5292000,
+  },
+  pcm: { firstSeconds: 3, peakFirst: 22654, peakFirstDbfs: -3.2056, peak: 22654, peakDbfs: -3.2056, firstSamples: [0, 0] },
   framesTotal: 1323000,
   framesSent: 1323000,
   underruns: 0,
@@ -27,21 +46,38 @@ const finished = {
   steps: [],
 };
 
-test('a finished test reads as one line with the clock, alt, feedback, underruns, errors and the hand-back', () => {
+test('a finished test reads as one line with the clock, alt, feedback, PCM peak, underruns, errors and the hand-back', () => {
   assert.equal(
     describeUsbExclusiveReport(finished),
-    '時鐘 44100（讀回 44100）．alt 6．回授平均 5.5126．欠載 0．錯誤 0．已交還',
+    '時鐘 44100（讀回 44100）．alt 6．回授 7480／7500．平均 5.5126．峰值 -3.2 dBFS．欠載 0．錯誤 0．已交還',
+  );
+  assert.equal(
+    describeUsbExclusiveReport({ ...finished, pcm: { ...finished.pcm, peakDbfs: -0.0003 } }),
+    '時鐘 44100（讀回 44100）．alt 6．回授 7480／7500．平均 5.5126．峰值 0.0 dBFS．欠載 0．錯誤 0．已交還',
+  );
+});
+
+test('feedback that never came back shows how many URBs were reaped, without an average; silence is named', () => {
+  const silent = {
+    ...finished,
+    feedback: { ...finished.feedback, avg: null, min: null, max: null, accepted: 0, rejected: 0 },
+    feedbackUrbs: { ...finished.feedbackUrbs, withData: 0, zeroLength: 7500, firstPackets: [] },
+    pcm: { ...finished.pcm, peak: 0, peakDbfs: null, peakFirst: 0, peakFirstDbfs: null },
+  };
+  assert.equal(
+    describeUsbExclusiveReport(silent),
+    '時鐘 44100（讀回 44100）．alt 6．回授 0／7500．PCM 全為靜音．欠載 0．錯誤 0．已交還',
+  );
+  assert.equal(
+    describeUsbExclusiveReport({ ...silent, feedbackUrbs: undefined, pcm: null }),
+    '時鐘 44100（讀回 44100）．alt 6．回授 0／0．欠載 0．錯誤 0．已交還',
   );
 });
 
 test('a stopped test says so first; errors add URB and packet errors', () => {
   assert.equal(
     describeUsbExclusiveReport({ ...finished, outcome: 'stopped', underruns: 2, urbErrors: 1, packetErrors: 3 }),
-    '已停止．時鐘 44100（讀回 44100）．alt 6．回授平均 5.5126．欠載 2．錯誤 4．已交還',
-  );
-  assert.equal(
-    describeUsbExclusiveReport({ ...finished, feedback: { ...finished.feedback, avg: null } }),
-    '時鐘 44100（讀回 44100）．alt 6．沒有回授．欠載 0．錯誤 0．已交還',
+    '已停止．時鐘 44100（讀回 44100）．alt 6．回授 7480／7500．平均 5.5126．峰值 -3.2 dBFS．欠載 2．錯誤 4．已交還',
   );
 });
 
@@ -81,4 +117,8 @@ test('the page starts the test only from the confirm panel, and the area never c
   assert.match(component, /onclick=\{\(\) => \{ exclusivePanelOpen = true; \}\}/);
   assert.equal(component.match(/void startExclusive\(\)/g)?.length, 1);
   assert.match(component, /class="output-device-usb" data-own-click/);
+  // It may be a speaker: the warning names a USB audio device, not a DAC.
+  const panel = component.slice(component.indexOf('id="usb-exclusive-title"'));
+  assert.doesNotMatch(panel.slice(0, panel.indexOf('</dialog>')), /DAC/);
+  assert.match(panel, /USB 音訊裝置/);
 });

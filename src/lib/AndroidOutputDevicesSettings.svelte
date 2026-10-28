@@ -447,8 +447,8 @@
 >
   <div class="update-dialog-content">
     <h2 id="usb-exclusive-title">{tr('USB 獨佔試播（開發用）')}</h2>
-    <p id="usb-exclusive-description">{tr('試播時本程式直接把聲音送到 USB DAC，繞過 Android 音訊系統：DAC 沒有硬體音量，程式也不調整音量，位元完美輸出就是滿音量。請先調低 DAC 或耳機的音量。')}</p>
-    <p>{tr('將播放目前曲目（本機 16 bit 雙聲道 FLAC）開頭最多 30 秒；結束、按「停止」或發生錯誤時，都會把 DAC 交還系統。')}</p>
+    <p id="usb-exclusive-description">{tr('試播時本程式直接把聲音送到 USB 音訊裝置，繞過 Android 音訊系統：裝置可能沒有硬體音量，程式也不調整音量，位元完美輸出就是滿音量。請先調低 USB 音訊裝置或耳機的音量。')}</p>
+    <p>{tr('將播放目前曲目（本機 16 bit 雙聲道 FLAC）開頭最多 30 秒；結束、按「停止」或發生錯誤時，都會把 USB 音訊裝置交還系統。')}</p>
     <div class="update-dialog-actions">
       <button class="soft-button" type="button" onclick={() => { exclusivePanelOpen = false; }}>{tr('取消')}</button>
       <button class="soft-button" type="button" onclick={() => void startExclusive()}>{tr('開始試播')}</button>
