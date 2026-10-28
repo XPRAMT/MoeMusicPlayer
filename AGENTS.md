@@ -58,6 +58,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 **介面** → `ui.md`
 - 介面語言 `tr()`／`zh-CN.json`（ADR 0019）；字型選擇 `FontPicker.svelte`／`crates/player-fonts`（ADR 0042）。
 - 左側導覽與窄版導覽面板、浮動面板外觀 `.floating-surface`、睡眠定時 `sleep_timer.rs`（ADR 0036）。
+- 記住上次的頁面並於啟動時還原 `lastPage`、`start-page.js`（ADR 0053）。
 - 專輯詳情捲動（ADR 0012）與資料、專輯首頁、列表、曲目欄位、歌曲來源篩選開關 `LibrarySourceScope`（ADR 0037）、同步結果顯示、頻譜圖（ADR 0038）。
 
 **歌曲資訊面板** → `track-details.md`：`TrackDetailsDialog`、`crates/player-tags` 寫檔流程、封面計畫、儲存後重讀（ADR 0013）。
