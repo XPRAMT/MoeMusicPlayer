@@ -10,18 +10,18 @@ use std::{
     collections::{HashSet, VecDeque},
     path::Path,
     sync::{
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
-        Arc, Mutex, OnceLock, RwLock,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use player_core::{
-    display_track_title, MediaLocator, NaturalWalk, PlaybackCheckpoint, PlaybackQueue,
-    PlaybackQueueSnapshot, QueueRepeatMode, QueueTrackListeningStats, StartFailure, TrackId,
-    TrackListSort, TrackSummary,
+    MediaLocator, NaturalWalk, PlaybackCheckpoint, PlaybackQueue, PlaybackQueueContext,
+    PlaybackQueueEntry, PlaybackQueueSnapshot, QueueRepeatMode, QueueTrackListeningStats,
+    StartFailure, TrackId, TrackListSort, TrackSummary, display_track_title,
 };
 use player_db::{Database, PlaybackSessionCheckpoint};
 use serde::{Deserialize, Serialize};
@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::queue_for_track;
 use crate::{
-    queue_repeat_mode, set_queue_shuffle_with_latest_stats, PlaybackQueueSource, PlaybackSnapshot,
-    RepeatMode,
+    PlaybackQueueSource, PlaybackSnapshot, RepeatMode, queue_repeat_mode,
+    set_queue_shuffle_with_latest_stats,
 };
 #[cfg(target_os = "android")]
 use std::sync::mpsc::TryRecvError;
@@ -108,6 +108,13 @@ pub(crate) enum PlaybackAction {
     },
     /// The current track's tags were edited: read its summary from the library again.
     RefreshCurrentTrack,
+    /// Another app opened an audio file with this one (ADR 0054): play `selected_index` of `entries` (the files of
+    /// its folder) at once as a new queue. The entries that are not in the library are in
+    /// `external_open::registry()`.
+    OpenExternal {
+        entries: Vec<PlaybackQueueEntry>,
+        selected_index: usize,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -382,7 +389,10 @@ impl PlaybackAction {
     fn chooses_track(&self) -> bool {
         matches!(
             self,
-            Self::SelectTrack { .. } | Self::Next { .. } | Self::Previous
+            Self::SelectTrack { .. }
+                | Self::Next { .. }
+                | Self::Previous
+                | Self::OpenExternal { .. }
         )
     }
 
@@ -528,8 +538,105 @@ impl AndroidActor {
 
     /// The server a track is on (`None` for a local file).
     fn server_key_of_track(&self, track_id: TrackId) -> Option<String> {
-        let uri = crate::android_dsd::playable_uri(&self.database, track_id).ok()?;
+        let uri = self.playable_uri_of(track_id).ok()?;
         crate::remote_server_key_of(&uri)
+    }
+
+    /// The summary of a track: a track of the queue built for a file another app opened (ADR 0054) first, else the
+    /// library's.
+    fn track_summary_of(&self, track_id: TrackId) -> Result<Option<TrackSummary>, String> {
+        if let Some(external) = crate::external_open::registry().get(track_id) {
+            return Ok(Some(external.summary));
+        }
+        self.database
+            .get_track_summary(track_id)
+            .map_err(|error| error.to_string())
+    }
+
+    /// The URI Media3 loads for a track.
+    fn playable_uri_of(&self, track_id: TrackId) -> Result<String, String> {
+        if let Some(external) = crate::external_open::registry().get(track_id) {
+            #[cfg(unix)]
+            let uri = player_core::file_uri_for_path(&external.path)
+                .map(|uri| crate::android_dsd::to_converted_uri(&uri));
+            // Only Android runs this for real; the host build of the tests gets a plain `file://` URI.
+            #[cfg(not(unix))]
+            let uri: Option<String> = Some(format!(
+                "file://{}",
+                external.path.to_string_lossy().replace('\\', "/")
+            ));
+            return uri.ok_or_else(|| "音樂檔案路徑無效。".to_owned());
+        }
+        crate::android_dsd::playable_uri(&self.database, track_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn locators_of(&self, track_id: TrackId) -> Vec<MediaLocator> {
+        if let Some(external) = crate::external_open::registry().get(track_id) {
+            return vec![MediaLocator::FileSystem(external.path)];
+        }
+        self.database.track_locators(track_id).unwrap_or_default()
+    }
+
+    /// Whether the queue holds a track that is not in the library: its saved session would name tracks the database
+    /// does not know, so the last library session stays as it is.
+    fn queue_has_external_tracks(&self) -> bool {
+        self.queue.as_ref().is_some_and(|queue| {
+            queue
+                .snapshot()
+                .entries
+                .iter()
+                .any(|entry| crate::external_open::registry().contains(entry.track_id))
+        })
+    }
+
+    /// Forget the registered tracks that the queue does not hold any more.
+    fn prune_external_tracks(&self) {
+        let keep: HashSet<TrackId> = self
+            .queue
+            .as_ref()
+            .map(|queue| {
+                queue
+                    .snapshot()
+                    .entries
+                    .iter()
+                    .map(|entry| entry.track_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::external_open::registry().retain_only(&keep);
+    }
+
+    /// Start the file another app opened, with the files of its folder as the queue (ADR 0054). The file is opened
+    /// before anything changes: a failure leaves the queue and the track that play as they are.
+    fn open_external(
+        &mut self,
+        request_id: &str,
+        entries: Vec<PlaybackQueueEntry>,
+        selected_index: usize,
+    ) -> Result<PlaybackSnapshot, String> {
+        let mut queue = PlaybackQueue::with_entries(
+            entries,
+            PlaybackQueueContext::Library {
+                query: None,
+                field_filter: None,
+                sort: Default::default(),
+            },
+            selected_index,
+        )
+        .ok_or_else(|| "此資料夾沒有可播放的音訊檔案。".to_owned())?;
+        queue.set_repeat_mode(queue_repeat_mode(self.repeat_mode));
+        set_queue_shuffle_with_latest_stats(&self.database, &mut queue, self.shuffle)?;
+        let track_id = queue.current();
+        let result = self
+            .track_summary_of(track_id)
+            .and_then(|track| track.ok_or_else(|| "找不到要播放的音樂檔案。".to_owned()))
+            .and_then(|track| {
+                let uri = self.playable_uri_of(track_id)?;
+                self.load_track_and_replace_queue(request_id, track, uri, queue, true)
+            });
+        self.prune_external_tracks();
+        result
     }
 
     /// Close the listening segment of the track that is being replaced, as of now: it kept playing while the new file
@@ -657,6 +764,12 @@ impl AndroidActor {
                 }
                 self.native_command(request_id, "set_volume", None, None, Some(volume))
             }
+            PlaybackAction::OpenExternal {
+                entries,
+                selected_index,
+            } => self
+                .open_external(request_id, entries, selected_index)
+                .map_err(|error| self.start_error(error)),
             PlaybackAction::Next { natural } => self
                 .navigate(request_id, true, natural)
                 .map_err(|error| self.start_error(error)),
@@ -780,12 +893,9 @@ impl AndroidActor {
             return self.select_queue_entry(request_id, track_id, traversal_position);
         }
         let track = self
-            .database
-            .get_track_summary(track_id)
-            .map_err(|error| error.to_string())?
+            .track_summary_of(track_id)?
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
-            .map_err(|error| error.to_string())?;
+        let uri = self.playable_uri_of(track_id)?;
         let replacement_queue =
             super::queue_for_track(&self.database, scope, track_id, source.clone())?;
         let mut replacement_queue = replacement_queue;
@@ -873,12 +983,9 @@ impl AndroidActor {
         play_when_ready: bool,
     ) -> Result<PlaybackSnapshot, String> {
         let track = self
-            .database
-            .get_track_summary(track_id)
-            .map_err(|error| error.to_string())?
+            .track_summary_of(track_id)?
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
-            .map_err(|error| error.to_string())?;
+        let uri = self.playable_uri_of(track_id)?;
         let command = self.new_command(
             request_id,
             "load",
@@ -1041,12 +1148,9 @@ impl AndroidActor {
         track_id: TrackId,
     ) -> Result<PlaybackSnapshot, String> {
         let track = self
-            .database
-            .get_track_summary(track_id)
-            .map_err(|error| error.to_string())?
+            .track_summary_of(track_id)?
             .ok_or_else(|| "曲目已不在曲庫中，請重新整理列表。".to_owned())?;
-        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
-            .map_err(|error| error.to_string())?;
+        let uri = self.playable_uri_of(track_id)?;
         let track_id_text = track_id.to_string();
         let position_ms = if self.native.track_id.as_deref() == Some(track_id_text.as_str()) {
             self.native.position_ms
@@ -1501,7 +1605,8 @@ impl AndroidActor {
         if track.id != track_id {
             return Err("還原的播放游標與目前曲目不一致。".to_owned());
         }
-        let uri = crate::android_dsd::playable_uri(&self.database, track_id)
+        let uri = self
+            .playable_uri_of(track_id)
             .map_err(|error| format!("找不到目前曲目的有效來源：{error}"))?;
         let track_id_text = track_id.to_string();
         let position_ms = if self.native.track_id.as_deref() == Some(track_id_text.as_str()) {
@@ -1617,8 +1722,8 @@ impl AndroidActor {
                 .as_ref()
                 .is_none_or(|current| current.id != track_id)
         }) {
-            self.current_track = track_id
-                .and_then(|track_id| self.database.get_track_summary(track_id).ok().flatten());
+            self.current_track =
+                track_id.and_then(|track_id| self.track_summary_of(track_id).ok().flatten());
         }
         self.publish_snapshot();
     }
@@ -1697,27 +1802,18 @@ impl AndroidActor {
     }
 
     fn native_metadata(&self, track: &TrackSummary) -> NativeTrackMetadata {
-        let artwork_uri = self
-            .database
-            .track_locators(track.id)
-            .ok()
-            .and_then(|locators| {
-                locators.into_iter().find_map(|locator| match locator {
-                    MediaLocator::ContentUri(uri) => Some(uri),
-                    // Real-path track (ADR 0014): Media3 reads embedded art from file:// URIs.
-                    #[cfg(unix)]
-                    MediaLocator::FileSystem(path) => player_core::file_uri_for_path(&path),
-                    #[cfg(not(unix))]
-                    MediaLocator::FileSystem(_) => None,
-                    // A remote track's cover comes through the remote reader, not a Media3 URI.
-                    MediaLocator::Remote { .. } => None,
-                })
-            });
-        let artwork_data_base64 = self
-            .database
-            .track_locators(track.id)
-            .ok()
-            .and_then(|locators| ape_cover_base64(&locators));
+        let locators = self.locators_of(track.id);
+        let artwork_uri = locators.iter().cloned().find_map(|locator| match locator {
+            MediaLocator::ContentUri(uri) => Some(uri),
+            // Real-path track (ADR 0014): Media3 reads embedded art from file:// URIs.
+            #[cfg(unix)]
+            MediaLocator::FileSystem(path) => player_core::file_uri_for_path(&path),
+            #[cfg(not(unix))]
+            MediaLocator::FileSystem(_) => None,
+            // A remote track's cover comes through the remote reader, not a Media3 URI.
+            MediaLocator::Remote { .. } => None,
+        });
+        let artwork_data_base64 = ape_cover_base64(&locators);
         NativeTrackMetadata {
             title: display_track_title(track.title.as_deref(), track.file_name.as_deref()),
             artist: track.artist.clone(),
@@ -1735,6 +1831,9 @@ impl AndroidActor {
         let Some(queue) = self.queue.as_ref() else {
             return Ok(());
         };
+        if self.queue_has_external_tracks() {
+            return Ok(());
+        }
         self.database
             .save_playback_session(&PlaybackSessionCheckpoint {
                 queue: queue.snapshot(),
@@ -1757,7 +1856,11 @@ impl AndroidActor {
         {
             return Ok(());
         }
-        if let Some(queue) = self.queue.as_ref() {
+        if let Some(queue) = self
+            .queue
+            .as_ref()
+            .filter(|_| !self.queue_has_external_tracks())
+        {
             self.database
                 .checkpoint_playback_position(&queue.snapshot(), self.logical_position_ms())
                 .map_err(|error| format!("保存播放狀態失敗：{error}"))?;
@@ -1781,9 +1884,17 @@ impl AndroidActor {
         if checkpoints.is_empty() {
             return Ok(());
         }
-        self.database
-            .record_playback_checkpoints(self.runtime_id, &checkpoints)
-            .map_err(|error| format!("保存播放時長統計失敗：{error}"))?;
+        // Listening time of a file the library does not have is not kept (there is no track row for it).
+        let recorded: Vec<PlaybackCheckpoint> = checkpoints
+            .iter()
+            .filter(|checkpoint| !crate::external_open::registry().contains(checkpoint.track_id))
+            .cloned()
+            .collect();
+        if !recorded.is_empty() {
+            self.database
+                .record_playback_checkpoints(self.runtime_id, &recorded)
+                .map_err(|error| format!("保存播放時長統計失敗：{error}"))?;
+        }
         self.meter.acknowledge(&checkpoints);
         self.stats_status = None;
         Ok(())
@@ -2072,9 +2183,9 @@ impl ListeningMeter {
 mod jni_exports {
     use super::*;
     use jni::{
+        JNIEnv,
         objects::{JObject, JString},
         sys::jstring,
-        JNIEnv,
     };
 
     #[no_mangle]

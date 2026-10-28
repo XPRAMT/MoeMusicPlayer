@@ -48,6 +48,26 @@ pub struct AllFilesAccessStatus {
     pub granted: bool,
 }
 
+/// A file another app opened with this one (`ACTION_VIEW`, ADR 0054), as the plugin resolved it.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalOpen {
+    /// False when no request was waiting.
+    #[serde(default)]
+    pub pending: bool,
+    /// The file to play: its real path, or a private copy in the cache (`copied`). Absent when it could not be read
+    /// (`error` says why).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `path` is a copy of the sender's bytes, alone in its folder: there is no folder to list.
+    #[serde(default)]
+    pub copied: bool,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 /// System font files and the system region (Android; ADR 0042).
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,6 +199,18 @@ impl<R: Runtime> MediaIndex<R> {
         operation: impl FnOnce(&mut dyn CoreMediaIndex) -> T,
     ) -> T {
         operation(&mut Adapter { index: self, excluded })
+    }
+
+    /// Whether another app opened a file with this one and nobody has taken it yet (ADR 0054).
+    #[cfg(target_os = "android")]
+    pub fn external_open_pending(&self) -> Result<bool> {
+        self.platform.external_open_pending()
+    }
+
+    /// Takes the waiting request (once): the real path of the file, or a copy of it in the cache (ADR 0054).
+    #[cfg(target_os = "android")]
+    pub fn external_open_take(&self) -> Result<ExternalOpen> {
+        self.platform.external_open_take()
     }
 
     /// MANAGE_EXTERNAL_STORAGE ("All files access") state.

@@ -568,7 +568,13 @@ mod tests {
     #[test]
     fn android_open_types_are_the_library_formats_mime_types() {
         let types = android_open_mime_types();
-        for expected in ["audio/flac", "audio/x-wavpack", "audio/x-dsf", "audio/opus", "audio/mpeg"] {
+        for expected in [
+            "audio/flac",
+            "audio/x-wavpack",
+            "audio/x-dsf",
+            "audio/opus",
+            "audio/mpeg",
+        ] {
             assert!(types.contains(&expected), "{expected}");
         }
         for mime in &types {

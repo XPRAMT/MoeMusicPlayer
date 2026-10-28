@@ -93,6 +93,7 @@ mod android_playback;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_usb_output;
+mod external_open;
 mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
@@ -7138,15 +7139,24 @@ struct StartPageRestore {
 
 #[tauri::command]
 fn settings_get_last_page(
+    app: AppHandle,
     state: State<'_, AppState>,
     intent: State<'_, LaunchIntent>,
 ) -> Result<StartPageRestore, String> {
+    // A start that another app caused by opening an audio file (Android 「開啟方式」, ADR 0054) is an explicit launch too.
+    #[cfg(target_os = "android")]
+    let external_launch = intent.external_file || external_open::pending(&app);
+    #[cfg(not(target_os = "android"))]
+    let external_launch = {
+        let _ = &app;
+        intent.external_file
+    };
     state
         .settings
         .snapshot()
         .map(|settings| StartPageRestore {
             last_page: settings.last_page,
-            external_launch: intent.external_file,
+            external_launch,
         })
         .map_err(|error| error.to_string())
 }
@@ -9913,7 +9923,24 @@ fn playback_get_queue_page(
         let (revision, queue) = service
             .queue_snapshot()?
             .map_or((0, None), |(revision, queue)| (revision, Some(queue)));
-        build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)
+        let mut page =
+            build_playback_queue_page(state.database.as_ref(), revision, queue, offset, limit)?;
+        // The tracks of a queue built for a file another app opened (ADR 0054) are not in the library.
+        let missing = page
+            .items
+            .iter()
+            .filter(|item| item.track.is_none())
+            .map(|item| item.track_id)
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let external = external_open::registry().summaries(&missing);
+            for item in &mut page.items {
+                if item.track.is_none() {
+                    item.track = external.get(&item.track_id).cloned();
+                }
+            }
+        }
+        Ok(page)
     }
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
@@ -9972,6 +9999,12 @@ fn playback_get_queue_quick_index_groupings(
     ) {
         if let Some(summary) = summary {
             summaries.insert(id, summary);
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        for (id, summary) in external_open::registry().summaries(&track_ids) {
+            summaries.entry(id).or_insert(summary);
         }
     }
     #[cfg(target_os = "windows")]
@@ -10082,9 +10115,13 @@ async fn library_get_track_artwork(
                 .unwrap_or_else(|| "曲庫資料庫尚未開啟。".to_owned())
         })?;
         let id = TrackId::parse(&track_id).map_err(|error| format!("曲目 ID 無效：{error}"))?;
-        let locators = database
-            .track_locators(id)
-            .map_err(|error| error.to_string())?;
+        // A file another app opened (ADR 0054) has no library locators: its cover comes from its own path.
+        let locators = match external_open::registry().get(id) {
+            Some(external) => vec![MediaLocator::FileSystem(external.path)],
+            None => database
+                .track_locators(id)
+                .map_err(|error| error.to_string())?,
+        };
         let tree_uris: Vec<String> = Vec::new();
         let (artwork, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
             let artwork = find_android_artwork(&app, &locators, &tree_uris);
@@ -13218,6 +13255,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            external_open::android_external_open,
             backup::backup_export,
             backup::backup_import,
             backup::backup_pending,

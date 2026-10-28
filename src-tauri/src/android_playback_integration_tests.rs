@@ -1569,3 +1569,142 @@ fn a_choice_of_the_user_ends_the_walk_before_its_next_entry() {
         "a replaced start reports nothing"
     );
 }
+
+fn external_entry(
+    name: &str,
+    title: &str,
+) -> (PlaybackQueueEntry, crate::external_open::ExternalTrack) {
+    let id = TrackId::new();
+    let path = PathBuf::from(format!("/storage/emulated/0/Opened/{name}"));
+    let summary = crate::external_open::external_summary(
+        &path,
+        id,
+        TrackMetadata {
+            title: Some(title.to_owned()),
+            duration_ms: Some(8_000),
+            ..TrackMetadata::default()
+        },
+        None,
+        None,
+    );
+    (
+        PlaybackQueueEntry {
+            track_id: id,
+            source_position: None,
+        },
+        crate::external_open::ExternalTrack { path, summary },
+    )
+}
+
+#[test]
+fn a_file_another_app_opened_plays_at_once_as_the_current_entry_of_its_folders_queue() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    let actor_db = temporary.open();
+    drop(seed_db);
+    let (first_entry, first_track) = external_entry("1a.flac", "Opened A");
+    let (second_entry, second_track) = external_entry("3c.flac", "Opened C");
+    let library_entry = PlaybackQueueEntry {
+        track_id: fixture.first,
+        source_position: None,
+    };
+    let opened = first_entry.track_id;
+    crate::external_open::registry().register([first_track, second_track]);
+
+    let mut harness = ActorFixture::new(actor_db);
+    let actor = harness.take_actor();
+    let entries = vec![first_entry, library_entry, second_entry];
+    let handle = perform_on_thread(actor, move |actor| {
+        actor.handle_action(
+            "open-with",
+            PlaybackAction::OpenExternal {
+                entries,
+                selected_index: 0,
+            },
+        )
+    });
+    let load = harness.fake.next_command();
+    assert_eq!(load.op, "load");
+    assert_eq!(load.track_id.as_deref(), Some(opened.to_string().as_str()));
+    let uri = load.content_uri.as_deref().expect("a URI to load");
+    assert!(
+        uri.starts_with("file://") || uri.starts_with("moeflac://"),
+        "{uri}"
+    );
+    assert!(uri.ends_with("/Opened/1a.flac"), "{uri}");
+    assert_eq!(
+        load.play_when_ready,
+        Some(true),
+        "the opened file plays at once"
+    );
+    assert_eq!(
+        load.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.title.as_deref()),
+        Some("Opened A")
+    );
+    harness.fake.ack(&load);
+    let capabilities = harness.fake.next_command();
+    harness.fake.ack(&capabilities);
+    let (actor, result) = handle.join().expect("actor action thread");
+    assert!(result.is_ok(), "open result: {:?}", result.err());
+    let queue = actor.queue.as_ref().expect("queue");
+    assert_eq!(queue.current(), opened);
+    assert_eq!(queue.snapshot().entries.len(), 3);
+    assert_eq!(
+        actor.current_track.as_ref().map(|track| track.id),
+        Some(opened)
+    );
+    // The queue is not saved: its tracks are not in the database, and the last library session stays.
+    assert!(actor.database.load_playback_session().unwrap().is_none());
+    // Navigation reaches the library track and the next opened file through the same lookups.
+    let next = queue.preview_next(true).expect("next entry").0;
+    assert_eq!(next, fixture.first);
+    assert!(crate::external_open::registry().contains(opened));
+}
+
+#[test]
+fn a_file_the_service_refuses_leaves_the_playing_queue_and_forgets_the_new_tracks() {
+    let temporary = TemporaryDatabase::new();
+    let mut seed_db = temporary.open();
+    let fixture = seed_library(&mut seed_db);
+    let actor_db = temporary.open();
+    drop(seed_db);
+    let (entry, track) = external_entry("x.flac", "Refused");
+    let refused = entry.track_id;
+    crate::external_open::registry().register([track]);
+
+    let mut harness = ActorFixture::new(actor_db);
+    let mut actor = harness.take_actor();
+    actor.queue = PlaybackQueue::with_entries(
+        vec![PlaybackQueueEntry {
+            track_id: fixture.first,
+            source_position: None,
+        }],
+        PlaybackQueueContext::Library {
+            query: None,
+            field_filter: None,
+            sort: Default::default(),
+        },
+        0,
+    );
+    let handle = perform_on_thread(actor, move |actor| {
+        actor.handle_action(
+            "open-with",
+            PlaybackAction::OpenExternal {
+                entries: vec![entry],
+                selected_index: 0,
+            },
+        )
+    });
+    let load = harness.fake.next_command();
+    harness.fake.refuse_load(&load, "cannot open");
+    let (actor, result) = handle.join().expect("actor action thread");
+    assert!(result.is_err());
+    assert_eq!(
+        actor.queue.as_ref().map(PlaybackQueue::current),
+        Some(fixture.first)
+    );
+    assert!(!crate::external_open::registry().contains(refused));
+}

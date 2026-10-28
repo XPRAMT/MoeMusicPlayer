@@ -157,6 +157,15 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         Ok(crate::adapter::into_core_metadata(metadata))
     }
 
+    pub(crate) fn external_open_pending(&self) -> Result<bool> {
+        let value = self.0.run_mobile_plugin::<serde_json::Value>("externalOpenPending", json!({}))?;
+        Ok(value.get("pending").and_then(serde_json::Value::as_bool).unwrap_or(false))
+    }
+
+    pub(crate) fn external_open_take(&self) -> Result<crate::ExternalOpen> {
+        Ok(self.0.run_mobile_plugin::<crate::ExternalOpen>("externalOpenTake", json!({}))?)
+    }
+
     pub(crate) fn all_files_access_status(&self) -> Result<crate::AllFilesAccessStatus> {
         Ok(self.0.run_mobile_plugin::<crate::AllFilesAccessStatus>("allFilesAccessStatus", json!({}))?)
     }
