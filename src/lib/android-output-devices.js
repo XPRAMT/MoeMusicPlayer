@@ -7,6 +7,34 @@ import { describeAndroidExclusive, describeAndroidPath, dsdFallbackNotice, forma
 /** `androidUsbExclusive` when settings.json does not say (Rust `AppSettings::default`, ADR 0047): the shared mode. */
 export const DEFAULT_ANDROID_USB_EXCLUSIVE = false;
 
+/** `androidBluetoothRateFollow` when settings.json does not say (Rust `AppSettings::default`, ADR 0051): off. */
+export const DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW = false;
+
+/**
+ * Whether the Bluetooth sample-rate follow can run: it needs root or a Shizuku this app may use (ADR 0051; the same
+ * sources as the real mixer rate, ADR 0048). Null while the sources have not been read.
+ * @param {import('./ipc').AndroidMixerRateSourceStatus | null | undefined} sources
+ * @returns {boolean | null}
+ */
+export function bluetoothRateSourceAvailable(sources) {
+  if (!sources) return null;
+  return sources.root === 'available' || sources.shizuku === 'granted';
+}
+
+/**
+ * The short notice under the switch: why it does nothing yet. Null when it can work (or the sources are not known).
+ * @param {boolean} enabled
+ * @param {import('./ipc').AndroidMixerRateSourceStatus | null | undefined} sources
+ * @returns {string | null}
+ */
+export function bluetoothRateNotice(enabled, sources) {
+  const available = bluetoothRateSourceAvailable(sources);
+  if (available !== false) return null;
+  return enabled
+    ? tr('需要 root 或已授權的 Shizuku 才能切換藍牙取樣率；目前沒有，所以不會變更。')
+    : tr('此功能需要 root 或已授權的 Shizuku。');
+}
+
 /**
  * The two output modes under 「播放裝置」, as on Windows (`.output-mode`, ADR 0047): `exclusive` is
  * `androidUsbExclusive`.

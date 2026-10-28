@@ -7,7 +7,7 @@
     AndroidMixerRateSourceStatus,
     AndroidOutputDevice,
   } from './ipc';
-  import { DEFAULT_ANDROID_USB_EXCLUSIVE } from './android-output-devices.js';
+  import { DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW, DEFAULT_ANDROID_USB_EXCLUSIVE } from './android-output-devices.js';
 
   const s = $state({
     /** The choice in settings.json (null: the system default). */
@@ -20,6 +20,12 @@
   /** The output mode (ADR 0047, `androidUsbExclusive`: true for 獨佔), shared like the list. */
   const usbExclusive = $state({
     enabled: DEFAULT_ANDROID_USB_EXCLUSIVE,
+    busy: false,
+    failure: null as string | null,
+  });
+  /** The Bluetooth sample-rate follow switch (ADR 0051, `androidBluetoothRateFollow`), shared like the list. */
+  const btRate = $state({
+    enabled: DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW,
     busy: false,
     failure: null as string | null,
   });
@@ -41,6 +47,7 @@
   import {
     androidOutputHeader,
     androidOutputModes,
+    bluetoothRateNotice,
     buildAndroidRows,
     sameChoice,
   } from './android-output-devices.js';
@@ -92,14 +99,16 @@
       return;
     }
     try {
-      const [saved, status, exclusiveOn] = await Promise.all([
+      const [saved, status, exclusiveOn, rateFollowOn] = await Promise.all([
         invokeCommand('settings_get_android_output_device', {}),
         invokeCommand('android_audio_output_status', {}),
         invokeCommand('settings_get_android_usb_exclusive', {}),
+        invokeCommand('settings_get_android_bluetooth_rate_follow', {}),
       ]);
       if (disposed) return;
       s.saved = saved;
       usbExclusive.enabled = exclusiveOn;
+      btRate.enabled = rateFollowOn;
       s.status = status;
       s.failure = null;
       s.loaded = true;
@@ -131,6 +140,23 @@
       setTimeout(() => void refreshStatus(), AFTER_CHOICE_MS);
     });
   }
+
+  // ---- Bluetooth sample-rate follow (ADR 0051): a plain switch, saved at once. Without root or an authorized Shizuku it
+  // only shows a notice (the mixer-rate panel below is the place to get either). ----
+  async function setBluetoothRateFollow(enabled: boolean): Promise<void> {
+    if (!isTauri() || btRate.busy) return;
+    btRate.busy = true;
+    btRate.failure = null;
+    try {
+      btRate.enabled = await invokeCommand('settings_set_android_bluetooth_rate_follow', { enabled });
+    } catch (error) {
+      btRate.failure = getErrorText(error);
+    } finally {
+      btRate.busy = false;
+    }
+  }
+
+  let btRateNotice = $derived(bluetoothRateNotice(btRate.enabled, mixerSource.status));
 
   // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Both buttons save at once; there is no panel of ours. In
   // 獨佔 the playback service asks Android's USB permission dialog by itself whenever the USB audio device the choice plays
@@ -330,6 +356,26 @@
   </p>
 {/if}
 
+<label class="bluetooth-rate-follow">
+  <input
+    type="checkbox"
+    checked={btRate.enabled}
+    disabled={btRate.busy}
+    onchange={(event) => void setBluetoothRateFollow(event.currentTarget.checked)}
+  />
+  <span>
+    <strong>{tr('藍牙取樣率跟隨曲目')}</strong>
+    <small>{tr('換歌時把藍牙編碼的取樣率改成接近這首歌的值（需要 root 或 Shizuku）。')}</small>
+  </span>
+</label>
+{#if btRateNotice}
+  <p class="mixer-source-line">
+    {btRateNotice}
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
+  </p>
+{/if}
+{#if btRate.failure}<p class="source-error-message" role="alert">{btRate.failure}</p>{/if}
+
 {#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
 {#if usbExclusive.failure}<p class="source-error-message" role="alert">{usbExclusive.failure}</p>{/if}
 
@@ -452,5 +498,22 @@
 
   .output-device-permission {
     margin-left: 8px;
+  }
+
+  .bluetooth-rate-follow {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 0 10px;
+    cursor: pointer;
+  }
+
+  .bluetooth-rate-follow span {
+    display: grid;
+    gap: 2px;
+  }
+
+  .bluetooth-rate-follow small {
+    opacity: 0.75;
   }
 </style>

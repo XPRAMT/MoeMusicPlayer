@@ -5,7 +5,10 @@ import test from 'node:test';
 import {
   androidOutputHeader,
   androidOutputModes,
+  bluetoothRateNotice,
+  bluetoothRateSourceAvailable,
   buildAndroidRows,
+  DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW,
   DEFAULT_ANDROID_USB_EXCLUSIVE,
   describeSupport,
   deviceLabel,
@@ -315,7 +318,9 @@ test('USB exclusive is off by default on both sides, and turned on by the mode b
   assert.match(component, /onclick=\{\(\) => void requestUsbPermission\(\)\}/);
   assert.doesNotMatch(component, /<dialog\s+bind:this=\{usbExclusiveDialog\}|openUsbExclusivePanel|authorizeUsbExclusive|exclusiveSwitchNeedsPanel|usb-exclusive-title/);
   // The mode buttons replace the per-card switch; the P0 development test is gone.
-  assert.doesNotMatch(component, /USB 獨佔（App 直接驅動，不經過系統）|toggleUsbExclusive|type="checkbox"/);
+  assert.doesNotMatch(component, /USB 獨佔（App 直接驅動，不經過系統）|toggleUsbExclusive/);
+  // The only checkbox is the Bluetooth sample-rate follow switch (ADR 0051).
+  assert.equal(component.match(/type="checkbox"/g)?.length, 1);
   assert.doesNotMatch(component, /試播|android_usb_exclusive_start/);
   // Both modes are saved at once, with no gate on the permission (the service asks the system dialog by itself).
   const setMode = component.slice(component.indexOf('function setMode('), component.indexOf('/** The card'));
@@ -494,4 +499,31 @@ test('the settings page reads the output mode from the Android list and shows th
   const group = app.slice(app.indexOf('<div class="dsd-settings"'), app.indexOf("{:else if settingsSection === 'now-playing'}"));
   assert.ok(group.length > 500);
   assert.doesNotMatch(group, /nativeByteOrder|位元組順序|byte order/i);
+});
+
+test('Bluetooth sample-rate follow is off by default on both sides and saved by its own switch (ADR 0051)', () => {
+  assert.equal(DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW, false);
+  const settings = readFileSync(new URL('../src-tauri/src/settings.rs', import.meta.url), 'utf8');
+  assert.match(settings, /android_bluetooth_rate_follow: false,/);
+  assert.match(settings, /#\[serde\(default\)\]\s+pub android_bluetooth_rate_follow: bool,/);
+  assert.match(settings, /android_bluetooth_rate_follow\.unwrap_or\(false\)/);
+  const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
+  assert.match(component, /settings_set_android_bluetooth_rate_follow/);
+  assert.match(component, /settings_get_android_bluetooth_rate_follow/);
+});
+
+test('the Bluetooth rate switch shows a notice only when neither root nor an authorized Shizuku exists', () => {
+  const sources = (root, shizuku) => ({ state: 'none', root, shizuku, shizukuInstalled: false, source: 'platform' });
+  assert.equal(bluetoothRateSourceAvailable(null), null);
+  assert.equal(bluetoothRateSourceAvailable(sources('available', 'not_installed')), true);
+  assert.equal(bluetoothRateSourceAvailable(sources('unavailable', 'granted')), true);
+  assert.equal(bluetoothRateSourceAvailable(sources('unknown', 'needs_permission')), false);
+  assert.equal(bluetoothRateNotice(true, null), null);
+  assert.equal(bluetoothRateNotice(true, sources('available', 'not_installed')), null);
+  assert.ok(bluetoothRateNotice(true, sources('unavailable', 'not_running')));
+  assert.ok(bluetoothRateNotice(false, sources('unavailable', 'not_running')));
+  assert.notEqual(
+    bluetoothRateNotice(true, sources('unavailable', 'not_running')),
+    bluetoothRateNotice(false, sources('unavailable', 'not_running')),
+  );
 });

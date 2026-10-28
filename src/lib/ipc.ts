@@ -1305,6 +1305,14 @@ interface IpcContract {
     args: { enabled: boolean };
     result: boolean;
   };
+  settings_get_android_bluetooth_rate_follow: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_set_android_bluetooth_rate_follow: {
+    args: { enabled: boolean };
+    result: boolean;
+  };
   android_request_usb_exclusive_permission: {
     args: { productName: string | null };
     result: { granted: boolean; found: boolean } | null;
