@@ -1,6 +1,6 @@
 ﻿# USB exclusive output test (P0, development only)
 
-Status: Accepted (P0 verified on the tablet with the Sony USB speaker: plays at 44.1 kHz with feedback after the order change; other devices not run)
+Status: Accepted (P0 verified on the tablet with the Sony USB speaker: plays at 44.1 kHz with feedback after the order change; other devices not run). Superseded in part by ADR 0047 (P1): the development button, its commands, the Kotlin `UsbExclusiveTest` and the page summary were removed; the usbfs flow, order, feedback and packet sizing below are what P1 builds on.
 
 Decision date: 2026-10-28, Asia/Taipei (UTC+08:00)
 
@@ -74,7 +74,7 @@ Same tablet, device and 44.1 kHz / 16-bit FLAC, order alt then clock: the user h
 
 ## Consequences
 
-- P0 changes no playback path; the button is development only and not a product feature.
+- P0 changed no playback path; the button was development only and was removed in P1 (ADR 0047), together with `android_usb_exclusive_start` / `_stop` / `_status`, the plugin command `usbExclusiveStart`, `UsbExclusiveTest.kt`, `usb-exclusive-test.js` and their strings. `Report`, `run_exclusive` and the FLAC decode of `pcm.rs` went with them; the unit tests listed below for those parts were replaced by ADR 0047's.
 - Unit tests: `cargo test -p player-usb-audio` (Sony fixture plan incl. every PCM alt and alt 7 not PCM, truncation at every byte and random bytes, UAC1 adaptive with rates, async without feedback refused, high-bandwidth sizes; control request encoding, RANGE parsing and the grid check; feedback HS/FS/rescaled/rejected, shift / rescales / first raw; status counts with errno names, every feedback URB in one bucket, first raw packets capped, data packet statuses and length mismatch; PCM peaks in dBFS and the first samples; packet sizer exact over ten minutes and every listed rate, feedback within one frame, packet cap; MD5 bit-exactness of the 16-bit path; ioctl numbers); src-tauri `android_usb_exclusive::tests` (guards, a remote track's reason, one test at a time); JS `tests/usb-exclusive-test.test.mjs`.
 - Verified on the tablet (Android 15, the Sony USB speaker): SELinux lets the app issue `USBDEVFS_IOCTL` DISCONNECT/CONNECT and isochronous `SUBMITURB` on the `openDevice` fd; `snd-usb-audio` lets go and binds again (normal playback works afterwards); Q16.16 feedback at high speed; 16 × 1 ms URBs without underrun.
 - Not verified: the phones (NX809J, others); what AudioFlinger and the playback service do while the DAC is gone; clicks at start and end; that the hand-back works after a stop in the middle and after unplugging during the test; that bit-perfect really reaches the DAC (needs a DAC that shows the incoming format or a digital loopback).
