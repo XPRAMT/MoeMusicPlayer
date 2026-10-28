@@ -20,6 +20,9 @@ rodio = { version = "=0.22.2", default-features = false, features = [
     "playback",
     "symphonia-alac",
     "symphonia-mkv",
+    "symphonia-aiff",
+    "symphonia-mp1",
+    "symphonia-mp2",
     "mp3",
     "mp4",
     "flac",
@@ -37,6 +40,9 @@ symphonia = { version = "=0.5.5", default-features = false, features = [
     "alac",
     "isomp4",
     "mkv",
+    "aiff",
+    "mp1",
+    "mp2",
     "pcm",
 ] }
 # WASAPI exclusive mode (ADR 0020); MIT, built on the same windows crate version.
