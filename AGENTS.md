@@ -69,7 +69,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 **Windows 音訊輸出** → `windows-audio-output.md`：多裝置輸出 `outputDevices`、聲道矩陣、音量同步、rubato 取樣率轉換、WASAPI 獨佔 `outputExclusive`（ADR 0020 P0／P1）。
 
-**Android 平台** → `android-platform.md`：建置與安裝、本機來源與資料夾瀏覽器（ADR 0014、0039）、Media3 `PlaybackService`（ADR 0006、0039）、播放裝置／藍牙／USB 獨佔／混音器取樣率（ADR 0044–0048、0051、0052）、系統列安全區、權限說明面板（ADR 0039）。
+**Android 平台** → `android-platform.md`：建置與安裝、本機來源與資料夾瀏覽器（ADR 0014、0039）、Media3 `PlaybackService`（ADR 0006、0039）、播放裝置／藍牙／USB 獨佔／混音器取樣率（ADR 0044–0048、0051、0052）、系統列安全區、權限說明面板（ADR 0039）、「開啟方式」開啟音訊檔（ADR 0054）。
 
 **曲庫同步與資料** → `library-sync-and-data.md`：同步與取消續掃、歌詞不存內容（schema 21）、播放時檢查檔案、冷建庫效能、遺失檔案隱藏（ADR 0027、0033、0040）。
 
