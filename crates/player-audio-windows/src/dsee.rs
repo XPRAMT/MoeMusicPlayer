@@ -93,6 +93,7 @@ pub(crate) struct TrackSignal {
     pub duration: Option<Duration>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Engagement {
     Off,
     Bypass(String),
@@ -104,19 +105,24 @@ pub(crate) enum Engagement {
     },
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DseePlan {
     pub output_rate: u32,
     pub engagement: Engagement,
 }
 
 pub(crate) fn plan(enabled: bool, path: &Path, signal: &TrackSignal) -> DseePlan {
+    plan_with(enabled, filter_installed(), path, signal)
+}
+
+fn plan_with(enabled: bool, installed: bool, path: &Path, signal: &TrackSignal) -> DseePlan {
     if !enabled {
         return DseePlan {
             output_rate: signal.sample_rate,
             engagement: Engagement::Off,
         };
     }
-    if !filter_installed() {
+    if !installed {
         return DseePlan {
             output_rate: signal.sample_rate,
             engagement: Engagement::Unavailable(INSTALL_NOTICE.to_owned()),
@@ -961,6 +967,131 @@ mod tests {
         let output: Vec<f32> = source.take(2_000).collect();
         assert!(output.iter().any(|sample| sample.abs() > 0.001));
         player.stop();
+    }
+
+    /// A 16-bit/24-bit PCM WAV of silence, `frames` long.
+    pub(crate) fn wav_bytes(bits: u16, frames: u32) -> Vec<u8> {
+        let rate = 44_100u32;
+        let block = u32::from(bits / 8) * 2;
+        let data = frames * block;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&rate.to_le_bytes());
+        out.extend_from_slice(&(rate * block).to_le_bytes());
+        out.extend_from_slice(&(block as u16).to_le_bytes());
+        out.extend_from_slice(&bits.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data.to_le_bytes());
+        out.resize(out.len() + data as usize, 0);
+        out
+    }
+
+    fn signal(sample_rate: u32, channels: u16, seconds: Option<u64>) -> TrackSignal {
+        TrackSignal {
+            sample_rate,
+            channels,
+            duration: seconds.map(Duration::from_secs),
+        }
+    }
+
+    fn run(bitrate_kbps: u32, input_bits: u16) -> DseePlan {
+        DseePlan {
+            output_rate: 176_400,
+            engagement: Engagement::Run {
+                bitrate_kbps,
+                input_rate: 44_100,
+                input_bits,
+            },
+        }
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    /// The plan a local file gets. These results are the behaviour local playback had before the plan read from an
+    /// opened reader; they must not change.
+    #[test]
+    fn local_files_keep_their_plans() {
+        let one_second = signal(44_100, 2, Some(1));
+        let table = [
+            ("seek-tone.flac", run(259, 16)),
+            ("seek-tone.mp3", run(264, 32)),
+            ("seek-tone.ogg", run(55, 32)),
+            ("seek-tone.wav", run(1021, 16)),
+            ("aac-lc.m4a", run(139, 32)),
+        ];
+        for (name, expected) in table {
+            assert_eq!(
+                plan_with(true, true, &fixture(name), &one_second),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_lossless_depth_comes_from_the_header() {
+        let directory = std::env::temp_dir();
+        let id = std::process::id();
+        let wav24 = directory.join(format!("moe-dsee-plan-{id}-24.wav"));
+        std::fs::write(&wav24, wav_bytes(24, 44_100)).unwrap();
+        let ten_seconds = signal(44_100, 2, Some(10));
+        // The WAV is 264 600 bytes for one second, so over ten seconds it is 211 kbps.
+        assert_eq!(
+            plan_with(true, true, &wav24, &signal(44_100, 2, Some(1))),
+            run(1021, 24)
+        );
+        assert_eq!(plan_with(true, true, &wav24, &ten_seconds), run(211, 24));
+        // 32 436 bytes over ten seconds is 25 kbps.
+        assert_eq!(
+            plan_with(true, true, &fixture("seek-tone.flac"), &ten_seconds),
+            run(25, 16)
+        );
+        let _ = std::fs::remove_file(wav24);
+    }
+
+    #[test]
+    fn local_plan_respects_switch_install_and_format_limits() {
+        let flac = fixture("seek-tone.flac");
+        assert_eq!(
+            plan_with(false, true, &flac, &signal(44_100, 2, Some(1))).engagement,
+            Engagement::Off
+        );
+        assert!(matches!(
+            plan_with(true, false, &flac, &signal(44_100, 2, Some(1))).engagement,
+            Engagement::Unavailable(_)
+        ));
+        let high = plan_with(true, true, &flac, &signal(96_000, 2, Some(1)));
+        assert_eq!(high.output_rate, 96_000);
+        assert!(matches!(high.engagement, Engagement::Bypass(_)));
+        let mono = plan_with(true, true, &flac, &signal(44_100, 1, Some(1)));
+        assert_eq!(mono.output_rate, 44_100);
+        assert!(matches!(mono.engagement, Engagement::Bypass(_)));
+        let forty_eight = plan_with(true, true, &flac, &signal(48_000, 2, Some(1)));
+        assert_eq!(forty_eight.output_rate, 96_000);
+        // No duration: the bitrate is unknown, so lossless gets the top value.
+        assert_eq!(
+            plan_with(true, true, &flac, &signal(44_100, 2, None)),
+            run(1021, 16)
+        );
+    }
+
+    /// A file that cannot be read gets the defaults of an unprobeable lossless file.
+    #[test]
+    fn an_unreadable_local_file_gets_the_default_assumptions() {
+        let missing = fixture("no-such-file.flac");
+        assert_eq!(
+            plan_with(true, true, &missing, &signal(44_100, 2, Some(1))),
+            run(1021, 16)
+        );
     }
 
     #[test]
