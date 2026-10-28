@@ -147,7 +147,9 @@ export function usbExclusivePath(status, androidPath) {
   if (exclusive.active) {
     const described = describeAndroidExclusive(exclusive.engine);
     if (described) return { text: described.text, tone: 'ok', notice: described.notice };
-    return { text: tr('USB 獨佔：準備中'), tone: 'idle', notice: null };
+    // No format yet (the device is being claimed), or the device went back to Android while paused.
+    const idle = exclusive.state === 'handedBack' ? tr('USB 獨佔：裝置已暫時交還系統，播放時再取得') : tr('USB 獨佔：準備中');
+    return { text: idle, tone: 'idle', notice: null };
   }
   if (exclusive.fallbackReason && androidPath) {
     return { text: androidPath, tone: 'warn', notice: tr('USB 獨佔無法播放這首：{0}', [exclusive.fallbackReason]) };

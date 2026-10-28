@@ -180,7 +180,8 @@ internal object UsbExclusiveEngine {
         }
         val output = current
         val state = engine?.optString("state")
-        val active = output != null && !output.failed && state in setOf("claimed", "streaming", "paused")
+        // The track's output is ours (also while the device went back to Android after 10 s paused: play claims again).
+        val active = output != null && !output.failed
         return JSONObject().apply {
             put("enabled", enabled)
             put("active", active)

@@ -464,11 +464,15 @@ impl Runtime<'_> {
         let format = engine::format_of(self.state);
         let attached = self.attached.as_ref();
         let source = attached.map(|a| a.source).unwrap_or_default();
-        let not_bit_perfect = match (attached, self.stream.as_ref()) {
-            (Some(attached), Some(stream)) => format::bit_perfect(
+        // From the format the device is set to (also while paused), for the ring the output writes.
+        let not_bit_perfect = match (attached, format) {
+            (Some(attached), Some(format)) => format::bit_perfect(
                 source,
                 attached.ring.encoding(),
-                stream.container,
+                Container {
+                    bytes: format.subslot_bytes,
+                    bits: format.bits,
+                },
                 self.shared.gain(),
             ),
             _ => Vec::new(),

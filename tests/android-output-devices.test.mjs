@@ -269,6 +269,9 @@ test('the chosen USB row shows the exclusive line while the app drives the devic
   assert.equal(quiet[1].path?.notice, '播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出（不是位元完美）');
   const preparing = usbExclusivePath(exclusiveStatus({ enabled: true, active: true, state: 'claimed', fallbackReason: null, engine: engine({ rate: null }) }), null);
   assert.equal(preparing?.tone, 'idle');
+  assert.equal(preparing?.text, 'USB 獨佔：準備中');
+  const away = usbExclusivePath(exclusiveStatus({ enabled: true, active: true, state: 'handedBack', fallbackReason: null, engine: engine({ rate: null }) }), null);
+  assert.equal(away?.text, 'USB 獨佔：裝置已暫時交還系統，播放時再取得');
 });
 
 test('a track the USB output cannot play keeps the Android path with the reason', () => {
