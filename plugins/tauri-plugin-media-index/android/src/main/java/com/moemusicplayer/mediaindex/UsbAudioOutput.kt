@@ -31,6 +31,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - When the device fails, is unplugged or the mode is switched to shared, the ring is failed: [write] takes nothing and
  *   [isStalled] is true, so Media3 releases this output and asks the provider for a new one, which is an AudioTrack.
  * - [retire] (the mode, the chosen device or the attached USB devices changed) does the same on purpose: no fallback reason is recorded.
+ * - Native DSD (ADR 0049, [UsbExclusiveRules.Source.nativeDsd]): the PCM Media3 writes is the raw DSD slots in a 16-bit,
+ *   4-channel carrier. The ring replaces the first 25 ms of it by idle fill (Media3 scales that much with its volume
+ *   ramp), the engine sends the bytes unchanged, and [setVolume] (the app volume and the audio-focus ducking) is ignored.
  */
 @UnstableApi
 internal class UsbAudioOutput private constructor(
@@ -69,13 +72,14 @@ internal class UsbAudioOutput private constructor(
             UsbExclusiveRules.ringFrames(config.sampleRate),
             config.encoding,
             channels,
+            if (source.nativeDsd) config.sampleRate else 0,
         )
         return ring != 0L && attach()
     }
 
     /** Attach the ring to the device (claim, alt and clock as needed); false with the reason as the track's fallback. */
     private fun attach(): Boolean {
-        val answer = UsbExclusiveNative.nativeAttach(ring, config.sampleRate, source.bits, source.dsd)
+        val answer = UsbExclusiveNative.nativeAttach(ring, config.sampleRate, source.bits, source.dsd, source.nativeDsd)
             ?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
         if (answer?.optBoolean("ok") == true) return true
         fallBack(answer?.optString("reason")?.takeIf { it.isNotBlank() } ?: "USB 音訊裝置無法開始播放")
@@ -159,7 +163,10 @@ internal class UsbAudioOutput private constructor(
         listeners.forEach { it.onReleased() }
     }
 
-    override fun setVolume(volume: Float) = UsbExclusiveNative.nativeSetGain(volume)
+    // The app volume and the ducking arrive here; native DSD ignores them (the slots are not audio to scale).
+    override fun setVolume(volume: Float) {
+        DsdPassthroughRules.gainFor(source.nativeDsd, volume)?.let(UsbExclusiveNative::nativeSetGain)
+    }
 
     override fun isOffloadedPlayback(): Boolean = false
 
@@ -349,7 +356,11 @@ internal class UsbAudioOutputProvider(
             "無法讀取 USB 描述元"
         } else {
             try {
-                UsbExclusiveNative.nativeSupports(raw, rate, channels, source.bits, source.dsd)
+                if (source.nativeDsd) {
+                    UsbExclusiveNative.nativeSupportsDsd(raw, rate)
+                } else {
+                    UsbExclusiveNative.nativeSupports(raw, rate, channels, source.bits, source.dsd)
+                }
             } catch (error: Throwable) {
                 error.message ?: "USB 獨佔輸出無法使用"
             }
@@ -368,12 +379,30 @@ internal class UsbAudioOutputProvider(
         }
     }
 
+    /**
+     * The carrier of a native DSD track (16-bit, 4 channels, at the frame rate: up to 352.8 kHz, beyond what an AudioTrack
+     * is asked about) is supported directly: only this provider's USB output ever plays it (ADR 0049).
+     */
+    override fun getFormatSupport(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.FormatSupport {
+        val format = formatConfig.format
+        return if (UsbExclusiveEngine.source.nativeDsd && DsdPassthroughRules.isCarrier(pcmEncoding(formatConfig), format.channelCount)) {
+            AudioOutputProvider.FormatSupport.Builder()
+                .setFormatSupportLevel(AudioOutputProvider.FORMAT_SUPPORTED_DIRECTLY)
+                .build()
+        } else {
+            delegate.getFormatSupport(formatConfig)
+        }
+    }
+
     override fun getOutputConfig(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.OutputConfig {
         val format = formatConfig.format
         val encoding = pcmEncoding(formatConfig)
         val decision = decide(encoding, format.sampleRate, format.channelCount)
         record("getOutputConfig", decision)
-        if (decision.choice is UsbExclusiveRules.Choice.AudioTrack) return delegate.getOutputConfig(formatConfig)
+        // A native DSD track has no AudioTrack config: getAudioOutput fails it (and the service reloads it as PCM).
+        if (decision.choice is UsbExclusiveRules.Choice.AudioTrack && !UsbExclusiveEngine.source.nativeDsd) {
+            return delegate.getOutputConfig(formatConfig)
+        }
         val frameBytes = Util.getPcmFrameSize(encoding, format.channelCount)
         return AudioOutputProvider.OutputConfig.Builder()
             .setEncoding(encoding)
@@ -396,9 +425,11 @@ internal class UsbAudioOutputProvider(
             config.isTunneling,
             config.usePlaybackParameters,
         )
+        var notUsbReason: String? = null
         val usbOutput = if (plain) {
             val decision = decide(config.encoding, config.sampleRate, Integer.bitCount(config.channelMask))
             record("getAudioOutput", decision)
+            notUsbReason = DsdPassthroughRules.notUsbReason(decision.facts, decision.choice)
             if (decision.choice == UsbExclusiveRules.Choice.Usb) openUsb(config, decision) else null
         } else {
             Log.i(
@@ -408,6 +439,13 @@ internal class UsbAudioOutputProvider(
                     "playbackParameters=${config.usePlaybackParameters})",
             )
             null
+        }
+        if (DsdPassthroughRules.mustFail(UsbExclusiveEngine.source.nativeDsd, usbOutput != null)) {
+            // The raw slots must never reach an AudioTrack. The service reloads the track through the PCM converter.
+            val reason = UsbExclusiveEngine.trackFallback ?: notUsbReason ?: "USB 獨佔輸出無法使用"
+            Log.w(TAG, "USB exclusive: native DSD output not possible, the track is reloaded as PCM: $reason")
+            UsbExclusiveEngine.trackFallback = reason
+            throw AudioOutputProvider.InitializationException()
         }
         // Not ours (or it could not start): Android plays it, through an AudioTrack that a change can retire.
         val output: AudioOutput = usbOutput ?: RetirableAudioOutput(delegate.getAudioOutput(config)) { released ->
@@ -446,7 +484,7 @@ internal class UsbAudioOutputProvider(
             TAG,
             "USB exclusive: openUsb → USB: ${device.deviceName} rate=${config.sampleRate} channels=$channels " +
                 "encoding=${config.encoding} sourceBits=${UsbExclusiveEngine.source.bits} " +
-                "dsd=${UsbExclusiveEngine.source.dsd}",
+                "dsd=${UsbExclusiveEngine.source.dsd} nativeDsd=${UsbExclusiveEngine.source.nativeDsd}",
         )
         UsbExclusiveEngine.current = output
         return output

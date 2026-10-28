@@ -260,7 +260,7 @@ class UsbExclusiveRulesTest {
         assertEquals(
             "USB exclusive: getOutputConfig → USB: every check passed; mode=exclusive chosen=usb " +
                 "device=/dev/bus/usb/002/002 deviceAttached=true permitted=true encoding=4 rate=48000 channels=2 " +
-                "sourceBits=16 dsd=false trackFallback=null unsupported=null",
+                "sourceBits=16 dsd=false nativeDsd=false trackFallback=null unsupported=null",
             UsbExclusiveRules.decisionLog("getOutputConfig", facts, UsbExclusiveRules.choose(facts)),
         )
         val off = facts.copy(enabled = false)

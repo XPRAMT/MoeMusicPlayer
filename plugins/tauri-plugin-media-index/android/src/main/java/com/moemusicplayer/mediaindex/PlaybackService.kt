@@ -162,7 +162,8 @@ class PlaybackService : MediaSessionService() {
                 androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessorChain(FloatAwareAudioProcessorChain())
+                    // Native DSD (ADR 0049): the raw slots of a DSD track must not meet the float converter.
+                    .setAudioProcessorChain(FloatAwareAudioProcessorChain { UsbExclusiveEngine.source.nativeDsd })
                     // The default AudioTrack provider, watched so the settings page can show where the track is
                     // really routed (ADR 0044), behind the USB exclusive output, which takes a track only when the
                     // switch is on and the chosen USB device can play it (ADR 0047).
@@ -214,6 +215,8 @@ class PlaybackService : MediaSessionService() {
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // A track loaded as native DSD whose USB output cannot be used goes on through the PCM converter.
+                if (retryDsdThroughPcm(player)) return
                 pendingLoadAck?.let { ack ->
                     pendingLoadAck = null
                     loadFence.finish(expectedLoadCommandId)
@@ -492,10 +495,26 @@ class PlaybackService : MediaSessionService() {
                         metadata.optStringOrNull("artworkUri")?.let { mediaMetadataBuilder.setArtworkUri(Uri.parse(it)) }
                     }
                     val mediaMetadata = mediaMetadataBuilder.build()
+                    // A service that started before the settings were read picks the choice up here, before any sound.
+                    outputRouter?.setPreference(readOutputPreference())
+                    readUsbExclusive()?.let(UsbExclusiveEngine::setEnabled)
+                    // A DSD track is played natively (raw slots to the USB device, ADR 0049) or converted to PCM; the
+                    // decision is made here, where the route, the permission and the device's descriptors are known.
+                    val isDsd = metadata.optBoolean("dsd", false)
+                    val dsdDecision = DsdPassthrough.decide(
+                        this,
+                        readDsdPassthrough() ?: false,
+                        uri,
+                        isDsd,
+                        outputRouter?.currentPreference(),
+                    )
+                    val loadUri = (dsdDecision as? DsdPassthroughRules.Decision.Raw)
+                        ?.let { DsdPassthroughRules.rawUriOf(uri) } ?: uri
+                    val nativeDsd = loadUri != uri
                     val mediaItemBuilder = MediaItem.Builder()
                         .setMediaId(trackId)
                         .setTag(commandId)
-                        .setUri(Uri.parse(uri))
+                        .setUri(Uri.parse(loadUri))
                         .setMediaMetadata(mediaMetadata)
                     // A converted track is served as a WAV stream, so the extractor is chosen by MIME type, not by the
                     // extension. Rust says which loads are converted (`player_formats::android_converter`).
@@ -503,15 +522,16 @@ class PlaybackService : MediaSessionService() {
                         mediaItemBuilder.setMimeType("audio/wav")
                     }
                     val mediaItem = mediaItemBuilder.build()
-                    // A service that started before the settings were read picks the choice up here, before any sound.
-                    outputRouter?.setPreference(readOutputPreference())
-                    readUsbExclusive()?.let(UsbExclusiveEngine::setEnabled)
+                    // The same track through the PCM converter, for when the native output cannot be used.
+                    dsdPcmFallbackItem = if (nativeDsd) mediaItemBuilder.setUri(Uri.parse(uri)).build() else null
                     // Each track gets its own chance on the USB exclusive output, with its own bit depth (ADR 0047).
                     UsbExclusiveEngine.newTrack(
                         UsbExclusiveRules.sourceOf(
                             metadata.optInt("bitsPerSample", 0),
-                            metadata.optBoolean("dsd", false),
+                            isDsd,
+                            nativeDsd,
                         ),
+                        (dsdDecision as? DsdPassthroughRules.Decision.Pcm)?.reason,
                     )
                     endedEventLoadInstance = null
                     stopped = false
@@ -588,6 +608,26 @@ class PlaybackService : MediaSessionService() {
             ack.put("snapshot", snapshot(player))
             sendAck(ack)
         }
+    }
+
+    /** The PCM-converter form of the DSD track loaded natively, while that is the one playing (ADR 0049). */
+    private var dsdPcmFallbackItem: MediaItem? = null
+
+    /**
+     * The native DSD output failed (no USB output could be made for the raw slots: the device went away, the mode was
+     * switched, the rate was refused): the same track goes on through the DSD-to-PCM converter from where it was. True
+     * when it did, so the error is not reported.
+     */
+    private fun retryDsdThroughPcm(player: ExoPlayer): Boolean {
+        val item = dsdPcmFallbackItem ?: return false
+        if (!UsbExclusiveEngine.source.nativeDsd) return false
+        val reason = UsbExclusiveEngine.trackFallback ?: "USB 獨佔輸出無法使用"
+        dsdPcmFallbackItem = null
+        UsbExclusiveEngine.dsdPassthroughFailed(reason)
+        android.util.Log.w("MoeMediaIndex", "DSD passthrough: reloading the track through the PCM converter: $reason")
+        player.setMediaItem(item, player.currentPosition.coerceAtLeast(0L))
+        player.prepare()
+        return true
     }
 
     private val preparedArtworkBytes = HashMap<String, ByteArray>()
@@ -1128,9 +1168,21 @@ class PlaybackService : MediaSessionService() {
         null
     }
 
+    /** The DSD native passthrough switch (`dsd.nativePassthrough`, ADR 0049), or null while the settings have not been read yet. */
+    private fun readDsdPassthrough(): Boolean? = try {
+        when (nativeDsdPassthroughEnabled()) {
+            1 -> true
+            0 -> false
+            else -> null
+        }
+    } catch (_: UnsatisfiedLinkError) {
+        null
+    }
+
     private external fun nativePollPlaybackCommand(): String?
     private external fun nativeOutputDevicePreference(): String?
     private external fun nativeUsbExclusiveEnabled(): Int
+    private external fun nativeDsdPassthroughEnabled(): Int
     private external fun nativeOnPlaybackEvent(json: String)
 
     private fun JSONObject.optStringOrNull(key: String): String? =

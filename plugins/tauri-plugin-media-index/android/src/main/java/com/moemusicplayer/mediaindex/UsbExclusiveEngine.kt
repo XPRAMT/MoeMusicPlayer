@@ -16,8 +16,12 @@ internal object UsbExclusiveNative {
     /** Blocks until the claim ended (the device handed back); the last status as JSON. */
     @JvmStatic external fun nativeLoop(): String?
     @JvmStatic external fun nativeAlive(): Boolean
-    /** A ring of [capacityFrames] frames of [encoding] (`ENCODING_PCM_*`); 0 when the encoding is not PCM. */
-    @JvmStatic external fun nativeCreateRing(capacityFrames: Int, encoding: Int, channels: Int): Long
+    /**
+     * A ring of [capacityFrames] frames of [encoding] (`ENCODING_PCM_*`); 0 when the encoding is not PCM. A [dsdRate] above
+     * 0 makes it the ring of native DSD at that many frames per second (ADR 0049): 16-bit, 4 channels, and the start of
+     * what is written is replaced by idle fill.
+     */
+    @JvmStatic external fun nativeCreateRing(capacityFrames: Int, encoding: Int, channels: Int, dsdRate: Int): Long
     @JvmStatic external fun nativeDestroyRing(ring: Long)
     /** Copy what fits of the direct [buffer] from [offset], [length] bytes; the bytes taken (never blocks). */
     @JvmStatic external fun nativeWrite(ring: Long, buffer: ByteBuffer, offset: Int, length: Int): Int
@@ -27,7 +31,7 @@ internal object UsbExclusiveNative {
     @JvmStatic external fun nativeRingFailed(ring: Long): Boolean
     @JvmStatic external fun nativeRingUnderruns(ring: Long): Long
     /** `{ ok, rate, channels, alt, subslotBytes, bits }` or `{ ok: false, reason }`. */
-    @JvmStatic external fun nativeAttach(ring: Long, rate: Int, sourceBits: Int, dsd: Boolean): String?
+    @JvmStatic external fun nativeAttach(ring: Long, rate: Int, sourceBits: Int, dsd: Boolean, nativeDsd: Boolean): String?
     /** Null when it worked, else the reason. The same for the next three. */
     @JvmStatic external fun nativePlay(ring: Long): String?
     @JvmStatic external fun nativePause(ring: Long): String?
@@ -37,6 +41,8 @@ internal object UsbExclusiveNative {
     @JvmStatic external fun nativeStatus(): String?
     /** Null when the device of [rawDescriptors] can take the format, else why not. */
     @JvmStatic external fun nativeSupports(rawDescriptors: ByteArray, rate: Int, channels: Int, sourceBits: Int, dsd: Boolean): String?
+    /** Null when the device of [rawDescriptors] has the RAW_DATA alt for native DSD at [rate] frames per second, else why not. */
+    @JvmStatic external fun nativeSupportsDsd(rawDescriptors: ByteArray, rate: Int): String?
 }
 
 /**
@@ -66,6 +72,12 @@ internal object UsbExclusiveEngine {
     /** The source of the track being loaded (bits per sample, DSD), from the load command. */
     @Volatile var source = UsbExclusiveRules.Source(0, false)
 
+    /**
+     * Why the DSD track being loaded plays as PCM although native passthrough is on (the card shows it as
+     * 「DSD 直通無法使用：…」), null when it plays natively, the setting is off or the track is not DSD (ADR 0049).
+     */
+    @Volatile var dsdReason: String? = null
+
     /** The output Media3 plays through now, when it is ours. */
     @Volatile var current: UsbAudioOutput? = null
 
@@ -83,9 +95,20 @@ internal object UsbExclusiveEngine {
     }
 
     /** A new track is loaded: it gets its own chance on the USB output. */
-    fun newTrack(next: UsbExclusiveRules.Source) {
+    fun newTrack(next: UsbExclusiveRules.Source, dsdPcmReason: String? = null) {
         source = next
         trackFallback = null
+        dsdReason = dsdPcmReason
+    }
+
+    /**
+     * The native DSD output could not be used after the load chose it (the device went away, refused the rate, ...): the
+     * track is reloaded through the DSD-to-PCM converter and gets its own chance on the USB output as PCM (ADR 0049).
+     */
+    fun dsdPassthroughFailed(reason: String) {
+        source = source.copy(nativeDsd = false)
+        trackFallback = null
+        dsdReason = reason
     }
 
     /** The attached USB audio devices, in `UsbManager` order (by device name). */
@@ -231,6 +254,9 @@ internal object UsbExclusiveEngine {
             put("active", active)
             put("state", state ?: JSONObject.NULL)
             put("fallbackReason", trackFallback ?: JSONObject.NULL)
+            // Native DSD (ADR 0049): the card says 「DSD 直通」; or why a DSD track plays as PCM although the setting is on.
+            put("dsdNative", active && source.nativeDsd)
+            put("dsdFallbackReason", dsdReason ?: JSONObject.NULL)
             put("engine", engine ?: JSONObject.NULL)
         }
     }

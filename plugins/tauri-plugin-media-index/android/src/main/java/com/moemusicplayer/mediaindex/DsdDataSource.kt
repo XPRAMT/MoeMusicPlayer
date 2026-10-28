@@ -20,6 +20,15 @@ object DsdBridge {
     /** Opens a converted file; 0 means it could not be opened or is not supported, -2 an unreachable server. */
     @JvmStatic external fun nativeOpen(path: String): Long
 
+    /**
+     * Opens a local DSF as the raw 32-bit DSD slots of native passthrough (`moedsdraw://`, ADR 0049); 0 when it cannot
+     * be carried (not stereo DSD64/128/256).
+     */
+    @JvmStatic external fun nativeOpenRaw(path: String): Long
+
+    /** Whether the DSF at [path] can be played natively: JSON `{ ok, rate, name }` or `{ ok: false, reason }` (header only). */
+    @JvmStatic external fun nativeRawPlan(path: String): String?
+
     /** Length in bytes of the virtual WAV file, or -1 for an unknown handle. */
     @JvmStatic external fun nativeLength(handle: Long): Long
 
@@ -36,6 +45,13 @@ object DsdBridge {
 }
 
 const val DSD_URI_SCHEME = "moedsd"
+
+/**
+ * Scheme of a local DSF served as the raw DSD slots of native passthrough to the USB exclusive output (ADR 0049):
+ * `moedsdraw:///path/to/file.dsf`. Rust never hands it over; `DsdPassthrough` swaps it in for a `moedsd://` load when
+ * the track can play natively. It is a WAV (16-bit, 4 channels) whose data is not audio.
+ */
+const val DSD_RAW_URI_SCHEME = "moedsdraw"
 
 /** Message shown when a remote track stopped because its server could not be reached (Rust `REMOTE_LINK_LOST`). */
 const val REMOTE_LINK_LOST_MESSAGE = "伺服器無法連線"
@@ -69,7 +85,7 @@ const val WAVPACK_URI_SCHEME = "moewv"
 const val FLAC_URI_SCHEME = "moeflac"
 
 /** Schemes of local files that Rust converts; which formats these are is decided on the Rust side. */
-val LOCAL_CONVERTED_SCHEMES = setOf(DSD_URI_SCHEME, WAVPACK_URI_SCHEME, FLAC_URI_SCHEME)
+val LOCAL_CONVERTED_SCHEMES = setOf(DSD_URI_SCHEME, DSD_RAW_URI_SCHEME, WAVPACK_URI_SCHEME, FLAC_URI_SCHEME)
 
 /** Whether [scheme] is read through [DsdDataSource] (a converted local file or a remote track). */
 fun isRustServedScheme(scheme: String?): Boolean = scheme in LOCAL_CONVERTED_SCHEMES || scheme == REMOTE_URI_SCHEME
@@ -89,7 +105,7 @@ fun fileUriOfConverted(uri: String): String {
  */
 const val REMOTE_URI_SCHEME = "moeremote"
 
-/** Reads a `moedsd:///…dsf`, `moewv:///…wv`, `moeflac:///…flac` or `moeremote://…` URI served by Rust. */
+/** Reads a `moedsd:///…dsf`, `moedsdraw:///…dsf`, `moewv:///…wv`, `moeflac:///…flac` or `moeremote://…` URI served by Rust. */
 @UnstableApi
 class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
     private var uri: Uri? = null
@@ -107,7 +123,7 @@ class DsdDataSource : BaseDataSource(/* isNetwork = */ false) {
         } else {
             dataSpec.uri.path ?: throw IOException("Converted-media URI has no path")
         }
-        handle = DsdBridge.nativeOpen(path)
+        handle = if (dataSpec.uri.scheme == DSD_RAW_URI_SCHEME) DsdBridge.nativeOpenRaw(path) else DsdBridge.nativeOpen(path)
         if (handle == -2L) {
             // The server of a remote track cannot be reached: stop at once (this is not retried, see RemoteLinkLostException).
             handle = 0L

@@ -14,8 +14,11 @@ internal object UsbExclusiveRules {
     /** The ring between Media3 and the device thread holds this much audio. */
     const val RING_MS = 250
 
-    /** What the track is, as the load command told the service. */
-    data class Source(val bits: Int, val dsd: Boolean)
+    /**
+     * What the track is, as the load command told the service. [nativeDsd]: the load chose native DSD passthrough
+     * (ADR 0049), the data is raw DSD slots in a 16-bit, 4-channel carrier and the output sends them as they are.
+     */
+    data class Source(val bits: Int, val dsd: Boolean, val nativeDsd: Boolean = false)
 
     /** Everything the choice depends on, read by the provider when Media3 configures an output. */
     data class Facts(
@@ -90,7 +93,7 @@ internal object UsbExclusiveRules {
             "chosen=${facts.chosenKind ?: "system default"} device=${facts.device} " +
             "deviceAttached=${facts.deviceAttached} permitted=${facts.permitted} " +
             "encoding=${facts.encoding} rate=${facts.rate} channels=${facts.channels} " +
-            "sourceBits=${facts.source.bits} dsd=${facts.source.dsd} trackFallback=${facts.trackFallback} " +
+            "sourceBits=${facts.source.bits} dsd=${facts.source.dsd} nativeDsd=${facts.source.nativeDsd} trackFallback=${facts.trackFallback} " +
             "unsupported=${facts.unsupported}"
     }
 
@@ -283,5 +286,6 @@ internal object UsbExclusiveRules {
         if (sampleRate <= 0) 0L else (frames.toBigInteger() * 1_000_000.toBigInteger() / sampleRate.toBigInteger()).toLong()
 
     /** The source as the load command carries it (`metadata.bitsPerSample`, `metadata.dsd`). */
-    fun sourceOf(bits: Int?, dsd: Boolean): Source = Source(bits?.takeIf { it in 8..32 } ?: 0, dsd)
+    fun sourceOf(bits: Int?, dsd: Boolean, nativeDsd: Boolean = false): Source =
+        Source(bits?.takeIf { it in 8..32 } ?: 0, dsd || nativeDsd, nativeDsd)
 }
