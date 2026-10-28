@@ -785,14 +785,18 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     /**
      * The descriptors of the attached USB audio devices, parsed (ADR 0045). With `request` (the page's 「讀取 USB 規格」
      * button), a device without USB permission gets the system dialog first. Read only: the connection is opened for
-     * `getRawDescriptors()` and closed; no interface is claimed and nothing is sent to the device.
+     * `getRawDescriptors()` and closed; no interface is claimed and nothing is sent to the device. The answer also
+     * carries `mixerAttributes`: the system mixer formats (Android 14+) of the card's output device `deviceId` (every
+     * USB output when it is absent), only queried, never set.
      */
     @Command
     fun usbAudioDescriptors(invoke: Invoke) {
-        val request = JSONObject(invoke.getArgs().toString()).optBoolean("request", false)
+        val args = JSONObject(invoke.getArgs().toString())
+        val request = args.optBoolean("request", false)
+        val deviceId = if (args.has("deviceId") && !args.isNull("deviceId")) args.optInt("deviceId") else null
         activity.runOnUiThread {
             try {
-                UsbAudioReader.read(activity, request) { result -> invoke.resolve(JSObject(result.toString())) }
+                UsbAudioReader.read(activity, request, deviceId) { result -> invoke.resolve(JSObject(result.toString())) }
             } catch (error: Exception) {
                 invoke.reject("Could not read the USB audio devices: ${error.message}")
             }

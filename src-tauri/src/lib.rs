@@ -7642,11 +7642,13 @@ async fn android_request_bluetooth_connect(app: AppHandle) -> Result<serde_json:
 }
 
 /// The attached USB audio devices with their parsed descriptors (ADR 0045), read only. `request` asks for USB
-/// permission first (the system dialog), only when the user pressed 「讀取 USB 規格」. Null on other platforms.
+/// permission first (the system dialog), only when the user pressed 「讀取 USB 規格」. `device_id` is the card's output
+/// device, whose system mixer formats (Android 14+) come back as `mixerAttributes`. Null on other platforms.
 #[tauri::command]
 async fn android_usb_audio_descriptors(
     app: AppHandle,
     request: bool,
+    device_id: Option<i64>,
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "android")]
     {
@@ -7654,7 +7656,7 @@ async fn android_usb_audio_descriptors(
             app.media_index()
                 .audio_output(
                     "usbAudioDescriptors",
-                    serde_json::json!({ "request": request }),
+                    serde_json::json!({ "request": request, "deviceId": device_id }),
                 )
                 .map_err(|error| error.to_string())
         })
@@ -7663,7 +7665,7 @@ async fn android_usb_audio_descriptors(
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (app, request);
+        let _ = (app, request, device_id);
         Ok(serde_json::Value::Null)
     }
 }

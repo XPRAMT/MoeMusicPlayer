@@ -5,6 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.AudioMixerAttributes
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -38,22 +42,75 @@ internal object UsbAudioReader {
 
     /**
      * The attached USB audio devices and their parsed descriptors. With `request`, devices without permission are
-     * asked for it first, one system dialog each; `done` is called on the main thread.
+     * asked for it first, one system dialog each; `done` is called on the main thread. The answer's `mixerAttributes`
+     * holds the system mixer formats of the output device `deviceId` (every USB output when null or not attached).
      */
-    fun read(context: Context, request: Boolean, done: (JSONObject) -> Unit) {
+    fun read(context: Context, request: Boolean, deviceId: Int?, done: (JSONObject) -> Unit) {
         val main = Handler(Looper.getMainLooper())
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         val usb = context.getSystemService(Context.USB_SERVICE) as? UsbManager
         if (usb == null) {
-            done(JSONObject().put("supported", false).put("devices", JSONArray()))
+            val result = JSONObject().put("supported", false).put("devices", JSONArray())
+            done(result.put("mixerAttributes", mixerAttributes(audio, deviceId)))
             return
         }
         val pending = if (request) audioDevices(usb).filter { !usb.hasPermission(it) } else emptyList()
         askInTurn(context.applicationContext, usb, main, pending) {
             Thread({
-                val result = collect(usb)
+                val result = collect(usb, audio, deviceId)
                 main.post { done(result) }
             }, "moe-usb-descriptors").start()
         }
+    }
+
+    private val USB_OUTPUT_TYPES = setOf(
+        AudioOutputRules.TYPE_USB_DEVICE,
+        AudioOutputRules.TYPE_USB_HEADSET,
+        AudioOutputRules.TYPE_USB_ACCESSORY,
+    )
+
+    /**
+     * The system mixer formats (Android 14+) of the card's output device, or of every USB output when the card's
+     * device is not given or no longer attached. Read only: only the two queries; nothing is set, cleared or opened.
+     */
+    private fun mixerAttributes(audio: AudioManager?, deviceId: Int?): JSONObject {
+        val sdk = Build.VERSION.SDK_INT
+        if (sdk < MixerAttributesRules.MIN_SDK) return MixerAttributesRules.resultJson(sdk, emptyList())
+        val outputs = try {
+            audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "listing the output devices failed: $error")
+            emptyList()
+        }
+        val usbOutputs = outputs.filter { it.type in USB_OUTPUT_TYPES }
+        val chosen = usbOutputs.filter { it.id == deviceId }.ifEmpty { usbOutputs }
+        return MixerAttributesRules.resultJson(sdk, chosen.map { device -> mixerAttributesOf(audio!!, device) })
+    }
+
+    @androidx.annotation.RequiresApi(MixerAttributesRules.MIN_SDK)
+    private fun mixerAttributesOf(audio: AudioManager, device: AudioDeviceInfo): JSONObject {
+        val name = device.productName?.toString() ?: ""
+        return try {
+            val supported = audio.getSupportedMixerAttributes(device).map(::entryOf)
+            val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build()
+            val preferred = audio.getPreferredMixerAttributes(media, device)?.let(::entryOf)
+            MixerAttributesRules.deviceJson(device.id, device.type, name, supported, preferred)
+        } catch (error: Exception) {
+            Log.w(TAG, "mixer attributes failed for device ${device.id}: $error")
+            MixerAttributesRules.deviceJson(device.id, device.type, name, emptyList(), null, error.toString())
+        }
+    }
+
+    @androidx.annotation.RequiresApi(MixerAttributesRules.MIN_SDK)
+    private fun entryOf(attributes: AudioMixerAttributes): MixerAttributesRules.Entry {
+        val format = attributes.format
+        return MixerAttributesRules.Entry(
+            encoding = format.encoding,
+            sampleRate = format.sampleRate,
+            channelMask = format.channelMask,
+            channelCount = format.channelCount,
+            behavior = attributes.mixerBehavior,
+        )
     }
 
     private fun askInTurn(context: Context, usb: UsbManager, main: Handler, devices: List<UsbDevice>, then: () -> Unit) {
@@ -102,7 +159,7 @@ internal object UsbAudioReader {
         main.postDelayed({ finish(null) }, PERMISSION_TIMEOUT_MS)
     }
 
-    private fun collect(usb: UsbManager): JSONObject {
+    private fun collect(usb: UsbManager, audio: AudioManager?, deviceId: Int?): JSONObject {
         val devices = JSONArray()
         for (device in audioDevices(usb)) {
             val entry = JSONObject()
@@ -129,13 +186,18 @@ internal object UsbAudioReader {
             devices.put(entry)
         }
         val result = JSONObject().put("supported", true).put("devices", devices)
-        // logcat cuts a line at about 4 kB: the JSON goes out in numbered parts, read back with `adb logcat -s MoeMediaIndex`.
-        val text = result.toString()
-        val parts = (text.length + LOG_CHUNK - 1) / LOG_CHUNK
-        for (i in 0 until maxOf(parts, 1)) {
-            Log.i(TAG, "USB audio descriptors ${i + 1}/$parts: ${text.substring(i * LOG_CHUNK, minOf(text.length, (i + 1) * LOG_CHUNK))}")
+        logInParts("USB audio descriptors", result.toString())
+        val mixer = mixerAttributes(audio, deviceId)
+        logInParts("USB mixer attributes", mixer.toString())
+        return result.put("mixerAttributes", mixer)
+    }
+
+    /** logcat cuts a line at about 4 kB: the JSON goes out in numbered parts, read back with `adb logcat -s MoeMediaIndex`. */
+    private fun logInParts(prefix: String, text: String) {
+        val parts = maxOf((text.length + LOG_CHUNK - 1) / LOG_CHUNK, 1)
+        for (i in 0 until parts) {
+            Log.i(TAG, "$prefix ${i + 1}/$parts: ${text.substring(i * LOG_CHUNK, minOf(text.length, (i + 1) * LOG_CHUNK))}")
         }
-        return result
     }
 
     /** Open, read the raw descriptors and close at once; nothing is claimed or sent. */
