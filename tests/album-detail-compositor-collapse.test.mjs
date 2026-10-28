@@ -1,41 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import {
+  createCollapseProgressWriter,
+  getAlbumDetailCollapseProgress,
+  getAlbumDetailCollapseRange,
+  getAlbumDetailScrollState,
+} from '../src/lib/album-detail-collapse.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const albumDetail = read('src/lib/AlbumDetail.svelte');
 const albumCard = read('src/lib/AlbumCard.svelte');
 const pagedList = read('src/lib/PagedVirtualList.svelte');
 
-/** Declaration names used inside `@keyframes <name> { ... }` (nested keyframe blocks included). */
-function keyframeProperties(source, name) {
-  const start = source.indexOf(`@keyframes ${name} {`);
-  assert.notEqual(start, -1, `missing @keyframes ${name}`);
-  let depth = 0;
-  let end = start;
-  for (let index = source.indexOf('{', start); index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
-    if (source[index] === '}') depth -= 1;
-    if (depth === 0) { end = index; break; }
+test('the collapse has no CSS scroll timelines and no keyframe animations (Android WebView drops fling frames with them)', () => {
+  for (const [name, source] of [['AlbumDetail', albumDetail], ['PagedVirtualList', pagedList]]) {
+    assert.doesNotMatch(source, /animation-timeline|scroll-timeline|timeline-scope|animation-range/, name);
+    assert.doesNotMatch(source, /supportsScrollDrivenAlbumOverlay|scroll-driven-collapse|album-detail-scroll-timeline/, name);
+    assert.doesNotMatch(source, /@keyframes album-detail-(cover|summary|grid-header)-collapse/, name);
   }
-  const body = source.slice(source.indexOf('{', start) + 1, end);
-  const props = new Set();
-  for (const block of body.matchAll(/\{([^{}]*)\}/g)) {
-    for (const declaration of block[1].split(';')) {
-      const property = declaration.split(':')[0].trim();
-      if (property) props.add(property);
-    }
-  }
-  return props;
-}
-
-test('album cover and heading collapse animate only transform (compositor), never layout properties', () => {
-  assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-cover-collapse')], ['transform']);
-  // Exception (ADR 0012): the summary text box reflows into the room the cover frees; nothing else besides transform.
-  assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-summary-collapse')].sort(), ['margin-left', 'max-height', 'transform']);
-  assert.deepEqual([...keyframeProperties(pagedList, 'album-detail-grid-header-collapse')], ['transform']);
-  assert.doesNotMatch(albumDetail, /album-detail-cover-radius/);
-  assert.doesNotMatch(albumDetail, /@keyframes album-detail-heading-collapse/);
+  assert.doesNotMatch(albumDetail, /transition:|animation:/);
 });
 
 test('album cover is laid out at its base size and only scaled from the top-left corner', () => {
@@ -59,21 +43,89 @@ test('album index cards and album detail cover use square corners', () => {
   assert.doesNotMatch(albumDetail, /album-detail-cover-radius/);
 });
 
-test('scroll events write no album heading styles when CSS scroll timelines are supported', () => {
-  // The list only reports scroll positions to the album detail in the fallback path.
-  assert.match(albumDetail, /onViewportScrollTopChange=\{supportsScrollDrivenAlbumOverlay \? undefined : handleListScrollTopChange\}/);
-  assert.equal(albumDetail.split('handleListScrollTopChange').length - 1, 2, 'declared once, referenced once');
-  // The progress variable exists only in the fallback inline style.
-  const shellStyle = albumDetail.match(/let shellStyle = \$derived\(([\s\S]*?)\n  \);/)?.[1] ?? '';
-  assert.match(shellStyle, /supportsScrollDrivenAlbumOverlay \? '' : `;--album-detail-collapse-progress:/);
-  assert.doesNotMatch(albumDetail, /class="album-detail-heading"\s+style=/);
-  assert.match(albumDetail, /<div class="album-detail-heading">/);
+test('cover, summary and column header all read the one progress variable', () => {
+  const art = albumDetail.match(/\n  \.album-detail-art \{([^}]*)\}/)?.[1] ?? '';
+  const summary = albumDetail.match(/\.album-detail-summary \{([^}]*)\}/)?.[1] ?? '';
+  const header = pagedList.match(/\.paged-virtual-frame\.leading-overlay \.paged-virtual-header \{([^}]*)\}/)?.[1] ?? '';
+  for (const block of [art, summary, header]) assert.match(block, /var\(--album-detail-collapse-progress, 0\)/);
+  assert.match(art, /transform:scale\(calc\(1 - \(1 - var\(--album-detail-cover-end-scale, 1\)\) \* var\(--album-detail-collapse-progress, 0\)\)\)/);
+  assert.match(summary, /transform:translateY\(calc\(var\(--album-detail-collapse-range, 0px\) \* var\(--album-detail-collapse-progress, 0\) \* -0\.5\)\)/);
+  assert.match(summary, /margin-left:calc\(var\(--album-detail-collapse-range, 0px\) \* var\(--album-detail-collapse-progress, 0\) \* -1\)/);
+  assert.match(header, /transform: translateY\(calc\(var\(--paged-collapse-range, 0px\) \* var\(--album-detail-collapse-progress, 0\) \* -1\)\)/);
+  assert.match(header, /position: absolute/);
+  // The list writes no transform on the header itself any more.
+  assert.doesNotMatch(pagedList, /transform:translateY\(\$\{-collapseOffset\}px\)/);
 });
 
-test('sortable header moves with transform, not top, and is scripted only in the fallback path', () => {
-  assert.doesNotMatch(pagedList, /top:\$\{Math\.max\(0, leadingOverlayHeight - collapseOffset\)\}px/);
-  assert.match(pagedList, /top:\$\{leadingOverlayHeight\}px;right:\$\{headerGutter\}px;\$\{supportsScrollDrivenAlbumOverlay \? '' : `transform:translateY\(\$\{-collapseOffset\}px\);`\}/);
-  assert.match(pagedList, /\.paged-virtual-frame\.leading-overlay\.scroll-driven-collapse \.paged-virtual-header \{\s*animation: album-detail-grid-header-collapse/);
+test('the progress is written only through the frame-coalesced writer, and nothing else is written per scroll', () => {
+  assert.equal(albumDetail.split("style.setProperty('--album-detail-collapse-progress'").length - 1, 1);
+  assert.equal(albumDetail.split('requestAnimationFrame(').length - 1, 1);
+  assert.match(albumDetail, /createCollapseProgressWriter\(\{/);
+  assert.match(albumDetail, /onViewportScrollTopChange=\{handleListScrollTopChange\}/);
+  assert.doesNotMatch(albumDetail, /class="album-detail-heading"\s+style=/);
+  // shellStyle holds layout inputs only; the progress never goes through Svelte state.
+  const shellStyle = albumDetail.match(/let shellStyle = \$derived\(([\s\S]*?)\n  \);/)?.[1] ?? '';
+  assert.doesNotMatch(shellStyle, /collapse-progress/);
+  assert.doesNotMatch(albumDetail, /albumCoverScrollPeak|albumCollapseProgress/);
+});
+
+test('the progress is right at mount, on restore and when the range or the leading overlay changes', () => {
+  // The list reports immediately (not in a frame) after restoring a scroll position and after measuring.
+  assert.match(pagedList, /onViewportScrollTopChange\?\.\(safeRestoredScrollTop, restoredCollapseOffset, true\)/);
+  assert.match(pagedList, /onViewportScrollTopChange\?\.\(scrollTop, collapseOffset, true\)/);
+  assert.match(pagedList, /onViewportScrollTopChange\?\.\(scrollTop, nextCollapseOffset, immediate\)/);
+  assert.match(pagedList, /leadingCollapseRange;\s+leadingOverlayHeight;[\s\S]*?tick\(\)\.then\(\(\) => \{ if \(viewport\) updateViewport\(true\); \}\)/);
+  // A new shell style string replaces the inline style, so the progress is recomputed and written again.
+  assert.match(albumDetail, /\$effect\(\(\) => \{\s+shellStyle;[\s\S]*?, true\);\s+collapseProgressWriter\.reapply\(\);/);
+});
+
+test('progress pure function: clamping, mapping and restore', () => {
+  const range = getAlbumDetailCollapseRange(200);
+  assert.equal(range, 120);
+  assert.equal(getAlbumDetailCollapseProgress(0, range), 0);
+  assert.equal(getAlbumDetailCollapseProgress(60, range), 0.5);
+  assert.equal(getAlbumDetailCollapseProgress(120, range), 1);
+  assert.equal(getAlbumDetailCollapseProgress(-5, range), 0);
+  assert.equal(getAlbumDetailCollapseProgress(500, range), 1);
+  assert.equal(getAlbumDetailCollapseProgress(10, 0), 0);
+  assert.equal(getAlbumDetailCollapseProgress(Number.NaN, range), 0);
+  // Native offset -> collapse offset -> progress, including a restored position far below the collapse range.
+  for (const [native, expected] of [[0, 0], [30, 0.25], [120, 1], [4000, 1]]) {
+    const { collapseOffset } = getAlbumDetailScrollState(native, range);
+    assert.equal(getAlbumDetailCollapseProgress(collapseOffset, range), expected);
+  }
+});
+
+test('the writer writes at most once per frame while scrolling and at once when told to', () => {
+  const frames = [];
+  const writes = [];
+  const writer = createCollapseProgressWriter({
+    requestFrame: (callback) => { frames.push(callback); return frames.length; },
+    cancelFrame: (handle) => { frames[handle - 1] = null; },
+    write: (progress) => writes.push(progress),
+  });
+  writer.set(0.1);
+  writer.set(0.2);
+  writer.set(0.3);
+  assert.equal(frames.length, 1, 'one frame requested for many scroll events');
+  assert.deepEqual(writes, []);
+  frames[0]();
+  assert.deepEqual(writes, [0.3]);
+  writer.set(0.3);
+  frames[1]();
+  assert.deepEqual(writes, [0.3], 'unchanged values are not written');
+  // Mount / restore: immediate, and it supersedes a pending frame.
+  writer.set(0.6);
+  writer.set(1, true);
+  assert.deepEqual(writes, [0.3, 1]);
+  frames[2]?.();
+  assert.deepEqual(writes, [0.3, 1]);
+  // After the inline style was replaced the same value is written again.
+  writer.reapply();
+  assert.deepEqual(writes, [0.3, 1, 1]);
+  writer.set(0.5);
+  writer.dispose();
+  assert.equal(frames.at(-1), null, 'pending frame cancelled on destroy');
 });
 
 test('the summary reflow is contained so it cannot touch the cover, the header or the track list', () => {

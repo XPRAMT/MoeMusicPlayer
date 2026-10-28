@@ -38,7 +38,7 @@
 <script lang="ts" generics="Item">
   import { tr } from './i18n.js';
   import { displayUnknown } from './unknown-label.js';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import type { Snippet } from 'svelte';
   import {
     getNextActiveIndex,
@@ -87,7 +87,7 @@
     listName: string;
     onRange: (range: VirtualRange) => void;
     onPlay: (item: Item, index: number) => void;
-    onViewportScrollTopChange?: (scrollTop: number, collapseOffset: number) => void;
+    onViewportScrollTopChange?: (scrollTop: number, collapseOffset: number, immediate?: boolean) => void;
     rowActivates?: boolean;
     longPressReorder?: boolean;
     onReorder?: (from: number, to: number) => void | Promise<void>;
@@ -202,11 +202,6 @@
     getVirtualRowsHeight(virtualDataCount, renderGroupRows, rowHeight, groupRowHeight),
   );
   const hasLeadingOverlay = $derived(leadingOverlayHeight > 0);
-  const supportsScrollDrivenAlbumOverlay = typeof CSS !== 'undefined'
-    && CSS.supports('animation-timeline', 'scroll()')
-    && CSS.supports('animation-range', '0px 1px')
-    && CSS.supports('timeline-scope', '--album-detail-scroll')
-    && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
   /** Album detail: the scroller starts below the fully collapsed heading and table header; it never moves or resizes. */
   const viewportTopOffset = $derived(hasLeadingOverlay
     ? getAlbumDetailScrollerTop(leadingOverlayHeight, leadingCollapseRange, headerHeight)
@@ -303,6 +298,15 @@
     recalculateMetrics();
   });
 
+  // Album detail: when the collapse range or the heading height changes, re-read the native scroll position once the
+  // spacer has its new height and report it at once, so the collapse progress is right without waiting for a scroll.
+  $effect(() => {
+    leadingCollapseRange;
+    leadingOverlayHeight;
+    if (!viewport || !hasLeadingOverlay) return;
+    void tick().then(() => { if (viewport) updateViewport(true); });
+  });
+
   function rememberVisibleScrollPosition(position: number): void {
     if (seenListId === listId) writeListScrollPosition(listId, position);
   }
@@ -369,7 +373,7 @@
         overscan,
       );
       onRange(visualRangeToDataRange(restoredRange.start, restoredRange.end, renderGroupRows, virtualDataCount));
-      onViewportScrollTopChange?.(safeRestoredScrollTop, restoredCollapseOffset);
+      onViewportScrollTopChange?.(safeRestoredScrollTop, restoredCollapseOffset, true);
       pendingListRestore = null;
     }
     seenListId = currentListId;
@@ -461,7 +465,7 @@
       if (effectiveViewportHeight > 0) metricsReady = true;
       if (viewport) headerGutter = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
       if (viewport) viewportClientWidth = viewport.clientWidth;
-      if (viewport) onViewportScrollTopChange?.(scrollTop, collapseOffset);
+      if (viewport) onViewportScrollTopChange?.(scrollTop, collapseOffset, true);
     };
     recalculateMetrics = updateMetrics;
     updateMetrics();
@@ -482,7 +486,7 @@
     rememberVisibleScrollPosition(finalScrollTop);
   });
 
-  function updateViewport(): void {
+  function updateViewport(immediate = false): void {
     if (!viewport) return;
     let nextCollapseOffset = collapseOffset;
     if (viewport.clientHeight > 0) {
@@ -499,7 +503,7 @@
     // viewportHeight is the measured viewport's clientHeight; the album-detail
     // scroller has a fixed size, so scrolling never changes it.
     metricsReady = true;
-    onViewportScrollTopChange?.(scrollTop, nextCollapseOffset);
+    onViewportScrollTopChange?.(scrollTop, nextCollapseOffset, immediate);
   }
 
   function handleViewportScroll(): void {
@@ -780,11 +784,10 @@
   class="paged-virtual-frame"
   class:fill-available={fillAvailable}
   class:leading-overlay={hasLeadingOverlay}
-  class:scroll-driven-collapse={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
   bind:this={frame}
   style={`--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px;--paged-leading-height:${leadingOverlayHeight}px;--paged-collapse-range:${leadingCollapseRange}px;--paged-viewport-top:${viewportTopOffset}px`}
 >
-  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${leadingOverlayHeight}px;right:${headerGutter}px;${supportsScrollDrivenAlbumOverlay ? '' : `transform:translateY(${-collapseOffset}px);`}` : `padding-right:${headerGutter}px;`}`}>
+  <div class="paged-virtual-header" role="presentation" style={`height:${headerHeight}px;${hasLeadingOverlay ? `top:${leadingOverlayHeight}px;right:${headerGutter}px;` : `padding-right:${headerGutter}px;`}`}>
     <div class="paged-virtual-header-shift" style={`transform:translateX(${-headerShift}px)`}>
       {#if header}{@render header()}{/if}
     </div>
@@ -800,7 +803,6 @@
     aria-busy={pending || totalCount === null}
     tabindex="0"
     style={`${fillAvailable ? '' : `height:${rowViewportHeight}px;`}--paged-header-height:${headerHeight}px;--paged-row-height:${rowHeight}px;--paged-grid-template:${gridTemplate};--track-list-min-width:${effectiveMinContentWidth}px;--paged-viewport-width:${viewportClientWidth > 0 ? `${viewportClientWidth}px` : '100%'}`}
-    class:album-detail-scroll-timeline={hasLeadingOverlay && supportsScrollDrivenAlbumOverlay}
     class:is-reordering={dragFromIndex !== null}
     use:longPressDragGuard={() => dragFromIndex !== null}
     onscroll={handleViewportScroll}
@@ -967,24 +969,6 @@
     flex: none;
   }
 
-  @supports (animation-timeline: scroll()) and (timeline-scope: --album-detail-scroll) {
-    .paged-virtual-viewport.album-detail-scroll-timeline {
-      scroll-timeline: --album-detail-scroll block;
-    }
-
-    .paged-virtual-frame.leading-overlay.scroll-driven-collapse .paged-virtual-header {
-      animation: album-detail-grid-header-collapse auto linear both;
-      animation-duration: 1s;
-      animation-timeline: --album-detail-scroll;
-      animation-range: 0px var(--paged-collapse-range);
-    }
-
-    @keyframes album-detail-grid-header-collapse {
-      from { transform: translateY(0); }
-      to { transform: translateY(calc(var(--paged-collapse-range) * -1)); }
-    }
-  }
-
   .paged-virtual-frame.leading-overlay .paged-virtual-header {
     position: absolute;
     z-index: 3;
@@ -993,6 +977,8 @@
     width: auto;
     min-width: 0;
     pointer-events: auto;
+    /* Rises with the album detail cover collapse: one progress variable written once per frame by AlbumDetail (ADR 0012). */
+    transform: translateY(calc(var(--paged-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -1));
   }
 
   .paged-virtual-viewport.is-reordering {

@@ -47,7 +47,7 @@
     playbackReady: boolean;
     isSendingPlaybackCommand: boolean;
     onPlay: (track: TrackSummary) => void | Promise<void>;
-    onViewportScrollTopChange?: (scrollTop: number, collapseOffset: number) => void;
+    onViewportScrollTopChange?: (scrollTop: number, collapseOffset: number, immediate?: boolean) => void;
     onTotalCount?: (count: number | null) => void;
     sortable?: boolean;
     groupingEnabled?: boolean;

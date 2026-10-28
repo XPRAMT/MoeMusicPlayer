@@ -12,7 +12,7 @@
   import { formatDurationHours, formatAlbumTrackNumber } from './format';
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
   import { albumReflowProbeEnabled, startAlbumReflowProbe } from './album-reflow-debug.js';
-  import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange } from './album-detail-collapse.js';
+  import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange, getAlbumDetailCollapseProgress, createCollapseProgressWriter } from './album-detail-collapse.js';
 
   interface Props {
     album: AlbumEntry;
@@ -43,24 +43,11 @@
   let sortSaveQueue: Promise<unknown> = Promise.resolve();
   let albumCoverBaseSize = $state(DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX);
   let albumHeadingBaseHeight = $state(DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX + 36);
-  const supportsScrollDrivenAlbumOverlay = typeof CSS !== 'undefined'
-    && CSS.supports('animation-timeline', 'scroll()')
-    && CSS.supports('animation-range', '0px 1px')
-    && CSS.supports('timeline-scope', '--album-detail-scroll')
-    && CSS.supports('scroll-timeline-name', '--album-detail-scroll');
-  /**
-   * Current collapse offset in CSS px. Only the fallback for runtimes without CSS scroll timelines uses it (and only then
-   * does the list report scroll positions); with scroll timelines the compositor drives the cover from the native scroll
-   * offset and nothing here is written per scroll event.
-   */
-  let albumCoverScrollPeak = $state(0);
   let albumCollapseRange = $derived(getAlbumDetailCollapseRange(albumCoverBaseSize));
-  let albumCollapseProgress = $derived(albumCollapseRange > 0 ? Math.min(1, Math.max(0, albumCoverScrollPeak / albumCollapseRange)) : 0);
   /** Cover scale when fully collapsed (80px / base size). The cover is always laid out at base size and only scaled. */
   let albumCoverEndScale = $derived(Math.min(1, MIN_ALBUM_DETAIL_COVER_SIZE_PX / albumCoverBaseSize));
   let shellStyle = $derived(
-    `--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px;--album-detail-cover-end-scale:${albumCoverEndScale}`
-    + (supportsScrollDrivenAlbumOverlay ? '' : `;--album-detail-collapse-progress:${albumCollapseProgress}`),
+    `--album-detail-heading-base-height:${albumHeadingBaseHeight}px;--album-detail-cover-base-size:${albumCoverBaseSize}px;--album-detail-collapse-range:${albumCollapseRange}px;--album-detail-cover-end-scale:${albumCoverEndScale}`,
   );
   let albumDiscQuickIndices = $state<{
     ascending: QuickIndexSnapshot;
@@ -82,6 +69,29 @@
   }));
   let shellElement = $state<HTMLElement | null>(null);
   let summaryElement = $state<HTMLElement | null>(null);
+  /**
+   * The collapse of the cover, the summary and the column header is driven by ONE custom property on the shell,
+   * --album-detail-collapse-progress (0..1), written at most once per animation frame while scrolling (never CSS scroll
+   * timelines: Android WebView drops the intermediate frames of a fling with them, ADR 0012). The list reports its collapse
+   * offset (immediately on mount, restore and layout changes, coalesced to a frame while scrolling).
+   */
+  let collapseOffsetNow = 0;
+  const collapseProgressWriter = createCollapseProgressWriter({
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
+    write: (progress) => shellElement?.style.setProperty('--album-detail-collapse-progress', String(progress)),
+  });
+  function reportCollapse(immediate: boolean): void {
+    collapseProgressWriter.set(getAlbumDetailCollapseProgress(collapseOffsetNow, albumCollapseRange), immediate);
+  }
+  // A new style string (range, cover size or heading height changed) replaces the whole inline style, including the
+  // progress: recompute against the new range and write it again before the next paint.
+  $effect(() => {
+    shellStyle;
+    if (!shellElement) return;
+    collapseProgressWriter.set(getAlbumDetailCollapseProgress(collapseOffsetNow, albumCollapseRange), true);
+    collapseProgressWriter.reapply();
+  });
   // Opt-in (localStorage moe.debug.albumReflow = "1"): logs the layout cost of the summary reflow while scrolling.
   $effect(() => {
     if (!shellElement || !summaryElement || !albumReflowProbeEnabled()) return;
@@ -123,8 +133,9 @@
     saveDetailSort(toggleAlbumDetailSort(detailSort, 'position'));
   }
 
-  function handleListScrollTopChange(_scrollTop: number, collapseOffset: number): void {
-    albumCoverScrollPeak = Math.min(albumCollapseRange, Math.max(0, collapseOffset));
+  function handleListScrollTopChange(_scrollTop: number, collapseOffset: number, immediate = false): void {
+    collapseOffsetNow = collapseOffset;
+    reportCollapse(immediate);
   }
 
   function saveDetailSort(preference: import('./ipc').AlbumDetailSort): void {
@@ -241,7 +252,8 @@
           const quickUrls = await loadThumbnails(quick?.trackIds.slice(0, 1) ?? [], current);
           if (current !== revision) { quickUrls.forEach((url) => URL.revokeObjectURL(url)); return; }
           if (quickUrls.length > 0 && coverUrls.length === 0) {
-            for (const url of ownedCoverUrls) URL.revokeObjectURL(url);
+            collapseProgressWriter.dispose();
+    for (const url of ownedCoverUrls) URL.revokeObjectURL(url);
             ownedCoverUrls = quickUrls;
             coverUrls = quickUrls;
           } else {
@@ -317,7 +329,6 @@
 
 <div
   class="album-detail-shell"
-  class:scroll-driven-collapse={supportsScrollDrivenAlbumOverlay}
   style={shellStyle}
   bind:this={shellElement}
 >
@@ -336,7 +347,7 @@
         getIndexLabel={(track) => formatAlbumTrackNumber(track.trackNumber)}
         leadingOverlayHeight={albumHeadingBaseHeight}
         leadingCollapseRange={albumCollapseRange}
-        onViewportScrollTopChange={supportsScrollDrivenAlbumOverlay ? undefined : handleListScrollTopChange}
+        onViewportScrollTopChange={handleListScrollTopChange}
       />
     {/if}
   </div>
@@ -362,43 +373,13 @@
   .album-detail-shell { position:relative; min-width:0; min-height:0; flex:1 1 auto; overflow:hidden; }
   /*
    * The cover is always laid out at its base size (200px, 160px narrow) and the heading keeps its base height, so scrolling
-   * never changes layout: the cover only gets transform: scale() and the summary only translate(), both driven by the
-   * list's native scroll offset (CSS scroll timeline, compositor) when supported. Cover and summary follow one linear
-   * progress, so the cover's visual size is base - scrollTop px and the summary stays beside it and vertically centred on it.
-   * Without scroll timelines, the script writes --album-detail-collapse-progress (0..1) and the same declarations apply.
+   * never changes layout: the cover only gets transform: scale() and the summary only translate(). All of it (and the
+   * column header's translateY in PagedVirtualList) reads one variable, --album-detail-collapse-progress (0..1), which the
+   * script writes once per animation frame from the list's native scroll offset (no CSS scroll timelines: Android WebView
+   * drops fling frames with them, ADR 0012). Cover and summary follow one linear progress, so the cover's visual size is
+   * base - scrollTop px and the summary stays beside it and vertically centred on it.
    */
   .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-base-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; contain:layout style size; }
-  @supports (animation-timeline: scroll()) and (timeline-scope: --album-detail-scroll) {
-    .album-detail-shell.scroll-driven-collapse { timeline-scope: --album-detail-scroll; }
-
-    .album-detail-shell.scroll-driven-collapse .album-detail-art {
-      animation: album-detail-cover-collapse auto linear both;
-      animation-duration: 1s;
-      animation-timeline: --album-detail-scroll;
-      animation-range: 0px var(--album-detail-collapse-range);
-    }
-
-    .album-detail-shell.scroll-driven-collapse .album-detail-summary {
-      animation: album-detail-summary-collapse auto linear both;
-      animation-duration: 1s;
-      animation-timeline: --album-detail-scroll;
-      animation-range: 0px var(--album-detail-collapse-range);
-    }
-
-    @keyframes album-detail-cover-collapse {
-      from { transform: scale(1); }
-      to { transform: scale(var(--album-detail-cover-end-scale, 1)); }
-    }
-
-    @keyframes album-detail-summary-collapse {
-      from { transform: translateY(0); margin-left: 0; max-height: var(--album-detail-heading-base-height); }
-      to {
-        transform: translateY(calc(var(--album-detail-collapse-range, 0px) * -0.5));
-        margin-left: calc(var(--album-detail-collapse-range, 0px) * -1);
-        max-height: calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range, 0px));
-      }
-    }
-  }
   .album-detail-heading > * { pointer-events:auto; }
   .album-detail-art {
     width:var(--album-detail-cover-base-size,200px); height:var(--album-detail-cover-base-size,200px); flex:0 0 var(--album-detail-cover-base-size,200px); aspect-ratio:1; overflow:hidden; background:#000;
@@ -414,7 +395,7 @@
    * header, which rises by the same range (bottom edge = header top at every progress; the artists, the one block that may
    * not fit, are clipped, the stats stay). Containment (the heading's `contain: layout style size`, the summary's own
    * `contain: layout style`) keeps this layout work out of the cover, the header and the track list. The cover, the header
-   * and the list keep their transform-only collapse. Reflow is driven by the same progress (timeline or fallback variable).
+   * and the list keep their transform-only collapse. Reflow is driven by the same progress variable.
    */
   .album-detail-summary {
     display:flex; min-width:0; flex:1 1 0; flex-direction:column; gap:10px; overflow:hidden; contain:layout style;

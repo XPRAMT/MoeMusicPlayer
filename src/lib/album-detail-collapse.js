@@ -63,3 +63,60 @@ export function getAlbumDetailNativeScrollTop(listScrollTop, collapseRange, coll
   const collapse = Number.isFinite(collapseOffset) ? Math.min(range, Math.max(0, collapseOffset)) : 0;
   return list > 0 ? list + range : collapse;
 }
+/**
+ * Collapse progress 0..1 of the album detail heading: the clamped collapse offset over the collapse range. The one value
+ * the cover, the summary and the column header all read (as `--album-detail-collapse-progress`).
+ *
+ * @param {number} collapseOffset @param {number} collapseRange
+ * @returns {number}
+ */
+export function getAlbumDetailCollapseProgress(collapseOffset, collapseRange) {
+  const range = Number.isFinite(collapseRange) ? Math.max(0, collapseRange) : 0;
+  if (range <= 0) return 0;
+  const offset = Number.isFinite(collapseOffset) ? collapseOffset : 0;
+  return Math.min(1, Math.max(0, offset / range));
+}
+
+/**
+ * Writes the progress at most once per animation frame while scrolling (`set`), at once for mount, restore and layout
+ * changes (`set(progress, true)`), and again unconditionally after something rewrote the element's style (`reapply`).
+ * Unchanged values are not written.
+ *
+ * @param {{requestFrame: (callback: () => void) => number, cancelFrame: (handle: number) => void, write: (progress: number) => void}} options
+ */
+export function createCollapseProgressWriter({ requestFrame, cancelFrame, write }) {
+  let latest = 0;
+  let written = Number.NaN;
+  /** @type {number | null} */
+  let pending = null;
+  const cancelPending = () => {
+    if (pending === null) return;
+    cancelFrame(pending);
+    pending = null;
+  };
+  const commit = (/** @type {boolean} */ force) => {
+    if (!force && latest === written) return;
+    written = latest;
+    write(latest);
+  };
+  return {
+    /** @param {number} progress @param {boolean} [immediate] */
+    set(progress, immediate = false) {
+      latest = progress;
+      if (immediate) {
+        cancelPending();
+        commit(false);
+      } else if (pending === null) {
+        pending = requestFrame(() => {
+          pending = null;
+          commit(false);
+        });
+      }
+    },
+    reapply() {
+      cancelPending();
+      commit(true);
+    },
+    dispose: cancelPending,
+  };
+}
