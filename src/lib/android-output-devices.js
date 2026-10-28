@@ -376,3 +376,89 @@ export function buildAndroidRows(status, saved, exclusiveMode = status?.exclusiv
   }
   return rows;
 }
+
+// ---- Bluetooth codec priority list (ADR 0052) ----------------------------------------------------------------
+
+/** `androidBluetoothCodecCustom` when settings.json does not say (Rust `AppSettings::default`, ADR 0052): off. */
+export const DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM = false;
+
+/**
+ * What the 「藍牙」 codec section shows, from the privileged sources and the codecs the service reported.
+ * `notice`: neither root nor an authorized Shizuku, so only the short permission notice (no switch, no list);
+ * `connect`: the phone's codec list is not known yet, so the plain line; `list`: the switch and the list.
+ * The sources not being read yet counts as available (nothing is shown that could be wrong).
+ * @param {import('./ipc').AndroidMixerRateSourceStatus | null | undefined} sources
+ * @param {import('./ipc').AndroidBluetoothCodecChoices | null | undefined} choices
+ * @returns {'notice' | 'connect' | 'list'}
+ */
+export function bluetoothCodecSection(sources, choices) {
+  if (bluetoothRateSourceAvailable(sources) === false) return 'notice';
+  return (choices?.local?.length ?? 0) > 0 ? 'list' : 'connect';
+}
+
+/** The permission notice that replaces the switch and the list. @returns {string} */
+export function bluetoothCodecNotice() {
+  return tr('需要 root 或已授權的 Shizuku 才能切換藍牙編碼。');
+}
+
+/**
+ * The headset the list refers to: the one that plays when it has codec data, else the first with data.
+ * @param {import('./ipc').AndroidAudioOutputStatus | null | undefined} status
+ * @returns {{ address: string, active: string | null, supported: string[], error?: string } | null}
+ */
+export function pickCodecDevice(status) {
+  const devices = status?.bluetoothCodecChoices?.devices ?? {};
+  const routed = status?.routed?.address?.trim().toUpperCase();
+  const address = routed && devices[routed] ? routed : Object.keys(devices)[0];
+  if (!address) return null;
+  const entry = devices[address];
+  return { address, active: entry.active ?? null, supported: entry.supported ?? [], ...(entry.error ? { error: entry.error } : {}) };
+}
+
+/**
+ * The rows of the list, top to bottom: the phone's codecs in the stored order (one order for every headset), then
+ * the codecs the order does not know yet in the stack's order. A stored key the phone does not list is skipped.
+ * With a headset connected each row says whether it is in use and whether the headset supports it.
+ * @param {Array<{ key: string, name: string }>} local
+ * @param {string[]} order
+ * @param {{ active: string | null, supported: string[] } | null} device
+ * @returns {Array<{ key: string, name: string, active: boolean, unsupported: boolean }>}
+ */
+export function buildCodecRows(local, order, device) {
+  const byKey = new Map(local.map((codec) => [codec.key, codec]));
+  const first = [...new Set(order)].filter((key) => byKey.has(key));
+  const known = new Set(first);
+  const keys = [...first, ...local.map((codec) => codec.key).filter((key) => !known.has(key))];
+  return [...new Set(keys)].map((key) => ({
+    key,
+    name: byKey.get(key)?.name ?? key,
+    active: device ? device.active === key : false,
+    unsupported: device ? !device.supported.includes(key) : false,
+  }));
+}
+
+/**
+ * The order to store after the user moved shown row `from` to place `to`: the listed codecs fill, in their new order,
+ * the places the listed codecs had in the stored order; a stored codec the phone does not list keeps its place.
+ * @param {string[]} order
+ * @param {Array<{ key: string }>} local
+ * @param {string[]} shownKeys the keys as shown now
+ * @param {number} from
+ * @param {number} to
+ * @returns {string[]}
+ */
+export function moveCodecInOrder(order, local, shownKeys, from, to) {
+  if (from === to || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < 0 || from >= shownKeys.length || to >= shownKeys.length) {
+    return [...order];
+  }
+  const moved = [...shownKeys];
+  const [key] = moved.splice(from, 1);
+  moved.splice(to, 0, key);
+  const listed = new Set(local.map((codec) => codec.key));
+  const full = [...new Set(order)];
+  for (const codec of local) if (!full.includes(codec.key)) full.push(codec.key);
+  const placed = [...new Set(moved)].filter((item) => listed.has(item));
+  for (const item of full) if (listed.has(item) && !placed.includes(item)) placed.push(item);
+  let next = 0;
+  return full.map((item) => (listed.has(item) ? placed[next++] : item));
+}

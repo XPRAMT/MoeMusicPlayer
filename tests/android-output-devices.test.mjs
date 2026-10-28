@@ -5,15 +5,20 @@ import test from 'node:test';
 import {
   androidOutputHeader,
   androidOutputModes,
+  bluetoothCodecSection,
   bluetoothRateNotice,
   bluetoothRateSourceAvailable,
   buildAndroidRows,
+  buildCodecRows,
+  DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM,
   DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW,
   DEFAULT_ANDROID_USB_EXCLUSIVE,
   describeSupport,
   deviceLabel,
   exclusiveHint,
   exclusiveTargetDevice,
+  moveCodecInOrder,
+  pickCodecDevice,
   sameChoice,
   usbExclusivePath,
 } from '../src/lib/android-output-devices.js';
@@ -319,8 +324,8 @@ test('USB exclusive is off by default on both sides, and turned on by the mode b
   assert.doesNotMatch(component, /<dialog\s+bind:this=\{usbExclusiveDialog\}|openUsbExclusivePanel|authorizeUsbExclusive|exclusiveSwitchNeedsPanel|usb-exclusive-title/);
   // The mode buttons replace the per-card switch; the P0 development test is gone.
   assert.doesNotMatch(component, /USB 獨佔（App 直接驅動，不經過系統）|toggleUsbExclusive/);
-  // The only checkbox is the Bluetooth sample-rate follow switch (ADR 0051).
-  assert.equal(component.match(/type="checkbox"/g)?.length, 1);
+  // The only checkboxes are the Bluetooth switches: the sample-rate follow (ADR 0051) and the codec order (ADR 0052).
+  assert.equal(component.match(/type="checkbox"/g)?.length, 2);
   assert.doesNotMatch(component, /試播|android_usb_exclusive_start/);
   // Both modes are saved at once, with no gate on the permission (the service asks the system dialog by itself).
   const setMode = component.slice(component.indexOf('function setMode('), component.indexOf('/** The card'));
@@ -526,4 +531,92 @@ test('the Bluetooth rate switch shows a notice only when neither root nor an aut
     bluetoothRateNotice(true, sources('unavailable', 'not_running')),
     bluetoothRateNotice(false, sources('unavailable', 'not_running')),
   );
+});
+
+// ---- Bluetooth codec priority list (ADR 0052) ----
+
+const codecLocal = [
+  { key: 't4', name: 'LDAC' },
+  { key: 't3', name: 'aptX HD' },
+  { key: 't1', name: 'AAC' },
+  { key: 't0', name: 'SBC' },
+];
+const noSources = { state: 'none', root: 'unavailable', shizuku: 'not_installed', shizukuInstalled: false, source: 'platform' };
+const rootSources = { ...noSources, root: 'available', source: 'root' };
+
+test('the codec switch is off by default on both sides and saved by its own commands (ADR 0052)', () => {
+  assert.equal(DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM, false);
+  const settings = readFileSync(new URL('../src-tauri/src/settings.rs', import.meta.url), 'utf8');
+  assert.match(settings, /android_bluetooth_codec_custom: false,/);
+  assert.match(settings, /#\[serde\(default\)\]\s+pub android_bluetooth_codec_custom: bool,/);
+  assert.match(settings, /android_bluetooth_codec_custom\.unwrap_or\(false\)/);
+  const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
+  for (const command of [
+    'settings_get_android_bluetooth_codec_custom',
+    'settings_set_android_bluetooth_codec_custom',
+    'settings_get_android_bluetooth_codec_order',
+    'settings_set_android_bluetooth_codec_order',
+  ]) {
+    assert.match(component, new RegExp(command));
+  }
+  // The list reuses the long-press reorder of 設定 → 曲目欄位.
+  assert.match(component, /longPressDragGuard/);
+  assert.match(component, /track-column-setting-row/);
+});
+
+test('the codec section shows only a notice without root or Shizuku, a plain line without a known phone list, else the list', () => {
+  const withCodecs = { local: codecLocal, devices: {} };
+  assert.equal(bluetoothCodecSection(noSources, withCodecs), 'notice');
+  assert.equal(bluetoothCodecSection(noSources, null), 'notice');
+  assert.equal(bluetoothCodecSection(rootSources, null), 'connect');
+  assert.equal(bluetoothCodecSection(rootSources, { local: [], devices: {} }), 'connect');
+  assert.equal(bluetoothCodecSection(rootSources, withCodecs), 'list');
+  // The sources not read yet: nothing is claimed missing.
+  assert.equal(bluetoothCodecSection(null, withCodecs), 'list');
+});
+
+test('the rows follow the one stored order, add unknown codecs at the end and skip stored codecs the phone lacks', () => {
+  const keys = (rows) => rows.map((row) => row.key);
+  assert.deepEqual(keys(buildCodecRows(codecLocal, [], null)), ['t4', 't3', 't1', 't0']);
+  assert.deepEqual(keys(buildCodecRows(codecLocal, ['t1', 't4'], null)), ['t1', 't4', 't3', 't0']);
+  assert.deepEqual(keys(buildCodecRows(codecLocal, ['x9', 't0', 't0'], null)), ['t0', 't4', 't3', 't1']);
+});
+
+test('rows say which codec is in use and which the connected headset does not support', () => {
+  const device = { active: 't1', supported: ['t1', 't0'] };
+  const rows = buildCodecRows(codecLocal, [], device);
+  assert.deepEqual(rows.map((row) => [row.key, row.active, row.unsupported]), [
+    ['t4', false, true],
+    ['t3', false, true],
+    ['t1', true, false],
+    ['t0', false, false],
+  ]);
+  // No headset: no marks at all.
+  assert.ok(buildCodecRows(codecLocal, [], null).every((row) => !row.active && !row.unsupported));
+});
+
+test('moving a row keeps stored codecs the phone does not list in their place', () => {
+  const shown = ['t4', 't3', 't1', 't0'];
+  assert.deepEqual(moveCodecInOrder([], codecLocal, shown, 3, 0), ['t0', 't4', 't3', 't1']);
+  assert.deepEqual(moveCodecInOrder(['x9', 't4', 't3'], codecLocal, ['t4', 't3', 't1', 't0'], 0, 1), ['x9', 't3', 't4', 't1', 't0']);
+  assert.deepEqual(moveCodecInOrder(['t4'], codecLocal, shown, 1, 1), ['t4']);
+  assert.deepEqual(moveCodecInOrder(['t4'], codecLocal, shown, 9, 0), ['t4']);
+});
+
+test('the list refers to the headset that plays, else the first one with codec data', () => {
+  const status = {
+    routed: { address: 'aa:bb:cc:dd:ee:02' },
+    bluetoothCodecChoices: {
+      local: codecLocal,
+      devices: {
+        'AA:BB:CC:DD:EE:01': { active: 't4', supported: ['t4'] },
+        'AA:BB:CC:DD:EE:02': { active: 't1', supported: ['t1'], error: '無法切換藍牙編碼' },
+      },
+    },
+  };
+  assert.equal(pickCodecDevice(status).address, 'AA:BB:CC:DD:EE:02');
+  assert.equal(pickCodecDevice(status).error, '無法切換藍牙編碼');
+  assert.equal(pickCodecDevice({ ...status, routed: null }).address, 'AA:BB:CC:DD:EE:01');
+  assert.equal(pickCodecDevice({ bluetoothCodecChoices: { local: codecLocal, devices: {} } }), null);
+  assert.equal(pickCodecDevice(null), null);
 });

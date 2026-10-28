@@ -1031,5 +1031,14 @@
   "DSD": "DSD",
   "獨佔優先": "Prefer exclusive",
   "DoP 只在獨佔模式下使用；請先在上方「模式」選擇獨佔優先。": "DoP is only used in exclusive mode; choose \"Prefer exclusive\" under \"Mode\" above first.",
-  "DSD 直通只在獨佔模式下使用；請先在上方「模式」選擇獨佔優先。": "DSD passthrough is only used in exclusive mode; choose \"Prefer exclusive\" under \"Mode\" above first."
+  "DSD 直通只在獨佔模式下使用；請先在上方「模式」選擇獨佔優先。": "DSD passthrough is only used in exclusive mode; choose \"Prefer exclusive\" under \"Mode\" above first.",
+  "需要 root 或已授權的 Shizuku 才能切換藍牙編碼。": "Switching the Bluetooth codec needs root or an authorized Shizuku.",
+  "自訂藍牙編碼順序": "Custom Bluetooth codec order",
+  "連線與調整順序時，依下列順序使用耳機支援的第一個編碼；關閉時只記住順序，不會切換耳機的編碼。": "When a headset connects and when you reorder, the first codec in this list that the headset supports is used. While off, the order is only remembered and the headset codec is not changed.",
+  "連接藍牙耳機後可選擇編碼": "Connect a Bluetooth headset to choose a codec",
+  "藍牙編碼順序": "Bluetooth codec order",
+  "使用中": "In use",
+  "此耳機不支援": "Not supported by this headset",
+  "第 {0} 項": "Item {0}",
+  "無法切換藍牙編碼": "Could not switch the Bluetooth codec"
 }

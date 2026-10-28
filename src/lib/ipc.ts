@@ -422,8 +422,17 @@ export interface AndroidAudioOutputStatus {
   bluetoothPermission?: 'granted' | 'needed' | 'unavailable';
   /** The codec of each A2DP device the Bluetooth stack reported, by upper-case address. */
   bluetoothCodecs?: Record<string, AndroidBluetoothCodec>;
+  /** The Bluetooth codec priority list (ADR 0052): the phone's codecs and what each connected headset supports. */
+  bluetoothCodecChoices?: AndroidBluetoothCodecChoices;
   /** The USB exclusive output (ADR 0047). */
   exclusive?: AndroidUsbExclusiveStatus | null;
+}
+
+export interface AndroidBluetoothCodecChoices {
+  /** The codecs this phone can encode (last known when no headset reported them), in the stack's order. */
+  local: Array<{ key: string; name: string }>;
+  /** Per upper-case headset address: the codec in use, the keys the headset supports, a recent failure text. */
+  devices: Record<string, { active: string | null; supported: string[]; error?: string }>;
 }
 
 /** The codec a Bluetooth headset streams with (from the stack's codec broadcast). */
@@ -1315,6 +1324,22 @@ interface IpcContract {
   settings_set_android_bluetooth_rate_follow: {
     args: { enabled: boolean };
     result: boolean;
+  };
+  settings_get_android_bluetooth_codec_custom: {
+    args: Record<string, never>;
+    result: boolean;
+  };
+  settings_set_android_bluetooth_codec_custom: {
+    args: { enabled: boolean };
+    result: boolean;
+  };
+  settings_get_android_bluetooth_codec_order: {
+    args: Record<string, never>;
+    result: string[];
+  };
+  settings_set_android_bluetooth_codec_order: {
+    args: { order: string[] };
+    result: string[];
   };
   android_request_usb_exclusive_permission: {
     args: { productName: string | null };

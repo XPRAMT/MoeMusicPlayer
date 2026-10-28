@@ -7,7 +7,11 @@
     AndroidMixerRateSourceStatus,
     AndroidOutputDevice,
   } from './ipc';
-  import { DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW, DEFAULT_ANDROID_USB_EXCLUSIVE } from './android-output-devices.js';
+  import {
+    DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM,
+    DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW,
+    DEFAULT_ANDROID_USB_EXCLUSIVE,
+  } from './android-output-devices.js';
 
   const s = $state({
     /** The choice in settings.json (null: the system default). */
@@ -29,6 +33,13 @@
     busy: false,
     failure: null as string | null,
   });
+  /** The Bluetooth codec priority list (ADR 0052): the switch and the one stored order, shared like the list. */
+  const btCodec = $state({
+    custom: DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM,
+    order: [] as string[],
+    busy: false,
+    failure: null as string | null,
+  });
   /** The sources of the real mixer rate (ADR 0048), shared like the list; null until read. */
   const mixerSource = $state({ status: null as AndroidMixerRateSourceStatus | null });
   const liveInstances = new Set<symbol>();
@@ -47,11 +58,19 @@
   import {
     androidOutputHeader,
     androidOutputModes,
+    bluetoothCodecNotice,
+    bluetoothCodecSection,
     bluetoothRateNotice,
     buildAndroidRows,
+    buildCodecRows,
+    moveCodecInOrder,
+    pickCodecDevice,
     sameChoice,
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
+  import { exceedsLongPressSlop, longPressDragGuard } from './long-press-reorder.js';
+  import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './queue-reorder.js';
+  import { trackColumnDropIndexFromPointer } from './track-columns.js';
   import { mixerRateEntryVisible, mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
 
   interface Props {
@@ -99,16 +118,20 @@
       return;
     }
     try {
-      const [saved, status, exclusiveOn, rateFollowOn] = await Promise.all([
+      const [saved, status, exclusiveOn, rateFollowOn, codecCustom, codecOrder] = await Promise.all([
         invokeCommand('settings_get_android_output_device', {}),
         invokeCommand('android_audio_output_status', {}),
         invokeCommand('settings_get_android_usb_exclusive', {}),
         invokeCommand('settings_get_android_bluetooth_rate_follow', {}),
+        invokeCommand('settings_get_android_bluetooth_codec_custom', {}),
+        invokeCommand('settings_get_android_bluetooth_codec_order', {}),
       ]);
       if (disposed) return;
       s.saved = saved;
       usbExclusive.enabled = exclusiveOn;
       btRate.enabled = rateFollowOn;
+      btCodec.custom = codecCustom;
+      btCodec.order = codecOrder;
       s.status = status;
       s.failure = null;
       s.loaded = true;
@@ -157,6 +180,140 @@
   }
 
   let btRateNotice = $derived(bluetoothRateNotice(btRate.enabled, mixerSource.status));
+
+  // ---- Bluetooth codec priority list (ADR 0052): a switch and a list the user reorders by long-press drag (the same
+  // gesture as 設定 → 曲目欄位). The order is one list for every headset; with the switch off it is still editable and
+  // stored but nothing is applied to the headset. Without root or an authorized Shizuku only a notice is shown. ----
+  let codecSection = $derived(bluetoothCodecSection(mixerSource.status, s.status?.bluetoothCodecChoices));
+  let codecDevice = $derived(pickCodecDevice(s.status));
+  let codecRows = $derived(buildCodecRows(s.status?.bluetoothCodecChoices?.local ?? [], btCodec.order, codecDevice));
+
+  async function setBluetoothCodecCustom(enabled: boolean): Promise<void> {
+    if (!isTauri() || btCodec.busy) return;
+    btCodec.busy = true;
+    btCodec.failure = null;
+    try {
+      btCodec.custom = await invokeCommand('settings_set_android_bluetooth_codec_custom', { enabled });
+    } catch (error) {
+      btCodec.failure = getErrorText(error);
+    } finally {
+      btCodec.busy = false;
+      void refreshStatus();
+      setTimeout(() => void refreshStatus(), 3500);
+    }
+  }
+
+  let codecSaveQueue: Promise<void> = Promise.resolve();
+
+  function saveCodecOrder(order: string[]): void {
+    if (!isTauri()) return;
+    const previous = btCodec.order;
+    btCodec.order = order;
+    btCodec.failure = null;
+    codecSaveQueue = codecSaveQueue.catch(() => undefined).then(async () => {
+      try {
+        btCodec.order = await invokeCommand('settings_set_android_bluetooth_codec_order', { order });
+      } catch (error) {
+        btCodec.order = previous;
+        btCodec.failure = getErrorText(error);
+      }
+      void refreshStatus();
+      setTimeout(() => void refreshStatus(), 3500);
+    });
+  }
+
+  function moveCodec(from: number, to: number): void {
+    const local = s.status?.bluetoothCodecChoices?.local ?? [];
+    const next = moveCodecInOrder(btCodec.order, local, codecRows.map((row) => row.key), from, to);
+    if (next.join() !== btCodec.order.join()) saveCodecOrder(next);
+  }
+
+  let codecDrag = $state<{ pointerId: number; fromIndex: number; toIndex: number } | null>(null);
+  let codecPending: { pointerId: number; fromIndex: number; startX: number; startY: number } | null = null;
+  let codecTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearCodecTimer(): void {
+    if (codecTimer !== null) clearTimeout(codecTimer);
+    codecTimer = null;
+  }
+
+  function codecPointerDown(event: PointerEvent, index: number): void {
+    if (event.button !== 0) return;
+    clearCodecTimer();
+    codecPending = { pointerId: event.pointerId, fromIndex: index, startX: event.clientX, startY: event.clientY };
+    const target = event.currentTarget as HTMLElement;
+    codecTimer = setTimeout(() => {
+      const pending = codecPending;
+      if (!pending || pending.pointerId !== event.pointerId) return;
+      codecPending = null;
+      codecDrag = { pointerId: pending.pointerId, fromIndex: pending.fromIndex, toIndex: pending.fromIndex };
+      try {
+        target.setPointerCapture(pending.pointerId);
+      } catch {
+        // The pointer may have ended while the long-press callback was queued.
+      }
+    }, QUEUE_REORDER_LONG_PRESS_MS);
+  }
+
+  function codecPointerMove(event: PointerEvent): void {
+    const pending = codecPending;
+    if (pending?.pointerId === event.pointerId && !codecDrag) {
+      if (exceedsLongPressSlop(event.clientX - pending.startX, event.clientY - pending.startY, QUEUE_REORDER_MOVE_CANCEL_PX)) {
+        clearCodecTimer();
+        codecPending = null;
+      }
+      return;
+    }
+    const drag = codecDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const list = (event.currentTarget as HTMLElement).closest<HTMLOListElement>('.bluetooth-codec-list');
+    const rowElements = list ? [...list.querySelectorAll<HTMLElement>('[data-codec-index]')] : [];
+    if (rowElements.length === 0) return;
+    const centers = rowElements.map((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+    const destination = trackColumnDropIndexFromPointer(event.clientY, centers, drag.fromIndex);
+    if (destination !== drag.toIndex) codecDrag = { ...drag, toIndex: destination };
+  }
+
+  function codecPointerUp(event: PointerEvent): void {
+    if (codecPending?.pointerId === event.pointerId) {
+      clearCodecTimer();
+      codecPending = null;
+    }
+    const drag = codecDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    try {
+      (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already have been released.
+    }
+    codecDrag = null;
+    if (drag.fromIndex !== drag.toIndex) moveCodec(drag.fromIndex, drag.toIndex);
+  }
+
+  function codecPointerCancel(event: PointerEvent): void {
+    if (codecPending?.pointerId === event.pointerId || codecDrag?.pointerId === event.pointerId) {
+      clearCodecTimer();
+      codecPending = null;
+      codecDrag = null;
+    }
+  }
+
+  function codecKeydown(event: KeyboardEvent, index: number): void {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const to = index + (event.key === 'ArrowUp' ? -1 : 1);
+    if (to < 0 || to >= codecRows.length) return;
+    moveCodec(index, to);
+    const list = (event.currentTarget as HTMLElement).closest('.bluetooth-codec-list');
+    // Keep the keyboard on the moved row once the new order is drawn.
+    setTimeout(() => list?.querySelectorAll<HTMLElement>('[data-codec-index]')[to]?.focus(), 0);
+  }
 
   // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Both buttons save at once; there is no panel of ours. In
   // 獨佔 the playback service asks Android's USB permission dialog by itself whenever the USB audio device the choice plays
@@ -453,6 +610,60 @@
 {/if}
 {#if btRate.failure}<p class="source-error-message" role="alert">{btRate.failure}</p>{/if}
 
+{#if codecSection === 'notice'}
+  <p class="mixer-source-line">
+    {bluetoothCodecNotice()}
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
+  </p>
+{:else}
+  <label class="bluetooth-rate-follow">
+    <input
+      type="checkbox"
+      checked={btCodec.custom}
+      disabled={btCodec.busy}
+      onchange={(event) => void setBluetoothCodecCustom(event.currentTarget.checked)}
+    />
+    <span>
+      <strong>{tr('自訂藍牙編碼順序')}</strong>
+      <small>{tr('連線與調整順序時，依下列順序使用耳機支援的第一個編碼；關閉時只記住順序，不會切換耳機的編碼。')}</small>
+    </span>
+  </label>
+  {#if codecSection === 'connect'}
+    <p class="mixer-source-line">{tr('連接藍牙耳機後可選擇編碼')}</p>
+  {:else}
+    <ol class="track-column-settings bluetooth-codec-list" use:longPressDragGuard={() => codecDrag !== null} aria-label={tr('藍牙編碼順序')}>
+      {#each codecRows as row, index (row.key)}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+        <li
+          class="track-column-setting-row"
+          class:column-order-dragging={codecDrag?.fromIndex === index}
+          class:column-order-drop-before={codecDrag !== null && codecDrag.toIndex === index && codecDrag.fromIndex > index}
+          class:column-order-drop-after={codecDrag !== null && codecDrag.toIndex === index && codecDrag.fromIndex < index}
+          data-codec-index={index}
+          tabindex="0"
+          use:appTooltip={tr('長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵')}
+          onpointerdown={(event) => codecPointerDown(event, index)}
+          onpointermove={codecPointerMove}
+          onpointerup={codecPointerUp}
+          onpointercancel={codecPointerCancel}
+          onkeydown={(event) => codecKeydown(event, index)}
+        >
+          <span class="track-column-setting-label">
+            <span>{row.name}</span>
+            {#if row.active}<small class="bluetooth-codec-tag is-active">{tr('使用中')}</small>{/if}
+            {#if row.unsupported}<small class="bluetooth-codec-tag">{tr('此耳機不支援')}</small>{/if}
+          </span>
+          <div class="track-column-order-actions">
+            <span aria-label={tr('第 {0} 項', [index + 1])}>{index + 1}</span>
+          </div>
+        </li>
+      {/each}
+    </ol>
+    {#if codecDevice?.error}<p class="source-error-message" role="alert">{tr('無法切換藍牙編碼')}</p>{/if}
+  {/if}
+  {#if btCodec.failure}<p class="source-error-message" role="alert">{btCodec.failure}</p>{/if}
+{/if}
+
 
 <dialog
   bind:this={permissionDialog}
@@ -528,5 +739,19 @@
 
   .bluetooth-rate-follow small {
     opacity: 0.75;
+  }
+
+  .bluetooth-codec-list {
+    margin: 0 0 10px;
+  }
+
+  .bluetooth-codec-tag {
+    margin-left: 8px;
+    opacity: 0.7;
+  }
+
+  .bluetooth-codec-tag.is-active {
+    color: var(--accent-text);
+    opacity: 1;
   }
 </style>
