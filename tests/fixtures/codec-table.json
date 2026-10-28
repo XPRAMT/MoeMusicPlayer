@@ -1,0 +1,28 @@
+{
+  "codecs": [
+    {"name": "WVDSD", "label": "WVDSD", "rank": 6.5, "lossless": true, "group": "WVDSD"},
+    {"name": "WAV", "label": "WAV", "rank": 6, "lossless": true, "group": "WAV"},
+    {"name": "WAVE", "label": "WAV", "rank": 6, "lossless": true, "group": "WAV"},
+    {"name": "AIFF", "label": "WAV", "rank": 6, "lossless": true, "group": "WAV"},
+    {"name": "AIF", "label": "WAV", "rank": 6, "lossless": true, "group": "WAV"},
+    {"name": "AIFC", "label": "WAV", "rank": 6, "lossless": true, "group": "WAV"},
+    {"name": "PCM", "label": "WAV", "rank": 6, "lossless": true, "group": "WAV"},
+    {"name": "WVLL", "label": "WVLL", "rank": 5.5, "lossless": true, "group": "WVLL"},
+    {"name": "FLAC", "label": "FLAC", "rank": 5, "lossless": true, "group": "FLAC"},
+    {"name": "ALAC", "label": "ALAC", "rank": 4.8, "lossless": true, "group": "ALAC"},
+    {"name": "APE", "label": "APE", "rank": 4.7, "lossless": true, "group": "APE"},
+    {"name": "WVL", "label": "WVL", "rank": 4.5, "lossless": false, "group": "WVL"},
+    {"name": "VORBIS", "label": "VORBIS", "rank": 4, "lossless": false, "group": "VORBIS"},
+    {"name": "OGG VORBIS", "label": "VORBIS", "rank": 4, "lossless": false, "group": "VORBIS"},
+    {"name": "OPUS", "label": "OPUS", "rank": 3, "lossless": false, "group": "OPUS"},
+    {"name": "AAC", "label": "AAC", "rank": 2, "lossless": false, "group": "MP4"},
+    {"name": "MP4", "label": "AAC", "rank": 2, "lossless": false, "group": "MP4"},
+    {"name": "M4A", "label": "AAC", "rank": 2, "lossless": false, "group": "MP4"},
+    {"name": "MP4A", "label": "AAC", "rank": 2, "lossless": false, "group": "MP4"},
+    {"name": "MP3", "label": "MP3", "rank": 1, "lossless": false, "group": "MP3"},
+    {"name": "WV", "label": "WV", "rank": 0, "lossless": true, "group": "WV"},
+    {"name": "WAVPACK", "label": "WV", "rank": 0, "lossless": true, "group": "WV"},
+    {"name": "TAK", "label": "TAK", "rank": 0, "lossless": true, "group": "TAK"},
+    {"name": "TTA", "label": "TTA", "rank": 0, "lossless": true, "group": "TTA"}
+  ]
+}

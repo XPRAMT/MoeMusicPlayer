@@ -130,9 +130,58 @@ pub struct TagEdit {
     pub cover_options: CoverOptions,
 }
 
-/// DSF/DFF are read-only (ADR 0013 D10); the capability table decides.
+/// The formats whose tags are only shown (the capability table decides): DFF and Matroska.
 fn is_read_only_format(path: &Path) -> bool {
     !player_formats::tag_write_supported(path)
+}
+
+fn is_matroska(path: &Path) -> bool {
+    player_formats::format_of_path(path)
+        .is_some_and(|format| format.id == player_formats::FormatId::Matroska)
+}
+
+fn read_only_message(path: &Path) -> String {
+    if is_matroska(path) {
+        "Matroska 目前僅支援唯讀（ADR 0013）".to_owned()
+    } else {
+        "DFF 目前僅支援唯讀（ADR 0013 D10）".to_owned()
+    }
+}
+
+/// The scan reader's view of the file: the properties and the date the library shows (ADR 0040). `None` when it cannot
+/// read the file.
+fn shared_metadata(path: &Path) -> Option<player_track_metadata::TrackMetadata> {
+    player_track_metadata::read_track_metadata(&player_track_metadata::PathSource(path)).ok()
+}
+
+/// A Matroska file: nothing is written back, so the panel shows what the scan reader finds.
+fn fill_matroska_details(details: &mut TrackDetails, path: &Path) -> Result<(), String> {
+    let metadata = shared_metadata(path).ok_or_else(|| "讀取標籤失敗".to_owned())?;
+    details.format = "MKA".to_owned();
+    details.fields.title = metadata.title.unwrap_or_default();
+    details.fields.artist = metadata.artist.unwrap_or_default();
+    details.fields.album = metadata.album.unwrap_or_default();
+    details.fields.album_artist = metadata.album_artist.unwrap_or_default();
+    details.fields.track_number = metadata
+        .track_number
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    details.fields.disc_number = metadata
+        .disc_number
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    details.fields.date = metadata.release_date.unwrap_or_default();
+    let bitrate_kbps = metadata.bitrate_bps.map(|bps| bps / 1000);
+    details.properties = AudioProperties {
+        duration_ms: metadata.duration_ms.unwrap_or_default(),
+        overall_bitrate_kbps: bitrate_kbps,
+        audio_bitrate_kbps: bitrate_kbps,
+        sample_rate: metadata.sample_rate_hz,
+        bit_depth: metadata.bit_depth,
+        channels: None,
+    };
+    details.tag_format = "Matroska".to_owned();
+    Ok(())
 }
 
 fn id3v2_version(path: &Path) -> Option<u8> {
@@ -294,7 +343,10 @@ fn fill_wavpack_dsd_properties(properties: &mut AudioProperties, path: &Path) {
     if !info.dsd {
         return;
     }
-    let bit_rate_kbps = info.native_sample_rate.saturating_mul(u32::from(info.channels)) / 1000;
+    let bit_rate_kbps = info
+        .native_sample_rate
+        .saturating_mul(u32::from(info.channels))
+        / 1000;
     properties.sample_rate = Some(info.native_sample_rate);
     properties.bit_depth = Some(1);
     properties.overall_bitrate_kbps = Some(bit_rate_kbps);
@@ -368,11 +420,18 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
     }
     if is_read_only_format(path) {
         details.read_only = true;
-        details.read_only_reason = Some("DFF 目前僅支援唯讀（ADR 0013 D10）".into());
+        details.read_only_reason = Some(read_only_message(path));
+        if is_matroska(path) {
+            fill_matroska_details(&mut details, path)?;
+        }
         return Ok(details);
     }
     let file = lofty::read_from_path(path).map_err(|e| format!("讀取標籤失敗：{e}"))?;
+    let shared = shared_metadata(path);
     details.format = format_name(file.file_type(), path);
+    if shared.as_ref().and_then(|m| m.codec.as_deref()) == Some("ALAC") {
+        details.format = "ALAC".to_owned();
+    }
     let p = file.properties();
     details.properties = AudioProperties {
         duration_ms: p.duration().as_millis() as u64,
@@ -382,6 +441,10 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         bit_depth: p.bit_depth(),
         channels: p.channels(),
     };
+    // The bit depth is the one the library shows: the encoded depth of a lossless file, none for a lossy one.
+    if let Some(metadata) = &shared {
+        details.properties.bit_depth = metadata.bit_depth;
+    }
     if file.file_type() == FileType::WavPack {
         fill_wavpack_dsd_properties(&mut details.properties, path);
     }
@@ -399,6 +462,13 @@ pub fn read_details(path: &Path) -> Result<TrackDetails, String> {
         for (key, _, get_mut) in FIELD_KEYS.iter() {
             if let Some(value) = tag.get_string(effective_key(*key, tag.tag_type())) {
                 *get_mut(&mut details.fields) = value.to_owned();
+            }
+        }
+        // Lofty cuts a date written without zero padding (2024-2-9) to 2024-02; the scan reader keeps the day.
+        if let Some(full) = shared.as_ref().and_then(|m| m.release_date.as_deref()) {
+            let shown = &details.fields.date;
+            if !shown.is_empty() && full.len() > shown.len() && full.starts_with(shown.as_str()) {
+                details.fields.date = full.to_owned();
             }
         }
         let ape_cover = match front_cover(tag) {
@@ -497,7 +567,7 @@ fn same_to_file_system_resolution(a: SystemTime, b: SystemTime) -> bool {
 /// updated normally; on Windows its creation time is kept (see `replace_original`). On failure the original is untouched.
 pub fn write_edit(path: &Path, edit: &TagEdit) -> Result<TrackDetails, String> {
     if is_read_only_format(path) {
-        return Err("DFF 目前僅支援唯讀".into());
+        return Err(read_only_message(path));
     }
     let cover = match &edit.replace_cover {
         Some(bytes) => Some(prepare_cover(bytes, edit.cover_options)?),

@@ -14,12 +14,13 @@ use lofty::{
     probe::Probe,
     tag::{ItemKey, Tag},
 };
-use player_core::{TrackMetadata, TrackMetadataError};
+use player_core::TrackMetadataError;
 use symphonia::{
     core::{formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint},
     default::get_probe,
 };
 
+pub use player_core::TrackMetadata;
 pub use player_wavpack::ReadSeek;
 
 pub mod labels;
@@ -228,10 +229,18 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
                 FileType::Mp4 => {
                     let file = Mp4File::read_from(&mut reader, scan_parse_options())
                         .map_err(properties_error)?;
-                    if file.properties().codec() == Some(Mp4Codec::ALAC) {
-                        codec = labels::ALAC.to_owned();
-                        lossless_pcm_depth = file.properties().bit_depth();
+                    // The codec of the sample entry, not the container.
+                    codec = match file.properties().codec() {
+                        Some(Mp4Codec::AAC) => labels::AAC,
+                        Some(Mp4Codec::ALAC) => {
+                            lossless_pcm_depth = file.properties().bit_depth();
+                            labels::ALAC
+                        }
+                        Some(Mp4Codec::MP3) => labels::MP3,
+                        Some(Mp4Codec::FLAC) => labels::FLAC,
+                        _ => labels::MP4_UNKNOWN,
                     }
+                    .to_owned();
                     TaggedFile::from(file)
                 }
                 _ => {
@@ -239,7 +248,10 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
                         .map_err(properties_error)?;
                     let properties = file.properties();
                     if aiff_is_pcm(properties.compression_type()) {
+                        codec = labels::WAV.to_owned();
                         lossless_pcm_depth = u8::try_from(properties.sample_size()).ok();
+                    } else {
+                        codec = labels::AIFC.to_owned();
                     }
                     TaggedFile::from(file)
                 }
@@ -249,6 +261,11 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
             message: format!("could not parse audio metadata: {error}"),
         })?,
     };
+    if file_type == FileType::Wav {
+        if let Some(tag) = source.open().ok().and_then(read_wav_format_tag_from) {
+            codec = labels::wav_label(tag).to_owned();
+        }
+    }
     let wavpack = if file_type == FileType::WavPack {
         source
             .open()
@@ -466,7 +483,58 @@ pub fn read_lossless_wav_bit_depth(path: &Path) -> Option<u8> {
 }
 
 /// As [`read_lossless_wav_bit_depth`], for any seekable stream.
-pub fn read_lossless_wav_bit_depth_from(mut file: impl Read + Seek) -> Option<u8> {
+pub fn read_lossless_wav_bit_depth_from(file: impl Read + Seek) -> Option<u8> {
+    wav_bit_depth(&read_wav_fmt_chunk(file)?)
+}
+
+/// The effective format tag of a WAV file (an extensible file gives the tag of its sub-format), for its codec label.
+pub fn read_wav_format_tag_from(file: impl Read + Seek) -> Option<u16> {
+    wav_format_tag(&read_wav_fmt_chunk(file)?)
+}
+
+fn wav_format_tag(format: &[u8]) -> Option<u16> {
+    let tag = u16::from_le_bytes(format.get(0..2)?.try_into().ok()?);
+    if tag == 0xfffe && format.len() >= 40 {
+        return Some(u16::from_le_bytes(format.get(24..26)?.try_into().ok()?));
+    }
+    Some(tag)
+}
+
+fn wav_bit_depth(format: &[u8]) -> Option<u8> {
+    let format_tag = u16::from_le_bytes(format.get(0..2)?.try_into().ok()?);
+    let container_depth = u16::from_le_bytes(format.get(14..16)?.try_into().ok()?);
+    let depth = match format_tag {
+        0x0001 | 0x0003 => container_depth,
+        0xfffe if format.len() >= 40 => {
+            let extension_size = u16::from_le_bytes(format[16..18].try_into().ok()?);
+            if extension_size < 22 {
+                return None;
+            }
+            let valid_depth = u16::from_le_bytes(format[18..20].try_into().ok()?);
+            let sub_format = &format[24..40];
+            const PCM_GUID_TAIL: [u8; 12] = [0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
+            let subtype = u32::from_le_bytes(sub_format[..4].try_into().ok()?);
+            if !matches!(subtype, 1 | 3) || sub_format[4..] != PCM_GUID_TAIL {
+                return None;
+            }
+            if valid_depth == 0 {
+                container_depth
+            } else if valid_depth <= container_depth {
+                valid_depth
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    u8::try_from(depth)
+        .ok()
+        .filter(|depth| (8..=32).contains(depth))
+}
+
+/// The `fmt ` chunk of a WAV/RF64 file. The chunk walk is bounded: metadata parsing must never allocate according to an
+/// untrusted chunk length.
+fn read_wav_fmt_chunk(mut file: impl Read + Seek) -> Option<Vec<u8>> {
     let file_len = file.seek(SeekFrom::End(0)).ok()?;
     file.seek(SeekFrom::Start(0)).ok()?;
     let mut header = [0; 12];
@@ -484,8 +552,7 @@ pub fn read_lossless_wav_bit_depth_from(mut file: impl Read + Seek) -> Option<u8
     };
     let mut offset = 12_u64;
 
-    // WAV chunks have even-byte alignment. Bound both the number and size of inspected chunks;
-    // metadata parsing must never allocate according to an untrusted chunk length.
+    // WAV chunks have even-byte alignment.
     for _ in 0..256 {
         if offset.checked_add(8)? > riff_end {
             return None;
@@ -506,38 +573,10 @@ pub fn read_lossless_wav_bit_depth_from(mut file: impl Read + Seek) -> Option<u8
             }
             let mut format = vec![0; usize::try_from(chunk_size).ok()?];
             file.read_exact(&mut format).ok()?;
-            let format_tag = u16::from_le_bytes(format[0..2].try_into().ok()?);
-            let container_depth = u16::from_le_bytes(format[14..16].try_into().ok()?);
-            let depth = match format_tag {
-                0x0001 | 0x0003 => container_depth,
-                0xfffe if format.len() >= 40 => {
-                    let extension_size = u16::from_le_bytes(format[16..18].try_into().ok()?);
-                    if extension_size < 22 {
-                        return None;
-                    }
-                    let valid_depth = u16::from_le_bytes(format[18..20].try_into().ok()?);
-                    let sub_format = &format[24..40];
-                    const PCM_GUID_TAIL: [u8; 12] = [0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
-                    let subtype = u32::from_le_bytes(sub_format[..4].try_into().ok()?);
-                    if !matches!(subtype, 1 | 3) || sub_format[4..] != PCM_GUID_TAIL {
-                        return None;
-                    }
-                    if valid_depth == 0 {
-                        container_depth
-                    } else if valid_depth <= container_depth {
-                        valid_depth
-                    } else {
-                        return None;
-                    }
-                }
-                _ => return None,
-            };
-            return u8::try_from(depth)
-                .ok()
-                .filter(|depth| (8..=32).contains(depth));
+            return Some(format);
         }
 
-        // A valid WAV fmt chunk precedes the audio data. Don't scan into a large data region
+        // A valid WAV fmt chunk precedes the audio data. Do not scan into a large data region
         // looking for bytes that happen to resemble another chunk.
         if &chunk_header[..4] == b"data" {
             return None;
@@ -722,20 +761,44 @@ fn read_matroska_audio_metadata(
         })
     };
     let bitrate_bps = matroska_bitrate_bps(&container_tags, &symphonia_tags);
+    let is_pcm = {
+        use symphonia::core::codecs::{
+            CODEC_TYPE_PCM_F32BE, CODEC_TYPE_PCM_F32LE, CODEC_TYPE_PCM_F64BE, CODEC_TYPE_PCM_F64LE,
+            CODEC_TYPE_PCM_S16BE, CODEC_TYPE_PCM_S16LE, CODEC_TYPE_PCM_S24BE, CODEC_TYPE_PCM_S24LE,
+            CODEC_TYPE_PCM_S32BE, CODEC_TYPE_PCM_S32LE, CODEC_TYPE_PCM_S8, CODEC_TYPE_PCM_U8,
+        };
+        [
+            CODEC_TYPE_PCM_F32BE,
+            CODEC_TYPE_PCM_F32LE,
+            CODEC_TYPE_PCM_F64BE,
+            CODEC_TYPE_PCM_F64LE,
+            CODEC_TYPE_PCM_S16BE,
+            CODEC_TYPE_PCM_S16LE,
+            CODEC_TYPE_PCM_S24BE,
+            CODEC_TYPE_PCM_S24LE,
+            CODEC_TYPE_PCM_S32BE,
+            CODEC_TYPE_PCM_S32LE,
+            CODEC_TYPE_PCM_S8,
+            CODEC_TYPE_PCM_U8,
+        ]
+        .contains(&params.codec)
+    };
     let codec = if params.codec == CODEC_TYPE_AAC {
-        "AAC"
+        labels::AAC
     } else if params.codec == CODEC_TYPE_ALAC {
-        "ALAC"
+        labels::ALAC
     } else if params.codec == CODEC_TYPE_FLAC {
-        "FLAC"
+        labels::FLAC
     } else if params.codec == CODEC_TYPE_MP3 {
-        "MP3"
+        labels::MP3
     } else if params.codec == CODEC_TYPE_OPUS {
-        "Opus"
+        labels::OPUS
     } else if params.codec == CODEC_TYPE_VORBIS {
-        "Vorbis"
+        labels::VORBIS
+    } else if is_pcm {
+        labels::WAV
     } else {
-        "Matroska audio"
+        labels::MATROSKA_AUDIO
     };
     let duration_ms = params
         .time_base
@@ -786,7 +849,7 @@ fn read_matroska_audio_metadata(
         sample_rate_hz: params.sample_rate,
         release_date,
         year,
-        bit_depth: if matches!(codec, "FLAC" | "ALAC" | "Matroska audio") {
+        bit_depth: if matches!(codec, "FLAC" | "ALAC" | "WAV" | "Matroska audio") {
             params
                 .bits_per_sample
                 .and_then(|value| u8::try_from(value).ok())

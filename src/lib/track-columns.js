@@ -202,6 +202,7 @@ const LOSSLESS_CODECS = new Set([
   'WAVE',
   'AIFF',
   'AIF',
+  'AIFC',
   'ALAC',
   'APE',
   'WV',

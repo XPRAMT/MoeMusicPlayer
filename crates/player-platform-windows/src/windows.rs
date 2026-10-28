@@ -1679,7 +1679,7 @@ mod tests {
             .expect("OGG Vorbis metadata");
         assert_eq!(metadata.title.as_deref(), Some("Ogg test title"));
         assert_eq!(metadata.artist.as_deref(), Some("Ogg test artist"));
-        assert_eq!(metadata.codec.as_deref(), Some("Vorbis"));
+        assert_eq!(metadata.codec.as_deref(), Some("VORBIS"));
         assert_eq!(metadata.sample_rate_hz, Some(24_000));
         assert_eq!(metadata.duration_ms, Some(500));
     }

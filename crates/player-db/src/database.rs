@@ -407,18 +407,12 @@ fn playlist_order_by(sort: PlaylistListSort, direction: &str) -> String {
 }
 
 fn audio_format_order_by(direction: &str, tie_breaker: &str) -> String {
-    // Keep one quality ordering for library and playlist views. Normalize older codec labels.
+    // One quality ordering for library and playlist views, from the codec table of `player-formats` (the codec names the
+    // encoding, never the container). Older codec labels are normalised by the table's aliases.
+    let rank = player_formats::codec::rank_case_sql("t.codec");
+    let lossless = player_formats::codec::lossless_in_list_sql();
     format!(
-        "CASE TRIM(UPPER(COALESCE(t.codec, ''))) \
-         WHEN 'WVDSD' THEN 6.5 WHEN 'WAV' THEN 6 WHEN 'WAVE' THEN 6 WHEN 'WVLL' THEN 5.5 WHEN 'FLAC' THEN 5 WHEN 'WVL' THEN 4.5 \
-         WHEN 'VORBIS' THEN 4 WHEN 'OGG VORBIS' THEN 4 WHEN 'OPUS' THEN 3 \
-         WHEN 'MP4' THEN 2 WHEN 'M4A' THEN 2 WHEN 'AAC' THEN 2 WHEN 'MP4A' THEN 2 WHEN 'MP3' THEN 1 \
-         ELSE CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) LIKE 'DSD%' THEN 7 ELSE 0 END END {direction}, \
-         {MUSIC_FORMAT_FUNCTION}(t.codec) {direction}, \
-         COALESCE(t.sample_rate_hz, 0) {direction}, \
-         CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ('WAV','WAVE','FLAC','AIFF','AIF','ALAC','APE','WV','WAVPACK','WVLL','WVDSD','PCM','TAK','TTA') \
-              THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction}, \
-         {tie_breaker} ASC"
+        "{rank} {direction},          {MUSIC_FORMAT_FUNCTION}(t.codec) {direction},          COALESCE(t.sample_rate_hz, 0) {direction},          CASE WHEN TRIM(UPPER(COALESCE(t.codec, ''))) IN ({lossless})               THEN COALESCE(t.bit_depth, 0) ELSE COALESCE(t.bitrate_bps, 0) END {direction},          {tie_breaker} ASC"
     )
 }
 
@@ -1165,14 +1159,10 @@ pub fn year_group_label(value: Option<&str>) -> String {
 /// `MP4`, the name the scanner writes; a track with no codec is in the unknown group.
 pub fn format_group_label(codec: Option<&str>) -> String {
     let name = codec.unwrap_or_default().trim().to_ascii_uppercase();
-    match name.as_str() {
-        "" => UNKNOWN_GROUP_LABEL.to_owned(),
-        "WAVE" => "WAV".to_owned(),
-        "OGG VORBIS" => "VORBIS".to_owned(),
-        "M4A" | "AAC" | "MP4A" => "MP4".to_owned(),
-        _ if name.starts_with("DSD") => "DSD".to_owned(),
-        _ => name,
+    if name.is_empty() {
+        return UNKNOWN_GROUP_LABEL.to_owned();
     }
+    player_formats::codec::codec_group(&name).map_or(name, str::to_owned)
 }
 
 /// What a quick-index grouping is made of: the first character of a name, a year, the year an item was added or the
@@ -12251,6 +12241,56 @@ mod tests {
             )
             .expect("album modified groups");
         assert!(!album_modified.labels.is_empty());
+    }
+
+    #[test]
+    fn the_quality_order_ranks_codecs_not_containers() {
+        let codecs = [
+            Some("AIFF"),
+            Some("ALAC"),
+            Some("APE"),
+            Some("WVL"),
+            Some("Vorbis"),
+            Some("OPUS"),
+            Some("AAC"),
+            Some("Mp4"),
+            Some("MP3"),
+            Some("WAV"),
+            Some("FLAC"),
+            Some("WVLL"),
+            Some("WVDSD"),
+            Some("DSD64"),
+        ];
+        let tracks: Vec<_> = codecs
+            .iter()
+            .map(|codec| (Some("2001"), Some(2001), *codec, None))
+            .collect();
+        let (db, _) = grouping_library("codec-order", &tracks);
+        let request = TrackListSort {
+            field: TrackSortField::AudioFormat,
+            direction: TrackSortDirection::Asc,
+        };
+        let page = db
+            .quick_index_for_tracks(
+                LibrarySourceScope::All,
+                &ListTracksQuery {
+                    offset: 0,
+                    limit: 100,
+                    query: None,
+                    field_filter: None,
+                    sort: request,
+                },
+                &[],
+            )
+            .expect("groups");
+        // Low to high: MP3, AAC (Mp4 too), Opus, Vorbis, WVL, APE, ALAC, FLAC, WVLL, WAV (AIFF too), WVDSD, DSD.
+        assert_eq!(
+            page.labels,
+            [
+                "MP3", "MP4", "OPUS", "VORBIS", "WVL", "APE", "ALAC", "FLAC", "WVLL", "WAV",
+                "WVDSD", "DSD"
+            ]
+        );
     }
 
     #[test]

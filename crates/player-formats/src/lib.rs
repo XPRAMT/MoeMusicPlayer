@@ -9,6 +9,8 @@
 
 use std::path::Path;
 
+pub mod codec;
+
 /// A container/codec family the player knows by name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FormatId {
@@ -165,7 +167,7 @@ const FORMATS: &[FormatInfo] = &[
     ),
     info(FormatId::Opus, "OPUS", true, true, &["audio/opus"]),
     info(FormatId::Speex, "SPEEX", true, true, &[]),
-    info(FormatId::Matroska, "MKA", true, true, &[]),
+    info(FormatId::Matroska, "MKA", false, true, &[]),
     info(FormatId::Ape, "APE", true, true, &[]),
     info(FormatId::WavPack, "WV", true, true, &[]),
     info(FormatId::Mpc, "MPC", true, true, &[]),
@@ -177,11 +179,11 @@ const FORMATS: &[FormatInfo] = &[
         &["audio/x-dsf", "audio/dsf"],
     ),
     info(FormatId::Dff, "DFF", false, false, &[]),
-    info(FormatId::Ac3, "AC3", true, true, &[]),
-    info(FormatId::Amr, "AMR", true, true, &[]),
-    info(FormatId::Midi, "MIDI", true, true, &[]),
-    info(FormatId::Wma, "WMA", true, true, &[]),
-    info(FormatId::Caf, "CAF", true, true, &[]),
+    info(FormatId::Ac3, "AC3", false, true, &[]),
+    info(FormatId::Amr, "AMR", false, true, &[]),
+    info(FormatId::Midi, "MIDI", false, true, &[]),
+    info(FormatId::Wma, "WMA", false, true, &[]),
+    info(FormatId::Caf, "CAF", false, true, &[]),
 ];
 
 /// One file extension and where it is accepted.
@@ -253,23 +255,23 @@ const EXTENSIONS: &[ExtensionEntry] = &[
     ext("ogg", Ogg, true, true, true),
     ext("oga", Ogg, true, true, true),
     ext("opus", Opus, true, true, false),
-    ext("spx", Speex, true, true, false),
+    ext("spx", Speex, false, false, false),
     ext("mka", Matroska, true, true, true),
     video("mkv", Matroska, true),
     video("webm", Matroska, true),
-    ext("ape", Ape, true, true, false),
+    ext("ape", Ape, false, false, false),
     ext("wv", WavPack, true, true, true),
-    ext("mpc", Mpc, true, false, false),
-    ext("mp+", Mpc, true, false, false),
-    ext("mpp", Mpc, true, false, false),
+    ext("mpc", Mpc, false, false, false),
+    ext("mp+", Mpc, false, false, false),
+    ext("mpp", Mpc, false, false, false),
     ext("dsf", Dsf, true, true, true),
-    ext("dff", Dff, false, true, false),
+    ext("dff", Dff, false, false, false),
     ext("ac3", Ac3, false, true, false),
     ext("amr", Amr, false, true, false),
-    ext("mid", Midi, false, true, false),
-    ext("midi", Midi, false, true, false),
-    ext("wma", Wma, false, true, false),
-    ext("caf", Caf, false, false, true),
+    ext("mid", Midi, false, false, false),
+    ext("midi", Midi, false, false, false),
+    ext("wma", Wma, false, false, false),
+    ext("caf", Caf, false, false, false),
 ];
 
 fn extension_of(path: &Path) -> Option<&str> {
@@ -425,24 +427,23 @@ mod tests {
         }
     }
 
-    /// Previously lofty's `EXTENSIONS` plus `mka`/`oga`, minus `mp4`; `dsf` since the DSD converter (ADR 0016).
+    /// What both the tag reader and a decoder handle (ADR 0050): no `ape`, `spx`, `mpc` (no decoder on Windows).
     #[test]
     fn windows_library_set_is_unchanged() {
         let expected = [
-            "aac", "ape", "aiff", "aif", "afc", "aifc", "mp3", "mp2", "mp1", "wav", "wv", "opus",
-            "flac", "ogg", "m4a", "m4b", "m4p", "m4r", "m4v", "3gp", "mpc", "mp+", "mpp", "spx",
-            "mka", "oga", "dsf",
+            "aac", "aiff", "aif", "afc", "aifc", "mp3", "mp2", "mp1", "wav", "wv", "opus", "flac",
+            "ogg", "m4a", "m4b", "m4p", "m4r", "m4v", "3gp", "mka", "oga", "dsf",
         ]
         .map(|extension| format!(".{extension}"));
         assert_eq!(set(windows_library_extensions()), set(expected));
     }
 
-    /// Previously `fs_scan::AUDIO_EXTENSIONS`, plus `wv` since WavPack playback on Android (ADR 0025).
+    /// What both the tag reader and Media3 or a converter handle (ADR 0050): no `ape`, `spx`, `dff`, `wma`, `mid`.
     #[test]
     fn android_library_set_is_unchanged() {
         let expected = [
-            "aac", "ac3", "aif", "aiff", "alac", "amr", "ape", "dff", "dsf", "flac", "m4a", "m4b",
-            "mid", "midi", "mka", "mp3", "oga", "ogg", "opus", "spx", "wav", "wave", "wma", "wv",
+            "aac", "ac3", "aif", "aiff", "alac", "amr", "dsf", "flac", "m4a", "m4b", "mka", "mp3",
+            "oga", "ogg", "opus", "wav", "wave", "wv",
         ];
         assert_eq!(set(android_library_extensions()), set(expected));
     }
@@ -460,7 +461,7 @@ mod tests {
     fn open_dialog_set_is_unchanged() {
         let expected = [
             "mp3", "flac", "m4a", "mp4", "aac", "alac", "ogg", "oga", "wav", "wave", "aif", "aiff",
-            "mka", "mkv", "webm", "caf", "dsf", "wv",
+            "mka", "mkv", "webm", "dsf", "wv",
         ];
         assert_eq!(set(open_dialog_extensions()), set(expected));
     }
