@@ -167,9 +167,15 @@ const FORMATS: &[FormatInfo] = &[
     ),
     info(FormatId::Opus, "OPUS", true, true, &["audio/opus"]),
     info(FormatId::Speex, "SPEEX", true, true, &[]),
-    info(FormatId::Matroska, "MKA", false, true, &[]),
+    info(
+        FormatId::Matroska,
+        "MKA",
+        false,
+        true,
+        &["audio/x-matroska", "audio/matroska"],
+    ),
     info(FormatId::Ape, "APE", true, true, &[]),
-    info(FormatId::WavPack, "WV", true, true, &[]),
+    info(FormatId::WavPack, "WV", true, true, &["audio/x-wavpack"]),
     info(FormatId::Mpc, "MPC", true, true, &[]),
     info(
         FormatId::Dsf,
@@ -179,8 +185,8 @@ const FORMATS: &[FormatInfo] = &[
         &["audio/x-dsf", "audio/dsf"],
     ),
     info(FormatId::Dff, "DFF", false, false, &[]),
-    info(FormatId::Ac3, "AC3", false, true, &[]),
-    info(FormatId::Amr, "AMR", false, true, &[]),
+    info(FormatId::Ac3, "AC3", false, true, &["audio/ac3"]),
+    info(FormatId::Amr, "AMR", false, true, &["audio/amr"]),
     info(FormatId::Midi, "MIDI", false, true, &[]),
     info(FormatId::Wma, "WMA", false, true, &[]),
     info(FormatId::Caf, "CAF", false, true, &[]),
@@ -346,6 +352,26 @@ pub fn android_candidate_extensions() -> Vec<&'static str> {
         .filter(|entry| entry.android_library || (entry.video && entry.extension == "mp4"))
         .map(|entry| entry.extension)
         .collect()
+}
+
+/// The MIME types of the formats Android's library accepts, in table order: the types the app declares to the system
+/// as ones it can open (the intent filters of the manifest, ADR 0054).
+pub fn android_open_mime_types() -> Vec<&'static str> {
+    let mut types: Vec<&'static str> = Vec::new();
+    for format in FORMATS {
+        if !EXTENSIONS
+            .iter()
+            .any(|entry| entry.format == format.id && entry.android_library)
+        {
+            continue;
+        }
+        for mime in format.mime_types {
+            if !types.contains(mime) {
+                types.push(mime);
+            }
+        }
+    }
+    types
 }
 
 /// Extensions offered by the Windows "open audio file" dialog (no dot).
@@ -534,6 +560,23 @@ mod tests {
         assert_eq!(extension_for_mime("audio/x-wav"), Some("wav"));
         assert_eq!(extension_for_mime("audio/x-dsf"), Some("dsf"));
         assert_eq!(extension_for_mime("audio/opus"), Some("opus"));
+        assert_eq!(extension_for_mime("audio/x-wavpack"), Some("wv"));
+        assert_eq!(extension_for_mime("audio/x-matroska"), Some("mka"));
         assert_eq!(extension_for_mime("audio/x-unknown"), None);
+    }
+
+    #[test]
+    fn android_open_types_are_the_library_formats_mime_types() {
+        let types = android_open_mime_types();
+        for expected in ["audio/flac", "audio/x-wavpack", "audio/x-dsf", "audio/opus", "audio/mpeg"] {
+            assert!(types.contains(&expected), "{expected}");
+        }
+        for mime in &types {
+            let extension = extension_for_mime(mime).expect("a type with an extension");
+            assert!(
+                is_android_library_audio(Path::new(&format!("a.{extension}"))),
+                "{mime}"
+            );
+        }
     }
 }

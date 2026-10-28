@@ -150,6 +150,111 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         Thread(runnable, "moe-media-index").apply { isDaemon = true }
     }
 
+    // A file another app opened with this one (ADR 0054). The intent that started the activity is read here, before the
+    // page asks; a later `ACTION_VIEW` arrives in `onNewIntent` (the activity is `singleTask`).
+    private val externalOpenInbox = ExternalOpenInbox()
+    private var externalOpenWebView: WebView? = null
+
+    init {
+        externalOpenInbox.offer(incomingOf(activity.intent))
+    }
+
+    override fun load(webView: WebView) {
+        super.load(webView)
+        externalOpenWebView = webView
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val incoming = incomingOf(intent) ?: return
+        externalOpenInbox.offer(incoming)
+        // The page takes the request (`externalOpenTake`); this only tells a running page that there is one.
+        val view = externalOpenWebView ?: return
+        view.post {
+            view.evaluateJavascript("window.dispatchEvent(new CustomEvent('moe:android-external-open'));", null)
+        }
+    }
+
+    private fun incomingOf(intent: Intent?): ExternalOpenRules.Incoming? =
+        intent?.let { ExternalOpenRules.incomingOf(it.action, it.dataString, it.type, it.flags) }
+
+    /** Whether an opened file is waiting (read when the start page is decided, so a remembered page does not cover it). */
+    @Command
+    fun externalOpenPending(invoke: Invoke) {
+        invoke.resolve(JSObject().put("pending", externalOpenInbox.hasPending()))
+    }
+
+    /**
+     * Takes the waiting request and resolves it to something Rust can play: the real file path when there is one and it can
+     * be read, else a private copy in the cache (a file of another app's provider, or no storage access). `copied` tells
+     * the two apart: a copy has no folder worth listing.
+     */
+    @Command
+    fun externalOpenTake(invoke: Invoke) {
+        val incoming = externalOpenInbox.take()
+        if (incoming == null) {
+            invoke.resolve(JSObject().put("pending", false))
+            return
+        }
+        io.execute {
+            try {
+                invoke.resolve(resolveExternalOpen(incoming))
+            } catch (error: Exception) {
+                Log.i(LOG_TAG, "could not open ${incoming.uri}: $error")
+                invoke.resolve(
+                    JSObject().put("pending", true).put("path", JSONObject.NULL)
+                        .put("error", error.message ?: error.javaClass.simpleName),
+                )
+            }
+        }
+    }
+
+    private fun resolveExternalOpen(incoming: ExternalOpenRules.Incoming): JSObject {
+        val uri = Uri.parse(incoming.uri)
+        val queriedName = if (uri.scheme == "content") runCatching { queryDisplayName(uri) }.getOrNull() else null
+        val displayName = queriedName ?: ExternalOpenRules.pathOfFileUri(incoming.uri)?.substringAfterLast('/')
+        val realPath = realPathOfExternalOpen(uri, incoming.uri)
+        if (realPath != null) {
+            return JSObject().put("pending", true).put("path", realPath).put("copied", false)
+                .put("displayName", displayName ?: JSONObject.NULL)
+        }
+        val copy = copyExternalOpen(uri, ExternalOpenRules.copyName(displayName, incoming.mimeType))
+        return JSObject().put("pending", true).put("path", copy.absolutePath).put("copied", true)
+            .put("displayName", displayName ?: JSONObject.NULL)
+    }
+
+    /** The readable real file behind the URI, or null (then the bytes are copied). */
+    private fun realPathOfExternalOpen(uri: Uri, text: String): String? {
+        val candidates = ArrayList<String>(3)
+        ExternalOpenRules.pathOfFileUri(text)?.let(candidates::add)
+        if (uri.scheme == "content") {
+            ExternalOpenRules.pathOfDocument(uri.authority, ExternalOpenRules.documentIdOf(text))?.let(candidates::add)
+            runCatching { documentPathFor(uri) }.getOrNull()?.let(candidates::add)
+        }
+        for (candidate in candidates) {
+            val file = File(candidate)
+            if (file.isFile && file.canRead()) return file.absolutePath
+        }
+        return null
+    }
+
+    private fun copyExternalOpen(uri: Uri, name: String): File {
+        val directory = File(appContext.cacheDir, EXTERNAL_OPEN_DIRECTORY)
+        // Only the file being played is kept: a new request clears the old copy.
+        directory.listFiles()?.forEach { it.delete() }
+        if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Could not create the cache folder")
+        val target = File(directory, name)
+        try {
+            (resolver.openInputStream(uri) ?: throw IOException("The file cannot be read")).use { input ->
+                FileOutputStream(target).use { output -> input.copyTo(output, COPY_BUFFER_SIZE) }
+            }
+        } catch (error: Exception) {
+            target.delete()
+            throw error
+        }
+        return target
+    }
+
     @Command
     fun openOfficialUrl(invoke: Invoke) {
         val value = invoke.parseArgs(OfficialUrlArgs::class.java).url
@@ -1846,7 +1951,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
 
         // Mirrors player-formats::android_candidate_extensions(); the test
         // plugins/tauri-plugin-media-index/tests/kotlin_extension_list.rs fails when the two drift.
-        private val AUDIO_EXTENSIONS = setOf(
+        internal val AUDIO_EXTENSIONS = setOf(
             "aac", "ac3", "aif", "aiff", "alac", "amr", "dsf", "flac", "m4a", "m4b", "mka",
             "mp3", "mp4", "oga", "ogg", "opus", "wav", "wave", "wv",
         )
@@ -1855,6 +1960,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         private const val MAX_ARTWORK_BYTES = 32L * 1024 * 1024
         private const val TAG = "MoeMediaIndex"
         private const val CLIPBOARD_SHARE_DIRECTORY = "clipboard-share"
+        private const val EXTERNAL_OPEN_DIRECTORY = "external-open"
         private const val MAX_PLAYLIST_BYTES = 32L * 1024 * 1024
         private const val MAX_LYRICS_BYTES = 2L * 1024 * 1024
         private const val MAX_TOTAL_LEASE_BYTES = 512L * 1024 * 1024
