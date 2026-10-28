@@ -1528,6 +1528,12 @@ interface IpcContract {
     args: { key: string; albumNames: string[]; trackCount: number; representative: boolean; forceRebuild: boolean };
     result: AlbumArtworkSelection | null;
   };
+  /** The covers of the album whose detail page is open: the page's one scan, ended by `album_detail_cover_cancel` (`null` = cancelled). */
+  album_detail_cover_ensure: {
+    args: { key: string; albumNames: string[]; trackCount: number; representative: boolean; forceRebuild: boolean };
+    result: AlbumArtworkSelection | null;
+  };
+  album_detail_cover_cancel: { args: { keys: string[] }; result: void };
   album_artwork_cache_get_for_track: {
     args: { trackId: string };
     result: ArrayBuffer;

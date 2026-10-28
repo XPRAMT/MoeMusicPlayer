@@ -1,10 +1,11 @@
 <script lang="ts">
   import { tr } from './i18n.js';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry, AlbumTrackOrder } from './ipc';
   import { advanceAlbumArtworkSelectionRevision, albumCoverSourcesHaveSameContent, copyToArrayBuffer, createAlbumThumbnail, resolveAlbumArtworkDisplaySources, sha256Hex, withAlbumArtworkSlot } from './album-artwork.js';
   import { detectArtworkMimeType } from './active-track-artwork';
+  import { createAlbumDetailCoverScan } from './album-detail-cover-scan.js';
   import AlbumArtworkMosaic from './AlbumArtworkMosaic.svelte';
   import defaultCoverUrl from '../../icon/DefaultCover.jpg?inline';
   import TrackList from './TrackList.svelte';
@@ -87,6 +88,13 @@
     return startAlbumReflowProbe(shellElement, summaryElement);
   });
   let revision = 0;
+  let detailDataRevision = 0;
+  // The one cover scan of this page: it is started when the album is opened and ended when the page is left (the backend
+  // stops reading files at once). It asks only through the detail commands, each call once.
+  const coverScan = createAlbumDetailCoverScan({
+    ensure: (args) => invokeCommand('album_detail_cover_ensure', args as never),
+    cancel: (keys) => invokeCommand('album_detail_cover_cancel', { keys }),
+  });
   function currentOrder(): AlbumTrackOrder {
     return {
       sort: detailSort.field === 'position' ? null : { field: detailSort.field, direction: detailSort.direction },
@@ -200,16 +208,16 @@
   function loadDetailData(current: number): void {
     void invokeCommand('library_get_album_detail_facets', { albumNames: album.aliases })
       .then((facets) => {
-        if (current !== revision) return;
+        if (current !== detailDataRevision) return;
         albumDiscQuickIndices = {
           ascending: facets.quickIndexAscending,
           descending: facets.quickIndexDescending,
         };
         onTotalCount(facets.trackCount);
       })
-      .catch((error) => { if (current === revision) scanError = getErrorText(error); });
+      .catch((error) => { if (current === detailDataRevision) scanError = getErrorText(error); });
     void invokeCommand('library_get_album_detail_artists', { albumNames: album.aliases })
-      .then((resolvedArtists) => { if (current === revision) artists = resolvedArtists; })
+      .then((resolvedArtists) => { if (current === detailDataRevision) artists = resolvedArtists; })
       .catch(() => undefined);
   }
 
@@ -217,9 +225,6 @@
     const current = ++revision;
     scanning = true;
     scanError = null;
-    artists = [];
-    albumDiscQuickIndices = null;
-    loadDetailData(current);
     try {
       const key = await selectionKey();
 
@@ -227,7 +232,7 @@
       // while the whole album is looked through for the representative covers below.
       if (!coverScanResolved && coverUrls.length === 0) {
         try {
-          const quick = await invokeCommand('album_artwork_selection_ensure', {
+          const quick = await coverScan.ensure({
             key: await sha256Hex(copyToArrayBuffer(new TextEncoder().encode(`${album.key} ${album.trackCount}`))),
             albumNames: album.aliases, trackCount: album.trackCount,
             representative: false, forceRebuild: false,
@@ -245,21 +250,21 @@
         } catch { /* the full scan below still runs */ }
       }
 
-      let selection = await invokeCommand('album_artwork_selection_ensure', {
+      let selection = await coverScan.ensure({
         key, albumNames: album.aliases, trackCount: album.trackCount,
         representative: true, forceRebuild: false,
       });
-      if (current !== revision) return;
+      if (current !== revision || selection === null) return;
       let selectedIds = selection?.trackIds.slice(0, 4) ?? [];
       let urls = await loadThumbnails(selectedIds, current);
       if (current !== revision) { urls.forEach((url) => URL.revokeObjectURL(url)); return; }
       if (selectedIds.length > 0 && urls.length === 0) {
         // A stale selection can outlive removed/replaced source art; ask the backend to rebuild it.
-        selection = await invokeCommand('album_artwork_selection_ensure', {
+        selection = await coverScan.ensure({
           key, albumNames: album.aliases, trackCount: album.trackCount,
           representative: true, forceRebuild: true,
         });
-        if (current !== revision) return;
+        if (current !== revision || selection === null) return;
         selectedIds = selection?.trackIds.slice(0, 4) ?? [];
         urls = await loadThumbnails(selectedIds, current);
       }
@@ -287,14 +292,27 @@
     }
   }
 
+  /** The list, the quick index and the artists follow the library (`refreshKey`); the covers are not looked for again. */
   $effect(() => {
-    const key = refreshKey;
-    const albumKey = album.key;
-    void key;
-    void albumKey;
-    void scanCovers();
+    void refreshKey;
+    untrack(() => {
+      const current = ++detailDataRevision;
+      artists = [];
+      albumDiscQuickIndices = null;
+      loadDetailData(current);
+    });
   });
-  onDestroy(() => { revision += 1; for (const url of ownedCoverUrls) URL.revokeObjectURL(url); });
+  /** The covers are looked for once, when the album is opened (a remembered page at start counts as opened). */
+  function startCoverScan(): void {
+    void scanCovers();
+  }
+  onMount(() => { startCoverScan(); });
+  onDestroy(() => {
+    revision += 1;
+    detailDataRevision += 1;
+    coverScan.cancel();
+    for (const url of ownedCoverUrls) URL.revokeObjectURL(url);
+  });
 </script>
 
 <div
