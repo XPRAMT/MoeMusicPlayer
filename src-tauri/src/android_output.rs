@@ -3,7 +3,9 @@
 //! `settings.json` keeps the choice (`androidOutputDevice`); this module holds a copy for the Media3 service, which
 //! reads it over JNI when it is created and before every load, so the choice applies with no Activity or WebView. A
 //! change made on the settings page is also pushed to a running service through the plugin (`setAudioOutputPreference`).
+//! The USB exclusive switch (`androidUsbExclusive`, ADR 0047) travels the same way (`setUsbExclusive`).
 
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::RwLock;
 
 use crate::settings::AndroidOutputDevice;
@@ -31,6 +33,19 @@ pub(crate) fn current_preference_json() -> Option<String> {
         .clone()
 }
 
+/// The USB exclusive switch for the service: -1 until the settings were read, else 0 or 1.
+static USB_EXCLUSIVE: AtomicI8 = AtomicI8::new(-1);
+
+/// Remember the USB exclusive switch for the service (at startup and whenever the user changes it).
+pub(crate) fn set_usb_exclusive(enabled: bool) {
+    USB_EXCLUSIVE.store(i8::from(enabled), Ordering::Relaxed);
+}
+
+/// The switch as the service reads it: -1 not known yet (keep what it has), 0 off, 1 on.
+pub(crate) fn usb_exclusive_state() -> i8 {
+    USB_EXCLUSIVE.load(Ordering::Relaxed)
+}
+
 #[cfg(target_os = "android")]
 mod jni_exports {
     use jni::{objects::JObject, sys::jstring, JNIEnv};
@@ -46,6 +61,15 @@ mod jni_exports {
             Some(value) => value.into_raw(),
             None => std::ptr::null_mut(),
         }
+    }
+
+    /// `PlaybackService.nativeUsbExclusiveEnabled()`: -1 while the settings have not been read, else 0 or 1.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_PlaybackService_nativeUsbExclusiveEnabled(
+        _env: JNIEnv,
+        _service: JObject,
+    ) -> jni::sys::jint {
+        jni::sys::jint::from(super::usb_exclusive_state())
     }
 }
 
@@ -78,5 +102,14 @@ mod tests {
         );
         set_preference(None);
         assert_eq!(current_preference_json().as_deref(), Some("null"));
+    }
+
+    #[test]
+    fn the_usb_exclusive_switch_is_unknown_until_read() {
+        assert_eq!(usb_exclusive_state(), -1);
+        set_usb_exclusive(true);
+        assert_eq!(usb_exclusive_state(), 1);
+        set_usb_exclusive(false);
+        assert_eq!(usb_exclusive_state(), 0);
     }
 }

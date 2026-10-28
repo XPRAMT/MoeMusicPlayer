@@ -1,174 +1,252 @@
-//! The PCM the exclusive test sends (ADR 0046, P0: 16-bit stereo FLAC only, no volume, no resampling, no dither).
+//! Turning the PCM Media3 hands over into the samples a USB audio streaming alt carries (ADR 0047).
 //!
-//! `player-flac` decodes to `f32` by dividing Symphonia's left-aligned `i32` samples by 2^31, which is exact for 16-bit
-//! samples (16 significant bits, a power-of-two divisor). Multiplying by 32 768 gives the original sample back; every
-//! value is checked to be such a sample, so the bytes sent are the file's samples bit for bit.
+//! Media3's sink gives this output float PCM for every track the app plays (the FLAC, WavPack and DSD converters serve
+//! float WAV, and `FloatAwareAudioProcessorChain` turns 16-bit decoder output into float); 16-, 24- and 32-bit integer
+//! PCM are accepted too. A float sample of an integer source of n ≤ 24 bits is that integer divided by 2^(n−1), exactly
+//! (`f32` has a 24-bit significand), so multiplying by 2^(bits−1) of the alt and rounding gives the original integer
+//! back bit for bit, also into a wider container. A 32-bit integer source that went through float is not exact.
+//!
+//! Samples sit left-justified in their subslot (UAC2 Type I formats: the unused low bits are zero; a 4-byte subslot
+//! with 24 valid bits is what Linux calls S32_LE), little-endian. The gain is the app volume; only exactly 1.0 leaves
+//! the samples untouched.
 
-use std::path::Path;
-
-use player_flac::{FlacInfo, FlacReader};
-
-/// Interleaved little-endian 16-bit PCM, ready to be cut into packets.
-#[derive(Clone, Debug)]
-pub struct Pcm16 {
-    pub rate: u32,
-    pub channels: u16,
-    pub bytes: Vec<u8>,
+/// The encoding of the PCM written to the output (`C.ENCODING_PCM_*`, little-endian, interleaved).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputEncoding {
+    F32,
+    S16,
+    /// 24-bit packed in 3 bytes.
+    S24,
+    S32,
 }
 
-impl Pcm16 {
-    pub fn bytes_per_frame(&self) -> usize {
-        2 * usize::from(self.channels)
-    }
-
-    pub fn frames(&self) -> u64 {
-        (self.bytes.len() / self.bytes_per_frame().max(1)) as u64
-    }
-}
-
-/// How many seconds from the start the first peak covers.
-pub const LEVEL_FIRST_SECONDS: u32 = 3;
-/// How many interleaved samples from the start the report lists.
-pub const LEVEL_FIRST_SAMPLES: usize = 16;
-
-/// How loud the PCM sent is, to rule out a silent buffer when nothing is heard (ADR 0046).
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PcmLevels {
-    pub first_seconds: u32,
-    /// Peak absolute sample (0..=32768) over the first [`LEVEL_FIRST_SECONDS`].
-    pub peak_first: u32,
-    /// The same in dBFS (0 = full scale); `None` when every sample is 0.
-    pub peak_first_dbfs: Option<f64>,
-    /// Peak absolute sample over the whole buffer.
-    pub peak: u32,
-    pub peak_dbfs: Option<f64>,
-    /// The first interleaved samples.
-    pub first_samples: Vec<i16>,
-}
-
-/// dBFS of a peak absolute 16-bit sample (32768 = 0 dBFS); `None` for silence.
-pub fn peak_dbfs(peak: u32) -> Option<f64> {
-    (peak > 0).then(|| 20.0 * (f64::from(peak) / 32_768.0).log10())
-}
-
-/// Peaks and the first samples of `pcm`.
-pub fn levels(pcm: &Pcm16) -> PcmLevels {
-    let first_bytes =
-        (u64::from(pcm.rate) * u64::from(LEVEL_FIRST_SECONDS)) as usize * pcm.bytes_per_frame();
-    let mut peak_first = 0_u32;
-    let mut peak = 0_u32;
-    let mut first_samples = Vec::with_capacity(LEVEL_FIRST_SAMPLES);
-    for (index, pair) in pcm.bytes.chunks_exact(2).enumerate() {
-        let sample = i16::from_le_bytes([pair[0], pair[1]]);
-        let magnitude = u32::from(sample.unsigned_abs());
-        peak = peak.max(magnitude);
-        if index * 2 < first_bytes {
-            peak_first = peak_first.max(magnitude);
-        }
-        if first_samples.len() < LEVEL_FIRST_SAMPLES {
-            first_samples.push(sample);
+impl InputEncoding {
+    /// Android's `AudioFormat.ENCODING_PCM_*` (the same numbers as Media3's `C.ENCODING_PCM_*`).
+    pub fn from_android(encoding: i32) -> Option<Self> {
+        match encoding {
+            2 => Some(Self::S16),
+            4 => Some(Self::F32),
+            21 => Some(Self::S24),
+            22 => Some(Self::S32),
+            _ => None,
         }
     }
-    PcmLevels {
-        first_seconds: LEVEL_FIRST_SECONDS,
-        peak_first,
-        peak_first_dbfs: peak_dbfs(peak_first),
-        peak,
-        peak_dbfs: peak_dbfs(peak),
-        first_samples,
-    }
-}
 
-/// Why a file cannot be played by the P0 test.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PcmError {
-    Open(String),
-    NotSixteenBitStereo {
-        bits: Option<u32>,
-        channels: u16,
-    },
-    Decode(String),
-    /// A decoded value is not a 16-bit sample (should never happen for a 16-bit file).
-    NotExact,
-}
-
-impl std::fmt::Display for PcmError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub fn bytes(self) -> usize {
         match self {
-            Self::Open(message) | Self::Decode(message) => f.write_str(message),
-            Self::NotSixteenBitStereo { bits, channels } => write!(
-                f,
-                "只支援 16 bit 雙聲道 FLAC（此檔為 {} bit、{channels} 聲道）",
-                bits.map_or_else(|| "?".to_owned(), |bits| bits.to_string())
-            ),
-            Self::NotExact => f.write_str("解碼結果不是 16 bit 取樣"),
+            Self::S16 => 2,
+            Self::S24 => 3,
+            Self::F32 | Self::S32 => 4,
         }
     }
 }
 
-impl std::error::Error for PcmError {}
+/// How one sample sits on the bus: the subslot size and the valid bits (bSubslotSize, bBitResolution).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Container {
+    pub bytes: u8,
+    pub bits: u8,
+}
 
-/// Whether the stream is one the P0 test plays.
-pub fn check_format(info: &FlacInfo) -> Result<(), PcmError> {
-    if info.bits_per_sample == Some(16) && info.channels == 2 {
-        Ok(())
+/// The sample as a signed integer of `bits` bits, rounded and clamped.
+fn quantise(value: f64, bits: u8) -> i64 {
+    let scale = (1_i64 << (bits - 1)) as f64;
+    let max = (1_i64 << (bits - 1)) - 1;
+    ((value * scale).round() as i64).clamp(-max - 1, max)
+}
+
+/// An integer sample of `from` bits as `to` bits: shifted when no gain applies (exact when widening).
+fn rescale(sample: i64, from: u8, to: u8) -> i64 {
+    if to >= from {
+        sample << (to - from)
     } else {
-        Err(PcmError::NotSixteenBitStereo {
-            bits: info.bits_per_sample,
-            channels: info.channels,
-        })
+        sample >> (from - to)
     }
 }
 
-/// Append `samples` (exact 16-bit values in ±1.0) as little-endian 16-bit integers.
-pub fn pack_s16le(samples: &[f32], out: &mut Vec<u8>) -> Result<(), PcmError> {
-    out.reserve(samples.len() * 2);
-    for &sample in samples {
-        let scaled = sample * 32_768.0;
-        if scaled.fract() != 0.0 || !(-32_768.0..=32_767.0).contains(&scaled) {
-            return Err(PcmError::NotExact);
-        }
-        out.extend_from_slice(&(scaled as i16).to_le_bytes());
+fn read_sample(encoding: InputEncoding, bytes: &[u8]) -> (i64, u8, Option<f32>) {
+    match encoding {
+        InputEncoding::F32 => (
+            0,
+            0,
+            Some(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+        ),
+        InputEncoding::S16 => (
+            i64::from(i16::from_le_bytes([bytes[0], bytes[1]])),
+            16,
+            None,
+        ),
+        InputEncoding::S24 => (
+            i64::from(i32::from_le_bytes([0, bytes[0], bytes[1], bytes[2]]) >> 8),
+            24,
+            None,
+        ),
+        InputEncoding::S32 => (
+            i64::from(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+            32,
+            None,
+        ),
     }
-    Ok(())
 }
 
-/// The first `max_seconds` of a 16-bit stereo FLAC file, decoded whole before the stream starts.
-pub fn decode_flac_s16(path: &Path, max_seconds: u32) -> Result<Pcm16, PcmError> {
-    let mut reader =
-        FlacReader::open_path(path).map_err(|error| PcmError::Open(error.to_string()))?;
-    let info = *reader.info();
-    check_format(&info)?;
-    let limit = u64::from(info.sample_rate) * u64::from(max_seconds);
-    let mut bytes =
-        Vec::with_capacity((limit.min(info.total_frames.unwrap_or(limit)) * 4) as usize);
-    let mut samples = Vec::new();
-    let mut frames = 0_u64;
-    while frames < limit {
-        samples.clear();
-        let read = reader
-            .read_frames(&mut samples)
-            .map_err(|error| PcmError::Decode(error.to_string()))?;
-        if read == 0 {
-            break;
+/// One sample at the container's valid bits.
+fn convert(encoding: InputEncoding, bytes: &[u8], container: Container, gain: f32) -> i64 {
+    let (integer, integer_bits, float) = read_sample(encoding, bytes);
+    let unity = gain == 1.0;
+    match float {
+        Some(value) => quantise(f64::from(value) * f64::from(gain), container.bits),
+        None if unity => rescale(integer, integer_bits, container.bits),
+        None => {
+            let value = integer as f64 / (1_i64 << (integer_bits - 1)) as f64;
+            quantise(value * f64::from(gain), container.bits)
         }
-        let keep = (read as u64).min(limit - frames) as usize;
-        pack_s16le(&samples[..keep * 2], &mut bytes)?;
-        frames += keep as u64;
     }
-    Ok(Pcm16 {
-        rate: info.sample_rate,
-        channels: info.channels,
-        bytes,
-    })
+}
+
+/// Pack `input` (whole frames of `encoding`) into `out` as `container` samples, with `gain` applied. `out` must hold
+/// exactly as many samples as `input`. Returns the bytes written.
+pub fn pack(
+    encoding: InputEncoding,
+    input: &[u8],
+    container: Container,
+    gain: f32,
+    out: &mut [u8],
+) -> usize {
+    let in_bytes = encoding.bytes();
+    let out_bytes = usize::from(container.bytes);
+    let shift = u32::from(container.bytes) * 8 - u32::from(container.bits);
+    let samples = input.len() / in_bytes;
+    debug_assert!(out.len() >= samples * out_bytes);
+    for (sample, slot) in input
+        .chunks_exact(in_bytes)
+        .zip(out.chunks_exact_mut(out_bytes))
+    {
+        let value = convert(encoding, sample, container, gain) << shift;
+        slot.copy_from_slice(&value.to_le_bytes()[..out_bytes]);
+    }
+    samples * out_bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use md5::{Digest, Md5};
-    use std::path::PathBuf;
+    use player_flac::FlacReader;
+    use std::path::{Path, PathBuf};
+
+    const C16: Container = Container { bytes: 2, bits: 16 };
+    const C24: Container = Container { bytes: 3, bits: 24 };
+    const C4_24: Container = Container { bytes: 4, bits: 24 };
+    const C32: Container = Container { bytes: 4, bits: 32 };
+
+    fn floats(values: &[f32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    fn packed(encoding: InputEncoding, input: &[u8], container: Container, gain: f32) -> Vec<u8> {
+        let mut out = vec![0; input.len() / encoding.bytes() * usize::from(container.bytes)];
+        assert_eq!(pack(encoding, input, container, gain, &mut out), out.len());
+        out
+    }
+
+    #[test]
+    fn every_16_bit_sample_through_float_comes_back_exactly_in_each_container() {
+        let input: Vec<f32> = (i16::MIN..=i16::MAX)
+            .map(|s| f32::from(s) / 32_768.0)
+            .collect();
+        let bytes = floats(&input);
+        let out = packed(InputEncoding::F32, &bytes, C16, 1.0);
+        for (index, pair) in out.chunks_exact(2).enumerate() {
+            assert_eq!(
+                i32::from(i16::from_le_bytes([pair[0], pair[1]])),
+                i32::from(i16::MIN) + index as i32
+            );
+        }
+        // Wider containers: the same sample, shifted up (zero low bits).
+        let out = packed(InputEncoding::F32, &bytes, C24, 1.0);
+        for (index, triple) in out.chunks_exact(3).enumerate() {
+            let value = i32::from_le_bytes([0, triple[0], triple[1], triple[2]]) >> 8;
+            assert_eq!(value, (i32::from(i16::MIN) + index as i32) << 8);
+        }
+        let out = packed(InputEncoding::F32, &bytes, C32, 1.0);
+        for (index, quad) in out.chunks_exact(4).enumerate() {
+            let value = i32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]]);
+            assert_eq!(value, (i32::from(i16::MIN) + index as i32) << 16);
+        }
+    }
+
+    #[test]
+    fn every_24_bit_sample_through_float_comes_back_exactly() {
+        let min = -(1_i32 << 23);
+        let max = (1_i32 << 23) - 1;
+        let mut out3 = [0_u8; 3];
+        let mut out4 = [0_u8; 4];
+        for sample in min..=max {
+            let float = (sample as f32) / 8_388_608.0;
+            let input = float.to_le_bytes();
+            pack(InputEncoding::F32, &input, C24, 1.0, &mut out3);
+            assert_eq!(
+                i32::from_le_bytes([0, out3[0], out3[1], out3[2]]) >> 8,
+                sample
+            );
+            // 4-byte subslot with 24 valid bits: left-justified, low byte zero.
+            pack(InputEncoding::F32, &input, C4_24, 1.0, &mut out4);
+            assert_eq!(out4[0], 0);
+            assert_eq!(i32::from_le_bytes(out4) >> 8, sample);
+        }
+    }
+
+    #[test]
+    fn full_scale_is_clamped_and_integers_pass_through() {
+        let out = packed(
+            InputEncoding::F32,
+            &floats(&[1.0, -1.0, 2.0, -2.0]),
+            C16,
+            1.0,
+        );
+        assert_eq!(out, [0xFF, 0x7F, 0x00, 0x80, 0xFF, 0x7F, 0x00, 0x80]);
+        let s16: Vec<u8> = [-32_768_i16, 1, 32_767]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        assert_eq!(packed(InputEncoding::S16, &s16, C16, 1.0), s16);
+        let s24 = [0x01, 0x02, 0x83];
+        assert_eq!(packed(InputEncoding::S24, &s24, C24, 1.0), s24);
+        assert_eq!(
+            packed(InputEncoding::S24, &s24, C4_24, 1.0),
+            [0, 0x01, 0x02, 0x83]
+        );
+        let s32 = 0x1234_5678_i32.to_le_bytes();
+        assert_eq!(packed(InputEncoding::S32, &s32, C32, 1.0), s32);
+        // Narrowing a 32-bit integer drops its low bits.
+        assert_eq!(
+            packed(InputEncoding::S32, &s32, C24, 1.0),
+            [0x56, 0x34, 0x12]
+        );
+    }
+
+    #[test]
+    fn a_gain_below_one_scales_and_one_leaves_the_samples_alone() {
+        let input = floats(&[0.5, -0.25]);
+        let half = packed(InputEncoding::F32, &input, C16, 0.5);
+        assert_eq!(half, [0x00, 0x20, 0x00, 0xF0]);
+        let s16 = 16_384_i16.to_le_bytes();
+        assert_eq!(
+            packed(InputEncoding::S16, &s16, C16, 0.5),
+            8_192_i16.to_le_bytes()
+        );
+        assert_eq!(packed(InputEncoding::F32, &input, C16, 0.0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn android_encodings_map_to_inputs() {
+        assert_eq!(InputEncoding::from_android(2), Some(InputEncoding::S16));
+        assert_eq!(InputEncoding::from_android(4), Some(InputEncoding::F32));
+        assert_eq!(InputEncoding::from_android(21), Some(InputEncoding::S24));
+        assert_eq!(InputEncoding::from_android(22), Some(InputEncoding::S32));
+        assert_eq!(InputEncoding::from_android(5), None);
+    }
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -183,98 +261,32 @@ mod tests {
         bytes[26..42].try_into().unwrap()
     }
 
-    #[test]
-    fn a_16_bit_stereo_flac_decodes_to_exactly_the_samples_its_md5_signs() {
-        let path = fixture("s16_stereo_44100.flac");
-        let pcm = decode_flac_s16(&path, 30).unwrap();
-        assert_eq!((pcm.rate, pcm.channels, pcm.frames()), (44_100, 2, 44_100));
-        let digest: [u8; 16] = Md5::digest(&pcm.bytes).into();
-        assert_eq!(digest, streaminfo_md5(&path));
-    }
-
-    #[test]
-    fn levels_give_the_peaks_in_dbfs_and_the_first_samples() {
-        assert_eq!(peak_dbfs(0), None);
-        assert_eq!(peak_dbfs(32_768), Some(0.0));
-        assert!((peak_dbfs(16_384).unwrap() + 6.0206).abs() < 1e-3);
-        assert!((peak_dbfs(1).unwrap() + 90.309).abs() < 1e-3);
-
-        // 4 s at a tiny rate so the first-seconds window is visible: 3 s quiet, then one loud sample, and -32768.
-        let rate = 4;
-        let mut samples = vec![100_i16; (rate * 3 * 2) as usize];
-        samples[1] = -200;
-        samples.extend([16_384, -32_768, 0, 0, 0, 0, 0, 0]);
-        let bytes = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
-        let pcm = Pcm16 {
-            rate,
-            channels: 2,
-            bytes,
-        };
-        let levels = levels(&pcm);
-        assert_eq!((levels.peak_first, levels.peak), (200, 32_768));
-        assert_eq!(levels.peak_dbfs, Some(0.0));
-        assert!(
-            (levels.peak_first_dbfs.unwrap() - 20.0 * (200.0_f64 / 32_768.0).log10()).abs() < 1e-9
-        );
-        assert_eq!(levels.first_samples.len(), LEVEL_FIRST_SAMPLES);
-        assert_eq!(&levels.first_samples[..3], &[100, -200, 100]);
-
-        let silent = levels_of_silence();
-        assert_eq!(
-            (silent.peak, silent.peak_dbfs, silent.peak_first_dbfs),
-            (0, None, None)
-        );
-        assert_eq!(silent.first_samples, vec![0, 0]);
-    }
-
-    fn levels_of_silence() -> PcmLevels {
-        levels(&Pcm16 {
-            rate: 44_100,
-            channels: 2,
-            bytes: vec![0; 4],
-        })
-    }
-
-    #[test]
-    fn the_fixture_is_not_silent() {
-        let levels = levels(&decode_flac_s16(&fixture("s16_stereo_44100.flac"), 30).unwrap());
-        assert!(levels.peak > 0 && levels.peak_first > 0, "{levels:?}");
-    }
-
-    #[test]
-    fn the_length_is_cut_at_the_limit() {
-        let pcm = decode_flac_s16(&fixture("s16_stereo_44100.flac"), 0).unwrap();
-        assert_eq!(pcm.frames(), 0);
-    }
-
-    #[test]
-    fn other_bit_depths_and_channel_counts_are_refused() {
-        assert_eq!(
-            decode_flac_s16(&fixture("s24_stereo_96000.flac"), 30).unwrap_err(),
-            PcmError::NotSixteenBitStereo {
-                bits: Some(24),
-                channels: 2
+    /// Decode with `player-flac` (float, as the Android converter serves it) and pack: the MD5 of the packed samples is
+    /// the one the encoder signed over the original integers.
+    fn assert_bit_exact(name: &str, container: Container) {
+        let path = fixture(name);
+        let mut reader = FlacReader::open_path(&path).unwrap();
+        let mut samples = Vec::new();
+        let mut packed_all = Vec::new();
+        loop {
+            samples.clear();
+            if reader.read_frames(&mut samples).unwrap() == 0 {
+                break;
             }
-        );
-        assert!(matches!(
-            decode_flac_s16(&fixture("s16_6ch_48000.flac"), 30),
-            Err(PcmError::NotSixteenBitStereo { channels: 6, .. })
-        ));
-        assert!(matches!(
-            decode_flac_s16(&fixture("missing.flac"), 30),
-            Err(PcmError::Open(_))
-        ));
+            packed_all.extend(packed(
+                InputEncoding::F32,
+                &floats(&samples),
+                container,
+                1.0,
+            ));
+        }
+        let digest: [u8; 16] = Md5::digest(&packed_all).into();
+        assert_eq!(digest, streaminfo_md5(&path), "{name}");
     }
 
     #[test]
-    fn packing_is_an_exact_bit_copy_and_refuses_anything_else() {
-        let mut out = Vec::new();
-        pack_s16le(&[-1.0, 0.0, 32_767.0 / 32_768.0, 1.0 / 32_768.0], &mut out).unwrap();
-        assert_eq!(out, vec![0x00, 0x80, 0, 0, 0xFF, 0x7F, 0x01, 0x00]);
-        assert_eq!(
-            pack_s16le(&[0.5 / 32_768.0], &mut Vec::new()),
-            Err(PcmError::NotExact)
-        );
-        assert_eq!(pack_s16le(&[1.0], &mut Vec::new()), Err(PcmError::NotExact));
+    fn decoded_flac_packs_to_exactly_the_samples_its_md5_signs() {
+        assert_bit_exact("s16_stereo_44100.flac", C16);
+        assert_bit_exact("s24_stereo_96000.flac", C24);
     }
 }

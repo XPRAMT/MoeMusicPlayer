@@ -457,7 +457,7 @@ pub fn plan_stream(config: &Configuration, format: PcmFormat) -> Result<StreamPl
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn sony() -> Vec<u8> {

@@ -92,7 +92,7 @@ mod android_output;
 mod android_playback;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
-mod android_usb_exclusive;
+mod android_usb_output;
 mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
@@ -7673,86 +7673,77 @@ async fn android_usb_audio_descriptors(
     }
 }
 
-/// USB exclusive test (ADR 0046, P0, development only): play the current local 16-bit stereo FLAC for at most 30 s
-/// straight to the USB DAC over usbfs, bypassing the Android audio system, then hand the DAC back to the kernel driver.
-/// Refused while the player plays. Answers `{ running, report }` at once (the test runs on its own thread); null on
-/// other platforms.
 #[tauri::command]
-async fn android_usb_exclusive_start(
+fn settings_get_android_usb_exclusive(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_usb_exclusive)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the Android USB exclusive switch (ADR 0047) and hand it to the playback service: on, the next output to
+/// the chosen USB audio device is driven by the app over usbfs; off, a device it holds is handed back at once. Kept
+/// (and harmless) on other platforms.
+#[tauri::command]
+async fn settings_set_android_usb_exclusive(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+    enabled: bool,
+) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.android_usb_exclusive = enabled;
+            Ok(())
+        })
+        .map(|stored| stored.android_usb_exclusive)
+        .map_err(|error| error.to_string())?;
     #[cfg(target_os = "android")]
     {
-        let snapshot = android_playback_service(&state)?.snapshot();
-        android_usb_exclusive::refuse_while_playing(&snapshot.state)?;
-        let track = snapshot
-            .current_track
-            .ok_or_else(|| "沒有目前曲目".to_owned())?;
-        let database = state
-            .database
-            .as_ref()
-            .ok_or_else(|| "曲庫資料庫無法使用".to_owned())?;
-        let path = android_usb_exclusive::local_file(
-            database
-                .track_locators(track.id)
-                .map_err(|error| error.to_string())?,
-            std::path::Path::is_file,
-        )?;
-        android_usb_exclusive::check_track(&path)?;
-        android_usb_exclusive::begin()?;
-        let payload = serde_json::json!({ "path": path.to_string_lossy() });
-        let answer = tauri::async_runtime::spawn_blocking(move || {
+        android_output::set_usb_exclusive(saved);
+        let payload = serde_json::json!({ "enabled": saved });
+        // A service that is not running reads the switch when it starts; a failed push is picked up at the next load.
+        let pushed = tauri::async_runtime::spawn_blocking(move || {
             app.media_index()
-                .audio_output("usbExclusiveStart", payload)
+                .audio_output("setUsbExclusive", payload)
                 .map_err(|error| error.to_string())
         })
         .await
-        .map_err(|error| error.to_string())
-        .and_then(|answer| answer);
-        match answer {
-            Ok(answer) if answer["started"] == true => {}
-            Ok(answer) => android_usb_exclusive::fail_start(
-                answer["reason"]
-                    .as_str()
-                    .unwrap_or("無法開始 USB 獨佔試播")
-                    .to_owned(),
-            ),
-            Err(error) => android_usb_exclusive::fail_start(error),
+        .map_err(|error| error.to_string())?;
+        if let Err(error) = pushed {
+            eprintln!("無法把 USB 獨佔設定交給 Android 播放服務：{error}");
         }
-        Ok(android_usb_exclusive::status())
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+    Ok(saved)
+}
+
+/// Ask for USB permission for the chosen USB audio device (ADR 0047), only from the USB exclusive explanation panel's
+/// 「前往授權」. Answers `{ granted, device }`; null on other platforms.
+#[tauri::command]
+async fn android_request_usb_exclusive_permission(
+    app: AppHandle,
+    product_name: Option<String>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output(
+                    "requestUsbExclusivePermission",
+                    serde_json::json!({ "productName": product_name }),
+                )
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (app, state);
+        let _ = (app, product_name);
         Ok(serde_json::Value::Null)
-    }
-}
-
-/// Stop the USB exclusive test (ADR 0046); the DAC is handed back as the run ends. Null on other platforms.
-#[tauri::command]
-fn android_usb_exclusive_stop() -> serde_json::Value {
-    #[cfg(target_os = "android")]
-    {
-        android_usb_exclusive::request_stop();
-        android_usb_exclusive::status()
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        serde_json::Value::Null
-    }
-}
-
-/// Whether the USB exclusive test runs and the report of the last one (ADR 0046). Null on other platforms.
-#[tauri::command]
-fn android_usb_exclusive_status() -> serde_json::Value {
-    #[cfg(target_os = "android")]
-    {
-        android_usb_exclusive::status()
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        serde_json::Value::Null
     }
 }
 
@@ -13047,9 +13038,9 @@ pub fn run() {
             android_audio_output_status,
             android_request_bluetooth_connect,
             android_usb_audio_descriptors,
-            android_usb_exclusive_start,
-            android_usb_exclusive_stop,
-            android_usb_exclusive_status,
+            settings_get_android_usb_exclusive,
+            settings_set_android_usb_exclusive,
+            android_request_usb_exclusive_permission,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
@@ -13280,6 +13271,8 @@ pub fn run() {
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
             #[cfg(target_os = "android")]
             android_output::set_preference(initial_settings.android_output_device.as_ref());
+            #[cfg(target_os = "android")]
+            android_output::set_usb_exclusive(initial_settings.android_usb_exclusive);
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
                 // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).

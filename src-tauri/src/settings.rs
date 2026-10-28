@@ -2243,6 +2243,10 @@ pub struct AppSettings {
     /// The output device chosen on Android (Settings → playback, ADR 0044); `None`: the system default.
     #[serde(default, deserialize_with = "deserialize_android_output_device")]
     pub android_output_device: Option<AndroidOutputDevice>,
+    /// Android USB exclusive output (Settings → playback, the USB device's card; ADR 0047): the app drives the chosen
+    /// USB audio device itself, bypassing the Android audio system. Off by default.
+    #[serde(default)]
+    pub android_usb_exclusive: bool,
 }
 
 /// An Android output device as the user chose it (ADR 0044). `AudioDeviceInfo` ids change every time a device is
@@ -2346,6 +2350,7 @@ impl Default for AppSettings {
             language: UiLanguage::default(),
             interface_font_family: None,
             android_output_device: None,
+            android_usb_exclusive: false,
         }
     }
 }
@@ -2842,6 +2847,7 @@ struct RawSettings {
     language: Option<serde_json::Value>,
     interface_font_family: Option<serde_json::Value>,
     android_output_device: Option<serde_json::Value>,
+    android_usb_exclusive: Option<bool>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2922,6 +2928,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         language: lenient_language(raw.language),
         interface_font_family: lenient_font_family(raw.interface_font_family.as_ref()),
         android_output_device: lenient_android_output_device(raw.android_output_device),
+        android_usb_exclusive: raw.android_usb_exclusive.unwrap_or(false),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -4834,6 +4841,7 @@ mod tests {
     #[test]
     fn the_android_output_device_defaults_to_the_system_default_and_keeps_only_a_usable_choice() {
         assert_eq!(AppSettings::default().android_output_device, None);
+        assert!(!AppSettings::default().android_usb_exclusive);
         let usb = AndroidOutputDevice {
             kind: "usb".into(),
             product_name: " FiiO KA3 ".into(),
@@ -4930,6 +4938,36 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
         let broken = SettingsStore::open(&path, AppSettings::default()).expect("reopen broken");
         assert_eq!(broken.snapshot().unwrap().android_output_device, None);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_android_usb_exclusive_switch_survives_a_restart_and_defaults_off() {
+        let directory = test_directory("android-usb-exclusive");
+        let path = directory.join("settings.json");
+        {
+            let store =
+                SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+            assert!(!store.snapshot().unwrap().android_usb_exclusive);
+            store
+                .update(|settings| {
+                    settings.android_usb_exclusive = true;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        assert!(reopened.snapshot().unwrap().android_usb_exclusive);
+        drop(reopened);
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["androidUsbExclusive"], true);
+        persisted
+            .as_object_mut()
+            .unwrap()
+            .remove("androidUsbExclusive");
+        let typed: AppSettings = serde_json::from_value(persisted).unwrap();
+        assert!(!typed.android_usb_exclusive);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

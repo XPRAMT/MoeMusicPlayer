@@ -205,6 +205,18 @@ struct NativeTrackMetadata {
     /// WavPack or Monkey's Audio file is an APEv2 item (ADR 0025).
     #[serde(skip_serializing_if = "Option::is_none")]
     artwork_data_base64: Option<String>,
+    /// The file's bits per sample (lossless codecs only), so the USB exclusive output can choose the streaming alt
+    /// although Media3 hands it float PCM (ADR 0047).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bits_per_sample: Option<u8>,
+    /// A DSD file (played through the DSD-to-PCM converter): never bit-perfect on the USB exclusive output.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dsd: bool,
+}
+
+/// Whether a codec name is DSD (`DSD64`… for DSF, `WVDSD` for DSD in WavPack).
+fn is_dsd_codec(codec: Option<&str>) -> bool {
+    codec.is_some_and(|codec| codec.to_ascii_uppercase().contains("DSD"))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1708,6 +1720,8 @@ impl AndroidActor {
             duration_ms: track.duration_ms,
             artwork_uri,
             artwork_data_base64,
+            bits_per_sample: track.bit_depth,
+            dsd: is_dsd_codec(track.codec.as_deref()),
         }
     }
 
@@ -2122,6 +2136,8 @@ mod tests {
                 duration_ms: Some(1000),
                 artwork_uri: Some("content://media/external/audio/albumart/123".into()),
                 artwork_data_base64: None,
+                bits_per_sample: Some(24),
+                dsd: false,
             }),
             position_ms: Some(400),
             volume: None,
@@ -2142,6 +2158,16 @@ mod tests {
             json["metadata"]["artworkUri"],
             "content://media/external/audio/albumart/123"
         );
+        assert_eq!(json["metadata"]["bitsPerSample"], 24);
+        assert!(json["metadata"].get("dsd").is_none());
+    }
+
+    #[test]
+    fn dsd_codecs_are_told_apart_for_the_usb_exclusive_output() {
+        assert!(is_dsd_codec(Some("DSD64")));
+        assert!(is_dsd_codec(Some("WVDSD")));
+        assert!(!is_dsd_codec(Some("FLAC")));
+        assert!(!is_dsd_codec(None));
     }
 
     #[test]
