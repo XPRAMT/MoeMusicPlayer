@@ -1,4 +1,4 @@
-//! Which files cost many requests when their tags are read (see the 「遠端掃描的傳輸量」 notes in AGENTS.md), and why.
+//! Which files cost many requests when their tags are read (see the 「遠端掃描的傳輸量」 notes in docs/status/remote-sources.md), and why.
 //! Four ignored steps, each configured by environment variables (nothing secret is printed):
 //!
 //! 1. `list_library` (needs `MOE_SMB_*`, as in `scan_threads.rs`): lists the music folder once and saves

@@ -451,7 +451,7 @@ pub fn render() -> String {
     .collect();
 
     // `android` marks cases the Kotlin `cellWeight` must match too: Android's lead-in is a function of the position
-    // and does not shorten a fade to a line shorter than 200 ms (AGENTS.md, 浮動歌詞), so those cases are Windows only.
+    // and does not shorten a fade to a line shorter than 200 ms (docs/status/lyrics-windows.md, 浮動歌詞), so those cases are Windows only.
     let mut weights = Vec::new();
     for (list, android) in [
         (starts.to_vec(), true),

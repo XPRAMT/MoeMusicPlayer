@@ -141,7 +141,7 @@ mod win {
         ("この歌が届くまで", "直到這首歌傳達給你", 3.6),
         ("いつまでも 一緒に", "永遠 在一起", 3.0),
     ];
-    const LEAD: f64 = 0.2; // the 200 ms fade lead (AGENTS.md: 連續模式的透明度)
+    const LEAD: f64 = 0.2; // the 200 ms fade lead (docs/status/lyrics-windows.md: 連續動畫與透明度)
     const INACTIVE: f32 = 0.5; // inactiveOpacityPercent default 50
 
     struct Timeline {

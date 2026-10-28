@@ -511,7 +511,7 @@ object FloatingLyricsRules {
     fun windowAlpha(systemLimit: Float?): Float = if (systemLimit == null) 1f else minOf(1f, systemLimit)
 
     /**
-     * Device-pixel rule (AGENTS.md): a moving position is redrawn only when it crosses into another whole pixel, so the
+     * Device-pixel rule (AGENTS.md animation rules): a moving position is redrawn only when it crosses into another whole pixel, so the
      * overlay draws nothing while the text has not visibly moved; once it stops (`raw` equal to the previous frame's
      * `previousRaw`) the exact position is drawn, so every target is reached exactly. `shown` is the position last drawn;
      * between redraws it lags `raw` by less than one pixel.
