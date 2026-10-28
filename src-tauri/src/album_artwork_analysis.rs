@@ -3,6 +3,77 @@ use std::{collections::HashMap, io::Cursor, sync::OnceLock};
 use image::{imageops::FilterType, ImageReader};
 use player_core::TrackId;
 
+/// At most `limit` items spread evenly over `items` (the first and the last always among them), in their order. Looking
+/// through every song of an album on a server for its covers is a network read each; a spread sample finds the covers the
+/// album has (they repeat across its songs) with a bounded number of reads.
+pub(crate) fn spread_sample<T>(items: Vec<T>, limit: usize) -> Vec<T> {
+    let total = items.len();
+    if limit == 0 {
+        return Vec::new();
+    }
+    if total <= limit {
+        return items;
+    }
+    if limit == 1 {
+        return items.into_iter().take(1).collect();
+    }
+    let mut wanted = (0..limit)
+        .map(|slot| slot * (total - 1) / (limit - 1))
+        .peekable();
+    items
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let mut take = false;
+            while wanted.next_if(|candidate| *candidate == index).is_some() {
+                take = true;
+            }
+            take.then_some(item)
+        })
+        .collect()
+}
+
+type ScanFlag = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+/// Scans of album covers that are running, by selection key: a newer scan of the same album replaces the older one, and a
+/// page that is left cancels its scan. A cancelled scan stops before its next song and remembers nothing.
+#[derive(Default)]
+pub(crate) struct ScanRegistry(std::sync::Mutex<HashMap<String, ScanFlag>>);
+
+impl ScanRegistry {
+    /// Register a scan of `key` (cancelling one already running for it); the flag turns true when it is cancelled.
+    pub(crate) fn begin(&self, key: &str) -> ScanFlag {
+        let flag = ScanFlag::default();
+        if let Some(older) = self.lock().insert(key.to_owned(), flag.clone()) {
+            older.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        flag
+    }
+
+    pub(crate) fn cancel(&self, key: &str) {
+        if let Some(flag) = self.lock().remove(key) {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// The scan is over: forget it unless a newer scan has taken its place.
+    pub(crate) fn finish(&self, key: &str, flag: &ScanFlag) {
+        let mut running = self.lock();
+        if running
+            .get(key)
+            .is_some_and(|current| std::sync::Arc::ptr_eq(current, flag))
+        {
+            running.remove(key);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, ScanFlag>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 const HASH_SIZE: u32 = 32;
 const LOW_FREQUENCY_COUNT: usize = 8;
 const SIMILARITY_DISTANCE: u32 = 6;
@@ -283,5 +354,37 @@ mod tests {
             (TrackId::new(), encoded_pattern(true)),
         ]);
         assert_eq!(result.as_deref(), Some(expected.to_string().as_str()));
+    }
+
+    #[test]
+    fn a_spread_sample_is_bounded_ordered_and_keeps_both_ends() {
+        let all = (0..107).collect::<Vec<_>>();
+        let sample = spread_sample(all, 12);
+        assert_eq!(sample.len(), 12);
+        assert_eq!((sample[0], sample[11]), (0, 106));
+        assert!(sample.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(spread_sample(vec![1, 2, 3], 12), [1, 2, 3]);
+        assert_eq!(spread_sample(vec![1, 2, 3], 2), [1, 3]);
+        assert_eq!(spread_sample(vec![1, 2, 3], 1), [1]);
+        assert!(spread_sample(vec![1, 2, 3], 0).is_empty());
+        let few = spread_sample((0..13).collect::<Vec<_>>(), 12);
+        assert_eq!(few.len(), 12, "no duplicates when the list barely exceeds the limit");
+    }
+
+    #[test]
+    fn a_newer_scan_or_a_leave_cancels_the_older_scan_of_the_same_album() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let registry = ScanRegistry::default();
+        let first = registry.begin("a");
+        let other = registry.begin("b");
+        assert!(!first.load(SeqCst));
+        let second = registry.begin("a");
+        assert!(first.load(SeqCst), "replaced by the newer scan");
+        assert!(!second.load(SeqCst) && !other.load(SeqCst));
+        registry.finish("a", &first);
+        registry.cancel("a");
+        assert!(second.load(SeqCst), "the older scan finishing did not unregister the newer one");
+        registry.cancel("b");
+        assert!(other.load(SeqCst));
     }
 }
