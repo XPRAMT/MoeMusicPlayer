@@ -13399,6 +13399,7 @@ pub fn run() {
             android_output::set_usb_exclusive(initial_settings.android_usb_exclusive);
             #[cfg(target_os = "android")]
             android_output::set_real_mixer_rate(initial_settings.android_real_mixer_rate);
+            #[cfg(target_os = "android")]
             android_output::set_bluetooth_rate_follow(initial_settings.android_bluetooth_rate_follow);
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
