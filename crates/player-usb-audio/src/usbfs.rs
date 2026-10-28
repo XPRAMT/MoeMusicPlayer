@@ -1,10 +1,10 @@
 //! The exclusive stream over Linux usbfs (ADR 0046). Android and Linux only.
 //!
-//! Order: plan from the descriptors → detach the kernel driver from every audio interface and claim them → streaming
-//! interface to alt 0 → (UAC2) GET RANGE, SET CUR rate, GET CUR read-back, abort on a mismatch → alt for the format →
-//! feedback URBs and data URBs in flight, reaped on this one thread (poll + non-blocking reap) → at any end: discard and
-//! reap every URB, alt 0, release, let the kernel driver bind again. The hand-back runs from `Drop`, so an early
-//! return or a panic gives the DAC back too.
+//! Order (Linux `snd-usb-audio`'s UAC2 order, [`CLOCK_ORDER`]): plan from the descriptors → detach the kernel driver
+//! from every audio interface and claim them → streaming interface to alt 0 → (UAC2) GET RANGE → alt for the format →
+//! SET CUR rate, settle, GET CUR read-back, abort on a mismatch → feedback URBs and data URBs in flight, reaped on this
+//! one thread (poll + non-blocking reap) → at any end: discard and reap every URB, alt 0, release, let the kernel driver
+//! bind again. The hand-back runs from `Drop`, so an early return or a panic gives the device back too.
 
 use std::io;
 use std::os::raw::{c_int, c_uint, c_void};
@@ -12,12 +12,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::descriptors::{parse_configuration, plan_stream, PcmFormat, StreamPlan};
+use crate::diagnostics::{DataUrbStats, FeedbackUrbStats, StatusCounts};
 use crate::feedback::Feedback;
 use crate::ioctl::{self, CtrlTransfer, IoctlRequest, IsoPacketDesc, SetInterface, Urb};
 use crate::packets::PacketSizer;
-use crate::pcm::Pcm16;
+use crate::pcm::{self, Pcm16};
 use crate::uac::{self, ControlRequest};
-use crate::{Outcome, Report};
+use crate::{ClockOrder, Outcome, Report};
 
 /// Data URBs kept in flight and isochronous packets (microframes at high speed) per URB: 16 × 8 = 16 ms queued at
 /// high speed, enough to ride out a scheduling hiccup of the thread.
@@ -30,6 +31,8 @@ const POLL_MS: c_int = 100;
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// After the clock is set, before it is read back and streaming starts.
 const CLOCK_SETTLE: Duration = Duration::from_millis(50);
+/// The rate is set after the streaming alt is selected, as Linux does for UAC2; the other order only for an A/B test.
+const CLOCK_ORDER: ClockOrder = ClockOrder::AltThenClock;
 
 const FEEDBACK_TAG: usize = 0x1000;
 
@@ -362,7 +365,27 @@ fn high_speed(fd: c_int, bcd_usb: u16) -> bool {
     }
 }
 
-/// Set the clock and read it back. Returns (set, read back).
+/// UAC2: which rates the clock takes. A refused RANGE request is not fatal (the read-back still guards).
+fn check_rate_range(session: &mut Session, plan: &StreamPlan, rate: u32) -> Result<(), String> {
+    let Some(clock) = plan.clock_id else {
+        return Ok(());
+    };
+    let mut head = uac::uac2_get_rate_range(clock, plan.ac_interface, 2);
+    if session.control(&mut head).is_ok() {
+        if let Some(length) = uac::uac2_range_length(&head.data) {
+            let mut full = uac::uac2_get_rate_range(clock, plan.ac_interface, length);
+            if let Ok(count) = session.control(&mut full) {
+                let ranges = uac::parse_uac2_rate_ranges(&full.data[..count.min(full.data.len())]);
+                if !ranges.is_empty() && !uac::rate_in_ranges(&ranges, rate) {
+                    return Err(format!("USB 音訊裝置不支援 {rate} Hz"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Set the clock, let it settle and read it back; a read-back that is not the rate is an error.
 fn set_clock(
     session: &mut Session,
     plan: &StreamPlan,
@@ -370,20 +393,6 @@ fn set_clock(
     report: &mut Report,
 ) -> Result<(), String> {
     if let Some(clock) = plan.clock_id {
-        // Which rates the clock takes: a refused RANGE request is not fatal (the read-back still guards).
-        let mut head = uac::uac2_get_rate_range(clock, plan.ac_interface, 2);
-        if session.control(&mut head).is_ok() {
-            if let Some(length) = uac::uac2_range_length(&head.data) {
-                let mut full = uac::uac2_get_rate_range(clock, plan.ac_interface, length);
-                if let Ok(count) = session.control(&mut full) {
-                    let ranges =
-                        uac::parse_uac2_rate_ranges(&full.data[..count.min(full.data.len())]);
-                    if !ranges.is_empty() && !uac::rate_in_ranges(&ranges, rate) {
-                        return Err(format!("DAC 不支援 {rate} Hz"));
-                    }
-                }
-            }
-        }
         let mut set = uac::uac2_set_rate(clock, plan.ac_interface, rate);
         session
             .control(&mut set)
@@ -455,6 +464,18 @@ pub fn run_exclusive(
     report.alt = Some(plan.alt);
     let high = high_speed(fd, config.bcd_usb);
     report.high_speed = Some(high);
+    report.clock_order = CLOCK_ORDER;
+    let levels = pcm::levels(pcm);
+    let pcm_step = format!(
+        "pcm: peak first {} s {} ({}), peak {} ({}), first samples {:?}",
+        levels.first_seconds,
+        levels.peak_first,
+        dbfs_text(levels.peak_first_dbfs),
+        levels.peak,
+        dbfs_text(levels.peak_dbfs),
+        levels.first_samples
+    );
+    report.pcm = Some(levels);
 
     let mut session = Session {
         fd,
@@ -468,6 +489,7 @@ pub fn run_exclusive(
         hand_back_errors: Vec::new(),
         hand_back_ok: false,
     };
+    session.step(pcm_step);
     let result = stream(&mut session, &plan, high, pcm, stop, limit, &mut report);
     session.hand_back();
     report.handed_back = Some(session.hand_back_ok);
@@ -481,6 +503,22 @@ pub fn run_exclusive(
         }
     }
     report
+}
+
+/// `["0×120", "-18 EXDEV×3"]`, for the log.
+fn status_text(counts: &StatusCounts) -> Vec<String> {
+    counts
+        .0
+        .iter()
+        .map(|entry| match entry.name {
+            Some(name) => format!("{} {name}×{}", entry.status, entry.count),
+            None => format!("{}×{}", entry.status, entry.count),
+        })
+        .collect()
+}
+
+fn dbfs_text(dbfs: Option<f64>) -> String {
+    dbfs.map_or_else(|| "silent".to_owned(), |dbfs| format!("{dbfs:.1} dBFS"))
 }
 
 /// Cuts the PCM into the packets of data URBs.
@@ -529,11 +567,25 @@ fn stream(
     session
         .set_interface(streaming, 0)
         .map_err(|error| format!("介面 {streaming} 無法回到 alt 0：{error}"))?;
-    set_clock(session, plan, pcm.rate, report)?;
+    check_rate_range(session, plan, pcm.rate)?;
+    // From here the streaming interface may be on another alt: the hand-back puts it to alt 0.
     session.streaming = Some(streaming);
-    session
-        .set_interface(streaming, u32::from(plan.alt))
-        .map_err(|error| format!("無法切到 alt {}：{error}", plan.alt))?;
+    let alt = plan.alt;
+    let set_alt = |session: &mut Session| {
+        session
+            .set_interface(streaming, u32::from(alt))
+            .map_err(|error| format!("無法切到 alt {alt}：{error}"))
+    };
+    match CLOCK_ORDER {
+        ClockOrder::AltThenClock => {
+            set_alt(session)?;
+            set_clock(session, plan, pcm.rate, report)?;
+        }
+        ClockOrder::ClockThenAlt => {
+            set_clock(session, plan, pcm.rate, report)?;
+            set_alt(session)?;
+        }
+    }
 
     let bytes_per_frame = plan.bytes_per_frame.max(1);
     let max_packet = plan.data_endpoint.max_bytes_per_interval();
@@ -549,6 +601,8 @@ fn stream(
         sizer: PacketSizer::new(pcm.rate, bus_rate, plan.data_endpoint.interval, max_frames),
     };
     let mut feedback = Feedback::new(pcm.rate, bus_rate);
+    let mut feedback_urbs = FeedbackUrbStats::default();
+    let mut data_packets = DataUrbStats::default();
     let data_endpoint = plan.data_endpoint.address;
     session.data = (0..DATA_URBS)
         .map(|index| Slot::new(index, data_endpoint, max_packet))
@@ -607,11 +661,17 @@ fn stream(
                         continue;
                     };
                     let packet = slot.urb.packets[0];
-                    if slot.urb.urb.status != 0 {
+                    let urb_status = slot.urb.urb.status;
+                    if urb_status != 0 {
                         report.urb_errors += 1;
-                    } else if packet.status == 0 && packet.actual_length > 0 {
-                        let length = (packet.actual_length as usize).min(slot.buffer.len());
-                        feedback.push(&slot.buffer[..length]);
+                    }
+                    let length = (packet.actual_length as usize).min(slot.buffer.len());
+                    if let Some(bytes) = feedback_urbs.record(
+                        urb_status,
+                        packet.status as i32,
+                        &slot.buffer[..length],
+                    ) {
+                        feedback.push(bytes);
                     }
                     if !stop.load(Ordering::Relaxed) && Session::submit(fd, slot).is_err() {
                         report.urb_errors += 1;
@@ -625,7 +685,13 @@ fn stream(
                 if status != 0 {
                     report.urb_errors += 1;
                 }
+                data_packets.record_urb(status);
                 for packet in packets {
+                    data_packets.record_packet(
+                        packet.status as i32,
+                        packet.length,
+                        packet.actual_length,
+                    );
                     if packet.status != 0 {
                         report.packet_errors += 1;
                         continue;
@@ -657,5 +723,35 @@ fn stream(
     };
     report.elapsed_ms = started.elapsed().as_millis() as u64;
     report.feedback = feedback.stats();
+    session.step(format!(
+        "feedback urbs: reaped {}, with data {}, zero length {}, packet status {:?}, urb status {:?}, first {:?}",
+        feedback_urbs.reaped,
+        feedback_urbs.with_data,
+        feedback_urbs.zero_length,
+        status_text(&feedback_urbs.packet_status),
+        status_text(&feedback_urbs.urb_status),
+        feedback_urbs.first_packets
+    ));
+    session.step(format!(
+        "feedback parser: accepted {}, rejected {}, shift {:?}, rescales {}, first raw {:?}, avg {:?}",
+        report.feedback.accepted,
+        report.feedback.rejected,
+        report.feedback.shift,
+        report.feedback.rescales,
+        report.feedback.first_raw,
+        report.feedback.avg
+    ));
+    session.step(format!(
+        "data urbs: reaped {}, urb status {:?}, packets {}, packet status {:?}, length mismatch {}, bytes {}/{}",
+        data_packets.reaped,
+        status_text(&data_packets.urb_status),
+        data_packets.packets,
+        status_text(&data_packets.packet_status),
+        data_packets.length_mismatch,
+        data_packets.actual_bytes,
+        data_packets.requested_bytes
+    ));
+    report.feedback_urbs = feedback_urbs;
+    report.data_packets = data_packets;
     result
 }

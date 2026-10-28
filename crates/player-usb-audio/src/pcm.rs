@@ -26,6 +26,60 @@ impl Pcm16 {
     }
 }
 
+/// How many seconds from the start the first peak covers.
+pub const LEVEL_FIRST_SECONDS: u32 = 3;
+/// How many interleaved samples from the start the report lists.
+pub const LEVEL_FIRST_SAMPLES: usize = 16;
+
+/// How loud the PCM sent is, to rule out a silent buffer when nothing is heard (ADR 0046).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PcmLevels {
+    pub first_seconds: u32,
+    /// Peak absolute sample (0..=32768) over the first [`LEVEL_FIRST_SECONDS`].
+    pub peak_first: u32,
+    /// The same in dBFS (0 = full scale); `None` when every sample is 0.
+    pub peak_first_dbfs: Option<f64>,
+    /// Peak absolute sample over the whole buffer.
+    pub peak: u32,
+    pub peak_dbfs: Option<f64>,
+    /// The first interleaved samples.
+    pub first_samples: Vec<i16>,
+}
+
+/// dBFS of a peak absolute 16-bit sample (32768 = 0 dBFS); `None` for silence.
+pub fn peak_dbfs(peak: u32) -> Option<f64> {
+    (peak > 0).then(|| 20.0 * (f64::from(peak) / 32_768.0).log10())
+}
+
+/// Peaks and the first samples of `pcm`.
+pub fn levels(pcm: &Pcm16) -> PcmLevels {
+    let first_bytes =
+        (u64::from(pcm.rate) * u64::from(LEVEL_FIRST_SECONDS)) as usize * pcm.bytes_per_frame();
+    let mut peak_first = 0_u32;
+    let mut peak = 0_u32;
+    let mut first_samples = Vec::with_capacity(LEVEL_FIRST_SAMPLES);
+    for (index, pair) in pcm.bytes.chunks_exact(2).enumerate() {
+        let sample = i16::from_le_bytes([pair[0], pair[1]]);
+        let magnitude = u32::from(sample.unsigned_abs());
+        peak = peak.max(magnitude);
+        if index * 2 < first_bytes {
+            peak_first = peak_first.max(magnitude);
+        }
+        if first_samples.len() < LEVEL_FIRST_SAMPLES {
+            first_samples.push(sample);
+        }
+    }
+    PcmLevels {
+        first_seconds: LEVEL_FIRST_SECONDS,
+        peak_first,
+        peak_first_dbfs: peak_dbfs(peak_first),
+        peak,
+        peak_dbfs: peak_dbfs(peak),
+        first_samples,
+    }
+}
+
 /// Why a file cannot be played by the P0 test.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PcmError {
@@ -136,6 +190,55 @@ mod tests {
         assert_eq!((pcm.rate, pcm.channels, pcm.frames()), (44_100, 2, 44_100));
         let digest: [u8; 16] = Md5::digest(&pcm.bytes).into();
         assert_eq!(digest, streaminfo_md5(&path));
+    }
+
+    #[test]
+    fn levels_give_the_peaks_in_dbfs_and_the_first_samples() {
+        assert_eq!(peak_dbfs(0), None);
+        assert_eq!(peak_dbfs(32_768), Some(0.0));
+        assert!((peak_dbfs(16_384).unwrap() + 6.0206).abs() < 1e-3);
+        assert!((peak_dbfs(1).unwrap() + 90.309).abs() < 1e-3);
+
+        // 4 s at a tiny rate so the first-seconds window is visible: 3 s quiet, then one loud sample, and -32768.
+        let rate = 4;
+        let mut samples = vec![100_i16; (rate * 3 * 2) as usize];
+        samples[1] = -200;
+        samples.extend([16_384, -32_768, 0, 0, 0, 0, 0, 0]);
+        let bytes = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let pcm = Pcm16 {
+            rate,
+            channels: 2,
+            bytes,
+        };
+        let levels = levels(&pcm);
+        assert_eq!((levels.peak_first, levels.peak), (200, 32_768));
+        assert_eq!(levels.peak_dbfs, Some(0.0));
+        assert!(
+            (levels.peak_first_dbfs.unwrap() - 20.0 * (200.0_f64 / 32_768.0).log10()).abs() < 1e-9
+        );
+        assert_eq!(levels.first_samples.len(), LEVEL_FIRST_SAMPLES);
+        assert_eq!(&levels.first_samples[..3], &[100, -200, 100]);
+
+        let silent = levels_of_silence();
+        assert_eq!(
+            (silent.peak, silent.peak_dbfs, silent.peak_first_dbfs),
+            (0, None, None)
+        );
+        assert_eq!(silent.first_samples, vec![0, 0]);
+    }
+
+    fn levels_of_silence() -> PcmLevels {
+        levels(&Pcm16 {
+            rate: 44_100,
+            channels: 2,
+            bytes: vec![0; 4],
+        })
+    }
+
+    #[test]
+    fn the_fixture_is_not_silent() {
+        let levels = levels(&decode_flac_s16(&fixture("s16_stereo_44100.flac"), 30).unwrap());
+        assert!(levels.peak > 0 && levels.peak_first > 0, "{levels:?}");
     }
 
     #[test]

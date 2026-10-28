@@ -22,6 +22,10 @@ pub struct Feedback {
     rejected_in_a_row: u32,
     pub accepted: u64,
     pub rejected: u64,
+    /// The scaling was worked out again after [`REJECTS_BEFORE_RESCALE`] rejections in a row.
+    rescales: u64,
+    /// The first value given, read as Q16.16 before any shift (frames per bus interval).
+    first_raw_q16: Option<u64>,
     min_q16: u32,
     max_q16: u32,
     sum_q16: u128,
@@ -36,6 +40,11 @@ pub struct FeedbackStats {
     pub avg: Option<f64>,
     pub accepted: u64,
     pub rejected: u64,
+    /// The power-of-two shift chosen from the first non-zero value (`None`: no value yet, or reset by a rescale).
+    pub shift: Option<i32>,
+    pub rescales: u64,
+    /// The first packet's value as Q16.16 frames per bus interval, before any shift.
+    pub first_raw: Option<f64>,
 }
 
 impl Feedback {
@@ -48,6 +57,8 @@ impl Feedback {
             rejected_in_a_row: 0,
             accepted: 0,
             rejected: 0,
+            rescales: 0,
+            first_raw_q16: None,
             min_q16: u32::MAX,
             max_q16: 0,
             sum_q16: 0,
@@ -75,6 +86,9 @@ impl Feedback {
 
     /// Take one feedback packet; returns whether its value is now the current rate.
     pub fn push(&mut self, bytes: &[u8]) -> bool {
+        if self.first_raw_q16.is_none() {
+            self.first_raw_q16 = Self::raw_q16(bytes);
+        }
         let Some(raw) = Self::raw_q16(bytes).filter(|raw| *raw > 0) else {
             self.reject();
             return false;
@@ -117,6 +131,7 @@ impl Feedback {
         if self.rejected_in_a_row >= REJECTS_BEFORE_RESCALE {
             self.shift = None;
             self.rejected_in_a_row = 0;
+            self.rescales += 1;
         }
     }
 
@@ -134,6 +149,9 @@ impl Feedback {
             avg: any.then(|| self.sum_q16 as f64 / self.accepted as f64 / 65_536.0),
             accepted: self.accepted,
             rejected: self.rejected,
+            shift: self.shift,
+            rescales: self.rescales,
+            first_raw: self.first_raw_q16.map(|raw| raw as f64 / 65_536.0),
         }
     }
 }
@@ -175,6 +193,9 @@ mod tests {
         assert!(feedback.push(&(q16(6.0) >> 3).to_le_bytes()));
         assert_eq!(feedback.current_q16(), Some(q16(6.0)));
         assert!(feedback.push(&(q16(6.001) >> 3).to_le_bytes()));
+        let stats = feedback.stats();
+        assert_eq!((stats.shift, stats.rescales), (Some(3), 0));
+        assert!((stats.first_raw.unwrap() - 0.75).abs() < 1e-4);
     }
 
     #[test]
@@ -196,6 +217,8 @@ mod tests {
         }
         assert_eq!(feedback.current_q16(), None);
         assert_eq!(feedback.stats().avg, None);
+        assert_eq!(feedback.stats().rescales, 2);
+        assert_eq!(feedback.stats().first_raw, Some(7.0));
         // After the rescale a good value is still taken.
         assert!(feedback.push(&q16(5.5125).to_le_bytes()));
     }

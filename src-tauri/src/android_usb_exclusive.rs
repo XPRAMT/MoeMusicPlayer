@@ -8,10 +8,11 @@
 //! (`player_usb_audio::usbfs::run_exclusive`) blocks until the end; its report is kept here for the page and returned to
 //! Kotlin, which logs it and only then closes the connection.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+use player_core::MediaLocator;
 use player_usb_audio::Report;
 
 /// The test plays at most this long from the start of the track.
@@ -47,6 +48,26 @@ pub(crate) fn refuse_while_playing(playback_state: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// The track's local file; a remote track gets its own reason.
+pub(crate) fn local_file(
+    locators: impl IntoIterator<Item = MediaLocator>,
+    is_file: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
+    let mut remote = false;
+    for locator in locators {
+        match locator {
+            MediaLocator::FileSystem(path) if is_file(&path) => return Ok(path),
+            MediaLocator::Remote { .. } => remote = true,
+            _ => {}
+        }
+    }
+    Err(if remote {
+        "這首是遠端曲目，試播只支援本機 FLAC".to_owned()
+    } else {
+        "只支援本機 FLAC 檔".to_owned()
+    })
 }
 
 /// The track must be a local FLAC of 16-bit stereo; answers its sample rate.
@@ -169,6 +190,37 @@ mod tests {
         );
         assert_eq!(
             check_track(Path::new("song.mp3")),
+            Err("只支援本機 FLAC 檔".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_remote_track_is_refused_with_its_own_reason() {
+        let remote = || MediaLocator::Remote {
+            source_id: player_core::SourceId::new(),
+            path: "Music/a.flac".to_owned(),
+        };
+        let local = || MediaLocator::FileSystem(PathBuf::from("/sdcard/Music/a.flac"));
+        assert_eq!(
+            local_file([remote()], |_| true),
+            Err("這首是遠端曲目，試播只支援本機 FLAC".to_owned())
+        );
+        assert_eq!(
+            local_file([remote(), local()], |_| true),
+            Ok(PathBuf::from("/sdcard/Music/a.flac"))
+        );
+        assert_eq!(
+            local_file([local()], |_| false),
+            Err("只支援本機 FLAC 檔".to_owned())
+        );
+        assert_eq!(
+            local_file([MediaLocator::ContentUri("content://x".to_owned())], |_| {
+                true
+            }),
+            Err("只支援本機 FLAC 檔".to_owned())
+        );
+        assert_eq!(
+            local_file([], |_| true),
             Err("只支援本機 FLAC 檔".to_owned())
         );
     }

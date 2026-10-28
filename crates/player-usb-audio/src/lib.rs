@@ -10,6 +10,7 @@
 //! the usbfs numbers (`ioctl`). Only `usbfs` makes system calls; it exists on Android and Linux.
 
 pub mod descriptors;
+pub mod diagnostics;
 pub mod feedback;
 pub mod ioctl;
 pub mod packets;
@@ -18,7 +19,21 @@ pub mod uac;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub mod usbfs;
 
+use diagnostics::{DataUrbStats, FeedbackUrbStats};
 use feedback::FeedbackStats;
+use pcm::PcmLevels;
+
+/// When the sampling frequency is set relative to selecting the streaming alt (ADR 0046).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClockOrder {
+    /// Linux `snd-usb-audio`'s UAC2 order: alt 0, GET RANGE, the chosen alt, SET CUR, settle, GET CUR, stream.
+    #[default]
+    AltThenClock,
+    /// The first device test's order: alt 0, GET RANGE, SET CUR, settle, GET CUR, the chosen alt, stream. Kept only
+    /// for an A/B comparison; nothing selects it.
+    ClockThenAlt,
+}
 
 /// How a test ended.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -45,7 +60,15 @@ pub struct Report {
     pub interface: Option<u8>,
     pub alt: Option<u8>,
     pub high_speed: Option<bool>,
+    pub clock_order: ClockOrder,
+    /// What the feedback parser did with the packets that carried bytes.
     pub feedback: FeedbackStats,
+    /// Every reaped feedback URB: statuses, empty packets, the first raw packets.
+    pub feedback_urbs: FeedbackUrbStats,
+    /// Every reaped data URB: statuses (0 included) and packets whose actual length differs from the one asked for.
+    pub data_packets: DataUrbStats,
+    /// Peaks of the PCM sent; `None` when nothing was decoded.
+    pub pcm: Option<PcmLevels>,
     pub frames_total: u64,
     pub frames_sent: u64,
     /// Times every data URB had completed before the next was queued (the bus went without data).
@@ -84,5 +107,9 @@ mod tests {
         assert!(json.contains("\"rateReadBack\":null"), "{json}");
         assert!(json.contains("\"handBackErrors\":[]"), "{json}");
         assert!(json.contains("\"feedback\":{\"min\":null"), "{json}");
+        assert!(json.contains("\"clockOrder\":\"altThenClock\""), "{json}");
+        assert!(json.contains("\"feedbackUrbs\":{\"reaped\":0"), "{json}");
+        assert!(json.contains("\"dataPackets\":{\"reaped\":0"), "{json}");
+        assert!(json.contains("\"pcm\":null"), "{json}");
     }
 }

@@ -7693,15 +7693,12 @@ async fn android_usb_exclusive_start(
             .database
             .as_ref()
             .ok_or_else(|| "曲庫資料庫無法使用".to_owned())?;
-        let path = database
-            .track_locators(track.id)
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .find_map(|locator| match locator {
-                MediaLocator::FileSystem(path) if path.is_file() => Some(path),
-                _ => None,
-            })
-            .ok_or_else(|| "只支援本機 FLAC 檔".to_owned())?;
+        let path = android_usb_exclusive::local_file(
+            database
+                .track_locators(track.id)
+                .map_err(|error| error.to_string())?,
+            std::path::Path::is_file,
+        )?;
         android_usb_exclusive::check_track(&path)?;
         android_usb_exclusive::begin()?;
         let payload = serde_json::json!({ "path": path.to_string_lossy() });
