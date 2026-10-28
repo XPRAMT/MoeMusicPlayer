@@ -315,15 +315,19 @@ impl PlaybackQueue {
                 return Err("library queue entries cannot have playlist positions");
             }
             PlaybackQueueContext::Playlist { .. } => {
-                let mut previous = None;
+                // Entries follow the list the user clicked in (a sorted playlist page, the clicked entry put
+                // first when the page no longer shows it), so positions are not ascending. Each entry is one
+                // distinct playlist slot, though, so a position must not repeat.
+                let mut positions = Vec::with_capacity(snapshot.entries.len());
                 for entry in &snapshot.entries {
                     let Some(position) = entry.source_position else {
                         return Err("playlist queue entry has no source position");
                     };
-                    if previous.is_some_and(|previous| position <= previous) {
-                        return Err("playlist queue positions are not strictly increasing");
-                    }
-                    previous = Some(position);
+                    positions.push(position);
+                }
+                positions.sort_unstable();
+                if positions.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err("playlist queue positions are duplicated");
                 }
             }
             _ => {}

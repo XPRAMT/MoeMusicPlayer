@@ -16206,6 +16206,36 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
     }
 
+
+    #[test]
+    fn a_sorted_playlist_queue_saves_checkpoints_and_loads() {
+        let db = Database::open_in_memory().expect("database");
+        let entries = [3_u64, 0, 2, 1]
+            .into_iter()
+            .map(|position| PlaybackQueueEntry {
+                track_id: TrackId::new(),
+                source_position: Some(position),
+            })
+            .collect();
+        let queue = PlaybackQueue::with_entries(
+            entries,
+            PlaybackQueueContext::Playlist {
+                playlist_id: "sorted-playlist".to_owned(),
+            },
+            1,
+        )
+        .expect("queue");
+        let checkpoint = PlaybackSessionCheckpoint {
+            queue: queue.snapshot(),
+            position_ms: 10,
+        };
+        db.save_playback_session(&checkpoint).expect("save");
+        db.checkpoint_playback_position(&checkpoint.queue, 20)
+            .expect("position checkpoint");
+        let restored = db.load_playback_session().expect("load").expect("session");
+        assert_eq!(restored.queue, checkpoint.queue);
+        assert_eq!(restored.position_ms, 20);
+    }
     #[test]
     fn unavailable_track_ids_are_preserved_without_stored_paths_or_track_rows() {
         let db = Database::open_in_memory().expect("database");
