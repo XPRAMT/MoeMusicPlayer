@@ -2,7 +2,7 @@
   // The settings page and the quick-settings drawer each mount this list, and the two must always be the same list:
   // everything the list shows or edits lives here, once, and each mounted copy only draws it. Reading the devices
   // again is done by the copy that was mounted first (ADR 0044).
-  import type { AndroidAudioOutputStatus, AndroidOutputDevice } from './ipc';
+  import type { AndroidAudioOutputStatus, AndroidOutputDevice, AndroidUsbAudioDescriptors } from './ipc';
 
   const s = $state({
     /** The choice in settings.json (null: the system default). */
@@ -11,6 +11,14 @@
     loading: true,
     loaded: false,
     failure: null as string | null,
+  });
+  /** The USB descriptor reader (ADR 0045): which USB card asked, and the answer (shared like the list). */
+  const usb = $state({
+    rowKey: null as string | null,
+    busy: false,
+    result: null as AndroidUsbAudioDescriptors | null,
+    failure: null as string | null,
+    copied: null as string | null,
   });
   const liveInstances = new Set<symbol>();
   // Saving is one queue for both copies, so an older answer never overwrites a newer choice.
@@ -27,6 +35,7 @@
   import { appTooltip } from './app-tooltip.js';
   import { buildAndroidRows, sameChoice } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
+  import { describeUsbDevice, spacedHex } from './usb-audio-descriptors.js';
 
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
@@ -36,6 +45,7 @@
   const AFTER_CHOICE_MS = 400;
 
   let rows = $derived(buildAndroidRows(s.status, s.saved));
+  let usbViews = $derived((usb.result?.devices ?? []).map(describeUsbDevice));
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
 
@@ -97,6 +107,38 @@
       await refreshStatus();
       setTimeout(() => void refreshStatus(), AFTER_CHOICE_MS);
     });
+  }
+
+  // ---- USB DAC descriptors (ADR 0045): read only; the system asks for USB permission when the button is pressed ----
+  async function readUsbDescriptors(rowKey: string): Promise<void> {
+    if (usb.busy || !isTauri()) return;
+    usb.rowKey = rowKey;
+    usb.busy = true;
+    usb.failure = null;
+    usb.copied = null;
+    try {
+      usb.result = await invokeCommand('android_usb_audio_descriptors', { request: true });
+    } catch (error) {
+      usb.result = null;
+      usb.failure = tr('無法讀取 USB 規格：{0}', [getErrorText(error)]);
+    } finally {
+      usb.busy = false;
+    }
+  }
+
+  async function copyRaw(raw: string): Promise<void> {
+    const text = spacedHex(raw);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = document.createElement('textarea');
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    usb.copied = raw;
   }
 
   // ---- 「附近的裝置」 for the Bluetooth codec (ADR 0044; the explanation first, the request only on 「前往授權」) ----
@@ -225,6 +267,39 @@
       {#if row.path?.text}
         <p class="output-device-path is-{row.path.tone}">{row.path.text}</p>
       {/if}
+      {#if row.connected && row.identity?.kind === 'usb'}
+        <!-- Read only (ADR 0045): this area acts on its own controls and never chooses the card. -->
+        <div class="output-device-usb" data-own-click>
+          <button type="button" class="soft-button" disabled={usb.busy} onclick={() => void readUsbDescriptors(row.key)}>
+            {usb.busy && usb.rowKey === row.key ? tr('讀取中…') : tr('讀取 USB 規格')}
+          </button>
+          {#if usb.rowKey === row.key && !usb.busy}
+            {#if usb.failure}
+              <p class="output-device-path is-error" role="alert">{usb.failure}</p>
+            {:else if usb.result && !usbViews.length}
+              <p class="output-device-path is-idle">{tr('沒有找到 USB 音訊裝置')}</p>
+            {/if}
+            {#each usbViews as view (view.title)}
+              <div class="output-device-usb-device">
+                {#if usbViews.length > 1}<strong>{view.title}</strong>{/if}
+                <ul class="output-device-usb-list">
+                  {#each view.lines as line}<li>{line}</li>{/each}
+                  {#each view.streams as line}<li>{line}</li>{/each}
+                </ul>
+                {#if view.raw}
+                  <details class="output-device-usb-raw">
+                    <summary>{tr('原始描述元')}</summary>
+                    <code>{spacedHex(view.raw)}</code>
+                    <button type="button" class="soft-button" onclick={() => void copyRaw(view.raw)}>
+                      {usb.copied === view.raw ? tr('已複製') : tr('複製')}
+                    </button>
+                  </details>
+                {/if}
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {/if}
     </div>
   {/each}
 </div>
@@ -251,5 +326,44 @@
 <style>
   .output-device-permission {
     margin-left: 8px;
+  }
+
+  .output-device-usb {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+    margin-top: 6px;
+    padding-left: 28px;
+    cursor: auto;
+  }
+
+  .output-device-usb-device {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    color: var(--text-soft);
+    font-size: var(--font-caption);
+  }
+
+  .output-device-usb-list {
+    margin: 0;
+    padding-left: 1.2em;
+  }
+
+  .output-device-usb-raw summary {
+    cursor: pointer;
+  }
+
+  .output-device-usb-raw code {
+    display: block;
+    margin: 4px 0;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+
+  @media (max-width: 520px) {
+    .output-device-usb {
+      padding-left: 0;
+    }
   }
 </style>

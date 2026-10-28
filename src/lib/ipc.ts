@@ -326,6 +326,12 @@ export interface AndroidAudioTrackOutput {
   mixerSampleRate?: number | null;
 }
 
+/** Answer of `android_usb_audio_descriptors` (ADR 0045): the attached USB audio devices, parsed read only. */
+export interface AndroidUsbAudioDescriptors {
+  supported: boolean;
+  devices: import('./usb-audio-descriptors.js').UsbAudioDevice[];
+}
+
 /** Answer of `android_audio_output_status` (ADR 0044). */
 export interface AndroidAudioOutputStatus {
   devices: AndroidOutputDeviceInfo[];
@@ -1207,6 +1213,10 @@ interface IpcContract {
   android_request_bluetooth_connect: {
     args: Record<string, never>;
     result: { granted: boolean; openedSettings: boolean } | null;
+  };
+  android_usb_audio_descriptors: {
+    args: { request: boolean };
+    result: AndroidUsbAudioDescriptors | null;
   };
   settings_get_output_volume_sync: {
     args: Record<string, never>;
