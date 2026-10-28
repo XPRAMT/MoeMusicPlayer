@@ -13,8 +13,9 @@ import java.util.concurrent.TimeUnit
 /**
  * The real mixer rate of the playing AudioTrack from a privileged `dumpsys` (ADR 0048). Safety rules, from a real
  * incident (audioserver aborted about 2 s after a flinger dump): the dump runs on its own thread, at most once per
- * track creation or route change, never closer than [MixerRateConfig.MIN_INTERVAL_MS] to the last one (requests in
- * between are coalesced), never while the USB exclusive output or native DSD owns the device, never when a kill switch
+ * track creation or route change (the first run at once; while the track is not in the dump yet it retries at the short
+ * [MixerRateConfig.RETRY_BACKOFF_MS] delays), lookups never closer than [MixerRateConfig.MIN_GAP_MS] (requests in
+ * between are coalesced), at most [MixerRateConfig.MAX_RUNS_PER_WINDOW] runs a minute, never while the USB exclusive output or native DSD owns the device, never when a kill switch
  * is off, and an audio-server symptom soon after a dump stops it for the rest of the process.
  */
 internal class MixerRateLookup(
@@ -28,7 +29,12 @@ internal class MixerRateLookup(
     private val executor = ScheduledThreadPoolExecutor(1) { runnable ->
         Thread(runnable, "moe-mixer-rate").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }
-    private val gate = DumpGate(MixerRateConfig.MIN_INTERVAL_MS, MixerRateConfig.SETTLE_MS)
+    private val gate = DumpGate(
+        MixerRateConfig.MIN_GAP_MS, MixerRateConfig.RETRY_BACKOFF_MS,
+        MixerRateConfig.MAX_RUNS_PER_WINDOW, MixerRateConfig.RUN_WINDOW_MS,
+    )
+    /** The waiting run (first run or retry); replaced when a new request restarts the lookup. */
+    private var scheduled: java.util.concurrent.ScheduledFuture<*>? = null
 
     @Volatile private var track: WeakReference<AudioTrack>? = null
     @Volatile private var routeKey: Int? = null
@@ -48,7 +54,7 @@ internal class MixerRateLookup(
         // A privileged source is probably in use: show nothing for the 「系統」 step instead of the stream-level value.
         if (MixerRatePrefs.rootOptIn(appContext) || ShizukuAccess.binderAlive()) setLookup(MixerRateRules.Lookup.Pending)
         val delay = synchronized(gate) { gate.request(SystemClock.elapsedRealtime()) } ?: return
-        schedule(delay)
+        schedule(delay, replace = true)
     }
 
     /** The track is gone. */
@@ -80,9 +86,12 @@ internal class MixerRateLookup(
 
     private fun allowed() = MixerRateConfig.PRIVILEGED_LOOKUP_ENABLED && settingEnabled() && !breaker.tripped
 
-    private fun schedule(delayMs: Long) {
+    private fun schedule(delayMs: Long, replace: Boolean = false) {
         try {
-            executor.schedule({ runOnce() }, delayMs, TimeUnit.MILLISECONDS)
+            synchronized(gate) {
+                if (replace) scheduled?.cancel(false)
+                scheduled = executor.schedule({ runOnce() }, delayMs, TimeUnit.MILLISECONDS)
+            }
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             // The service is gone.
         }
@@ -102,41 +111,53 @@ internal class MixerRateLookup(
         val source = MixerRateRules.selectSource(
             rootState, shizuku, MixerRateConfig.PRIVILEGED_LOOKUP_ENABLED, settingEnabled(), breaker.tripped,
         )
-        val portId = audioTrack?.let(::portIdOf)
+        if (source == MixerRateRules.Source.PLATFORM || audioTrack == null) {
+            synchronized(gate) { gate.abort() }
+            setLookup(MixerRateRules.Lookup.NotUsed)
+            return
+        }
+        if (!synchronized(gate) { gate.begin(SystemClock.elapsedRealtime()) }) return
+        val portId = portIdOf(audioTrack)
         val key = portId?.let { cache.key(it, routeKey) }
-        if (source == MixerRateRules.Source.PLATFORM || audioTrack == null || portId == null) {
-            synchronized(gate) { gate.abort() }
-            setLookup(MixerRateRules.Lookup.NotUsed)
-            return
-        }
-        if (key != null && cache.has(key)) {
-            synchronized(gate) { gate.abort() }
-            setLookup(cache.get(key)?.let { MixerRateRules.Lookup.Found(it, source) } ?: MixerRateRules.Lookup.Failed)
-            return
-        }
-        if (!MixerRateRules.mayDump(source, usbOutputActive(), UsbExclusiveEngine.source.nativeDsd, portId)) {
-            synchronized(gate) { gate.abort() }
-            setLookup(MixerRateRules.Lookup.NotUsed)
-            return
-        }
-        val started = SystemClock.elapsedRealtime()
-        if (!synchronized(gate) { gate.begin(started) }) return
         var rate: Int? = null
-        try {
-            rate = dump(source, portId)
-        } catch (error: Exception) {
-            Log.w(TAG, "mixer rate lookup failed: $error")
-            if (source == MixerRateRules.Source.ROOT) RootAccess.forget()
+        var cached = false
+        if (key != null && cache.has(key)) {
+            // Already looked up (or already given up) for this track and route: no dump.
+            rate = cache.get(key)
+            cached = true
+        } else if (portId != null) {
+            if (!MixerRateRules.mayDump(source, usbOutputActive(), UsbExclusiveEngine.source.nativeDsd, portId)) {
+                synchronized(gate) { gate.abort() }
+                setLookup(MixerRateRules.Lookup.NotUsed)
+                return
+            }
+            try {
+                rate = dump(source, portId)
+            } catch (error: Exception) {
+                Log.w(TAG, "mixer rate lookup failed: $error")
+                if (source == MixerRateRules.Source.ROOT) RootAccess.forget()
+            }
         }
+        // No port id yet counts as "not found yet": the track may not have reported it, so the lookup retries.
+        val next = synchronized(gate) { gate.finish(SystemClock.elapsedRealtime(), rate != null || cached) }
         if (breaker.tripped) {
             setLookup(MixerRateRules.Lookup.NotUsed)
-        } else if (key != null) {
-            cache.put(key, rate)
-            Log.i(TAG, "mixer rate of port $portId via ${source.wire}: ${rate ?: "unknown"}")
-            setLookup(rate?.let { MixerRateRules.Lookup.Found(it, source) } ?: MixerRateRules.Lookup.Failed)
+            return
         }
-        val next = synchronized(gate) { gate.finish(SystemClock.elapsedRealtime()) }
-        if (next != null && !breaker.tripped) schedule(next)
+        if (rate != null) {
+            if (!cached && key != null) {
+                cache.put(key, rate)
+                Log.i(TAG, "mixer rate of port $portId via ${source.wire}: $rate")
+            }
+            setLookup(MixerRateRules.Lookup.Found(rate, source))
+        } else if (next.gaveUp || cached) {
+            if (key != null && !cached) {
+                cache.put(key, null)
+                Log.i(TAG, "mixer rate of port $portId via ${source.wire}: unknown")
+            }
+            setLookup(MixerRateRules.Lookup.Failed)
+        }
+        next.delayMs?.let { schedule(it) }
     }
 
     /** One run: the dumps of [MixerRateConfig.DUMP_ORDER] until one gives the rate, stopping at a tripped breaker. */

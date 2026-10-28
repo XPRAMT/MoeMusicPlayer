@@ -16,11 +16,21 @@ internal object MixerRateConfig {
     /** The dumps of one lookup run, in order, until one gives the rate. Flip to [FLINGER_SECOND] to ask `media.metrics` first. */
     val DUMP_ORDER: List<MixerRateRules.Dump> = MixerRateRules.FLINGER_FIRST
 
-    /** Two lookup runs start at least this far apart; requests in between are coalesced into one run. */
-    const val MIN_INTERVAL_MS = 5_000L
+    /**
+     * Two lookups (a new track or route) start at least this far apart; requests in between are coalesced into one. The
+     * dumps are cheap, so this is short.
+     */
+    const val MIN_GAP_MS = 1_000L
 
-    /** A request waits this long so a track that is created, pinned and re-routed within a moment costs one run. */
-    const val SETTLE_MS = 1_000L
+    /**
+     * The first run of a lookup starts at once. When the track is not in the dump yet, the lookup retries after each of
+     * these delays and then gives up (the platform value is shown).
+     */
+    val RETRY_BACKOFF_MS: List<Long> = listOf(150L, 300L, 600L, 1_200L)
+
+    /** No more than this many runs start within [RUN_WINDOW_MS], whatever asks. */
+    const val MAX_RUNS_PER_WINDOW = 30
+    const val RUN_WINDOW_MS = 60_000L
 
     /** An audio-server symptom this soon after a dump trips the circuit breaker. */
     const val BREAKER_WINDOW_MS = 8_000L
@@ -176,30 +186,53 @@ internal object MixerRateRules {
 }
 
 /**
- * Spaces the dump runs (ADR 0048 safety): at most one run in flight, runs start at least [minIntervalMs] apart, requests
- * wait [settleMs] and every request made while one is pending or running is coalesced into it (a run that is running
- * when a request arrives is followed by exactly one more, after the interval). Pure: the caller passes the clock.
+ * Schedules the dump runs of one lookup (ADR 0048 safety): at most one run in flight; the first run of a lookup starts
+ * at once (or as soon as [minGapMs] after the previous lookup's first run allows); while the track is not in the dump
+ * yet, the lookup retries after each delay of [backoffMs] and then gives up; a request made while a run is in flight is
+ * coalesced into exactly one follow-up lookup (the newest track); a request made while only a retry is waiting restarts
+ * the lookup; and no more than [maxRuns] runs start within [windowMs]. Pure: the caller passes the clock.
  */
-internal class DumpGate(private val minIntervalMs: Long, private val settleMs: Long) {
-    private var lastStartMs: Long? = null
+internal class DumpGate(
+    private val minGapMs: Long,
+    private val backoffMs: List<Long>,
+    private val maxRuns: Int,
+    private val windowMs: Long,
+) {
+    /** What to do after a run: wait [delayMs] and run again ([delayMs] null: nothing more); [gaveUp]: the retries ran out. */
+    class Next(val delayMs: Long?, val gaveUp: Boolean)
+
+    private var lastLookupStartMs: Long? = null
+    private val starts = ArrayDeque<Long>()
     private var pending = false
     private var running = false
     private var rerun = false
+    private var attempt = 0
 
-    /** The delay after which to call [begin], or null when the request is coalesced into a pending or running run. */
+    /**
+     * The delay after which to call [begin], or null when the request is coalesced (a first run is already pending, or a
+     * run is in flight and will be followed by one more). When a retry is waiting, the lookup restarts: the caller
+     * replaces the waiting timer with this delay.
+     */
     fun request(nowMs: Long): Long? {
-        if (pending) return null
         if (running) {
             rerun = true
             return null
         }
+        if (pending && attempt == 0) return null
         pending = true
-        return delayFor(nowMs)
+        attempt = 0
+        return firstDelay(nowMs)
     }
 
-    private fun delayFor(nowMs: Long): Long {
-        val earliest = maxOf(nowMs + settleMs, (lastStartMs ?: Long.MIN_VALUE / 2) + minIntervalMs)
-        return earliest - nowMs
+    private fun firstDelay(nowMs: Long): Long {
+        val gap = (lastLookupStartMs ?: (Long.MIN_VALUE / 2)) + minGapMs - nowMs
+        return maxOf(0L, gap, capDelay(nowMs))
+    }
+
+    private fun capDelay(nowMs: Long): Long {
+        while (starts.isNotEmpty() && nowMs - starts.first() >= windowMs) starts.removeFirst()
+        if (starts.size < maxRuns) return 0
+        return maxOf(0L, starts[starts.size - maxRuns] + windowMs - nowMs)
     }
 
     /** The scheduled time came: true when the run starts now (it is then "running" until [finish]). */
@@ -207,7 +240,8 @@ internal class DumpGate(private val minIntervalMs: Long, private val settleMs: L
         if (!pending || running) return false
         pending = false
         running = true
-        lastStartMs = nowMs
+        if (attempt == 0) lastLookupStartMs = nowMs
+        starts.addLast(nowMs)
         return true
     }
 
@@ -216,15 +250,30 @@ internal class DumpGate(private val minIntervalMs: Long, private val settleMs: L
         pending = false
         running = false
         rerun = false
+        attempt = 0
     }
 
-    /** The run ended; the delay of the one follow-up run when a request arrived meanwhile, else null. */
-    fun finish(nowMs: Long): Long? {
+    /** The run ended; [found]: the track was in the dump. A request that arrived meanwhile starts a fresh lookup. */
+    fun finish(nowMs: Long, found: Boolean): Next {
         running = false
-        if (!rerun) return null
-        rerun = false
-        pending = true
-        return delayFor(nowMs)
+        if (rerun) {
+            rerun = false
+            pending = true
+            attempt = 0
+            return Next(firstDelay(nowMs), false)
+        }
+        if (found) {
+            attempt = 0
+            return Next(null, false)
+        }
+        if (attempt < backoffMs.size) {
+            val delay = maxOf(backoffMs[attempt], capDelay(nowMs))
+            attempt++
+            pending = true
+            return Next(delay, false)
+        }
+        attempt = 0
+        return Next(null, true)
     }
 }
 

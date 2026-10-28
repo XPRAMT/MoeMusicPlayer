@@ -87,35 +87,108 @@ class MixerRateRulesTest {
         assertEquals(MixerRateRules.Dump.METRICS, MixerRateRules.FLINGER_SECOND.first())
     }
 
-    @Test fun theGateSpacesRunsAndCoalescesRequests() {
-        val gate = DumpGate(5_000, 1_000)
-        assertEquals(1_000L, gate.request(0))
-        assertNull(gate.request(100)) // coalesced into the pending run
-        assertTrue(gate.begin(1_000))
-        assertNull(gate.request(1_500)) // arrives while running: one follow-up
-        assertNull(gate.request(1_600))
-        // the follow-up starts at least 5 s after the start of the first run (1_000 + 5_000), asked at 2_000
-        assertEquals(4_000L, gate.finish(2_000))
-        assertTrue(gate.begin(6_000))
-        assertNull(gate.finish(6_500))
-        // a request long after: only the settle time applies
-        assertEquals(1_000L, gate.request(60_000))
+    private fun gate(maxRuns: Int = 30, windowMs: Long = 60_000) =
+        DumpGate(1_000, listOf(150L, 300L, 600L, 1_200L), maxRuns, windowMs)
+
+    @Test fun theFirstRunOfALookupStartsAtOnce() {
+        val gate = gate()
+        assertEquals(0L, gate.request(5_000))
+        assertNull(gate.request(5_010)) // coalesced into the pending first run
+        assertTrue(gate.begin(5_000))
+        assertTrue(gate.finish(5_020, found = true).delayMs == null)
     }
 
-    @Test fun aRequestRightAfterARunWaitsForTheMinimumInterval() {
-        val gate = DumpGate(5_000, 1_000)
+    @Test fun aMissingTrackIsRetriedAtTheBackoffDelaysThenGivenUp() {
+        val gate = gate()
         gate.request(0)
-        gate.begin(1_000)
-        gate.finish(1_100)
-        // last start 1_000 + 5_000 = 6_000; asked at 1_200
-        assertEquals(4_800L, gate.request(1_200))
+        gate.begin(0)
+        val delays = ArrayList<Long?>()
+        var now = 0L
+        var gaveUp = false
+        repeat(5) {
+            val next = gate.finish(now + 20, found = false)
+            delays += next.delayMs
+            gaveUp = next.gaveUp
+            if (next.delayMs != null) {
+                now += 20 + next.delayMs!!
+                assertTrue(gate.begin(now))
+            }
+        }
+        assertEquals(listOf<Long?>(150L, 300L, 600L, 1_200L, null), delays)
+        assertTrue(gaveUp)
+    }
+
+    @Test fun aRetrySucceedingStopsTheChain() {
+        val gate = gate()
+        gate.request(0)
+        gate.begin(0)
+        assertEquals(150L, gate.finish(20, found = false).delayMs)
+        assertTrue(gate.begin(170))
+        val done = gate.finish(190, found = true)
+        assertNull(done.delayMs)
+        assertFalse(done.gaveUp)
+    }
+
+    @Test fun aRequestDuringARunGivesExactlyOneFollowUpAfterTheMinimumGap() {
+        val gate = gate()
+        gate.request(0)
+        gate.begin(0)
+        assertNull(gate.request(100))
+        assertNull(gate.request(200))
+        // the follow-up lookup starts at least 1 s after the first lookup started, asked at 300
+        val next = gate.finish(300, found = true)
+        assertEquals(700L, next.delayMs)
+        assertTrue(gate.begin(1_000))
+        assertNull(gate.finish(1_020, found = true).delayMs)
+    }
+
+    @Test fun aRequestWhileARetryWaitsRestartsTheLookup() {
+        val gate = gate()
+        gate.request(0)
+        gate.begin(0)
+        assertEquals(150L, gate.finish(20, found = false).delayMs)
+        // a new track: the waiting retry is replaced by a first run (the gap since the lookup start is 1 s)
+        assertEquals(780L, gate.request(220))
+        assertTrue(gate.begin(1_000))
+        // and its retries start from the beginning
+        assertEquals(150L, gate.finish(1_020, found = false).delayMs)
+    }
+
+    @Test fun aLookupRightAfterAnotherWaitsForTheMinimumGap() {
+        val gate = gate()
+        gate.request(0)
+        gate.begin(0)
+        gate.finish(20, found = true)
+        assertEquals(800L, gate.request(200))
+    }
+
+    @Test fun aLateLookupHasNoDelay() {
+        val gate = gate()
+        gate.request(0)
+        gate.begin(0)
+        gate.finish(20, found = true)
+        assertEquals(0L, gate.request(60_000))
+    }
+
+    @Test fun theRunCapDelaysRunsUntilTheOldestLeavesTheWindow() {
+        val gate = gate(maxRuns = 3, windowMs = 10_000)
+        for (t in listOf(0L, 2_000L, 4_000L)) {
+            gate.request(t)
+            assertTrue(gate.begin(t))
+            gate.finish(t + 10, found = true)
+        }
+        // three runs started in the last 10 s: the next may start when the first is 10 s old
+        assertEquals(5_000L, gate.request(5_000))
+        // a retry is held back the same way
+        assertTrue(gate.begin(10_000))
+        assertEquals(1_990L, gate.finish(10_010, found = false).delayMs)
     }
 
     @Test fun anAbortedRunLeavesNoTraceAndAllowsTheNextRequest() {
-        val gate = DumpGate(5_000, 1_000)
+        val gate = gate()
         gate.request(0)
         gate.abort()
-        assertEquals(1_000L, gate.request(100))
+        assertEquals(0L, gate.request(100))
     }
 
     @Test fun aSymptomSoonAfterADumpTripsTheBreakerAndALateOneDoesNot() {

@@ -68,7 +68,7 @@
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
    *  this often while it is shown. */
-  const STATUS_POLL_MS = 2000;
+  const STATUS_POLL_MS = 500;
   /** The service pins the device and Media3 opens a new AudioTrack shortly after a choice; read again then. */
   const AFTER_CHOICE_MS = 400;
 
