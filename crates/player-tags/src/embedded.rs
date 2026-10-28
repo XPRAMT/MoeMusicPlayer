@@ -54,9 +54,38 @@ pub fn read_embedded_lyric_texts<R: Read + Seek + Send>(reader: R, name: &Path) 
         .unwrap_or_default()
 }
 
+thread_local! {
+    static BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Bytes the tag readers of this thread pulled out of files so far (a lookup reads the difference before and after).
+pub fn bytes_read_on_thread() -> u64 {
+    BYTES_READ.with(std::cell::Cell::get)
+}
+
+/// A reader that counts what is read through it (see [`bytes_read_on_thread`]).
+struct Counted<R>(R);
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.0.read(buf)?;
+        BYTES_READ.with(|total| total.set(total.get() + count as u64));
+        Ok(count)
+    }
+}
+
+impl<R: Seek> Seek for Counted<R> {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(position)
+    }
+}
+
 /// Read the pictures of the tags of `reader`; `name` only names the file (its extension picks the container, and the
-/// content decides when the extension says nothing). `None` when the tags cannot be read at all.
+/// content decides when the extension says nothing). `None` when the tags cannot be read at all. Only the tag is read:
+/// every container's parser seeks to its tag (the head, the end, or the atoms of an MP4 without its `mdat`) and never
+/// reads the audio (`tests/embedded_read_bounds.rs`).
 pub fn read_embedded_tags<R: Read + Seek + Send>(reader: R, name: &Path) -> Option<EmbeddedTags> {
+    let reader = Counted(reader);
     if player_formats::decode_engine(name) == player_formats::DecodeEngine::Dsd {
         let (_, tag) = player_dsd::id3::read_dsf_from(reader).ok()?;
         return Some(EmbeddedTags {

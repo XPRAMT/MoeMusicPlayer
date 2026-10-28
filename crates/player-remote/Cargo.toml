@@ -34,6 +34,8 @@ sspi = { version = "=0.21.3", default-features = false, features = ["ring"] }
 lofty = "0.25.4"
 player-db = { path = "../player-db" }
 smb-rpc = "=0.12.1"
+player-tags = { path = "../player-tags" }
+player-dsd = { path = "../player-dsd", features = ["id3", "testing"] }
 
 [[test]]
 name = "real_music"

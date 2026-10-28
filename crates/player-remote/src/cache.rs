@@ -297,11 +297,8 @@ impl CachedFile {
         file
     }
 
-    fn chunk(&mut self, index: u64) -> Result<Vec<u8>, RemoteError> {
-        if let Some(bytes) = self.cache.get(&self.key, index) {
-            self.hits += 1;
-            return Ok(bytes);
-        }
+    /// Fetch a chunk the cache does not hold (and keep it, unless this file only reads).
+    fn fetch_chunk(&mut self, index: u64) -> Result<Vec<u8>, RemoteError> {
         self.misses += 1;
         let len = self.inner.len();
         let start = index * CACHE_CHUNK as u64;
@@ -341,8 +338,31 @@ impl RemoteFile for CachedFile {
         while done < wanted {
             let position = offset + done as u64;
             let index = position / CACHE_CHUNK as u64;
-            let chunk = self.chunk(index)?;
             let inside = (position - index * CACHE_CHUNK as u64) as usize;
+            let chunk = match self.cache.get(&self.key, index) {
+                Some(bytes) => {
+                    self.hits += 1;
+                    bytes
+                }
+                None if self.read_only => {
+                    // A tag or a cover is a few kilobytes of a chunk of a megabyte: only the bytes asked for are fetched,
+                    // and (as nothing is kept) nothing more.
+                    let in_chunk = CACHE_CHUNK - inside;
+                    let want = (wanted - done).min(in_chunk);
+                    // A reader whose work was cancelled asks the server for nothing more.
+                    player_core::check_read_cancel().map_err(|_| {
+                        RemoteError::Protocol("the read was cancelled".to_owned())
+                    })?;
+                    self.misses += 1;
+                    let read = self.inner.read_at(position, &mut buf[done..done + want])?;
+                    if read == 0 {
+                        break;
+                    }
+                    done += read;
+                    continue;
+                }
+                None => self.fetch_chunk(index)?,
+            };
             let count = (chunk.len().saturating_sub(inside)).min(wanted - done);
             if count == 0 {
                 break;
@@ -513,6 +533,64 @@ mod tests {
         reader.read_at(at, &mut buffer).unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 3, "it was fetched again");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file that records the bytes asked of it.
+    struct Recording {
+        len: u64,
+        asked: Arc<AtomicU64>,
+    }
+
+    impl RemoteFile for Recording {
+        fn len(&self) -> u64 {
+            self.len
+        }
+
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RemoteError> {
+            let count = buf.len().min((self.len - offset) as usize);
+            self.asked.fetch_add(count as u64, Ordering::SeqCst);
+            buf[..count].fill(7);
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn a_read_only_cached_file_asks_the_server_for_the_bytes_it_needs_not_the_chunk() {
+        let dir = temp_dir("read-only-exact");
+        let cache = Arc::new(DiskCache::open(&dir, 100_000_000).unwrap());
+        let asked = Arc::new(AtomicU64::new(0));
+        let len = 30 * CACHE_CHUNK as u64;
+        let mut file = CachedFile::read_only(
+            Box::new(Recording {
+                len,
+                asked: Arc::clone(&asked),
+            }),
+            Arc::clone(&cache),
+            cache_key("a", "song.flac", len, Some(1)),
+        );
+        // A tag at the head, one across a chunk border and one at the very end of a 30 MiB song.
+        let mut buffer = vec![0_u8; 16 * 1024];
+        assert_eq!(file.read_at(0, &mut buffer).unwrap(), buffer.len());
+        assert_eq!(
+            file.read_at(CACHE_CHUNK as u64 - 100, &mut buffer).unwrap(),
+            buffer.len()
+        );
+        assert_eq!(file.read_at(len - 128, &mut buffer).unwrap(), 128);
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            2 * 16 * 1024 + 128,
+            "exactly the bytes asked for, not the megabyte chunks around them"
+        );
+        assert_eq!(cache.used(), 0, "nothing was kept");
+
+        // A cancelled lookup asks for nothing more.
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let before = asked.load(Ordering::SeqCst);
+        player_core::with_read_cancel(flag, || {
+            assert!(file.read_at(5 * CACHE_CHUNK as u64, &mut buffer).is_err());
+        });
+        assert_eq!(asked.load(Ordering::SeqCst), before);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -343,6 +343,29 @@ pub const BLOCK_SIZE: usize = 256 * 1024;
 /// Reading a song's tags in a scan: the tags are in the first few tens of kilobytes (or the last), so a scan reads in small
 /// pieces: a library of thousands of songs would otherwise pull a megabyte from the server for each.
 pub const METADATA_BLOCK_SIZE: usize = 16 * 1024;
+thread_local! {
+    static FETCHED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Bytes the range readers of this thread asked the server for so far (a lookup reads the difference before and after).
+pub fn fetched_bytes_on_thread() -> u64 {
+    FETCHED_BYTES.with(std::cell::Cell::get)
+}
+
+/// The most blocks (1 MiB) one request of a tag read may grow to.
+const METADATA_GROWTH_LIMIT_BLOCKS: u64 = 64;
+
+/// The one reader for reading tags, covers and lyrics out of a file (a library scan, an album cover, a lyrics lookup, local
+/// or remote): small blocks and a short read-ahead, because the tag is at the start (or the end) of a file and a song is
+/// never read through for it. A tag with a megabyte-sized picture in it is read through by the parser (MP3 and DSF `APIC`,
+/// MP4 `ilst`, the Ogg/Opus comment packet): the read-ahead then grows with the run, so that is a few big requests instead
+/// of one per 32 KiB. Ordinary files never reach the growth.
+pub fn metadata_reader(file: Box<dyn RemoteFile>) -> RangeReader {
+    RangeReader::with_geometry(file, METADATA_BLOCK_SIZE, 64)
+        .with_read_ahead(2)
+        .with_growing_read_ahead(METADATA_GROWTH_LIMIT_BLOCKS)
+}
+
 /// Blocks kept in memory (16 MiB).
 const DEFAULT_CACHED_BLOCKS: usize = 64;
 /// A sequential reader fetches this many blocks per request, so a long track is a few big requests, not thousands of
@@ -439,6 +462,8 @@ impl RangeReader {
         if self.blocks.contains_key(&block) {
             return Ok(());
         }
+        // A reader whose work was cancelled (the album page was left) asks the server for nothing more.
+        player_core::check_read_cancel()?;
         let last_block = self.len.saturating_sub(1) / self.block_size as u64;
         let sequential = block * self.block_size as u64 == self.next_sequential && block > 0;
         self.sequential_run = if sequential { self.sequential_run.saturating_add(1) } else { 0 };
@@ -480,6 +505,7 @@ impl RangeReader {
             offset += length;
         }
         self.next_sequential = start + wanted as u64;
+        FETCHED_BYTES.with(|total| total.set(total.get() + wanted as u64));
         Ok(())
     }
 

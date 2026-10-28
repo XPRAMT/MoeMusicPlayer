@@ -18,6 +18,7 @@ pub use artwork::{ArtworkImage, MAX_ARTWORK_BYTES, MAX_ARTWORK_DIMENSION, MAX_AR
 pub use filesystem_key::unix_path_from_key;
 #[cfg(unix)]
 pub use filesystem_key::{file_uri_for_path, unix_path_key};
+pub mod read_cancel;
 pub mod remote;
 pub use library::{
     display_track_title, locator_display_file_stem, parse_recording_date, parse_remote_locator_uri,
@@ -58,6 +59,10 @@ pub use sync::{
 };
 #[cfg(windows)]
 pub use windows_locator::windows_locator_key;
+
+pub use read_cancel::{
+    check_read_cancel, read_cancelled, read_cancelled_error, with_read_cancel,
+};
 
 pub use remote::{
     begin_load, begin_load_abandonable, end_load, forget_remote_tag_lyrics, is_remote_link_lost,

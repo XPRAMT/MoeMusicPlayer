@@ -14,9 +14,7 @@ use player_core::{
 };
 use player_track_metadata::{ByteSource, ReadSeek};
 
-use crate::fs::{
-    RangeReader, RemoteError, RemoteFile, RemoteFs, SharedRangeReader, METADATA_BLOCK_SIZE,
-};
+use crate::fs::{RemoteError, RemoteFs, SharedRangeReader};
 
 /// Directories listed at the same time. A listing costs a round trip, so a few at once make a scan several times
 /// faster on a distant server without loading it.
@@ -313,18 +311,6 @@ struct RemoteByteSource {
     shared: std::sync::Mutex<Option<SharedRangeReader>>,
 }
 
-/// The most blocks (1 MiB) one request of a tag read may grow to.
-const METADATA_GROWTH_LIMIT_BLOCKS: u64 = 64;
-
-/// A reader tuned for tags: small blocks, a short read-ahead. A tag with a megabyte-sized picture in it is read
-/// through by the parser (MP3 and DSF `APIC`, MP4 `ilst`, the Ogg/Opus comment packet): the read-ahead then grows with
-/// the run, so that is a few big requests instead of one per 32 KiB. Ordinary files never reach the growth.
-fn metadata_reader(file: Box<dyn RemoteFile>) -> RangeReader {
-    RangeReader::with_geometry(file, METADATA_BLOCK_SIZE, 64)
-        .with_read_ahead(2)
-        .with_growing_read_ahead(METADATA_GROWTH_LIMIT_BLOCKS)
-}
-
 impl ByteSource for RemoteByteSource {
     fn file_name(&self) -> String {
         self.path.rsplit('/').next().unwrap_or("").to_owned()
@@ -339,7 +325,7 @@ impl ByteSource for RemoteByteSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if shared.is_none() {
             let file = self.fs.open(&self.path)?;
-            *shared = Some(SharedRangeReader::new(metadata_reader(file)));
+            *shared = Some(SharedRangeReader::new(crate::fs::metadata_reader(file)));
         }
         Ok(Box::new(shared.as_ref().map(SharedRangeReader::handle).expect("opened above")))
     }
@@ -347,7 +333,7 @@ impl ByteSource for RemoteByteSource {
     fn open_correction(&self) -> Option<Box<dyn ReadSeek>> {
         let correction = format!("{}c", self.path);
         let file = self.fs.open(&correction).ok()?;
-        Some(Box::new(metadata_reader(file)))
+        Some(Box::new(crate::fs::metadata_reader(file)))
     }
 }
 
