@@ -14,7 +14,7 @@ import { formatDsdName } from './dsd-settings.js';
  *   dseeHx: 'off' | 'active' | 'bypassed' | 'unavailable',
  *   dseeNotice: string | null,
  *   dseeOutputRateHz: number | null,
- *   exclusive?: { bits: number, channels: number, sourceChannels: number, bitPerfect: boolean, volumeApplied: boolean, underruns: number, dopDsdRateHz?: number | null, dopFallback?: string | null } | null,
+ *   exclusive?: { bits: number, channels: number, sourceChannels: number, bitPerfect: boolean, volumeApplied: boolean, underruns: number, dopDsdRateHz?: number | null, dopFallback?: string | null, otherReasons?: string[] } | null,
  *   exclusiveFallback?: string | null,
  * }} OutputFormat
  */
@@ -184,6 +184,7 @@ export function describeExclusive(format) {
   if (exclusive.sourceChannels !== exclusive.channels) {
     reasons.push(tr("裝置不接受 {0} 聲道，已混成 {1} 聲道", [exclusive.sourceChannels, exclusive.channels]));
   }
+  reasons.push(...(exclusive.otherReasons ?? []));
   if (exclusive.volumeApplied) {
     reasons.push(tr('播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出'));
   }
@@ -237,4 +238,55 @@ export function describeAndroidPath(output, route = { bluetooth: false, codec: n
     steps.push(codec ? { rateHz: codec.sampleRate || null, name: codecStepName(codec) } : { rateHz: null, name: tr('藍牙') });
   }
   return formatOutputPath(formatSampleRate(output.sampleRate), steps, output.channelCount, [output.offload && tr('硬體解碼')]);
+}
+
+/**
+ * Why the Android USB exclusive output is not bit-perfect, other than the volume (ADR 0047).
+ * @param {import('./ipc').AndroidUsbExclusiveEngine['notBitPerfect'][number]} reason
+ */
+function androidExclusiveReason(reason) {
+  switch (reason) {
+    case 'float32': return tr('32 bit 來源經過浮點處理，無法逐位元原樣送出');
+    case 'unknownBits': return tr('無法得知來源的位元深度');
+    case 'dsd': return tr('DSD 已轉成 PCM');
+    case 'truncated': return tr('USB 音訊裝置的格式位元數少於來源');
+    default: return null;
+  }
+}
+
+/**
+ * The Android USB exclusive output (ADR 0047) in the Windows exclusive line's format (no conversion: the device runs
+ * at the file's rate): 「44.1 kHz → 44.1 kHz（獨佔）．2 聲道．16bit．位元完美」; what kept it from being bit-perfect is
+ * the notice.
+ * @param {import('./ipc').AndroidUsbExclusiveEngine | null | undefined} engine
+ * @returns {OutputFormatStatus | null} null while no format is set
+ */
+export function describeAndroidExclusive(engine) {
+  if (!engine?.rate || !engine.bits || !engine.channels) return null;
+  const reasons = engine.notBitPerfect ?? [];
+  /** @type {string[]} */
+  const otherReasons = reasons
+    .filter((reason) => reason !== 'volume')
+    .map(androidExclusiveReason)
+    .filter((text) => text !== null);
+  return describeExclusive({
+    mode: 'highQuality',
+    sourceRateHz: engine.rate,
+    outputRateHz: engine.rate,
+    deviceRateHz: engine.rate,
+    conversion: 'none',
+    fallbackReason: null,
+    dseeHx: 'off',
+    dseeNotice: null,
+    dseeOutputRateHz: null,
+    exclusive: {
+      bits: engine.bits,
+      channels: engine.channels,
+      sourceChannels: engine.channels,
+      bitPerfect: reasons.length === 0,
+      volumeApplied: reasons.includes('volume'),
+      underruns: engine.underruns,
+      otherReasons,
+    },
+  });
 }

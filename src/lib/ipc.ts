@@ -334,8 +334,41 @@ export interface AndroidUsbAudioDescriptors {
   mixerAttributes?: import('./usb-audio-descriptors.js').MixerAttributesResult;
 }
 
-/** The USB exclusive test (ADR 0046, development only): whether it runs and the report of the last one. */
-export type AndroidUsbExclusiveStatus = import('./usb-exclusive-test.js').UsbExclusiveStatus;
+/** The USB exclusive output engine (ADR 0047), as `player-usb-audio` reports it. */
+export interface AndroidUsbExclusiveEngine {
+  state: 'unclaimed' | 'claimed' | 'streaming' | 'paused' | 'handedBack';
+  rate: number | null;
+  rateReadBack: number | null;
+  channels: number | null;
+  alt: number | null;
+  subslotBytes: number | null;
+  bits: number | null;
+  sourceBits: number | null;
+  dsd: boolean;
+  /** Why the bus does not carry the file's samples bit for bit (empty: bit-perfect). */
+  notBitPerfect: Array<'volume' | 'float32' | 'unknownBits' | 'dsd' | 'truncated'>;
+  bitPerfect: boolean;
+  gain: number;
+  underruns: number;
+  feedbackAvg: number | null;
+  urbErrors: number;
+  packetErrors: number;
+  error: string | null;
+  handedBack: boolean | null;
+  handBackErrors: string[];
+}
+
+/** The USB exclusive output in `android_audio_output_status` (ADR 0047). */
+export interface AndroidUsbExclusiveStatus {
+  /** The `androidUsbExclusive` switch as the service applies it. */
+  enabled: boolean;
+  /** The track plays through the USB exclusive output now. */
+  active: boolean;
+  state: AndroidUsbExclusiveEngine['state'] | null;
+  /** Why the current track plays through Android although the switch is on. */
+  fallbackReason: string | null;
+  engine: AndroidUsbExclusiveEngine | null;
+}
 
 /** Answer of `android_audio_output_status` (ADR 0044). */
 export interface AndroidAudioOutputStatus {
@@ -354,6 +387,8 @@ export interface AndroidAudioOutputStatus {
   bluetoothPermission?: 'granted' | 'needed' | 'unavailable';
   /** The codec of each A2DP device the Bluetooth stack reported, by upper-case address. */
   bluetoothCodecs?: Record<string, AndroidBluetoothCodec>;
+  /** The USB exclusive output (ADR 0047). */
+  exclusive?: AndroidUsbExclusiveStatus | null;
 }
 
 /** The codec a Bluetooth headset streams with (from the stack's codec broadcast). */
@@ -1223,17 +1258,17 @@ interface IpcContract {
     args: { request: boolean; deviceId: number | null };
     result: AndroidUsbAudioDescriptors | null;
   };
-  android_usb_exclusive_start: {
+  settings_get_android_usb_exclusive: {
     args: Record<string, never>;
-    result: AndroidUsbExclusiveStatus | null;
+    result: boolean;
   };
-  android_usb_exclusive_stop: {
-    args: Record<string, never>;
-    result: AndroidUsbExclusiveStatus | null;
+  settings_set_android_usb_exclusive: {
+    args: { enabled: boolean };
+    result: boolean;
   };
-  android_usb_exclusive_status: {
-    args: Record<string, never>;
-    result: AndroidUsbExclusiveStatus | null;
+  android_request_usb_exclusive_permission: {
+    args: { productName: string | null };
+    result: { granted: boolean; found: boolean } | null;
   };
   settings_get_output_volume_sync: {
     args: Record<string, never>;

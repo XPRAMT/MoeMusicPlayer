@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import {
   codecStepName,
+  describeAndroidExclusive,
   describeAndroidPath,
   describeExclusive,
   describeExclusiveFallback,
@@ -159,4 +160,34 @@ test('an idle device lists every supported rate then the channels, no bit depth'
   assert.equal(formatSupportedFormats([], []), '格式不限');
   assert.equal(formatSupportedFormats([], [], '由藍牙編碼決定'), '由藍牙編碼決定');
   assert.doesNotMatch(formatSupportedFormats([44_100], [2]), /位元|bit/);
+});
+
+test('the Android USB exclusive output uses the Windows exclusive line and says why it is not bit-perfect', () => {
+  const engine = { rate: 44_100, channels: 2, bits: 16, notBitPerfect: [], bitPerfect: true, underruns: 0 };
+  assert.deepEqual(describeAndroidExclusive(/** @type {any} */ (engine)), {
+    text: '44.1 kHz → 44.1 kHz（獨佔）．2 聲道．16bit．位元完美',
+    notice: null,
+  });
+  assert.deepEqual(describeAndroidExclusive(/** @type {any} */ ({ ...engine, rate: 96_000, bits: 24, notBitPerfect: ['volume'] })), {
+    text: '96 kHz → 96 kHz（獨佔）．2 聲道．24bit',
+    notice: '播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出（不是位元完美）',
+  });
+  assert.equal(
+    describeAndroidExclusive(/** @type {any} */ ({ ...engine, bits: 32, notBitPerfect: ['float32', 'volume'] }))?.notice,
+    '32 bit 來源經過浮點處理，無法逐位元原樣送出；播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出（不是位元完美）',
+  );
+  assert.equal(
+    describeAndroidExclusive(/** @type {any} */ ({ ...engine, bits: 24, notBitPerfect: ['dsd'] }))?.notice,
+    'DSD 已轉成 PCM（不是位元完美）',
+  );
+  assert.equal(
+    describeAndroidExclusive(/** @type {any} */ ({ ...engine, bits: 24, notBitPerfect: ['unknownBits'] }))?.notice,
+    '無法得知來源的位元深度（不是位元完美）',
+  );
+  assert.equal(
+    describeAndroidExclusive(/** @type {any} */ ({ ...engine, notBitPerfect: ['truncated'] }))?.notice,
+    'USB 音訊裝置的格式位元數少於來源（不是位元完美）',
+  );
+  assert.equal(describeAndroidExclusive(null), null);
+  assert.equal(describeAndroidExclusive(/** @type {any} */ ({ ...engine, rate: null })), null);
 });

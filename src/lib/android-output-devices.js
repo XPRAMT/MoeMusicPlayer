@@ -2,14 +2,17 @@
 // identity rule (which devices are listed, what is stored, which device a stored choice is) lives in the Kotlin
 // `AudioOutputRules`; this file only turns its answer into rows.
 import { tr } from './i18n.js';
-import { describeAndroidPath, formatSupportedFormats } from './output-format.js';
+import { describeAndroidExclusive, describeAndroidPath, formatSupportedFormats } from './output-format.js';
+
+/** `androidUsbExclusive` when settings.json does not say (Rust `AppSettings::default`, ADR 0047). */
+export const DEFAULT_ANDROID_USB_EXCLUSIVE = false;
 
 /**
  * @typedef {import('./ipc').AndroidOutputDevice} AndroidOutputDevice
  * @typedef {import('./ipc').AndroidOutputDeviceInfo} AndroidOutputDeviceInfo
  * @typedef {import('./ipc').AndroidAudioOutputStatus} AndroidAudioOutputStatus
  * @typedef {import('./ipc').AndroidAudioTrackOutput} AndroidAudioTrackOutput
- * @typedef {{ text: string, tone: 'ok' | 'warn' | 'error' | 'idle' }} RowPath
+ * @typedef {{ text: string, tone: 'ok' | 'warn' | 'error' | 'idle', notice?: string | null }} RowPath
  * @typedef {{
  *   key: string,
  *   identity: AndroidOutputDevice | null,
@@ -131,6 +134,28 @@ export function sameChoice(a, b) {
 }
 
 /**
+ * The path of the chosen USB row when the USB exclusive output is on (ADR 0047): its own line while it plays the track
+ * (「44.1 kHz → 44.1 kHz（獨佔）．2 聲道．16bit．位元完美」, what keeps it from bit-perfect as the notice), or the
+ * Android path with the reason it is not used. Null when the switch is off or nothing plays.
+ * @param {AndroidAudioOutputStatus | null} status
+ * @param {string | null} androidPath the AudioTrack path line
+ * @returns {RowPath | null}
+ */
+export function usbExclusivePath(status, androidPath) {
+  const exclusive = status?.exclusive;
+  if (!exclusive?.enabled) return null;
+  if (exclusive.active) {
+    const described = describeAndroidExclusive(exclusive.engine);
+    if (described) return { text: described.text, tone: 'ok', notice: described.notice };
+    return { text: tr('USB 獨佔：準備中'), tone: 'idle', notice: null };
+  }
+  if (exclusive.fallbackReason && androidPath) {
+    return { text: androidPath, tone: 'warn', notice: tr('USB 獨佔無法播放這首：{0}', [exclusive.fallbackReason]) };
+  }
+  return null;
+}
+
+/**
  * The rows the list shows: 「系統預設」, then each attached device, then the chosen device when it is not attached (the
  * player then plays on the system's choice, and the row says which device that is).
  * @param {AndroidAudioOutputStatus | null} status
@@ -162,13 +187,17 @@ export function buildAndroidRows(status, saved) {
     const trackRoute = status?.routedFrom === 'system' ? null : routed;
     // The chosen row shows the path whenever a track is open (Android plays on the chosen device once it is pinned);
     // unknown routing (no routed device reported) does not make it idle.
-    const playing = chosen && path !== null;
+    const usbExclusive = chosen && device.kind === 'usb' ? usbExclusivePath(status, path) : null;
+    const playing = chosen && (path !== null || usbExclusive !== null);
     // The chosen device is attached but the track plays elsewhere: pinning did not take (yet). The same device can be
     // reported under another id (Android lists some devices twice), so the identity decides, not the id.
     const elsewhere = playing && trackRoute !== null && !isSameDevice(trackRoute, device);
     /** @type {RowPath | null} */
     let rowPath = null;
-    if (playing && path !== null) {
+    if (usbExclusive) {
+      // The app drives the device itself: Android's routing (the device is gone from its list) does not apply.
+      rowPath = usbExclusive;
+    } else if (playing && path !== null) {
       // Without a routing report the track plays where the player is pinned: this device (its codec step included).
       const own = trackRoute === null ? playingPath(status, device) ?? path : path;
       rowPath = elsewhere && trackRoute

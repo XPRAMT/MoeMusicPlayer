@@ -6,8 +6,8 @@
     AndroidAudioOutputStatus,
     AndroidOutputDevice,
     AndroidUsbAudioDescriptors,
-    AndroidUsbExclusiveStatus,
   } from './ipc';
+  import { DEFAULT_ANDROID_USB_EXCLUSIVE } from './android-output-devices.js';
 
   const s = $state({
     /** The choice in settings.json (null: the system default). */
@@ -25,13 +25,12 @@
     failure: null as string | null,
     copied: null as string | null,
   });
-  /** The USB exclusive test (ADR 0046, development only), shared like the list. */
-  const exclusive = $state({
-    status: null as AndroidUsbExclusiveStatus | null,
+  /** The USB exclusive switch (ADR 0047, `androidUsbExclusive`), shared like the list. */
+  const usbExclusive = $state({
+    enabled: DEFAULT_ANDROID_USB_EXCLUSIVE,
     busy: false,
     failure: null as string | null,
   });
-  let exclusivePoll: ReturnType<typeof setInterval> | null = null;
   const liveInstances = new Set<symbol>();
   // Saving is one queue for both copies, so an older answer never overwrites a newer choice.
   let saveRevision = 0;
@@ -48,7 +47,6 @@
   import { buildAndroidRows, sameChoice } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
   import { describeMixerAttributes, describeUsbDevice, spacedHex } from './usb-audio-descriptors.js';
-  import { describeUsbExclusiveReport, USB_EXCLUSIVE_POLL_MS } from './usb-exclusive-test.js';
 
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
@@ -60,7 +58,6 @@
   let rows = $derived(buildAndroidRows(s.status, s.saved));
   let usbViews = $derived((usb.result?.devices ?? []).map(describeUsbDevice));
   let mixerView = $derived(describeMixerAttributes(usb.result?.mixerAttributes));
-  let exclusiveSummary = $derived(describeUsbExclusiveReport(exclusive.status?.report));
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
 
@@ -86,12 +83,14 @@
       return;
     }
     try {
-      const [saved, status] = await Promise.all([
+      const [saved, status, exclusiveOn] = await Promise.all([
         invokeCommand('settings_get_android_output_device', {}),
         invokeCommand('android_audio_output_status', {}),
+        invokeCommand('settings_get_android_usb_exclusive', {}),
       ]);
       if (disposed) return;
       s.saved = saved;
+      usbExclusive.enabled = exclusiveOn;
       s.status = status;
       s.failure = null;
       s.loaded = true;
@@ -161,59 +160,66 @@
     usb.copied = raw;
   }
 
-  // ---- USB exclusive test (ADR 0046, P0, development only): the app takes the DAC from Android, plays the current
-  // 16-bit FLAC for at most 30 s straight over USB, and gives it back. Only after the volume warning is confirmed. ----
-  let exclusiveDialog = $state<HTMLDialogElement>();
-  let exclusivePanelOpen = $state(false);
+  // ---- USB exclusive (ADR 0047): the app drives the chosen USB audio device itself. Turning it on opens the
+  // explanation panel first; only its 「前往授權」 asks for USB permission (ADR 0039), and only a granted permission
+  // turns the switch on. Turning it off hands the device back at once. ----
+  let usbExclusiveDialog = $state<HTMLDialogElement>();
+  let usbExclusivePanel = $state<{ name: string; identity: AndroidOutputDevice | null } | null>(null);
+  let usbExclusiveMessage = $state<string | null>(null);
 
-  function stopExclusivePoll(): void {
-    if (exclusivePoll) clearInterval(exclusivePoll);
-    exclusivePoll = null;
-  }
-
-  async function readExclusiveStatus(): Promise<void> {
+  async function saveUsbExclusive(enabled: boolean): Promise<void> {
+    usbExclusive.busy = true;
+    usbExclusive.failure = null;
     try {
-      exclusive.status = await invokeCommand('android_usb_exclusive_status', {});
+      usbExclusive.enabled = await invokeCommand('settings_set_android_usb_exclusive', { enabled });
     } catch (error) {
-      exclusive.failure = getErrorText(error);
-    }
-    if (!exclusive.status?.running) stopExclusivePoll();
-  }
-
-  function pollExclusive(): void {
-    stopExclusivePoll();
-    if (exclusive.status?.running) exclusivePoll = setInterval(() => void readExclusiveStatus(), USB_EXCLUSIVE_POLL_MS);
-  }
-
-  async function startExclusive(): Promise<void> {
-    exclusivePanelOpen = false;
-    if (exclusive.busy || !isTauri()) return;
-    exclusive.busy = true;
-    exclusive.failure = null;
-    try {
-      exclusive.status = await invokeCommand('android_usb_exclusive_start', {});
-      pollExclusive();
-    } catch (error) {
-      exclusive.failure = getErrorText(error);
+      usbExclusive.failure = getErrorText(error);
     } finally {
-      exclusive.busy = false;
+      usbExclusive.busy = false;
+      void refreshStatus();
+      setTimeout(() => void refreshStatus(), AFTER_CHOICE_MS);
     }
   }
 
-  async function stopExclusive(): Promise<void> {
-    try {
-      exclusive.status = await invokeCommand('android_usb_exclusive_stop', {});
-      pollExclusive();
-    } catch (error) {
-      exclusive.failure = getErrorText(error);
+  function toggleUsbExclusive(event: Event, identity: AndroidOutputDevice | null): void {
+    const input = event.currentTarget as HTMLInputElement;
+    if (!input.checked) {
+      void saveUsbExclusive(false);
+      return;
     }
+    // Not on until the panel's 「前往授權」 got the permission.
+    input.checked = usbExclusive.enabled;
+    usbExclusiveMessage = null;
+    usbExclusivePanel = { name: identity?.productName ?? '', identity };
+  }
+
+  async function authorizeUsbExclusive(): Promise<void> {
+    const panel = usbExclusivePanel;
+    if (!panel || usbExclusive.busy || !isTauri()) return;
+    usbExclusive.busy = true;
+    usbExclusiveMessage = null;
+    let granted = false;
+    try {
+      const answer = await invokeCommand('android_request_usb_exclusive_permission', { productName: panel.name || null });
+      granted = Boolean(answer?.granted);
+      if (!granted) usbExclusiveMessage = answer?.found === false ? tr('找不到這台 USB 音訊裝置。') : tr('尚未取得 USB 權限。');
+    } catch (error) {
+      usbExclusiveMessage = getErrorText(error);
+    } finally {
+      usbExclusive.busy = false;
+    }
+    if (!granted) return;
+    usbExclusivePanel = null;
+    // The USB output applies to the chosen device: turning it on for this card also chooses the card.
+    if (panel.identity && !sameChoice(panel.identity, s.saved)) choose(panel.identity);
+    await saveUsbExclusive(true);
   }
 
   $effect(() => {
-    const dialog = exclusiveDialog;
+    const dialog = usbExclusiveDialog;
     if (!dialog) return;
-    if (exclusivePanelOpen && !dialog.open) dialog.showModal();
-    else if (!exclusivePanelOpen && dialog.open) dialog.close();
+    if (usbExclusivePanel && !dialog.open) dialog.showModal();
+    else if (!usbExclusivePanel && dialog.open) dialog.close();
   });
 
   // ---- 「附近的裝置」 for the Bluetooth codec (ADR 0044; the explanation first, the request only on 「前往授權」) ----
@@ -271,8 +277,6 @@
     liveInstances.add(instance);
     // Another copy already read everything and keeps it current; a copy that is alone reads it afresh.
     if (alone || !s.loaded) void load();
-    // A test started from the other copy, or before the page was reopened, keeps its status current.
-    if (alone && isTauri()) void readExclusiveStatus().then(pollExclusive);
     pollTimer = setInterval(() => {
       if (isPrimary() && document.visibilityState === 'visible') void refreshStatus();
     }, STATUS_POLL_MS);
@@ -284,18 +288,18 @@
     liveInstances.delete(instance);
     if (pollTimer) clearInterval(pollTimer);
     document.removeEventListener('visibilitychange', onVisibility);
-    if (liveInstances.size === 0) stopExclusivePoll();
   });
 </script>
 
 <div class="settings-panel-header">
   <div>
     <h3>{tr("播放裝置")}</h3>
-    <p>{tr("選擇要輸出的裝置；拔除後改由系統預設播放，重新接上時自動切回。音訊經 Android 系統混音器輸出，系統可能再轉換取樣率，不是 bit-perfect。")}</p>
+    <p>{tr("選擇要輸出的裝置；拔除後改由系統預設播放，重新接上時自動切回。音訊經 Android 系統混音器輸出，系統可能再轉換取樣率，不是 bit-perfect；USB 音訊裝置可改用 USB 獨佔，由本程式直接輸出。")}</p>
   </div>
 </div>
 
 {#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
+{#if usbExclusive.failure}<p class="source-error-message" role="alert">{usbExclusive.failure}</p>{/if}
 
 <div class="output-device-list" role="radiogroup" aria-label={tr('播放裝置')} aria-busy={s.loading} use:scrollChain>
   {#each rows as row (row.key)}
@@ -343,11 +347,25 @@
         </p>
       {/if}
       {#if row.path?.text}
-        <p class="output-device-path is-{row.path.tone}">{row.path.text}</p>
+        <p class="output-device-path is-{row.path.tone}">
+          {row.path.text}{#if row.path.notice}<span class="output-device-note"> — {row.path.notice}</span>{/if}
+        </p>
       {/if}
       {#if row.connected && row.identity?.kind === 'usb'}
-        <!-- Read only (ADR 0045): this area acts on its own controls and never chooses the card. -->
+        <!-- This area acts on its own controls and never chooses the card (the descriptor reader is read only, ADR 0045). -->
         <div class="output-device-usb" data-own-click>
+          <label class="lyrics-preference-toggle output-device-usb-exclusive">
+            <input
+              type="checkbox"
+              checked={usbExclusive.enabled}
+              disabled={usbExclusive.busy}
+              onchange={(event) => toggleUsbExclusive(event, row.identity)}
+            />
+            <span>
+              <strong>{tr('USB 獨佔（App 直接驅動，不經過系統）')}</strong>
+              <small>{tr('以裝置支援的格式原樣輸出，不重新取樣；選這台裝置時才會使用')}</small>
+            </span>
+          </label>
           <button type="button" class="soft-button" disabled={usb.busy} onclick={() => void readUsbDescriptors(row.key)}>
             {usb.busy && usb.rowKey === row.key ? tr('讀取中…') : tr('讀取 USB 規格')}
           </button>
@@ -375,31 +393,6 @@
                 {/if}
               </div>
             {/each}
-            {#if usbViews.length}
-              <div class="output-device-usb-device">
-                <div class="output-device-usb-actions">
-                  <button
-                    type="button"
-                    class="soft-button"
-                    disabled={exclusive.busy || exclusive.status?.running}
-                    onclick={() => { exclusivePanelOpen = true; }}
-                  >{tr('USB 獨佔試播 30 秒（開發用）')}</button>
-                  <button
-                    type="button"
-                    class="soft-button"
-                    disabled={!exclusive.status?.running}
-                    onclick={() => void stopExclusive()}
-                  >{tr('停止')}</button>
-                </div>
-                {#if exclusive.failure}
-                  <p class="output-device-path is-error" role="alert">{exclusive.failure}</p>
-                {:else if exclusive.status?.running}
-                  <p class="output-device-path is-idle">{tr('試播中…')}</p>
-                {:else if exclusiveSummary}
-                  <p class="output-device-path" class:is-error={exclusive.status?.report?.outcome === 'failed'}>{exclusiveSummary}</p>
-                {/if}
-              </div>
-            {/if}
             {#if usb.result?.mixerAttributes}
               <div class="output-device-usb-device">
                 <strong>{tr('系統混音器格式')}</strong>
@@ -439,19 +432,21 @@
 </dialog>
 
 <dialog
-  bind:this={exclusiveDialog}
+  bind:this={usbExclusiveDialog}
   class="update-dialog floating-surface"
   aria-labelledby="usb-exclusive-title"
   aria-describedby="usb-exclusive-description"
-  oncancel={(event) => { event.preventDefault(); exclusivePanelOpen = false; }}
+  oncancel={(event) => { event.preventDefault(); usbExclusivePanel = null; }}
 >
   <div class="update-dialog-content">
-    <h2 id="usb-exclusive-title">{tr('USB 獨佔試播（開發用）')}</h2>
-    <p id="usb-exclusive-description">{tr('試播時本程式直接把聲音送到 USB 音訊裝置，繞過 Android 音訊系統：裝置可能沒有硬體音量，程式也不調整音量，位元完美輸出就是滿音量。請先調低 USB 音訊裝置或耳機的音量。')}</p>
-    <p>{tr('將播放目前曲目（本機 16 bit 雙聲道 FLAC）開頭最多 30 秒；結束、按「停止」或發生錯誤時，都會把 USB 音訊裝置交還系統。')}</p>
+    <h2 id="usb-exclusive-title">{tr('USB 獨佔')}</h2>
+    <p id="usb-exclusive-description">{tr('開啟後，播放到這台 USB 音訊裝置時，本程式會直接驅動它，不經過 Android 音訊系統，以檔案的取樣率與位元深度原樣輸出。這段期間其他 App 與通知音會改從手機或平板的喇叭播放，系統音量鍵對這台裝置沒有作用。')}</p>
+    <p>{tr('位元完美輸出需要把本程式的音量調到 100%；低於 100% 時會先調整音量再送出。裝置可能沒有硬體音量，請先調低 USB 音訊裝置或耳機的音量。')}</p>
+    <p>{tr('按下「前往授權」後，Android 會詢問是否允許本程式存取這台 USB 裝置。')}</p>
+    {#if usbExclusiveMessage}<p class="error-text" role="alert">{usbExclusiveMessage}</p>{/if}
     <div class="update-dialog-actions">
-      <button class="soft-button" type="button" onclick={() => { exclusivePanelOpen = false; }}>{tr('取消')}</button>
-      <button class="soft-button" type="button" onclick={() => void startExclusive()}>{tr('開始試播')}</button>
+      <button class="soft-button" type="button" disabled={usbExclusive.busy} onclick={() => { usbExclusivePanel = null; }}>{tr('取消')}</button>
+      <button class="soft-button" type="button" disabled={usbExclusive.busy} onclick={() => void authorizeUsbExclusive()}>{usbExclusive.busy ? tr('授權中') : tr('前往授權')}</button>
     </div>
   </div>
 </dialog>
@@ -483,10 +478,8 @@
     padding-left: 1.2em;
   }
 
-  .output-device-usb-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+  .output-device-usb-exclusive {
+    width: 100%;
   }
 
   .output-device-usb-raw summary {

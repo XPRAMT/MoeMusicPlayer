@@ -4,9 +4,11 @@ import test from 'node:test';
 
 import {
   buildAndroidRows,
+  DEFAULT_ANDROID_USB_EXCLUSIVE,
   describeSupport,
   deviceLabel,
   sameChoice,
+  usbExclusivePath,
 } from '../src/lib/android-output-devices.js';
 
 const usb = {
@@ -124,8 +126,8 @@ test('Android shows its own device list in Settings → playback; the Windows-on
   assert.match(component, /<script module lang="ts">[\s\S]*const s = \$state\(/);
   assert.match(component, /<div class="output-device-list" role="radiogroup"/);
   assert.match(component, /type="radio"/);
-  // The USB exclusive test (ADR 0046) is its own development-only control, not the Windows shared/exclusive mode.
-  const shown = component.replace(/USB 獨佔試播/g, '');
+  // USB exclusive (ADR 0047) is Android's own switch on the USB card, not the Windows shared/exclusive mode.
+  const shown = component.replace(/USB 獨佔/g, '');
   for (const windowsOnly of ['共享', '獨佔', '方案', '音量同步', '聲道映射', '延遲', 'DSEE']) {
     assert.ok(!shown.includes(windowsOnly), `${windowsOnly} is not on Android`);
   }
@@ -208,4 +210,101 @@ test('while paused the system route names 「目前是」 but never warns that t
   // A playing track routed elsewhere still warns.
   const playing = buildAndroidRows({ devices: [headset, speaker], chosenId: 31, pinnedId: 31, routed: speaker, routedFrom: 'track', output: paused }, headset.identity);
   assert.equal(playing[1].path?.tone, 'warn');
+});
+
+/** A USB exclusive output that plays the track (ADR 0047), as the service reports it. */
+const engine = (overrides = {}) => ({
+  state: 'streaming',
+  rate: 44_100,
+  rateReadBack: 44_100,
+  channels: 2,
+  alt: 6,
+  subslotBytes: 2,
+  bits: 16,
+  sourceBits: 16,
+  dsd: false,
+  notBitPerfect: [],
+  bitPerfect: true,
+  gain: 1,
+  underruns: 0,
+  feedbackAvg: 5.5123,
+  urbErrors: 0,
+  packetErrors: 0,
+  error: null,
+  handedBack: null,
+  handBackErrors: [],
+  ...overrides,
+});
+const exclusiveStatus = (exclusive, extra = {}) => ({
+  devices: [usb, speaker],
+  chosenId: 57,
+  pinnedId: 57,
+  routed: speaker,
+  routedFrom: 'system',
+  output,
+  exclusive,
+  ...extra,
+});
+
+test('the chosen USB row shows the exclusive line while the app drives the device', () => {
+  const saved = { kind: 'usb', productName: 'KA3' };
+  const playing = buildAndroidRows(exclusiveStatus({ enabled: true, active: true, state: 'streaming', fallbackReason: null, engine: engine() }), saved);
+  assert.deepEqual(playing[1].path, {
+    text: '44.1 kHz → 44.1 kHz（獨佔）．2 聲道．16bit．位元完美',
+    tone: 'ok',
+    notice: null,
+  });
+  assert.equal(playing[1].capabilities, '');
+  // The device is gone from Android's list while it is held, but routing never raises 「目前由…」 for it.
+  const tracked = buildAndroidRows(
+    exclusiveStatus({ enabled: true, active: true, state: 'streaming', fallbackReason: null, engine: engine() }, { routedFrom: 'track' }),
+    saved,
+  );
+  assert.equal(tracked[1].path?.tone, 'ok');
+  const quiet = buildAndroidRows(
+    exclusiveStatus({ enabled: true, active: true, state: 'paused', fallbackReason: null, engine: engine({ notBitPerfect: ['volume'], bitPerfect: false, gain: 0.5 }) }),
+    saved,
+  );
+  assert.equal(quiet[1].path?.text, '44.1 kHz → 44.1 kHz（獨佔）．2 聲道．16bit');
+  assert.equal(quiet[1].path?.notice, '播放器音量低於 100%，已套用軟體音量；調到 100% 才會原樣送出（不是位元完美）');
+  const preparing = usbExclusivePath(exclusiveStatus({ enabled: true, active: true, state: 'claimed', fallbackReason: null, engine: engine({ rate: null }) }), null);
+  assert.equal(preparing?.tone, 'idle');
+});
+
+test('a track the USB output cannot play keeps the Android path with the reason', () => {
+  const saved = { kind: 'usb', productName: 'KA3' };
+  const rows = buildAndroidRows(
+    exclusiveStatus({ enabled: true, active: false, state: 'handedBack', fallbackReason: 'USB 音訊裝置不支援 705600 Hz', engine: null }, { routed: usb }),
+    saved,
+  );
+  assert.deepEqual(rows[1].path, {
+    text: '48 kHz．2 聲道',
+    tone: 'warn',
+    notice: 'USB 獨佔無法播放這首：USB 音訊裝置不支援 705600 Hz',
+  });
+  // Switch off: the row is the plain Android row again.
+  const off = buildAndroidRows(exclusiveStatus({ enabled: false, active: false, state: null, fallbackReason: 'x', engine: null }, { routed: usb }), saved);
+  assert.deepEqual(off[1].path, { text: '48 kHz．2 聲道', tone: 'ok' });
+  assert.equal(usbExclusivePath(null, '48 kHz'), null);
+  // Only the chosen USB row takes the exclusive line.
+  const speakerChosen = buildAndroidRows(
+    { ...exclusiveStatus({ enabled: true, active: true, state: 'streaming', fallbackReason: null, engine: engine() }), chosenId: 2 },
+    { kind: 'speaker', productName: 'NX809J' },
+  );
+  assert.equal(speakerChosen[1].path, null);
+});
+
+test('USB exclusive is off by default on both sides, and turned on only through its explanation panel', () => {
+  assert.equal(DEFAULT_ANDROID_USB_EXCLUSIVE, false);
+  const settings = readFileSync(new URL('../src-tauri/src/settings.rs', import.meta.url), 'utf8');
+  assert.match(settings, /android_usb_exclusive: false,/);
+  assert.match(settings, /#\[serde\(default\)\]\s+pub android_usb_exclusive: bool,/);
+  const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
+  assert.equal(component.match(/android_request_usb_exclusive_permission/g)?.length, 1);
+  const request = component.indexOf("invokeCommand('android_request_usb_exclusive_permission'");
+  assert.ok(request > component.indexOf('async function authorizeUsbExclusive()'), 'only inside the panel action');
+  assert.match(component, /onclick=\{\(\) => void authorizeUsbExclusive\(\)\}/);
+  // The switch is on the USB card only, and the P0 development test is gone.
+  assert.match(component, /row\.identity\?\.kind === 'usb'[\s\S]*USB 獨佔（App 直接驅動，不經過系統）/);
+  assert.doesNotMatch(component, /試播|android_usb_exclusive_start/);
 });
