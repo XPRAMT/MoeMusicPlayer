@@ -851,6 +851,63 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * The explanation panel of the real mixer rate (ADR 0048): the state of the privileged sources. `enabled` is the
+     * hidden settings switch. Reads Shizuku's state and, if the user opted in before, probes `su` silently; never asks.
+     */
+    @Command
+    fun mixerRateSourceStatus(invoke: Invoke) {
+        val enabled = JSONObject(invoke.getArgs().toString()).optBoolean("enabled", true)
+        Thread {
+            try {
+                if (RootAccess.state == MixerRateRules.RootState.UNKNOWN && MixerRatePrefs.rootOptIn(activity)) {
+                    RootAccess.probe(MixerRateConfig.ROOT_SILENT_TIMEOUT_MS)
+                }
+                invoke.resolve(JSObject(MixerRatePanel.status(activity, enabled).toString()))
+            } catch (error: Exception) {
+                invoke.reject("Could not read the mixer rate sources: ${error.message}")
+            }
+        }.apply { name = "moe-mixer-rate-status"; isDaemon = true }.start()
+    }
+
+    /**
+     * An action of the panel, only from its buttons: `checkRoot` (`su -c id`; the root manager shows its dialog),
+     * `requestShizuku` (Shizuku's own dialog), `openShizuku` (launch the Shizuku app) or `recheck`. Answers the new state.
+     */
+    @Command
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    fun mixerRateSourceAction(invoke: Invoke) {
+        val args = JSONObject(invoke.getArgs().toString())
+        val enabled = args.optBoolean("enabled", true)
+        val action = args.optString("action")
+        fun answer() = invoke.resolve(JSObject(MixerRatePanel.status(activity, enabled).toString()))
+        when (action) {
+            "requestShizuku" -> activity.runOnUiThread {
+                ShizukuAccess.requestPermission(activity) {
+                    Thread { answer() }.apply { name = "moe-mixer-rate-status"; isDaemon = true }.start()
+                    PlaybackService.recheckMixerRate()
+                }
+            }
+            "openShizuku" -> activity.runOnUiThread {
+                try {
+                    ShizukuAccess.launchIntent(activity)?.let { activity.startActivity(it) }
+                } catch (error: Exception) {
+                    Log.i(LOG_TAG, "could not open Shizuku: $error")
+                }
+                Thread { answer() }.apply { name = "moe-mixer-rate-status"; isDaemon = true }.start()
+            }
+            else -> Thread {
+                try {
+                    if (action == "checkRoot") MixerRatePanel.checkRoot(activity)
+                    PlaybackService.recheckMixerRate()
+                    answer()
+                } catch (error: Exception) {
+                    invoke.reject("Could not check the mixer rate sources: ${error.message}")
+                }
+            }.apply { name = "moe-mixer-rate-action"; isDaemon = true }.start()
+        }
+    }
+
     /** The user chose another output device: the playback service pins the player to it whenever it is attached. */
     @Command
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])

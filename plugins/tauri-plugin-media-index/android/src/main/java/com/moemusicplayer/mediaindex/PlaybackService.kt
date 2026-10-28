@@ -230,7 +230,7 @@ class PlaybackService : MediaSessionService() {
         })
         player.addListener(clockListener)
         exoPlayer = player
-        val router = AudioOutputRouter(this, mainHandler) { device -> player.setPreferredAudioDevice(device) }
+        val router = AudioOutputRouter(this, mainHandler, { device -> player.setPreferredAudioDevice(device) }, ::readRealMixerRate)
         outputRouter = router
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onAudioTrackInitialized(
@@ -242,6 +242,13 @@ class PlaybackService : MediaSessionService() {
                 eventTime: AnalyticsListener.EventTime,
                 audioTrackConfig: AudioSink.AudioTrackConfig,
             ) = router.onTrackReleased()
+
+            // An audio sink or player error soon after a privileged dump trips the lookup's circuit breaker (ADR 0048).
+            override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) =
+                router.mixerLookup.symptom("audio sink error")
+
+            override fun onPlayerError(eventTime: AnalyticsListener.EventTime, error: androidx.media3.common.PlaybackException) =
+                router.mixerLookup.symptom("player error")
         })
         // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
         router.setPreference(readOutputPreference())
@@ -363,6 +370,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
+        outputRouter?.shutdown()
         mainHandler.removeCallbacks(clockPoll)
         clockPolling = false
         LyricsClock.clear()
@@ -1219,6 +1227,16 @@ class PlaybackService : MediaSessionService() {
     private external fun nativeOutputDevicePreference(): String?
     private external fun nativeUsbExclusiveEnabled(): Int
     private external fun nativeDsdPassthroughEnabled(): Int
+
+    /** The hidden `androidRealMixerRate` switch (ADR 0048): -1 not read yet, 0 off, 1 on. */
+    private external fun nativeRealMixerRateEnabled(): Int
+
+    /** On unless settings.json turns it off; before the settings are read it is on (nothing runs without a granted source). */
+    private fun readRealMixerRate(): Boolean = try {
+        nativeRealMixerRateEnabled() != 0
+    } catch (_: UnsatisfiedLinkError) {
+        true
+    }
     private external fun nativeOnPlaybackEvent(json: String)
 
     private fun JSONObject.optStringOrNull(key: String): String? =
@@ -1264,6 +1282,11 @@ class PlaybackService : MediaSessionService() {
                 UsbExclusiveEngine.setEnabled(enabled)
             }
             service.autoAskUsbPermission("mode")
+        }
+
+        /** The panel asked to check the privileged sources again: the current track is looked up again (rate-limited). */
+        internal fun recheckMixerRate() {
+            activeInstance?.outputRouter?.mixerLookup?.recheck()
         }
 
         /** Main thread. USB permission was just granted: the playing track tries the exclusive output again now. */

@@ -19,3 +19,6 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# Real mixer rate (ADR 0048): Shizuku.newProcess is private in API 13 and reached by reflection.
+-keep class rikka.shizuku.Shizuku { *; }
+-keep class rikka.shizuku.ShizukuRemoteProcess { *; }

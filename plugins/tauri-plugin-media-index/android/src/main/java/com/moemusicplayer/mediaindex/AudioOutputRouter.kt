@@ -31,6 +31,8 @@ internal class AudioOutputRouter(
     private val handler: Handler,
     /** Pin the player to a device (`ExoPlayer.setPreferredAudioDevice`), null for the system's choice. */
     private val pin: (AudioDeviceInfo?) -> Unit,
+    /** The hidden `settings.json` switch `androidRealMixerRate` (ADR 0048). */
+    realMixerRateEnabled: () -> Boolean = { true },
 ) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private var preference: OutputDevicePreference? = null
@@ -43,6 +45,9 @@ internal class AudioOutputRouter(
     /** The rate the Android mixer runs at for the stream's output (null: unknown). */
     @Volatile private var mixerRate: Int? = null
     private var observedTrack: WeakReference<AudioTrack>? = null
+
+    /** The privileged lookup of the track's real mixer rate (ADR 0048). */
+    val mixerLookup = MixerRateLookup(context, realMixerRateEnabled) { /* the status reads the answer when asked */ }
 
     /** Called (main thread) after the attached devices or the device the app holds changed (ADR 0047). */
     var onDevicesChanged: (() -> Unit)? = null
@@ -58,8 +63,19 @@ internal class AudioOutputRouter(
     }
 
     private val routingListener = AudioRouting.OnRoutingChangedListener { router ->
+        val previous = routedDevice
         routedDevice = router.routedDevice
         mixerRate = readMixerRate()
+        // The playing track lost its route: a possible audio-server symptom (ADR 0048 safety).
+        val track = observedTrack?.get()
+        if (previous != null && routedDevice == null && track != null && playing(track)) mixerLookup.symptom("track route lost")
+        else if (track != null) mixerLookup.request(track, routedDevice?.id)
+    }
+
+    private fun playing(track: AudioTrack): Boolean = try {
+        track.playState == AudioTrack.PLAYSTATE_PLAYING
+    } catch (_: RuntimeException) {
+        false
     }
 
     /** The user's choice as applied now (null: the system default). */
@@ -126,8 +142,12 @@ internal class AudioOutputRouter(
         if (!none) return
         trackOutput = null
         mixerRate = null
+        mixerLookup.forget()
         forgetTrack()
     }
+
+    /** Release the lookup thread (the service is going away). */
+    fun shutdown() = mixerLookup.shutdown()
 
     /** The AudioTrack Media3 just created: follow where it is routed. Media3's playback thread. */
     fun observeTrack(track: AudioTrack) {
@@ -138,6 +158,7 @@ internal class AudioOutputRouter(
                 track.addOnRoutingChangedListener(routingListener, handler)
                 routedDevice = track.routedDevice
                 mixerRate = readMixerRate()
+                mixerLookup.request(track, routedDevice?.id)
             } catch (error: RuntimeException) {
                 Log.w(TAG, "Could not follow the audio routing", error)
             }
@@ -173,7 +194,8 @@ internal class AudioOutputRouter(
             AudioOutputRules.RouteSource.TRACK -> trackRoute?.let(::factsOf)
             AudioOutputRules.RouteSource.SYSTEM -> systemMediaRoute(audioManager, attached)
         }
-        return statusJson(listed, saved, pinnedId, routed, trackOutput, mixerRate, source)
+        val resolved = MixerRateRules.resolve(mixerRate, mixerLookup.lookup)
+        return statusJson(listed, saved, pinnedId, routed, trackOutput, resolved, source)
     }
 
     /**
@@ -215,7 +237,7 @@ internal class AudioOutputRouter(
                 null,
                 systemMediaRoute(audioManager, attached),
                 null,
-                null,
+                MixerRateRules.Resolved(null, null),
                 AudioOutputRules.RouteSource.SYSTEM,
             )
         }
@@ -245,7 +267,7 @@ internal class AudioOutputRouter(
             pinnedId: Int?,
             routed: OutputDeviceFacts?,
             output: AudioSink.AudioTrackConfig?,
-            mixerRate: Int?,
+            mixerRate: MixerRateRules.Resolved,
             source: AudioOutputRules.RouteSource,
         ): JSONObject {
             val listed = AudioOutputRules.userDevices(attached)
@@ -264,7 +286,9 @@ internal class AudioOutputRouter(
                             put("sampleRate", it.sampleRate)
                             put("channelCount", AudioOutputRules.channelCountOfMask(it.channelConfig))
                             put("offload", it.offload)
-                            put("mixerSampleRate", mixerRate ?: JSONObject.NULL)
+                            put("mixerSampleRate", mixerRate.rate ?: JSONObject.NULL)
+                            // Where the 「系統」 rate came from: root, shizuku or platform (the stream-level API).
+                            put("mixerRateSource", mixerRate.source?.wire ?: JSONObject.NULL)
                         }
                     } ?: JSONObject.NULL,
                 )
