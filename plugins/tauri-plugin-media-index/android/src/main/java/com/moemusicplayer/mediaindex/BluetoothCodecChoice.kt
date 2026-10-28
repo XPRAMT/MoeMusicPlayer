@@ -494,7 +494,9 @@ internal class BluetoothCodecChoiceController(
             BluetoothRateRules.HelperResult.Failed(error.toString())
         }
         val ok = result is BluetoothRateRules.HelperResult.CodecSwitched || result is BluetoothRateRules.HelperResult.Codecs
-        synchronized(breaker) { breaker.switchEnded(env.nowMs(), ok) }
+        synchronized(breaker) {
+            if (PrivilegedRunnerErrors.isRunnerBug(result)) breaker.switchIgnored() else breaker.switchEnded(env.nowMs(), ok)
+        }
         if (breaker.tripped) env.log("bluetooth codec: disabled for this process, ${breaker.reason}")
         return result
     }

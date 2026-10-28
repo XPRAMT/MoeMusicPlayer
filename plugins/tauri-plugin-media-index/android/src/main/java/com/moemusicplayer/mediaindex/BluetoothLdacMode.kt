@@ -121,7 +121,9 @@ internal class BluetoothLdacModeReader(
         }
         // A non-LDAC answer (the headset switched codec meanwhile) is not a failure of the helper.
         if (result is BluetoothRateRules.HelperResult.State && result.codecType != BluetoothCodecRules.CODEC_LDAC) return
-        if (++failures >= BluetoothLdacModeConfig.FAILURES_TO_STOP) {
+        if (PrivilegedRunnerErrors.isRunnerBug(result)) {
+            env.log("bluetooth ldac mode: read failed in the runner, not counted")
+        } else if (++failures >= BluetoothLdacModeConfig.FAILURES_TO_STOP) {
             stopped = true
             env.log("bluetooth ldac mode: stopped for this process after $failures failed reads")
         } else {

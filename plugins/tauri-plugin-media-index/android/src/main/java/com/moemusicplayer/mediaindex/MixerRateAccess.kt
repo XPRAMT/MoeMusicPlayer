@@ -15,16 +15,40 @@ import java.util.concurrent.TimeUnit
 /** What a bounded process run produced. */
 internal class ProcessResult(val stdout: String, val stderr: String, val exitCode: Int?, val timedOut: Boolean)
 
-/** Runs a process with a hard time limit and a size limit on what is kept (the rest is read and dropped). */
+/**
+ * Runs a process with a hard time limit and a size limit on what is kept (the rest is read and dropped).
+ *
+ * The exit code is only ever taken from `waitFor()`, which blocks on its own thread: `exitValue()` throws while the
+ * process still runs (`IllegalThreadStateException`, and a Shizuku remote process reports it as another runtime
+ * exception, "process hasn't exited"), and a helper that needs about a second to start is exactly such a process. The
+ * limit is our own watchdog: when the output threads and the waiter are not done in time the process is destroyed.
+ */
 internal object BoundedProcess {
+    /** How long a destroyed process is given to report its end. */
+    private const val GRACE_MS = 500L
+
     fun read(process: Process, timeoutMs: Long, maxBytes: Int): ProcessResult {
         val out = Capture(process.inputStream, maxBytes)
         val err = Capture(process.errorStream, 16 * 1024)
-        val done = CountDownLatch(2)
-        for ((name, capture) in listOf("moe-proc-out" to out, "moe-proc-err" to err)) {
+        val done = CountDownLatch(3)
+        val exit = java.util.concurrent.atomic.AtomicReference<Int?>(null)
+        val workers = listOf<Pair<String, () -> Unit>>(
+            "moe-proc-out" to { out.run() },
+            "moe-proc-err" to { err.run() },
+            "moe-proc-wait" to {
+                try {
+                    exit.set(process.waitFor())
+                } catch (_: InterruptedException) {
+                    // The run was abandoned.
+                } catch (_: RuntimeException) {
+                    // A remote process that cannot say: the exit code stays unknown.
+                }
+            },
+        )
+        for ((name, work) in workers) {
             Thread {
                 try {
-                    capture.run()
+                    work()
                 } finally {
                     done.countDown()
                 }
@@ -39,18 +63,9 @@ internal object BoundedProcess {
                 process.destroy()
             } catch (_: RuntimeException) {
             }
+            done.await(GRACE_MS, TimeUnit.MILLISECONDS)
         }
-        var exit: Int? = null
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500)
-        while (exit == null && System.nanoTime() < deadline) {
-            exit = try {
-                process.exitValue()
-            } catch (_: IllegalThreadStateException) {
-                Thread.sleep(20)
-                null
-            }
-        }
-        return ProcessResult(out.text(), err.text(), exit, !finished)
+        return ProcessResult(out.text(), err.text(), exit.get(), !finished)
     }
 
     private class Capture(private val stream: InputStream, private val max: Int) {

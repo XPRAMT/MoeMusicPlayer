@@ -328,6 +328,16 @@ internal object BluetoothRateRules {
     const val HELPER_CLASS = "com.moemusicplayer.mediaindex.BluetoothRateHelper"
 }
 
+/** Failures that come from the way the privileged process is run, not from the device (never counted by a breaker). */
+internal object PrivilegedRunnerErrors {
+    /** The text of a Shizuku remote process asked for its exit value while it still runs, or the JDK's own exception. */
+    fun isRunnerBug(text: String?): Boolean =
+        text != null && (text.contains("hasn't exited") || text.contains("IllegalThreadStateException"))
+
+    fun isRunnerBug(result: BluetoothRateRules.HelperResult): Boolean =
+        result is BluetoothRateRules.HelperResult.Failed && isRunnerBug(result.reason)
+}
+
 /**
  * The circuit breaker of the Bluetooth rate follow (ADR 0051): [failuresToTrip] failed calls in a row, or an audio
  * symptom within [windowMs] after a switch, stop the feature for the rest of the process. Pure.
@@ -343,6 +353,11 @@ internal class BluetoothRateBreaker(private val windowMs: Long, private val fail
 
     fun switchStarted() {
         switchRunning = true
+    }
+
+    /** A call that ended for a reason that says nothing about the device (a bug of the runner): counted as nothing. */
+    fun switchIgnored() {
+        switchRunning = false
     }
 
     fun switchEnded(nowMs: Long, ok: Boolean) {
@@ -537,7 +552,9 @@ internal class BluetoothRateController(
             BluetoothRateRules.HelperResult.Failed(error.toString())
         }
         val ok = result is BluetoothRateRules.HelperResult.Switched || result is BluetoothRateRules.HelperResult.State
-        synchronized(breaker) { breaker.switchEnded(env.nowMs(), ok) }
+        synchronized(breaker) {
+            if (PrivilegedRunnerErrors.isRunnerBug(result)) breaker.switchIgnored() else breaker.switchEnded(env.nowMs(), ok)
+        }
         if (breaker.tripped) env.log("bluetooth rate: disabled for this process, ${breaker.reason}")
         return result
     }

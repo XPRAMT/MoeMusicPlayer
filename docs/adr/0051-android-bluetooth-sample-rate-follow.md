@@ -92,3 +92,7 @@ Fix: every rate-only request (follow, set and the restore) sends the **current c
 With the codec list of ADR 0052 off and the rate follow on, nothing but the rate follow sends a request, and it keeps the codec in use. The codec controller's "already in use" check compares the announced codec key with the target and ignores rate and priority, so the two do not fight; a switch by the codec list changes the preferred codec, and later rate requests pin whatever codec is then in use.
 
 Another app, the Qualcomm aptX service (`com.qualcomm.qtil.aptxals`), also calls `setCodecConfigPreference` with aptX Adaptive quality values at times. This app does not try to control it; a codec or rate change it makes shows up as an unconfirmed switch or as a different codec in use.
+
+## Shizuku runner
+
+Over Shizuku every helper call failed with "process hasn't exited" because the runner read `exitValue()` while the helper (about a second to start) still ran, and three such failures tripped the breaker for the process. The runner now takes the exit code from `waitFor()` on its own thread (see ADR 0048, "Shizuku runner"), and a failure of that class is not counted by the breaker, the codec list's breaker or the LDAC mode reader. The breakers stay process-wide: a tripped breaker lasts until the app process restarts, which is intended for real device failures only.
