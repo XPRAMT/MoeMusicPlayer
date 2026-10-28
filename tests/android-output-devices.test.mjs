@@ -124,8 +124,10 @@ test('Android shows its own device list in Settings → playback; the Windows-on
   assert.match(component, /<script module lang="ts">[\s\S]*const s = \$state\(/);
   assert.match(component, /<div class="output-device-list" role="radiogroup"/);
   assert.match(component, /type="radio"/);
+  // The USB exclusive test (ADR 0046) is its own development-only control, not the Windows shared/exclusive mode.
+  const shown = component.replace(/USB 獨佔試播/g, '');
   for (const windowsOnly of ['共享', '獨佔', '方案', '音量同步', '聲道映射', '延遲', 'DSEE']) {
-    assert.ok(!component.includes(windowsOnly), `${windowsOnly} is not on Android`);
+    assert.ok(!shown.includes(windowsOnly), `${windowsOnly} is not on Android`);
   }
   assert.doesNotMatch(component, /\btitle=/, 'tooltips use appTooltip');
 });

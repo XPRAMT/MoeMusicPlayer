@@ -2,7 +2,12 @@
   // The settings page and the quick-settings drawer each mount this list, and the two must always be the same list:
   // everything the list shows or edits lives here, once, and each mounted copy only draws it. Reading the devices
   // again is done by the copy that was mounted first (ADR 0044).
-  import type { AndroidAudioOutputStatus, AndroidOutputDevice, AndroidUsbAudioDescriptors } from './ipc';
+  import type {
+    AndroidAudioOutputStatus,
+    AndroidOutputDevice,
+    AndroidUsbAudioDescriptors,
+    AndroidUsbExclusiveStatus,
+  } from './ipc';
 
   const s = $state({
     /** The choice in settings.json (null: the system default). */
@@ -20,6 +25,13 @@
     failure: null as string | null,
     copied: null as string | null,
   });
+  /** The USB exclusive test (ADR 0046, development only), shared like the list. */
+  const exclusive = $state({
+    status: null as AndroidUsbExclusiveStatus | null,
+    busy: false,
+    failure: null as string | null,
+  });
+  let exclusivePoll: ReturnType<typeof setInterval> | null = null;
   const liveInstances = new Set<symbol>();
   // Saving is one queue for both copies, so an older answer never overwrites a newer choice.
   let saveRevision = 0;
@@ -36,6 +48,7 @@
   import { buildAndroidRows, sameChoice } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
   import { describeMixerAttributes, describeUsbDevice, spacedHex } from './usb-audio-descriptors.js';
+  import { describeUsbExclusiveReport, USB_EXCLUSIVE_POLL_MS } from './usb-exclusive-test.js';
 
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
@@ -47,6 +60,7 @@
   let rows = $derived(buildAndroidRows(s.status, s.saved));
   let usbViews = $derived((usb.result?.devices ?? []).map(describeUsbDevice));
   let mixerView = $derived(describeMixerAttributes(usb.result?.mixerAttributes));
+  let exclusiveSummary = $derived(describeUsbExclusiveReport(exclusive.status?.report));
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
 
@@ -147,6 +161,61 @@
     usb.copied = raw;
   }
 
+  // ---- USB exclusive test (ADR 0046, P0, development only): the app takes the DAC from Android, plays the current
+  // 16-bit FLAC for at most 30 s straight over USB, and gives it back. Only after the volume warning is confirmed. ----
+  let exclusiveDialog = $state<HTMLDialogElement>();
+  let exclusivePanelOpen = $state(false);
+
+  function stopExclusivePoll(): void {
+    if (exclusivePoll) clearInterval(exclusivePoll);
+    exclusivePoll = null;
+  }
+
+  async function readExclusiveStatus(): Promise<void> {
+    try {
+      exclusive.status = await invokeCommand('android_usb_exclusive_status', {});
+    } catch (error) {
+      exclusive.failure = getErrorText(error);
+    }
+    if (!exclusive.status?.running) stopExclusivePoll();
+  }
+
+  function pollExclusive(): void {
+    stopExclusivePoll();
+    if (exclusive.status?.running) exclusivePoll = setInterval(() => void readExclusiveStatus(), USB_EXCLUSIVE_POLL_MS);
+  }
+
+  async function startExclusive(): Promise<void> {
+    exclusivePanelOpen = false;
+    if (exclusive.busy || !isTauri()) return;
+    exclusive.busy = true;
+    exclusive.failure = null;
+    try {
+      exclusive.status = await invokeCommand('android_usb_exclusive_start', {});
+      pollExclusive();
+    } catch (error) {
+      exclusive.failure = getErrorText(error);
+    } finally {
+      exclusive.busy = false;
+    }
+  }
+
+  async function stopExclusive(): Promise<void> {
+    try {
+      exclusive.status = await invokeCommand('android_usb_exclusive_stop', {});
+      pollExclusive();
+    } catch (error) {
+      exclusive.failure = getErrorText(error);
+    }
+  }
+
+  $effect(() => {
+    const dialog = exclusiveDialog;
+    if (!dialog) return;
+    if (exclusivePanelOpen && !dialog.open) dialog.showModal();
+    else if (!exclusivePanelOpen && dialog.open) dialog.close();
+  });
+
   // ---- 「附近的裝置」 for the Bluetooth codec (ADR 0044; the explanation first, the request only on 「前往授權」) ----
   // The panel belongs to the copy whose button was pressed (it is an interaction, not shown data), so each copy has
   // its own dialog; what the list shows still lives in the shared state.
@@ -202,6 +271,8 @@
     liveInstances.add(instance);
     // Another copy already read everything and keeps it current; a copy that is alone reads it afresh.
     if (alone || !s.loaded) void load();
+    // A test started from the other copy, or before the page was reopened, keeps its status current.
+    if (alone && isTauri()) void readExclusiveStatus().then(pollExclusive);
     pollTimer = setInterval(() => {
       if (isPrimary() && document.visibilityState === 'visible') void refreshStatus();
     }, STATUS_POLL_MS);
@@ -213,6 +284,7 @@
     liveInstances.delete(instance);
     if (pollTimer) clearInterval(pollTimer);
     document.removeEventListener('visibilitychange', onVisibility);
+    if (liveInstances.size === 0) stopExclusivePoll();
   });
 </script>
 
@@ -303,6 +375,31 @@
                 {/if}
               </div>
             {/each}
+            {#if usbViews.length}
+              <div class="output-device-usb-device">
+                <div class="output-device-usb-actions">
+                  <button
+                    type="button"
+                    class="soft-button"
+                    disabled={exclusive.busy || exclusive.status?.running}
+                    onclick={() => { exclusivePanelOpen = true; }}
+                  >{tr('USB 獨佔試播 30 秒（開發用）')}</button>
+                  <button
+                    type="button"
+                    class="soft-button"
+                    disabled={!exclusive.status?.running}
+                    onclick={() => void stopExclusive()}
+                  >{tr('停止')}</button>
+                </div>
+                {#if exclusive.failure}
+                  <p class="output-device-path is-error" role="alert">{exclusive.failure}</p>
+                {:else if exclusive.status?.running}
+                  <p class="output-device-path is-idle">{tr('試播中…')}</p>
+                {:else if exclusiveSummary}
+                  <p class="output-device-path" class:is-error={exclusive.status?.report?.outcome === 'failed'}>{exclusiveSummary}</p>
+                {/if}
+              </div>
+            {/if}
             {#if usb.result?.mixerAttributes}
               <div class="output-device-usb-device">
                 <strong>{tr('系統混音器格式')}</strong>
@@ -341,6 +438,24 @@
   </div>
 </dialog>
 
+<dialog
+  bind:this={exclusiveDialog}
+  class="update-dialog floating-surface"
+  aria-labelledby="usb-exclusive-title"
+  aria-describedby="usb-exclusive-description"
+  oncancel={(event) => { event.preventDefault(); exclusivePanelOpen = false; }}
+>
+  <div class="update-dialog-content">
+    <h2 id="usb-exclusive-title">{tr('USB 獨佔試播（開發用）')}</h2>
+    <p id="usb-exclusive-description">{tr('試播時本程式直接把聲音送到 USB DAC，繞過 Android 音訊系統：DAC 沒有硬體音量，程式也不調整音量，位元完美輸出就是滿音量。請先調低 DAC 或耳機的音量。')}</p>
+    <p>{tr('將播放目前曲目（本機 16 bit 雙聲道 FLAC）開頭最多 30 秒；結束、按「停止」或發生錯誤時，都會把 DAC 交還系統。')}</p>
+    <div class="update-dialog-actions">
+      <button class="soft-button" type="button" onclick={() => { exclusivePanelOpen = false; }}>{tr('取消')}</button>
+      <button class="soft-button" type="button" onclick={() => void startExclusive()}>{tr('開始試播')}</button>
+    </div>
+  </div>
+</dialog>
+
 <style>
   .output-device-permission {
     margin-left: 8px;
@@ -366,6 +481,12 @@
   .output-device-usb-list {
     margin: 0;
     padding-left: 1.2em;
+  }
+
+  .output-device-usb-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .output-device-usb-raw summary {

@@ -334,6 +334,9 @@ export interface AndroidUsbAudioDescriptors {
   mixerAttributes?: import('./usb-audio-descriptors.js').MixerAttributesResult;
 }
 
+/** The USB exclusive test (ADR 0046, development only): whether it runs and the report of the last one. */
+export type AndroidUsbExclusiveStatus = import('./usb-exclusive-test.js').UsbExclusiveStatus;
+
 /** Answer of `android_audio_output_status` (ADR 0044). */
 export interface AndroidAudioOutputStatus {
   devices: AndroidOutputDeviceInfo[];
@@ -1219,6 +1222,18 @@ interface IpcContract {
   android_usb_audio_descriptors: {
     args: { request: boolean; deviceId: number | null };
     result: AndroidUsbAudioDescriptors | null;
+  };
+  android_usb_exclusive_start: {
+    args: Record<string, never>;
+    result: AndroidUsbExclusiveStatus | null;
+  };
+  android_usb_exclusive_stop: {
+    args: Record<string, never>;
+    result: AndroidUsbExclusiveStatus | null;
+  };
+  android_usb_exclusive_status: {
+    args: Record<string, never>;
+    result: AndroidUsbExclusiveStatus | null;
   };
   settings_get_output_volume_sync: {
     args: Record<string, never>;
