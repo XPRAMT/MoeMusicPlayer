@@ -354,13 +354,6 @@ test('overlay geometry: the reset copy is the whole cover at the screen-resoluti
   assert.ok(Math.abs(plan.source.x - (1500 - 170 / k)) < 1e-6);
 });
 
-test('overlay is wanted at any settled scale but the promote-time one at 1', async () => {
-  const { coverOverlayWanted } = await import('../src/lib/cover-overlay.js');
-  assert.equal(coverOverlayWanted(1, 1), false);
-  assert.equal(coverOverlayWanted(3, 1), true);
-  assert.equal(coverOverlayWanted(0.5, 1), true);
-  assert.equal(coverOverlayWanted(1, 0.5), true);
-});
 
 function fakeOverlayDom() {
   const drawn = [];
@@ -454,98 +447,11 @@ test('reset with artwork: the copy canvas glides (drawn at the thumbnail size be
   }
 });
 
-/**
- * Where the transformed canvas is painted, from its pane position and its inline transform-origin, translate, scale and
- * transform, composed as CSS does: p = O + translate + scale * (transform(q - O)), O = transform-origin.
- */
-function paintedCanvasRect(canvas, paneBox) {
-  const left = paneBox.left + parseFloat(canvas.style.left);
-  const top = paneBox.top + parseFloat(canvas.style.top);
-  const width = parseFloat(canvas.style.width);
-  const height = parseFloat(canvas.style.height);
-  const origin = /(-?[\d.]+)px (-?[\d.]+)px/.exec(canvas.style.transformOrigin || '');
-  const [ox, oy] = origin ? origin.slice(1).map(Number) : [width / 2, height / 2];
-  const match = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\((-?[\d.]+), (-?[\d.]+)\)/.exec(canvas.style.transform || '');
-  const [x, y, kx, ky] = match ? match.slice(1).map(Number) : [0, 0, 1, 1];
-  const feedback = parseSwipeFeedback(canvas.style.translate, canvas.style.scale);
-  const map = (qx, qy) => ({
-    x: left + ox + feedback.x + feedback.scale * (x + kx * (qx - ox)),
-    y: top + oy + feedback.y + feedback.scale * (y + ky * (qy - oy)),
-  });
-  const a = map(0, 0);
-  const b = map(width, height);
-  return { left: a.x, top: a.y, width: b.x - a.x, height: b.y - a.y };
-}
-
-/** The client rect a content region drawn for the stage at `drawnVisual` must occupy when the stage is at `visual`. */
-function mappedRect(rect, drawnVisual, visual) {
-  const s = visual.width / drawnVisual.width;
-  return { left: visual.left + (rect.left - drawnVisual.left) * s, top: visual.top + (rect.top - drawnVisual.top) * s, width: rect.width * s, height: rect.height * s };
-}
-
 function assertRectClose(actual, expected, message, epsilon = 0.02) {
   for (const key of ['left', 'top', 'width', 'height']) {
     assert.ok(Math.abs(actual[key] - expected[key]) < epsilon, `${message}: ${key} ${actual[key]} vs ${expected[key]}`);
   }
 }
-
-test('overlay follow: a pan moves the drawn canvas by the same delta, no scale', async () => {
-  const { overlayFollowTransform, overlayTransformCss } = await import('../src/lib/cover-overlay.js');
-  const drawnVisual = { left: 0, top: 0, width: 600, height: 600 };
-  const drawnCanvas = { left: 100, top: 0, width: 400, height: 400 };
-  const panned = { ...drawnVisual, left: 30, top: -20 };
-  assert.deepEqual(overlayFollowTransform(drawnVisual, drawnCanvas, panned, { x: 0, y: 0 }), { x: 30, y: -20, scaleX: 1, scaleY: 1 });
-  // The pane (and the canvas with it) moved by -12 px in the same frame: the transform absorbs it.
-  assert.deepEqual(overlayFollowTransform(drawnVisual, drawnCanvas, panned, { x: -12, y: 0 }), { x: 42, y: -20, scaleX: 1, scaleY: 1 });
-  assert.equal(overlayTransformCss(overlayFollowTransform(drawnVisual, drawnCanvas, drawnVisual, { x: 0, y: 0 })), '');
-  assert.equal(overlayTransformCss({ x: 30, y: -20, scaleX: 1, scaleY: 1 }), 'translate(30.00px, -20.00px) scale(1.00000, 1.00000)');
-});
-
-test('overlay follow: zooming out around an anchor keeps the anchor content point under it, also when the pane moves', async () => {
-  const { overlayFollowTransform } = await import('../src/lib/cover-overlay.js');
-  // Drawn at 3x: stage painted at (0, 0) 600x600, canvas covering (100, 50) 400x400. Zoom out to 2x at (250, 250).
-  const drawnVisual = { left: 0, top: 0, width: 600, height: 600 };
-  const drawnCanvas = { left: 100, top: 50, width: 400, height: 400 };
-  const anchor = { x: 250, y: 250 };
-  const k = 2 / 3;
-  const visual = { left: anchor.x - (anchor.x - drawnVisual.left) * k, top: anchor.y - (anchor.y - drawnVisual.top) * k, width: 400, height: 400 };
-  for (const shift of [{ x: 0, y: 0 }, { x: -40, y: 7 }]) {
-    const t = overlayFollowTransform(drawnVisual, drawnCanvas, visual, shift);
-    assert.ok(Math.abs(t.scaleX - k) < 1e-12 && Math.abs(t.scaleY - k) < 1e-12);
-    // The canvas point that was at the anchor (client, at draw time) is at the anchor again.
-    const cx = drawnCanvas.left + drawnCanvas.width / 2 + shift.x;
-    const cy = drawnCanvas.top + drawnCanvas.height / 2 + shift.y;
-    const px = cx + t.x + t.scaleX * (anchor.x + shift.x - cx);
-    const py = cy + t.y + t.scaleY * (anchor.y + shift.y - cy);
-    assert.ok(Math.abs(px - anchor.x) < 1e-9 && Math.abs(py - anchor.y) < 1e-9, JSON.stringify({ shift, px, py }));
-  }
-});
-
-test('overlay draw region: visible part plus an even margin, capped at 2x the pixels and clamped to the cover', async () => {
-  const { overlayDrawRegion, COVER_OVERLAY_MARGIN_PIXEL_RATIO } = await import('../src/lib/cover-overlay.js');
-  assert.equal(COVER_OVERLAY_MARGIN_PIXEL_RATIO, 2);
-  const cover = { left: -400, top: -400, width: 1200, height: 1200 };
-  // Centred: an even margin on every side until the area is twice the visible area.
-  const centred = overlayDrawRegion({ visible: { left: 0, top: 0, width: 400, height: 400 }, cover, dpr: 3 });
-  const side = 400 * Math.SQRT2;
-  assertRectClose(centred, { left: -(side - 400) / 2, top: -(side - 400) / 2, width: side, height: side }, 'centred', 1e-6);
-  // At the cover's left edge: that side stops, the others keep growing to the same pixel budget.
-  const edge = overlayDrawRegion({ visible: { left: -400, top: 0, width: 400, height: 400 }, cover, dpr: 3 });
-  assert.equal(edge.left, -400);
-  assert.ok(Math.abs(edge.width * edge.height - 2 * 400 * 400) < 1e-3);
-  assert.ok(Math.abs((edge.width - 400) - (edge.height - 400) / 2) < 1e-6, 'right margin = top margin = bottom margin');
-  // Small cover: the whole cover is under the budget.
-  const small = { left: -50, top: -50, width: 500, height: 500 };
-  assert.deepEqual(overlayDrawRegion({ visible: { left: 0, top: 0, width: 400, height: 400 }, cover: small, dpr: 2 }), small);
-  // Nothing outside the visible part: the visible part itself.
-  const whole = { left: 10, top: 10, width: 300, height: 300 };
-  assert.deepEqual(overlayDrawRegion({ visible: whole, cover: whole, dpr: 2 }), whole);
-  // A side never exceeds the max canvas dimension (4 x 125 = 500 device px), unless the visible part already does.
-  const capped = overlayDrawRegion({ visible: { left: 0, top: 0, width: 100, height: 100 }, cover, dpr: 4, maxDimension: 500 });
-  assert.ok(capped.width <= 125 + 1e-6 && capped.height <= 125 + 1e-6 && capped.width > 100);
-  const huge = overlayDrawRegion({ visible: { left: 0, top: 0, width: 400, height: 400 }, cover, dpr: 4, maxDimension: 500 });
-  assertRectClose(huge, { left: 0, top: 0, width: 400, height: 400 }, 'visible part over the cap', 1e-6);
-});
 
 /** The painted rect of a 200x200 stage at layout centre `layout` with inline `style` (transform, then the swipe feedback
  *  translate / scale around the layout centre, as CSS composes them). */
@@ -568,132 +474,8 @@ function liveCover(layout) {
   return { node, listeners };
 }
 
-test('input never hides a shown overlay: pointer down, zoom out and zoom in follow the stage in the same task; redrawn 50 ms after', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  assert.equal(COVER_LAYER_IDLE_MS, 50);
-  const { pane, drawn, canvases } = fakeOverlayDom();
-  const frames = [];
-  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
-  globalThis.cancelAnimationFrame = () => {};
-  const layout = { x: 300, y: 300 };
-  let paneBox = { left: 20, top: 50, width: 500, height: 500 };
-  pane.getBoundingClientRect = () => ({ ...paneBox });
-  let action;
-  try {
-    const { node, listeners } = liveCover(layout);
-    pane.appendChild(node);
-    let squeeze = false;
-    action = coverZoom(node, {
-      initial: { scale: 3, x: 0, y: 0 },
-      onZoom: () => { squeeze = true; },
-      // The owner commits the squeeze the scale change caused: the cover's layout and its pane move left by 30 px.
-      settleLayout: () => { if (squeeze) { squeeze = false; layout.x -= 30; paneBox = { ...paneBox, left: paneBox.left - 30 }; } return Promise.resolve(); },
-    });
-    const overlay = canvases[0];
-    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
-    assert.equal(drawn.length, 1);
-    assert.equal(overlay.style.opacity, '1');
-    assert.equal(overlay.style.transform, '');
-    const drawnVisual = node.getBoundingClientRect();
-    const drawnCanvas = paintedCanvasRect(overlay, paneBox);
-    const touch = (id, x, y) => ({ pointerId: id, clientX: x, clientY: y, pointerType: 'touch', type: 'pointerup', timeStamp: 0, cancelable: true, preventDefault() {} });
-    listeners.get('pointerdown')(touch(1, 350, 320));
-    assert.equal(overlay.style.opacity, '1', 'pointer down keeps the overlay');
-    listeners.get('pointerup')(touch(1, 350, 320));
-    const wheel = (deltaY) => listeners.get('wheel')({ deltaY, deltaMode: 0, clientX: 350, clientY: 320, preventDefault() {} });
-    for (const [deltaY, label] of [[120, 'zoom out'], [-200, 'zoom in']]) {
-      wheel(deltaY);
-      assert.equal(overlay.style.opacity, '1', `${label}: not hidden in the handler`);
-      frames.shift()();
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-      assert.equal(frames.length, 0, `${label}: no later frame`);
-      assert.equal(overlay.style.opacity, '1', `${label}: still shown`);
-      assert.notEqual(overlay.style.transform, '');
-      // After the squeeze and the stage's re-pin (same task): the canvas content sits exactly on the stage.
-      assertRectClose(paintedCanvasRect(overlay, paneBox), mappedRect(drawnCanvas, drawnVisual, node.getBoundingClientRect()), label);
-    }
-    assert.equal(drawn.length, 1, 'no redraw while the input runs');
-    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
-    assert.equal(drawn.length, 2, 'redrawn sharp at the new scale once quiet');
-    assert.equal(overlay.style.transform, '');
-    assert.equal(overlay.style.opacity, '1');
-  } finally {
-    action?.destroy();
-    clearOverlayDom();
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
-test('without a drawn overlay (first zoom from 1x) the stage shows until the cover settles; at the promote-time scale none is drawn', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  const { pane, drawn, canvases } = fakeOverlayDom();
-  const frames = [];
-  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
-  globalThis.cancelAnimationFrame = () => {};
-  let action;
-  try {
-    const { node, listeners } = liveCover({ x: 300, y: 300 });
-    pane.appendChild(node);
-    action = coverZoom(node, { settleLayout: () => Promise.resolve() });
-    const overlay = canvases[0];
-    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
-    assert.equal(drawn.length, 0, 'scale 1 at the promote-time scale: no overlay');
-    listeners.get('wheel')({ deltaY: -200, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
-    frames.shift()();
-    await Promise.resolve(); await Promise.resolve();
-    assert.notEqual(overlay.style.opacity, '1', 'nothing drawn yet: the stage shows');
-    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
-    assert.equal(drawn.length, 1);
-    assert.equal(overlay.style.opacity, '1');
-    // Back at the promote-time scale (the owner drops the zoom): no overlay.
-    action.update({ settleLayout: () => Promise.resolve(), syncScale: 1 });
-    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
-    assert.equal(overlay.style.opacity, '0');
-  } finally {
-    action?.destroy();
-    clearOverlayDom();
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
-test('the change observer ignores the action\'s own transform writes, mirrors swipe feedback, hides the overlay on a foreign change', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  const { pane, canvases } = fakeOverlayDom();
-  const observers = [];
-  globalThis.MutationObserver = class { constructor(callback) { observers.push(callback); } observe() {} disconnect() {} };
-  globalThis.requestAnimationFrame = (fn) => { fn(); return 0; };
-  globalThis.cancelAnimationFrame = () => {};
-  let action;
-  try {
-    const { node, listeners } = liveCover({ x: 300, y: 300 });
-    pane.appendChild(node);
-    action = coverZoom(node, { initial: { scale: 3, x: 0, y: 0 }, settleLayout: () => Promise.resolve() });
-    const overlay = canvases[0];
-    await new Promise((resolve) => setTimeout(resolve, COVER_LAYER_IDLE_MS + 30));
-    assert.equal(overlay.style.opacity, '1');
-    listeners.get('wheel')({ deltaY: 100, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
-    observers[0]([{ target: node, attributeName: 'style' }]);
-    assert.equal(overlay.style.opacity, '1', 'own transform write');
-    node.style.translate = '12px 0px'; // swipe feedback
-    observers[0]([{ target: node, attributeName: 'style' }]);
-    assert.equal(overlay.style.opacity, '1', 'swipe feedback is mirrored, not a foreign change');
-    assert.equal(overlay.style.translate, '12px 0px');
-    node.style.width = '320px'; // the owner's cover frame
-    observers[0]([{ target: node, attributeName: 'style' }]);
-    assert.equal(overlay.style.opacity, '0', 'foreign style write');
-  } finally {
-    action?.destroy();
-    clearOverlayDom();
-    delete globalThis.MutationObserver;
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
-test('swipe feedback geometry: parsed from computed values, removed from a read rect, and the follow transform is origin-independent', async () => {
-  const { parseSwipeFeedback: parse, withoutSwipeFeedback, overlayFollowTransform, overlayOrigin } = await import('../src/lib/cover-overlay.js');
+test('swipe feedback geometry: parsed from computed values and removed from a read rect', async () => {
+  const { parseSwipeFeedback: parse, withoutSwipeFeedback } = await import('../src/lib/cover-overlay.js');
   assert.deepEqual(parse('none', 'none'), { x: 0, y: 0, scale: 1 });
   assert.deepEqual(parse('', undefined), { x: 0, y: 0, scale: 1 });
   assert.deepEqual(parse('12px', '0.97'), { x: 12, y: 0, scale: 0.97 });
@@ -705,21 +487,6 @@ test('swipe feedback geometry: parsed from computed values, removed from a read 
   const plain = stagePaintedRect(layout, { transform: style.transform });
   assertRectClose(withoutSwipeFeedback(fed, parse(style.translate, style.scale), { x: 40, y: -20 }), plain, 'feedback removed', 1e-9);
   assert.equal(withoutSwipeFeedback(plain, parse('none', 'none'), { x: 40, y: -20 }), plain);
-  // The same follow map with any transform-origin: content point p lands on the same client point.
-  const drawnVisual = { left: 0, top: 0, width: 600, height: 600 };
-  const drawnCanvas = { left: 100, top: 50, width: 400, height: 400 };
-  const visual = { left: 30, top: 10, width: 450, height: 450 };
-  const shift = { x: -10, y: 4 };
-  const centred = overlayFollowTransform(drawnVisual, drawnCanvas, visual, shift);
-  const origin = overlayOrigin({ x: 250, y: 260 }, { ...drawnCanvas, left: drawnCanvas.left + shift.x, top: drawnCanvas.top + shift.y });
-  assert.deepEqual(origin, { x: 160, y: 206 });
-  const pivoted = overlayFollowTransform(drawnVisual, drawnCanvas, visual, shift, origin);
-  for (const q of [{ x: 0, y: 0 }, { x: 400, y: 400 }, { x: 37, y: 311 }]) {
-    const k = { x: 200, y: 200 };
-    const a = { x: k.x + centred.x + centred.scaleX * (q.x - k.x), y: k.y + centred.y + centred.scaleY * (q.y - k.y) };
-    const b = { x: origin.x + pivoted.x + pivoted.scaleX * (q.x - origin.x), y: origin.y + pivoted.y + pivoted.scaleY * (q.y - origin.y) };
-    assert.ok(Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9, JSON.stringify({ q, a, b }));
-  }
 });
 
 /**
@@ -789,256 +556,6 @@ function installSharedStageGlobals() {
 const settle = async () => { for (let i = 0; i < 4; i += 1) await Promise.resolve(); };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('swipe feedback on a zoomed stage is mirrored onto the overlay in the same frame, pivoting on the stage centre, never hidden', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  const { swipeDismiss, SWIPE_SETTLE_MS } = await import('../src/lib/swipe-dismiss.js');
-  const { pane, drawn, canvases } = fakeOverlayDom();
-  const env = installSharedStageGlobals();
-  globalThis.requestAnimationFrame = () => 1;
-  globalThis.cancelAnimationFrame = () => {};
-  const layout = { x: 300, y: 300 };
-  let zoom;
-  let swipe;
-  try {
-    const stage = sharedStage(layout);
-    // The MutationObserver the action created gets the stage's batches.
-    const { node, fire } = stage;
-    pane.appendChild(node);
-    zoom = coverZoom(node, { initial: { scale: 3, x: 40, y: -20 }, settleLayout: () => Promise.resolve() });
-    stage.observers.push(...env.observers);
-    let skipped = 0;
-    swipe = swipeDismiss(node, { follow: false, damped: true, actions: { left: () => { skipped += 1; }, right: () => {}, down: () => {} } });
-    const overlay = canvases[0];
-    await wait(COVER_LAYER_IDLE_MS + 30);
-    assert.equal(drawn.length, 1);
-    assert.equal(overlay.style.opacity, '1');
-    const paneBox = pane.getBoundingClientRect();
-    const drawnVisual = node.getBoundingClientRect();
-    const drawnCanvas = paintedCanvasRect(overlay, paneBox);
-    // transform-origin = the stage's layout centre (300, 300) in the canvas's own box.
-    const origin = /(-?[\d.]+)px (-?[\d.]+)px/.exec(overlay.style.transformOrigin).slice(1).map(Number);
-    const canvasLeft = paneBox.left + parseFloat(overlay.style.left);
-    const canvasTop = paneBox.top + parseFloat(overlay.style.top);
-    assert.ok(Math.abs(canvasLeft + origin[0] - layout.x) < 0.01 && Math.abs(canvasTop + origin[1] - layout.y) < 0.01, 'pivot on the stage centre');
-    const touch = (x, y, extra = {}) => ({ pointerId: 1, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, timeStamp: 0, target: null, cancelable: true, preventDefault() {}, ...extra });
-    // One finger drags left: the damped feedback is written on the stage...
-    fire('pointerdown', touch(300, 300));
-    fire('pointermove', touch(270, 302, { timeStamp: 16 }));
-    assert.notEqual(node.style.translate, '');
-    assert.notEqual(node.style.scale, '');
-    await settle(); // ...and mirrored in the observer batch (before paint)
-    assert.equal(overlay.style.opacity, node.style.opacity, 'shown, at the stage feedback opacity');
-    assert.equal(overlay.style.translate, node.style.translate);
-    assert.equal(overlay.style.scale, node.style.scale);
-    assert.equal(overlay.style.transition, node.style.transition);
-    assertRectClose(paintedCanvasRect(overlay, paneBox), mappedRect(drawnCanvas, drawnVisual, node.getBoundingClientRect()), 'mirrored feedback lines up');
-    // Released short of the skip distance: the feedback settles back with a transition.
-    fire('pointerup', touch(285, 302, { timeStamp: 40 }));
-    await settle();
-    assert.equal(skipped, 0);
-    // Release below the threshold: cover and overlay return in the same write. The overlay is hidden with no feedback
-    // left on it (no second copy that stays where the swipe left it); the stage's own image shows the bounce.
-    assert.equal(overlay.style.opacity, '0', 'hidden in the release write');
-    assert.equal(overlay.style.translate, '');
-    assert.equal(overlay.style.scale, '');
-    assert.equal(overlay.style.transition, '');
-    assert.match(node.style.transition, /translate/, 'the stage bounces back by its settle transition');
-    // No redraw while the bounce runs; after it, the stage's delayed `transition = ''` write, one sharp redraw.
-    await wait(COVER_LAYER_IDLE_MS + 20);
-    assert.equal(drawn.length, 1, 'not redrawn mid-bounce');
-    await wait(SWIPE_SETTLE_MS + COVER_LAYER_IDLE_MS * 2);
-    await settle();
-    assert.equal(node.style.transition, '');
-    assert.equal(drawn.length, 2, 'redrawn once the stage has settled');
-    assert.equal(overlay.style.opacity, '1');
-    assert.equal(overlay.style.translate, '', 'overlay feedback == none, like the stage');
-    assert.equal(overlay.style.scale, '');
-    assert.equal(overlay.style.transition, '');
-    // A single-finger swipe far enough left still skips (far from the last release: not a double tap); the overlay
-    // moved with the feedback and snaps back with it.
-    fire('pointerdown', touch(300, 300, { timeStamp: 2000 }));
-    fire('pointermove', touch(260, 300, { timeStamp: 2016 }));
-    await settle();
-    assert.equal(overlay.style.translate, node.style.translate);
-    fire('pointerup', touch(150, 300, { timeStamp: 2040 }));
-    await settle();
-    assert.equal(skipped, 1, 'single-finger swipe still skips (commit case)');
-    assert.equal(overlay.style.opacity, '0', 'hidden in the release write on a commit too');
-    assert.equal(overlay.style.translate, '');
-    assert.equal(overlay.style.scale, '');
-    assert.equal(overlay.style.transition, '');
-    // A foreign style write still hides the overlay.
-    node.style.width = '320px';
-    await settle();
-    assert.equal(overlay.style.opacity, '0');
-  } finally {
-    swipe?.destroy();
-    zoom?.destroy();
-    env.restore();
-    clearOverlayDom();
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
-test('a settled redraw while the stage still carries swipe feedback is drawn without it and keeps the mirrored feedback on top', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  const { pane, drawn, canvases } = fakeOverlayDom();
-  const env = installSharedStageGlobals();
-  globalThis.requestAnimationFrame = () => 1;
-  globalThis.cancelAnimationFrame = () => {};
-  const layout = { x: 300, y: 300 };
-  let zoom;
-  try {
-    const stage = sharedStage(layout);
-    const { node, fire } = stage;
-    pane.appendChild(node);
-    zoom = coverZoom(node, { initial: { scale: 2.5, x: -30, y: 10 }, settleLayout: () => Promise.resolve() });
-    stage.observers.push(...env.observers);
-    const overlay = canvases[0];
-    await wait(COVER_LAYER_IDLE_MS + 30);
-    assert.equal(drawn.length, 1);
-    const plainVisual = node.getBoundingClientRect();
-    // A finger is down (holds the redraw) and feedback is on the stage when it lifts.
-    fire('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 300, clientY: 300 });
-    node.style.transition = 'none';
-    node.style.translate = '-18px 0px';
-    node.style.scale = '0.98';
-    node.style.opacity = '0.9';
-    await settle();
-    fire('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 300, clientY: 300, timeStamp: 0 });
-    await wait(COVER_LAYER_IDLE_MS + 20);
-    assert.equal(drawn.length, 2, 'redrawn although the feedback is not identity');
-    assert.equal(overlay.style.opacity, '0.9');
-    assert.equal(overlay.style.translate, '-18px 0px');
-    // Drawn for the stage without its feedback: the canvas content is where the stage's (fed) content is.
-    const drawnCanvas = paintedCanvasRect({ style: { ...overlay.style, translate: '', scale: '' } }, pane.getBoundingClientRect());
-    assertRectClose(paintedCanvasRect(overlay, pane.getBoundingClientRect()), mappedRect(drawnCanvas, plainVisual, node.getBoundingClientRect()), 'redraw lines up under the feedback');
-  } finally {
-    zoom?.destroy();
-    env.restore();
-    clearOverlayDom();
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
-test('pinch on a zoomed cover after the first finger moved (swipe feedback, synthetic pointercancel) keeps the overlay shown and aligned', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  const { swipeDismiss, SWIPE_SETTLE_MS } = await import('../src/lib/swipe-dismiss.js');
-  const { pane, drawn, canvases } = fakeOverlayDom();
-  const env = installSharedStageGlobals();
-  const frames = [];
-  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
-  globalThis.cancelAnimationFrame = () => {};
-  const layout = { x: 300, y: 300 };
-  let zoom;
-  let swipe;
-  try {
-    const stage = sharedStage(layout);
-    const { node, fire } = stage;
-    pane.appendChild(node);
-    zoom = coverZoom(node, { initial: { scale: 3, x: 0, y: 0 }, settleLayout: () => Promise.resolve() });
-    stage.observers.push(...env.observers);
-    const actions = [];
-    swipe = swipeDismiss(node, { follow: false, damped: true, actions: { left: () => actions.push('left'), right: () => actions.push('right'), down: () => actions.push('down') } });
-    const overlay = canvases[0];
-    await wait(COVER_LAYER_IDLE_MS + 30);
-    assert.equal(drawn.length, 1);
-    const paneBox = pane.getBoundingClientRect();
-    const drawnVisual = node.getBoundingClientRect();
-    const drawnCanvas = paintedCanvasRect(overlay, paneBox);
-    const ptr = (id, x, y, extra = {}) => ({ pointerId: id, isPrimary: id === 1, pointerType: 'touch', clientX: x, clientY: y, timeStamp: 0, target: null, cancelable: true, preventDefault() {}, ...extra });
-    fire('pointerdown', ptr(1, 260, 300));
-    fire('pointermove', ptr(1, 275, 301, { timeStamp: 10 })); // the first finger moves before the second lands
-    await settle();
-    assert.notEqual(node.style.translate, '', 'swipe feedback on the stage');
-    assert.equal(overlay.style.opacity, node.style.opacity);
-    fire('pointerdown', ptr(2, 360, 300)); // second finger: coverZoom cancels the swipe (synthetic pointercancel)
-    await settle();
-    assert.equal(node.style.translate, '', 'the swipe settled back');
-    assert.equal(overlay.style.opacity, '1', 'the settle write is mirrored, not hidden');
-    assert.equal(overlay.style.transition, node.style.transition);
-    for (let i = 1; i <= 4; i += 1) {
-      fire('pointermove', ptr(1, 275 - i * 5, 301));
-      fire('pointermove', ptr(2, 360 + i * 5, 300));
-    }
-    assert.equal(frames.length, 1);
-    frames.shift()();
-    await settle();
-    assert.equal(overlay.style.opacity, '1', 'shown during the pinch');
-    assert.equal(overlay.style.transition, node.style.transition, 'the zoom frame\'s transition write is mirrored too');
-    assertRectClose(paintedCanvasRect(overlay, paneBox), mappedRect(drawnCanvas, drawnVisual, node.getBoundingClientRect()), 'aligned with the pinched stage');
-    fire('pointerup', ptr(1, 255, 301));
-    fire('pointerup', ptr(2, 380, 300));
-    await settle();
-    assert.deepEqual(actions, [], 'the pinch never skips or closes');
-    await wait(COVER_LAYER_IDLE_MS + 20);
-    assert.equal(drawn.length, 2, 'redrawn sharp once quiet');
-    await wait(SWIPE_SETTLE_MS);
-    await settle();
-    assert.equal(overlay.style.opacity, '1', 'still shown after the swipe\'s delayed transition write');
-    assert.equal(drawn.length, 2);
-  } finally {
-    swipe?.destroy();
-    zoom?.destroy();
-    env.restore();
-    clearOverlayDom();
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
-test('mutation records that leave the attribute at its old value (no-op class or style writes) do not hide the overlay', async () => {
-  const { coverZoom, COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
-  const { pane, canvases } = fakeOverlayDom();
-  const env = installSharedStageGlobals();
-  globalThis.requestAnimationFrame = () => 1;
-  globalThis.cancelAnimationFrame = () => {};
-  let zoom;
-  try {
-    const stage = sharedStage({ x: 300, y: 300 });
-    const { node } = stage;
-    pane.appendChild(node);
-    zoom = coverZoom(node, { initial: { scale: 3, x: 0, y: 0 }, settleLayout: () => Promise.resolve() });
-    stage.observers.push(...env.observers);
-    const overlay = canvases[0];
-    await wait(COVER_LAYER_IDLE_MS + 30);
-    assert.equal(overlay.style.opacity, '1');
-    // swipe-dismiss's up() on a stage that never had the class: a class record with no change.
-    node.classList.remove('is-swiping');
-    await settle();
-    assert.equal(overlay.style.opacity, '1', 'no-op class record');
-    // Added and removed in one batch: no net change.
-    node.classList.add('is-swiping');
-    node.classList.remove('is-swiping');
-    await settle();
-    assert.equal(overlay.style.opacity, '1', 'no net change in the batch');
-    // A real class change still hides it.
-    node.classList.add('is-swiping');
-    await settle();
-    assert.equal(overlay.style.opacity, '0', 'real class change');
-    // ...and so does a real style change after it is drawn again.
-    await wait(COVER_LAYER_IDLE_MS + 30);
-    assert.equal(overlay.style.opacity, '1');
-    node.style.width = '320px';
-    await settle();
-    assert.equal(overlay.style.opacity, '0', 'real style change');
-    // The owner writes the same (non-own) value again: no change.
-    await wait(COVER_LAYER_IDLE_MS + 30);
-    assert.equal(overlay.style.opacity, '1');
-    node.style.width = '320px';
-    await settle();
-    assert.equal(overlay.style.opacity, '1', 'no-op style record');
-  } finally {
-    zoom?.destroy();
-    env.restore();
-    clearOverlayDom();
-    delete globalThis.requestAnimationFrame;
-    delete globalThis.cancelAnimationFrame;
-  }
-});
-
 test('source shape: the cover layer structure never changes at a gesture or animation end', async () => {
   const { readFileSync } = await import('node:fs');
   const css = readFileSync(new URL('../src/app.css', import.meta.url), 'utf8');
@@ -1053,129 +570,271 @@ test('source shape: the cover layer structure never changes at a gesture or anim
   assert.doesNotMatch(css, /data-cover-gesture|\[data-cover-resetting\]/);
   // The overlay canvas is persistent and promoted; shown and hidden by opacity only.
   assert.match(css, /\.cover-stage-overlay \{[^}]*will-change: transform;[^}]*\}/);
-  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.doesNotMatch(source, /coverGesture|style\.willChange|style\.zIndex|style\.contain|style\.isolation|style\.position/);
   const overlay = source.slice(source.indexOf('function createOverlayCanvas'));
   assert.doesNotMatch(overlay, /style\.display|style\.visibility|willChange/);
   // The stage itself is only animated without a drawable image (fallback art).
   const glide = source.slice(source.indexOf('  function startGlide'), source.indexOf('  function beginGlide'));
-  assert.match(glide, /drawOverlay\(to, 1, to, true\) \? overlay\.element : node/);
+  assert.match(glide, /drawOverlay\(to, 1, to\) \? overlay\.element : node/);
 });
 
-test('swipe feedback ending is detected so the overlay returns with the cover (no ghost left displaced)', async () => {
-  const { swipeFeedbackReleased, swipeFeedbackActive, overlayFeedbackStyle, overlayMatchesSource } = await import('../src/lib/cover-overlay.js');
-  const dragging = { translate: '-19px 0', scale: '0.98', opacity: '0.9', transition: 'none' };
-  const bouncing = { translate: '', scale: '', opacity: '', transition: 'translate 180ms ease, scale 180ms ease, opacity 180ms ease' };
-  const rest = { translate: '', scale: '', opacity: '', transition: '' };
-  assert.equal(swipeFeedbackActive(dragging), true);
-  assert.equal(swipeFeedbackActive(bouncing), false, 'a settle transition alone is no feedback');
-  assert.equal(swipeFeedbackReleased(dragging, bouncing), true, 'the release frame');
-  assert.equal(swipeFeedbackReleased(dragging, dragging), false);
-  assert.equal(swipeFeedbackReleased(bouncing, rest), false);
-  assert.equal(swipeFeedbackReleased(null, bouncing), false);
-  // A (re)drawn overlay carries exactly the stage's feedback: nothing after the release.
-  assert.deepEqual(overlayFeedbackStyle(bouncing), { translate: '', scale: '', opacity: '' });
-  assert.deepEqual(overlayFeedbackStyle(null), { translate: '', scale: '', opacity: '' });
-  assert.deepEqual(overlayFeedbackStyle(dragging), { translate: '-19px 0', scale: '0.98', opacity: '0.9' });
-  // A drawing belongs to the cover image it was drawn from.
-  assert.equal(overlayMatchesSource('blob:a', 'blob:a'), true);
-  assert.equal(overlayMatchesSource('blob:a', 'blob:b'), false);
-  assert.equal(overlayMatchesSource('', ''), true, 'no source on either side (no img): nothing to compare');
-});
-
-test('the overlay hides and clears its feedback in the same write the stage releases, and draws only after the bounce', async () => {
+test('source shape: the overlay canvas is drawn and shown only for the double-tap restore glide', async () => {
   const { readFileSync } = await import('node:fs');
   const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const mirror = source.slice(source.indexOf('  function mirrorFeedback'), source.indexOf('  /** Opt-in (localStorage'));
-  assert.match(mirror, /swipeFeedbackReleased\(mirrored, next\)/);
-  assert.match(mirror, /overlay\.mirror\(null\);\s*hideOverlay\(\);/);
-  // No redraw while the stage's settle transition runs; no layer property is toggled on the stage.
-  assert.match(source, /planSettledOverlay\(\{ settling: feedbackSettling\(\) \}\) === 'wait'/);
-  assert.doesNotMatch(source, /style\.(willChange|zIndex|contain|isolation|position)\b/);
-  // hide() leaves no feedback on the canvas; draw() applies the stage's current feedback.
-  const hide = source.slice(source.indexOf('    hide() {'), source.indexOf('    remove()'));
-  assert.match(hide, /transition = ''[\s\S]*translate = ''[\s\S]*scale = ''/);
-  assert.match(source, /overlayFeedbackStyle\(feedback\)/);
-  // The overlay is also dropped when the artwork source differs from the one it was drawn from (track change).
-  assert.match(source, /overlayMatchesSource\(overlay\.drawnSource, currentSource\(\)\)/);
+  // The sharpness machinery of the overlay is gone.
+  assert.doesNotMatch(source, /drawSettled|followOverlay|mirrorFeedback|dropStaleOverlay|invalidateOverlay|coverOverlayWanted|planSettledOverlay|verifyShownOverlay|overlayDrawRegion|overlayFollowTransform|layerGate|promotedScale|swipeSettling|clipToAncestors/);
+  // One call site draws the overlay: the restore glide; and only drawOverlay() asks the canvas to draw.
+  assert.equal([...source.matchAll(/drawOverlay\(/g)].length, 2, 'the definition and the restore glide');
+  assert.equal([...source.matchAll(/overlay\.draw\(/g)].length, 1);
+  assert.equal([...source.matchAll(/overlay\??\.(follow|mirror)\(/g)].length, 0);
+  const startGlide = source.slice(source.indexOf('  function startGlide'), source.indexOf('  function beginGlide'));
+  assert.match(startGlide, /drawOverlay\(to, 1, to\)/);
+  // Only the canvas module sets the canvas opacity to 1 (draw) and 0 (hide).
+  const overlayModule = source.slice(source.indexOf('function createOverlayCanvas'));
+  assert.equal([...overlayModule.matchAll(/style\.opacity = /g)].length, 2);
+  const overlayGeometry = readFileSync(new URL('../src/lib/cover-overlay.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(overlayGeometry, /export function (overlayDrawRegion|overlayFollowTransform|overlayOrigin|overlayTransformCss|coverOverlayWanted|planSettledOverlay|verifyShownOverlay|rectsAlign|swipeFeedbackReleased|swipeFeedbackActive|overlayFeedbackStyle|swipeFeedbackAtRest)/);
 });
 
-test('ghost regression: the overlay is never visible with a pinned rect that differs from the stage rect (drag, release, settle, idle draw; both directions; scale below and above 1)', async () => {
-  const { planSettledOverlay, verifyShownOverlay, rectsAlign, swipeFeedbackAtRest, withoutSwipeFeedback } = await import('../src/lib/cover-overlay.js');
-  const SETTLE_MS = 180; // swipe-dismiss SWIPE_SETTLE_MS: its timer clears the transition string, the transition itself runs on
-  const IDLE_MS = 50;
-  for (const scale of [0.53, 1.8]) {
-    for (const direction of [-1, 1]) {
-      for (const policy of ['fixed', 'string-only']) {
-        const rest = { left: 101.8, top: 146.3, width: 321 * scale, height: 321 * scale };
-        const centre = { x: rest.left + rest.width / 2, y: rest.top + rest.height / 2 };
-        const releaseAt = 400;
-        const transitionStartsAt = releaseAt + 40; // the transition begins a few frames after the release write
-        const transitionEndsAt = transitionStartsAt + SETTLE_MS;
-        const stringClearedAt = releaseAt + SETTLE_MS; // before the transition ends
-        // The stage's feedback at time t (what getComputedStyle reports) and its raw painted rect.
-        const feedbackAt = (t) => {
-          if (t < 100) return { x: 0, y: 0, scale: 1 };
-          if (t < releaseAt) return { x: direction * 22 * Math.min(1, (t - 100) / 100), y: 0, scale: 0.973 };
-          if (t < transitionStartsAt) return { x: direction * 22, y: 0, scale: 0.973 };
-          if (t < transitionEndsAt) { const k = 1 - (t - transitionStartsAt) / SETTLE_MS; return { x: direction * 22 * k, y: 0, scale: 1 - 0.027 * k }; }
-          return { x: 0, y: 0, scale: 1 };
-        };
-        const rawRect = (t) => {
-          const fb = feedbackAt(t);
-          const w = rest.width * fb.scale;
-          const h = rest.height * fb.scale;
-          return { left: centre.x + fb.x - w / 2, top: centre.y + fb.y - h / 2, width: w, height: h };
-        };
-        const stringSet = (t) => (t >= releaseAt && t < stringClearedAt) || (t >= 100 && t < releaseAt);
-        const transitionRunning = (t) => t >= transitionStartsAt && t < transitionEndsAt;
-        // The stage rect as the action reads it: with the feedback removed while the stage can carry some.
-        const settling = (t) => stringSet(t) || (policy === 'fixed' && (transitionRunning(t) || !swipeFeedbackAtRest(feedbackAt(t))));
-        const stageRest = (t) => (settling(t) ? withoutSwipeFeedback(rawRect(t), feedbackAt(t), { x: 0, y: 0 }) : rawRect(t));
-        let shown = false;
-        let pinned = null;
-        let gateOnAt = -Infinity;
-        let violations = 0;
-        for (let t = 0; t <= 1000; t += 4) {
-          if (t === 100) { shown = false; pinned = null; } // the swipe starts: the overlay is hidden with its feedback
-          if (t === releaseAt) { shown = false; pinned = null; gateOnAt = t; } // released: hidden, the gate is poked
-          if (t >= gateOnAt + IDLE_MS && gateOnAt >= 0 && !shown && t >= releaseAt) {
-            if (planSettledOverlay({ settling: settling(t) }) === 'wait') gateOnAt = t; // poke again
-            else {
-              pinned = stageRest(t); // re-pinned from the live rect, in the same write that shows it
-              shown = true;
-              // read back from the geometry as the actual stage is painted: the verification of the draw
-              if (verifyShownOverlay(pinned, rawRect(t)) === 'hide' && policy === 'fixed') { shown = false; pinned = null; gateOnAt = t; }
-            }
-          }
-          if (shown && !rectsAlign(pinned, stageRest(t))) violations += 1;
-          if (shown && !rectsAlign(pinned, rawRect(t)) && policy === 'fixed') violations += 1;
-        }
-        if (policy === 'fixed') assert.equal(violations, 0, `scale ${scale} direction ${direction}: overlay shown with a stale pinned rect`);
-        else assert.ok(violations > 0, 'control: deciding by the transition string alone does show a displaced ghost');
-        if (policy === 'fixed') assert.equal(shown, true, 'the settled overlay returns after the bounce');
-      }
-    }
+test('source shape: the nudge writes only translate and transition, never a layer property, and every gesture entry cancels it', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const nudge = source.slice(source.indexOf('  function runNudge'), source.indexOf('  /** The decoded cover image'));
+  assert.doesNotMatch(nudge, /willChange|zIndex|style\.contain|isolation|style\.position|style\.opacity|style\.scale|style\.transform/);
+  assert.match(nudge, /style\.translate = COVER_RERASTER_TRANSLATE/);
+  assert.match(nudge, /style\.transition = COVER_RERASTER_TRANSITION/);
+  // The raf step bails out when something else owns translate / transition now.
+  assert.match(nudge, /\(style\.translate \|\| ''\) !== COVER_RERASTER_TRANSLATE \|\| \(style\.transition \|\| ''\) !== 'none'/);
+  // The restore timer only touches the transition it set.
+  assert.match(nudge, /\(style\.transition \|\| ''\) === mine\.transition/);
+  for (const entry of ['function wheel', 'function down', 'function apply']) {
+    const body = source.slice(source.indexOf(`  ${entry}(`));
+    assert.match(body.slice(0, body.indexOf('\n  }\n')), /cancelNudge\(true\)/, entry);
   }
 });
 
-test('ghost regression: the settled draw waits for the bounce, pins from the live rect, and is verified before paint (source shape)', async () => {
-  const { readFileSync } = await import('node:fs');
-  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const settled = source.slice(source.indexOf('  function drawSettled'), source.indexOf('  /** Keep a shown overlay on the stage'));
-  assert.match(settled, /planSettledOverlay\(\{ settling: feedbackSettling\(\) \}\) === 'wait'\) \{[^}]*layerGate\.poke\(\); return; \}/);
-  assert.ok(settled.indexOf("=== 'wait'") < settled.indexOf('stageRect()'), 'wait before the live rect is read');
-  assert.ok(settled.indexOf('drawOverlay(visual') < settled.indexOf('verifyShownOverlay('), 'verified after the draw, in the same task');
-  // A running transition counts as settling even after the transition string was cleared.
-  const settling = source.slice(source.indexOf('  function feedbackSettling'), source.indexOf('  /** Whether the stage may carry swipe feedback'));
-  assert.match(settling, /feedbackTransitionRunning\(\)/);
-  assert.match(settling, /swipeFeedbackAtRest\(/);
-  assert.match(source, /released \|\| \(next && \/translate\|scale\/\.test\(next\.transition\)\)\) swipeSettling = true/);
-  // Write order inside draw(): every pinned property before the opacity that shows the canvas.
-  const draw = source.slice(source.indexOf('    draw(image, plan, visible'), source.indexOf('    hide() {'));
-  const order = ['style.left', 'style.top', 'style.width', 'style.height', 'style.transform = ', 'setOrigin(', 'style.opacity = shownOpacity()'].map((needle) => draw.indexOf(needle));
-  assert.ok(order.every((index) => index >= 0), 'all writes present');
-  assert.deepEqual([...order].sort((a, b) => a - b), order, 'left, top, size, transform, origin first; opacity last');
-  // The only place that shows the canvas is draw().
-  assert.equal([...source.matchAll(/style\.opacity = (?!'0')/g)].length, 2, 'draw() and the mirrored feedback opacity of a shown overlay');
+/** A stage in a pane with the frame queue, mutation observers and swipe wiring the nudge tests share. */
+async function nudgeRig(initial) {
+  const { coverZoom } = await import('../src/lib/cover-zoom.js');
+  const { swipeDismiss } = await import('../src/lib/swipe-dismiss.js');
+  const { pane, drawn, canvases } = fakeOverlayDom();
+  const env = installSharedStageGlobals();
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  const stage = sharedStage({ x: 300, y: 300 });
+  const { node, fire } = stage;
+  pane.appendChild(node);
+  const zoom = coverZoom(node, { initial, settleLayout: () => Promise.resolve() });
+  stage.observers.push(...env.observers);
+  const swipe = swipeDismiss(node, { follow: false, damped: true, actions: { left: () => {}, right: () => {}, down: () => {} } });
+  const runFrames = async () => { while (frames.length) frames.shift()(); await settle(); };
+  const wheel = async (deltaY) => {
+    fire('wheel', { deltaY, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
+    await runFrames();
+  };
+  const touch = (type, id = 1) => ({ pointerId: id, isPrimary: id === 1, pointerType: 'touch', clientX: 300, clientY: 300, timeStamp: 0, target: null, cancelable: true, preventDefault() {}, ...(type ? { type } : {}) });
+  return {
+    node, fire, frames, runFrames, wheel, touch, drawn, canvases,
+    destroy() {
+      swipe.destroy();
+      zoom.destroy();
+      env.restore();
+      clearOverlayDom();
+      delete globalThis.requestAnimationFrame;
+      delete globalThis.cancelAnimationFrame;
+    },
+  };
+}
+
+test('re-raster nudge: once the zoom-in is stable it moves the stage 0.01px and back by transition, then restores the transition', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await rig.wheel(-300); // zoom in
+    assert.ok(node.dataset.coverZoomed !== undefined);
+    assert.equal(node.style.translate ?? '', '', 'not nudged while the zoom was just applied');
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.transition, 'none');
+    await rig.runFrames();
+    assert.equal(node.style.translate, '');
+    assert.equal(node.style.transition, 'translate 180ms');
+    await wait(300);
+    assert.equal(node.style.transition, 'none', 'the transition string from before the nudge is back');
+    // Nothing more happens while the scale stays: one nudge per settled scale.
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '');
+    assert.equal(rig.frames.length, 0);
+    // The overlay canvas is never drawn or shown for sharpness.
+    assert.equal(rig.drawn.length, 0);
+    assert.ok(rig.canvases.every((canvas) => canvas.style.opacity !== '1'));
+    // A later zoom change nudges again once it is stable.
+    await rig.wheel(-200);
+    assert.equal(node.style.translate ?? '', '');
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+    await rig.runFrames();
+    await wait(300);
+    assert.equal(node.style.translate, '');
+    assert.equal(node.style.transition, 'none');
+    assert.equal(rig.drawn.length, 0);
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: continuous zooming postpones it; no nudge at scale 1 or below', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate ?? '', '', 'scale 1: nothing');
+    await rig.wheel(300); // zoom out below 1
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    await rig.runFrames();
+    assert.equal(node.style.translate ?? '', '', 'shrunk: nothing');
+    await rig.wheel(-900); // back above 1
+    for (let i = 0; i < 4; i += 1) {
+      await wait(COVER_LAYER_IDLE_MS / 2);
+      await rig.wheel(-50);
+      assert.equal(node.style.translate ?? '', '', 'still zooming');
+    }
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: a finger down cancels a pending nudge and it waits until all fingers are up', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node, fire } = rig;
+    await rig.wheel(-300);
+    fire('pointerdown', rig.touch());
+    await wait(COVER_LAYER_IDLE_MS * 3);
+    assert.equal(node.style.translate ?? '', '', 'no nudge under a finger');
+    fire('pointerup', rig.touch());
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px', 'nudged once the gesture is over');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: swipe feedback wins over a nudge in flight, and its settle is not nudged over', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await rig.wheel(-300);
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+    // The swipe feedback lands before the nudge's second step.
+    node.style.transition = 'none';
+    node.style.translate = '12px 0px';
+    node.style.scale = '0.97';
+    node.style.opacity = '0.9';
+    await settle();
+    await rig.runFrames();
+    assert.equal(node.style.translate, '12px 0px', 'the nudge did not clear the swipe translate');
+    assert.equal(node.style.scale, '0.97');
+    assert.equal(node.style.transition, 'none');
+    await wait(300);
+    assert.equal(node.style.translate, '12px 0px');
+    assert.equal(node.style.transition, 'none', 'the restore timer left the swipe transition alone');
+    // The swipe settles back by its own transition (which re-rasters the layer by itself): no nudge over it.
+    node.style.transition = 'translate 180ms ease, scale 180ms ease, opacity 180ms ease';
+    node.style.translate = '';
+    node.style.scale = '';
+    node.style.opacity = '';
+    await settle();
+    await wait(COVER_LAYER_IDLE_MS * 2);
+    assert.equal(node.style.translate ?? '', '');
+    node.style.transition = '';
+    await settle();
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate ?? '', '');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: swipe feedback written without any observer batch yet is not cleared by the nudge\'s second step', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await rig.wheel(-300);
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    node.style.translate = '9px 0px';
+    await rig.runFrames(); // the frame runs before any mutation observer batch
+    assert.equal(node.style.translate, '9px 0px');
+    assert.equal(node.style.transition, 'none');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: a swipe written in the second step of a nudge is not undone by its restore', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await rig.wheel(-300);
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    await rig.runFrames(); // the nudge's transition is now running
+    assert.equal(node.style.transition, 'translate 180ms');
+    node.style.transition = 'none';
+    node.style.translate = '-20px 0px';
+    await settle();
+    await wait(300);
+    assert.equal(node.style.translate, '-20px 0px');
+    assert.equal(node.style.transition, 'none');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: a wheel step during the nudge takes it back, and the new scale is nudged once stable', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await rig.wheel(-300);
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+    rig.fire('wheel', { deltaY: -100, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
+    assert.equal(node.style.translate, '', 'the wheel took the nudge back');
+    await rig.runFrames();
+    assert.equal(node.style.translate ?? '', '');
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: a track change at an enlarged scale (new cover element, then its image) nudges when stable', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig({ scale: 2, x: 0, y: 0 });
+  try {
+    const { node } = rig;
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+    await rig.runFrames();
+    await wait(300);
+    assert.equal(node.style.translate, '');
+    // The next cover image loads into the element: the layer needs another nudge.
+    node.dispatchEvent({ type: 'load' });
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px 0px');
+  } finally {
+    rig.destroy();
+  }
 });

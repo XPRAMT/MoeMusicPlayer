@@ -2233,7 +2233,8 @@ input:focus-visible {
 /* Layer structure of the cover is fixed for the stage's whole life (ADR 0036): the stage is always its own compositor
    layer above the lyrics, so no zoom, pan, reset or settle ever creates, drops or re-stacks a layer (that re-rasterised
    the cover and the lyrics from scratch on Android: blank frames). The data-cover-* attributes below change paint or
-   layout only. Sharpness at other scales comes from the overlay canvas (.cover-stage-overlay). */
+   layout only. Sharpness at other scales comes from the re-raster nudge (cover-reraster.js: an inline 0.01px translate
+   transition on the stage once the zoom is stable); the overlay canvas (.cover-stage-overlay) only carries the restore glide. */
 .now-playing-view .cover-stage {
   z-index: 1;
   will-change: transform;
@@ -2247,14 +2248,13 @@ input:focus-visible {
 }
 
 /* The reset glide's copy (overlay canvas) shows the cover: the stage's own image, already at its final size, is not
-   painted meanwhile (paint-only; the stage keeps its layer). Under the sharp zoomed view it stays painted. */
+   painted meanwhile (paint-only; the stage keeps its layer). */
 .now-playing-view .cover-stage[data-cover-overlay] .cover-stage-image {
   visibility: hidden;
 }
 
-/* The overlay canvas (cover-zoom.js): persistent, its own layer, shown and hidden by opacity only; during input it
-   follows the stage by an inline compositor transform and copies the stage's swipe feedback (inline transform-origin:
-   the stage's centre). */
+/* The overlay canvas (cover-zoom.js): persistent, its own layer, shown and hidden by opacity only; used only by the
+   double-tap restore glide (a thumbnail-size copy of the cover slides back by Web Animation). */
 .now-playing-artwork {
   position: relative;
 }

@@ -1,10 +1,8 @@
 // Now-playing cover overlay canvas (ADR 0036): pure geometry for drawing the cover into a <canvas> that sits above the
-// cover stage. Two uses, one element: (1) the reset glide animates a copy drawn at the screen-resolution thumbnail size
-// (the cover's on-screen size at zoom 1, in device pixels) instead of the stage itself; (2) after a zoom/pan settles,
-// the visible part of the cover plus a bounded margin is drawn at device resolution from the source-resolution image, so
-// the zoomed cover is sharp without a giant compositor layer; during later input the drawn canvas follows the stage by a
-// compositor transform (`overlayFollowTransform`) until the next settled draw. `cover-zoom.js` owns the element;
-// everything here is testable math.
+// cover stage. Its only use is the double-tap restore glide: a copy drawn at the screen-resolution thumbnail size (the
+// cover's on-screen size at zoom 1, in device pixels) animates instead of the stage itself. Sharpness after a zoom comes
+// from the re-raster nudge (cover-reraster.js), not from this canvas. `cover-zoom.js` owns the element; everything here
+// is testable math.
 
 /** @typedef {{ left: number, top: number, width: number, height: number }} Rect */
 
@@ -90,88 +88,6 @@ export function coverDrawPlan({ visual, scale, naturalWidth, naturalHeight, blee
   };
 }
 
-/** The settled draw covers at most this many times the visible area's device pixels (visible part + margin). */
-export const COVER_OVERLAY_MARGIN_PIXEL_RATIO = 2;
-/** The overlay canvas backing never exceeds this many device pixels on a side (unless the visible part alone does). */
-export const COVER_OVERLAY_MAX_DIMENSION = 4096;
-
-/**
- * The client rect the settled overlay is drawn for: the visible part of the cover grown by a margin, so content that a
- * pan or zoom-out brings into view is already sharp. The margin is the same on every side, clamped to the cover's own
- * painted rect (a side that hits the cover edge stops, the others keep growing), and grows only while the region stays
- * within `pixelRatio` times the visible area and `maxDimension` device pixels per side.
- * @param {{ visible: Rect, cover: Rect, dpr: number, pixelRatio?: number, maxDimension?: number }} input @returns {Rect}
- */
-export function overlayDrawRegion({ visible, cover, dpr, pixelRatio = COVER_OVERLAY_MARGIN_PIXEL_RATIO, maxDimension = COVER_OVERLAY_MAX_DIMENSION }) {
-  const base = intersectRects(visible, cover) ?? visible;
-  const ratio = dpr > 0 ? dpr : 1;
-  const maxArea = base.width * base.height * Math.max(1, pixelRatio);
-  const maxWidth = Math.max(base.width, maxDimension / ratio);
-  const maxHeight = Math.max(base.height, maxDimension / ratio);
-  /** @param {number} m */
-  const grow = (m) => intersectRects({ left: base.left - m, top: base.top - m, width: base.width + 2 * m, height: base.height + 2 * m }, cover) ?? base;
-  /** @param {Rect} r */
-  const fits = (r) => r.width * r.height <= maxArea * (1 + 1e-9) && r.width <= maxWidth + 1e-9 && r.height <= maxHeight + 1e-9;
-  const limit = Math.max(
-    base.left - cover.left,
-    base.top - cover.top,
-    cover.left + cover.width - (base.left + base.width),
-    cover.top + cover.height - (base.top + base.height),
-  );
-  if (!(limit > 0)) return base;
-  const whole = grow(limit);
-  if (fits(whole)) return whole;
-  let lo = 0;
-  let hi = limit;
-  for (let i = 0; i < 40; i += 1) {
-    const mid = (lo + hi) / 2;
-    if (fits(grow(mid))) lo = mid; else hi = mid;
-  }
-  return grow(lo);
-}
-
-/**
- * The compositor transform that keeps an overlay drawn for the stage at `drawnVisual` (its painted client rect then)
- * aligned with the stage now painted at `visual`. `drawnCanvas` is the canvas's client rect when it was drawn;
- * `paneShift` is how far its containing pane has moved since (the canvas is positioned in the pane, so it moves with
- * it). The cover content is mapped by the same translate + scale as the stage:
- * p' = visual.left + (p - drawnVisual.left) * visual.width / drawnVisual.width.
- * `origin` is the canvas's transform-origin in its own box (px from its top-left; default its centre): the overlay
- * pivots the mirrored swipe `scale` on the stage's centre (`overlayOrigin`), and the translate is adjusted so the
- * result is the same map whatever the origin: translate(a_K) scale(k) around the box centre K equals
- * translate(a_K + (1 - k) (K - O)) scale(k) around O.
- * @param {Rect} drawnVisual @param {Rect} drawnCanvas @param {Rect} visual @param {{ x: number, y: number }} paneShift
- * @param {{ x: number, y: number }} [origin]
- * @returns {{ x: number, y: number, scaleX: number, scaleY: number }}
- */
-export function overlayFollowTransform(drawnVisual, drawnCanvas, visual, paneShift, origin) {
-  const scaleX = drawnVisual.width > 0 ? visual.width / drawnVisual.width : 1;
-  const scaleY = drawnVisual.height > 0 ? visual.height / drawnVisual.height : 1;
-  const drawnCentreX = drawnCanvas.left + drawnCanvas.width / 2;
-  const drawnCentreY = drawnCanvas.top + drawnCanvas.height / 2;
-  const x = visual.left - (drawnCentreX + paneShift.x) + scaleX * (drawnCentreX - drawnVisual.left);
-  const y = visual.top - (drawnCentreY + paneShift.y) + scaleY * (drawnCentreY - drawnVisual.top);
-  if (!origin) return { x, y, scaleX, scaleY };
-  return {
-    x: x + (1 - scaleX) * (drawnCanvas.width / 2 - origin.x),
-    y: y + (1 - scaleY) * (drawnCanvas.height / 2 - origin.y),
-    scaleX,
-    scaleY,
-  };
-}
-
-/**
- * The overlay's transform-origin (px in its own box) that puts its pivot on the stage's layout centre `centre` (client
- * px; the stage's own transform-origin is its centre). `canvasBox` is the canvas's un-transformed client rect now.
- * With it the stage's swipe feedback (`translate`, `scale`) copied onto the canvas maps every client point exactly like
- * it does on the stage: CSS applies translate, then scale, then transform, all around transform-origin, so both become
- * p -> C + t + s (q - C) of the point q they would paint at without the feedback.
- * @param {{ x: number, y: number }} centre @param {Rect} canvasBox
- */
-export function overlayOrigin(centre, canvasBox) {
-  return { x: centre.x - canvasBox.left, y: centre.y - canvasBox.top };
-}
-
 /** @typedef {{ x: number, y: number, scale: number }} SwipeFeedback */
 
 /**
@@ -201,43 +117,6 @@ export function withoutSwipeFeedback(rect, feedback, pan) {
   return { left: centreX - width / 2, top: centreY - height / 2, width, height };
 }
 
-/** CSS for `overlayFollowTransform` ('' at identity). @param {{ x: number, y: number, scaleX: number, scaleY: number }} t */
-export function overlayTransformCss(t) {
-  if (Math.abs(t.x) < 0.005 && Math.abs(t.y) < 0.005 && Math.abs(t.scaleX - 1) < 1e-6 && Math.abs(t.scaleY - 1) < 1e-6) return '';
-  return `translate(${t.x.toFixed(2)}px, ${t.y.toFixed(2)}px) scale(${t.scaleX.toFixed(5)}, ${t.scaleY.toFixed(5)})`;
-}
-
-/**
- * Whether the settled cover is shown through the overlay: any scale but 1, or scale 1 on a stage whose compositor layer
- * was promoted at another scale (a will-change layer keeps its promote-time raster scale, so its own pixels are soft).
- * @param {number} scale @param {number} promotedScale
- */
-export function coverOverlayWanted(scale, promotedScale) {
-  return scale !== 1 || promotedScale !== 1;
-}
-
-/** @typedef {{ translate: string, scale: string, opacity: string, transition: string }} MirroredFeedback */
-
-/** Whether a mirrored swipe feedback carries a displacement, scale or fade (the settle transition alone does not count). @param {MirroredFeedback | null | undefined} f */
-export function swipeFeedbackActive(f) {
-  return Boolean(f && (f.translate || f.scale || f.opacity));
-}
-
-/**
- * The stage's feedback just ended (it was displaced, faded or scaled and is back at rest, the bounce-back settling by a
- * transition). The overlay must not run its own copy of that bounce: it is hidden in the same write with every feedback
- * property cleared, and redrawn once the stage has settled (ADR 0036).
- * @param {MirroredFeedback | null | undefined} previous @param {MirroredFeedback | null | undefined} next
- */
-export function swipeFeedbackReleased(previous, next) {
-  return swipeFeedbackActive(previous) && !swipeFeedbackActive(next);
-}
-
-/** The inline feedback values a (re)drawn overlay carries: exactly the stage's now, no transition. @param {MirroredFeedback | null | undefined} f */
-export function overlayFeedbackStyle(f) {
-  return { translate: f?.translate || '', scale: f?.scale || '', opacity: f?.opacity || '' };
-}
-
 /**
  * Whether a shown overlay still belongs to the cover image now on the stage (same source it was drawn from). A different
  * or unknown current source means the drawing is stale: it is dropped and drawn again.
@@ -245,41 +124,4 @@ export function overlayFeedbackStyle(f) {
  */
 export function overlayMatchesSource(drawnSource, currentSource) {
   return (drawnSource || "") === (currentSource || "");
-}
-
-/** The overlay's pinned rect may differ from the stage's by at most this many px while it is visible (ADR 0036). */
-export const OVERLAY_ALIGN_TOLERANCE_PX = 1;
-
-/** Whether two client rects are the same box within `tolerance` px on every edge. @param {Rect} a @param {Rect} b @param {number} [tolerance] */
-export function rectsAlign(a, b, tolerance = OVERLAY_ALIGN_TOLERANCE_PX) {
-  return Math.abs(a.left - b.left) <= tolerance
-    && Math.abs(a.top - b.top) <= tolerance
-    && Math.abs(a.width - b.width) <= tolerance
-    && Math.abs(a.height - b.height) <= tolerance;
-}
-
-/** Whether a (computed) swipe feedback is back at rest: no displacement and no scale. @param {SwipeFeedback} feedback */
-export function swipeFeedbackAtRest(feedback) {
-  return Math.abs(feedback.x) < 0.01 && Math.abs(feedback.y) < 0.01 && Math.abs(feedback.scale - 1) < 1e-4;
-}
-
-/**
- * What the settled draw may do now. The stage is "settling" while a swipe's bounce-back is not over: its transition
- * string is still set, a feedback transition is still running (clearing the string does not stop a running transition,
- * so the string alone says nothing), or its computed translate / scale are not at rest yet. A settling stage's rect is
- * moving: the overlay stays hidden (`wait`). Otherwise the overlay is pinned from the live stage rect in the same write
- * that shows it (`draw`).
- * @param {{ settling: boolean }} input @returns {'wait' | 'draw'}
- */
-export function planSettledOverlay({ settling }) {
-  return settling ? 'wait' : 'draw';
-}
-
-/**
- * After a draw, before anything is painted: keep the overlay only if the stage rect it was pinned to still is the stage's
- * live rect (within the tolerance); a pinned rect older than the last layout or feedback change is dropped.
- * @param {Rect} pinnedVisual @param {Rect} liveVisual @returns {'keep' | 'hide'}
- */
-export function verifyShownOverlay(pinnedVisual, liveVisual) {
-  return rectsAlign(pinnedVisual, liveVisual) ? 'keep' : 'hide';
 }
