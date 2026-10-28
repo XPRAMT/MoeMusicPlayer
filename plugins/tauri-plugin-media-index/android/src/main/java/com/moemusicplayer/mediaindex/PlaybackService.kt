@@ -67,6 +67,7 @@ class PlaybackService : MediaSessionService() {
     @Volatile private var outputRouter: AudioOutputRouter? = null
     /** The Bluetooth sample-rate follow (ADR 0051). */
     @Volatile private var bluetoothRate: BluetoothRateFollow? = null
+    @Volatile private var bluetoothCodec: BluetoothCodecChoiceFollow? = null
     /** Media3's output provider with the USB exclusive output in front (ADR 0047). */
     @Volatile private var usbOutputProvider: UsbAudioOutputProvider? = null
     private var session: MediaSession? = null
@@ -249,11 +250,13 @@ class PlaybackService : MediaSessionService() {
             override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
                 router.mixerLookup.symptom("audio sink error")
                 bluetoothRate?.symptom("audio sink error")
+                bluetoothCodec?.symptom("audio sink error")
             }
 
             override fun onPlayerError(eventTime: AnalyticsListener.EventTime, error: androidx.media3.common.PlaybackException) {
                 router.mixerLookup.symptom("player error")
                 bluetoothRate?.symptom("player error")
+                bluetoothCodec?.symptom("player error")
             }
         })
         // Bluetooth sample-rate follow (ADR 0051): saved original rates of an earlier run go back when the setting is off.
@@ -271,6 +274,10 @@ class PlaybackService : MediaSessionService() {
         autoAskUsbPermission("service-start")
         // Listen for the Bluetooth codec from the start, so a headset that connects while the app runs is known.
         BluetoothCodecWatch.ensure(this)
+        // Bluetooth codec priority list (ADR 0052): the stored order applies when a headset connects.
+        bluetoothCodec = BluetoothCodecChoiceFollow.create(this).also { follow ->
+            follow.start(readBluetoothCodecPrefs(), router.attachedA2dpAddresses())
+        }
         val forwarding = QueueAwarePlayer(player)
         sessionPlayer = forwarding
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -384,6 +391,8 @@ class PlaybackService : MediaSessionService() {
         outputRouter?.shutdown()
         bluetoothRate?.shutdown()
         bluetoothRate = null
+        bluetoothCodec?.shutdown()
+        bluetoothCodec = null
         mainHandler.removeCallbacks(clockPoll)
         clockPolling = false
         LyricsClock.clear()
@@ -1184,7 +1193,11 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun onDevicesChanged() {
-        outputRouter?.let { bluetoothRate?.devicesChanged(it.attachedA2dpAddresses()) }
+        outputRouter?.let {
+            val attached = it.attachedA2dpAddresses()
+            bluetoothRate?.devicesChanged(attached)
+            bluetoothCodec?.devicesChanged(attached)
+        }
         val before = lastUsbDevices
         val after = readUsbDevices()
         lastUsbDevices = after
@@ -1267,6 +1280,14 @@ class PlaybackService : MediaSessionService() {
     private external fun nativeUsbExclusiveEnabled(): Int
     private external fun nativeDsdPassthroughEnabled(): Int
     private external fun nativeBluetoothRateFollowEnabled(): Int
+    private external fun nativeBluetoothCodecPrefs(): String?
+
+    /** The Bluetooth codec priority list prefs (`{"enabled","order"}`, ADR 0052); null until the settings are read. */
+    private fun readBluetoothCodecPrefs(): String? = try {
+        nativeBluetoothCodecPrefs()
+    } catch (_: UnsatisfiedLinkError) {
+        null
+    }
 
     /** The Bluetooth sample-rate follow switch (`androidBluetoothRateFollow`, ADR 0051); off until the settings are read. */
     private fun readBluetoothRateFollow(): Boolean = try {
@@ -1345,6 +1366,20 @@ class PlaybackService : MediaSessionService() {
             }
         }
 
+        /**
+         * The Bluetooth codec priority list prefs changed (ADR 0052): a running service applies them at once (a switch
+         * turned off puts the original codecs back); without a service the original codecs are put back by a short-lived
+         * worker when the switch is off.
+         */
+        internal fun applyBluetoothCodecPrefs(context: android.content.Context, enabled: Boolean) {
+            val service = activeInstance
+            if (service != null) {
+                service.bluetoothCodec?.prefsChanged(service.readBluetoothCodecPrefs())
+            } else if (!enabled) {
+                BluetoothCodecChoiceFollow.restoreWithoutService(context)
+            }
+        }
+
         /** The panel asked to check the privileged sources again: the current track is looked up again (rate-limited). */
         internal fun recheckMixerRate() {
             activeInstance?.outputRouter?.mixerLookup?.recheck()
@@ -1367,6 +1402,14 @@ class PlaybackService : MediaSessionService() {
             BluetoothCodecWatch.ensure(context)
             status.put("bluetoothPermission", BluetoothCodecWatch.permissionState(context))
             status.put("bluetoothCodecs", JSONObject(BluetoothCodecWatch.snapshot() as Map<*, *>))
+            // The codec priority list (ADR 0052): the phone's codecs and, per headset, what it supports; a headset
+            // without known codecs is read through the helper while the page shows the list.
+            val service = activeInstance
+            service?.outputRouter?.let { service.bluetoothCodec?.ensureChoices(it.attachedA2dpAddresses()) }
+            status.put(
+                "bluetoothCodecChoices",
+                BluetoothCodecWatch.choicesJson(android.os.SystemClock.elapsedRealtime(), BluetoothCodecChoiceConfig.ERROR_VISIBLE_MS),
+            )
             // Where the exclusive mode plays the saved choice (the USB device, or none attached; ADR 0047).
             status.optJSONObject("exclusive")?.put("route", UsbExclusiveEngine.routeJson(context, saved))
             return status

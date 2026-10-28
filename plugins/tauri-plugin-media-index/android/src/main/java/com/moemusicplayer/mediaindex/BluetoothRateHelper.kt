@@ -79,6 +79,8 @@ object BluetoothRateHelper {
                 is BluetoothRateRules.HelperRequest.Follow -> request.address
                 is BluetoothRateRules.HelperRequest.Set -> request.address
                 is BluetoothRateRules.HelperRequest.State -> request.address
+                is BluetoothRateRules.HelperRequest.Codecs -> request.address
+                is BluetoothRateRules.HelperRequest.SetCodec -> request.address
             }
             val ok = inStep("profile-proxy") {
                 adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
@@ -184,6 +186,40 @@ object BluetoothRateHelper {
         return mask
     }
 
+    /** Switches to the headset's selectable codec [key] (the codec priority list, ADR 0052). */
+    private fun switchCodec(
+        proxy: BluetoothA2dp,
+        device: BluetoothDevice,
+        current: BluetoothCodecConfig,
+        status: BluetoothCodecStatus,
+        key: String,
+    ): BluetoothRateRules.HelperResult {
+        val currentKey = codecKeyOf(current)
+        val wanted = status.codecsSelectableCapabilities.orEmpty().firstOrNull { codecKeyOf(it) == key }
+            ?: return BluetoothRateRules.HelperResult.Failed("the headset does not offer codec $key")
+        if (currentKey == key) return BluetoothRateRules.HelperResult.CodecSwitched(currentKey, key, false)
+        val offer = codecOfferOf(wanted) ?: return BluetoothRateRules.HelperResult.Failed("codec $key is unreadable")
+        val values = BluetoothCodecChoiceRules.switchValues(current.sampleRate, current.bitsPerSample, current.channelMode, offer)
+        val builder = BluetoothCodecConfig.Builder()
+            .setCodecType(wanted.codecType)
+            .setCodecPriority(BluetoothCodecChoiceConfig.PRIORITY_HIGHEST)
+            .setSampleRate(values.rateFlag)
+            .setBitsPerSample(values.bitsFlag)
+            .setChannelMode(values.channelFlag)
+            .setCodecSpecific1(0)
+            .setCodecSpecific2(0)
+            .setCodecSpecific3(0)
+            .setCodecSpecific4(0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            wanted.extendedCodecType?.let { builder.setExtendedCodecType(it) }
+        }
+        inStep("set-codec-preference") {
+            proxy.javaClass.getMethod("setCodecConfigPreference", BluetoothDevice::class.java, BluetoothCodecConfig::class.java)
+                .invoke(proxy, device, builder.build())
+        }
+        return BluetoothRateRules.HelperResult.CodecSwitched(currentKey, key, true)
+    }
+
     private fun carryOut(
         adapter: BluetoothAdapter,
         proxy: BluetoothA2dp,
@@ -197,7 +233,17 @@ object BluetoothRateHelper {
         val status = inStep("codec-status") { statusOf(proxy, device) }
         val current = status.codecConfig ?: return BluetoothRateRules.HelperResult.Failed("codec-status: no current codec")
         val mask = maskOf(status, current)
+        if (request is BluetoothRateRules.HelperRequest.Codecs) {
+            return BluetoothRateRules.HelperResult.Codecs(
+                codecKeyOf(current),
+                status.codecsLocalCapabilities.orEmpty().mapNotNull(::codecOfferOf).distinctBy { it.key },
+                status.codecsSelectableCapabilities.orEmpty().mapNotNull(::codecOfferOf).distinctBy { it.key },
+            )
+        }
+        if (request is BluetoothRateRules.HelperRequest.SetCodec) return switchCodec(proxy, device, current, status, request.key)
         val target = when (request) {
+            is BluetoothRateRules.HelperRequest.Codecs, is BluetoothRateRules.HelperRequest.SetCodec ->
+                return BluetoothRateRules.HelperResult.Failed("unexpected request")
             is BluetoothRateRules.HelperRequest.State ->
                 return BluetoothRateRules.HelperResult.State(
                     current.codecType,

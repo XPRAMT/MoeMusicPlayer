@@ -89,6 +89,45 @@ pub(crate) fn bluetooth_rate_follow_state() -> i8 {
     BLUETOOTH_RATE_FOLLOW.load(Ordering::Relaxed)
 }
 
+/// The Bluetooth codec priority list for the service (ADR 0052): `{"enabled":bool,"order":[key]}` as JSON;
+/// `None` until the settings were read.
+static BLUETOOTH_CODEC_PREFS: RwLock<Option<String>> = RwLock::new(None);
+
+/// The JSON the service reads.
+pub(crate) fn bluetooth_codec_prefs_json(enabled: bool, order: &[String]) -> String {
+    serde_json::json!({ "enabled": enabled, "order": order }).to_string()
+}
+
+/// Remember the switch and the order for the service (at startup and whenever the user changes either).
+pub(crate) fn set_bluetooth_codec_prefs(enabled: bool, order: &[String]) {
+    *BLUETOOTH_CODEC_PREFS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(bluetooth_codec_prefs_json(enabled, order));
+}
+
+/// The remembered prefs, or `None` when they are not known yet (the service then keeps the list inert).
+pub(crate) fn bluetooth_codec_prefs() -> Option<String> {
+    BLUETOOTH_CODEC_PREFS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+#[cfg(test)]
+mod bluetooth_codec_prefs_tests {
+    use super::*;
+
+    #[test]
+    fn the_codec_prefs_json_carries_the_switch_and_the_order() {
+        let order = vec!["t4".to_owned(), "t1".to_owned()];
+        let value: serde_json::Value =
+            serde_json::from_str(&bluetooth_codec_prefs_json(true, &order)).unwrap();
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["order"][1], "t1");
+    }
+}
+
 #[cfg(target_os = "android")]
 mod jni_exports {
     use jni::{objects::JObject, sys::jstring, JNIEnv};
@@ -131,6 +170,19 @@ mod jni_exports {
         _service: JObject,
     ) -> jni::sys::jint {
         jni::sys::jint::from(super::bluetooth_rate_follow_state())
+    }
+
+    /// `PlaybackService.nativeBluetoothCodecPrefs()`: the codec priority list prefs as JSON, or a Java null while the
+    /// settings have not been read yet.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_PlaybackService_nativeBluetoothCodecPrefs(
+        env: JNIEnv,
+        _service: JObject,
+    ) -> jstring {
+        match super::bluetooth_codec_prefs().and_then(|json| env.new_string(json).ok()) {
+            Some(value) => value.into_raw(),
+            None => std::ptr::null_mut(),
+        }
     }
 
     /// `PlaybackService.nativeDsdPassthroughEnabled()`: -1 while the settings have not been read, else 0 or 1.

@@ -2295,6 +2295,58 @@ pub struct AppSettings {
     /// sample rate is moved to the track's (nearest offered) rate through root or Shizuku. Off by default.
     #[serde(default)]
     pub android_bluetooth_rate_follow: bool,
+    /// Android Bluetooth codec priority list (Settings -> playback -> Bluetooth; ADR 0052): on, the first codec of the
+    /// stored order that the connected headset supports is applied through root or Shizuku; off, the list is inert.
+    #[serde(default)]
+    pub android_bluetooth_codec_custom: bool,
+    /// The one codec order for every headset (codec keys `t<type>` / `x<id>`, best first); empty: never set.
+    #[serde(default, deserialize_with = "deserialize_bluetooth_codec_order")]
+    pub android_bluetooth_codec_order: Vec<String>,
+}
+
+const BLUETOOTH_CODEC_ORDER_MAX_KEYS: usize = 32;
+
+/// A codec key: `t` + a source codec type, or `x` + an extended codec id (digits only, at most 18).
+pub fn valid_bluetooth_codec_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some('t' | 'x'))
+        && key.len() >= 2
+        && key.len() <= 19
+        && chars.all(|c| c.is_ascii_digit())
+}
+
+/// The order as it is kept: valid keys only, first occurrence wins, at most a few dozen.
+pub fn normalize_bluetooth_codec_keys(keys: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in keys {
+        let key = key.trim();
+        if valid_bluetooth_codec_key(key)
+            && !out.iter().any(|seen| seen == key)
+            && out.len() < BLUETOOTH_CODEC_ORDER_MAX_KEYS
+        {
+            out.push(key.to_owned());
+        }
+    }
+    out
+}
+
+/// Reads a stored order leniently; anything that is not a list of strings is empty.
+pub fn normalize_bluetooth_codec_order(value: Option<serde_json::Value>) -> Vec<String> {
+    let Some(serde_json::Value::Array(items)) = value else {
+        return Vec::new();
+    };
+    let keys: Vec<String> = items
+        .into_iter()
+        .filter_map(|item| item.as_str().map(str::to_owned))
+        .collect();
+    normalize_bluetooth_codec_keys(&keys)
+}
+
+fn deserialize_bluetooth_codec_order<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(normalize_bluetooth_codec_order(value))
 }
 
 fn default_android_real_mixer_rate() -> bool {
@@ -2405,6 +2457,8 @@ impl Default for AppSettings {
             android_usb_exclusive: false,
             android_real_mixer_rate: true,
             android_bluetooth_rate_follow: false,
+            android_bluetooth_codec_custom: false,
+            android_bluetooth_codec_order: Vec::new(),
         }
     }
 }
@@ -2904,6 +2958,8 @@ struct RawSettings {
     android_usb_exclusive: Option<bool>,
     android_real_mixer_rate: Option<bool>,
     android_bluetooth_rate_follow: Option<bool>,
+    android_bluetooth_codec_custom: Option<bool>,
+    android_bluetooth_codec_order: Option<serde_json::Value>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2987,6 +3043,10 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         android_usb_exclusive: raw.android_usb_exclusive.unwrap_or(false),
         android_real_mixer_rate: raw.android_real_mixer_rate.unwrap_or(true),
         android_bluetooth_rate_follow: raw.android_bluetooth_rate_follow.unwrap_or(false),
+        android_bluetooth_codec_custom: raw.android_bluetooth_codec_custom.unwrap_or(false),
+        android_bluetooth_codec_order: normalize_bluetooth_codec_order(
+            raw.android_bluetooth_codec_order,
+        ),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -5117,6 +5177,51 @@ mod tests {
             .remove("androidBluetoothRateFollow");
         let typed: AppSettings = serde_json::from_value(persisted).unwrap();
         assert!(!typed.android_bluetooth_rate_follow);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_android_bluetooth_codec_list_defaults_off_and_keeps_only_valid_keys() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.android_bluetooth_codec_custom);
+        assert!(defaults.android_bluetooth_codec_order.is_empty());
+        let order = normalize_bluetooth_codec_order(Some(serde_json::json!([
+            "t4", "x1234", "t4", "bad", "t", " t2 ", 7
+        ])));
+        assert_eq!(order, vec!["t4", "x1234", "t2"]);
+        assert!(normalize_bluetooth_codec_order(Some(serde_json::json!({"t4": 1}))).is_empty());
+        assert!(normalize_bluetooth_codec_order(None).is_empty());
+    }
+
+    #[test]
+    fn the_android_bluetooth_codec_list_survives_a_restart_and_a_missing_field_is_default() {
+        let directory = test_directory("android-bluetooth-codec");
+        let path = directory.join("settings.json");
+        {
+            let store =
+                SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+            store
+                .update(|settings| {
+                    settings.android_bluetooth_codec_custom = true;
+                    settings.android_bluetooth_codec_order = vec!["t4".to_owned(), "t1".to_owned()];
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        let snapshot = reopened.snapshot().unwrap();
+        assert!(snapshot.android_bluetooth_codec_custom);
+        assert_eq!(snapshot.android_bluetooth_codec_order, vec!["t4", "t1"]);
+        drop(reopened);
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["androidBluetoothCodecCustom"], true);
+        let object = persisted.as_object_mut().unwrap();
+        object.remove("androidBluetoothCodecCustom");
+        object.remove("androidBluetoothCodecOrder");
+        let typed: AppSettings = serde_json::from_value(persisted).unwrap();
+        assert!(!typed.android_bluetooth_codec_custom);
+        assert!(typed.android_bluetooth_codec_order.is_empty());
         let _ = std::fs::remove_dir_all(&directory);
     }
 

@@ -195,14 +195,22 @@ internal object BluetoothRateRules {
         /** Switch to [rateFlag] (a restore). */
         data class Set(val address: String, val rateFlag: Int) : HelperRequest()
         data class State(val address: String) : HelperRequest()
+        /** List the codecs the headset offers and the one in use (the codec priority list, ADR 0052). */
+        data class Codecs(val address: String) : HelperRequest()
+        /** Switch to the codec [key] (`t<type>` or `x<id>`), keeping the sample rate as near as the codec allows. */
+        data class SetCodec(val address: String, val key: String) : HelperRequest()
     }
 
     fun parseRequest(args: List<String>): HelperRequest? {
         if (args.size != 3) return null
         val address = args[1].uppercase()
         if (!validAddress(address)) return null
+        if (args[0] == "codec") {
+            return if (BluetoothCodecChoiceRules.validKey(args[2])) HelperRequest.SetCodec(address, args[2]) else null
+        }
         val number = args[2].toIntOrNull() ?: return null
         return when (args[0]) {
+            "codecs" -> if (number == 0) HelperRequest.Codecs(address) else null
             "follow" -> if (number in 1..1_000_000) HelperRequest.Follow(address, number) else null
             "set" -> if (hzOfFlag(number) != null) HelperRequest.Set(address, number) else null
             "state" -> if (number == 0) HelperRequest.State(address) else null
@@ -214,6 +222,8 @@ internal object BluetoothRateRules {
         is HelperRequest.Follow -> listOf("follow", request.address, request.trackHz.toString())
         is HelperRequest.Set -> listOf("set", request.address, request.rateFlag.toString())
         is HelperRequest.State -> listOf("state", request.address, "0")
+        is HelperRequest.Codecs -> listOf("codecs", request.address, "0")
+        is HelperRequest.SetCodec -> listOf("codec", request.address, request.key)
     }
 
     /** The helper's one result line. */
@@ -226,6 +236,10 @@ internal object BluetoothRateRules {
             val selectableMask: Int,
             val specifics: List<Long> = emptyList(),
         ) : HelperResult()
+        /** The key of the codec in use, the codecs this phone can encode and the ones the headset can be switched to. */
+        data class Codecs(val activeKey: String?, val local: List<CodecOffer>, val selectable: List<CodecOffer>) : HelperResult()
+        /** A codec switch: [changed] is false when the codec was already in use. */
+        data class CodecSwitched(val fromKey: String?, val toKey: String, val changed: Boolean) : HelperResult()
         data class Failed(val reason: String) : HelperResult()
         object TimedOut : HelperResult()
     }
@@ -235,6 +249,11 @@ internal object BluetoothRateRules {
         is HelperResult.State ->
             "RESULT STATE ${result.codecType} ${result.rateFlag} ${result.selectableMask}" +
                 result.specifics.joinToString("") { " $it" }
+        is HelperResult.Codecs ->
+            "RESULT CODECS ${result.activeKey ?: "-"} ${BluetoothCodecChoiceRules.formatOffers(result.local)} " +
+                BluetoothCodecChoiceRules.formatOffers(result.selectable)
+        is HelperResult.CodecSwitched ->
+            "RESULT CODEC ${result.fromKey ?: "-"} ${result.toKey} ${if (result.changed) 1 else 0}"
         is HelperResult.Failed -> "RESULT ERR ${result.reason.replace('\n', ' ').take(300)}"
         HelperResult.TimedOut -> "RESULT ERR timeout"
     }
@@ -259,6 +278,23 @@ internal object BluetoothRateRules {
                     HelperResult.Failed("unreadable result: $line")
                 } else {
                     HelperResult.State(values[0]!!, values[1]!!, values[2]!!, specifics.map { it!! })
+                }
+            }
+            "CODECS" -> {
+                val active = parts.getOrNull(2)?.takeIf { it != "-" && BluetoothCodecChoiceRules.validKey(it) }
+                val local = BluetoothCodecChoiceRules.parseOffers(parts.getOrNull(3))
+                val selectable = BluetoothCodecChoiceRules.parseOffers(parts.getOrNull(4))
+                if (parts.size != 5 || local == null || selectable == null) HelperResult.Failed("unreadable result: $line")
+                else HelperResult.Codecs(active, local, selectable)
+            }
+            "CODEC" -> {
+                val from = parts.getOrNull(2)?.takeIf { it != "-" }
+                val to = parts.getOrNull(3)
+                val changed = parts.getOrNull(4)
+                if (to == null || !BluetoothCodecChoiceRules.validKey(to) || (changed != "0" && changed != "1")) {
+                    HelperResult.Failed("unreadable result: $line")
+                } else {
+                    HelperResult.CodecSwitched(from, to, changed == "1")
                 }
             }
             "ERR" -> HelperResult.Failed(line.removePrefix("RESULT ERR").trim().ifEmpty { "unknown" })
@@ -473,7 +509,7 @@ internal class BluetoothRateController(
             }
             is BluetoothRateRules.HelperResult.Failed -> env.log("bluetooth rate: failed, ${result.reason}")
             BluetoothRateRules.HelperResult.TimedOut -> env.log("bluetooth rate: the helper timed out")
-            is BluetoothRateRules.HelperResult.State -> env.log("bluetooth rate: unexpected state answer")
+            else -> env.log("bluetooth rate: unexpected answer")
         }
     }
 

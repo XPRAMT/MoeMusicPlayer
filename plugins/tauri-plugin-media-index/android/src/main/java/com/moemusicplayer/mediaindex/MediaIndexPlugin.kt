@@ -836,6 +836,17 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /** The Bluetooth codec priority list prefs changed (ADR 0052); the service reads them over JNI. */
+    @Command
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    fun setBluetoothCodecPrefs(invoke: Invoke) {
+        val enabled = JSONObject(invoke.getArgs().toString()).optBoolean("enabled", false)
+        activity.runOnUiThread {
+            PlaybackService.applyBluetoothCodecPrefs(activity.applicationContext, enabled)
+            invoke.resolve(JSObject())
+        }
+    }
+
     /**
      * USB permission for the USB audio device the exclusive mode plays on: the one named `productName` (a chosen USB
      * output; the only USB audio device when the name matches none), or the first USB audio device when the name is

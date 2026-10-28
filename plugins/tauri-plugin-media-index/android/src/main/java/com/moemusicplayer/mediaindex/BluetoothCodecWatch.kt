@@ -1,6 +1,7 @@
 package com.moemusicplayer.mediaindex
 
 import android.Manifest
+import android.bluetooth.BluetoothCodecConfig
 import android.bluetooth.BluetoothCodecStatus
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
@@ -32,13 +33,87 @@ internal object BluetoothCodecWatch {
     private val ldacModes = ConcurrentHashMap<String, Long>()
     /** Called (on the broadcast thread, memory only) with the address and codec type after each announcement. */
     @Volatile var onAnnounced: ((address: String, codecType: Int) -> Unit)? = null
+    /** Called (memory only) with the address after each announcement; the codec priority list uses it (ADR 0052). */
+    @Volatile var onChoicesAnnounced: ((address: String) -> Unit)? = null
     /** The same announcement in plain values, with the rates the codec offers (the sample-rate follow, ADR 0051). */
     private val states = ConcurrentHashMap<String, BluetoothCodecState>()
+    /** Per device: the codec in use, the codecs it can switch to and the codecs this phone can encode (ADR 0052). */
+    private val choices = ConcurrentHashMap<String, BluetoothCodecChoices>()
+    /** A short failure text of the last codec switch per device, with the time it happened. */
+    private val codecErrors = ConcurrentHashMap<String, Pair<String, Long>>()
+    /** The phone's own codecs, as last seen (restored from an earlier run by [restoreLocal]); empty until known. */
+    @Volatile var knownLocal: List<CodecOffer> = emptyList()
+        private set
+    /** Called (memory only) when the stack reported phone codecs different from [knownLocal], so they can be kept. */
+    @Volatile var onLocalSeen: ((List<CodecOffer>) -> Unit)? = null
     private val changed = Object()
     @Volatile private var registered = false
 
     /** Whether the receiver is registered (an announcement can be heard at all). */
     fun listening(): Boolean = registered
+
+    /** Restores the phone's codec list kept from an earlier run. */
+    fun restoreLocal(offers: List<CodecOffer>) {
+        if (knownLocal.isEmpty()) knownLocal = offers
+    }
+
+    /** What is known of the codecs of the address (announced by the stack or read by the helper), or null. */
+    fun choices(address: String): BluetoothCodecChoices? = BluetoothCodecRules.addressKey(address)?.let { choices[it] }
+
+    /** Keeps what the helper read; the phone's codecs go to [onLocalSeen] when they are new. */
+    fun setChoices(address: String, value: BluetoothCodecChoices) {
+        val key = BluetoothCodecRules.addressKey(address) ?: return
+        choices[key] = value
+        noteLocal(value.local)
+        synchronized(changed) { changed.notifyAll() }
+    }
+
+    private fun noteLocal(local: List<CodecOffer>) {
+        if (local.isEmpty() || local == knownLocal) return
+        knownLocal = local
+        onLocalSeen?.invoke(local)
+    }
+
+    /** Waits up to [timeoutMs] until the announced codec of the address is [codecKey]; never on the main thread. */
+    fun awaitCodec(address: String, codecKey: String, timeoutMs: Long): Boolean {
+        val key = BluetoothCodecRules.addressKey(address) ?: return false
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        synchronized(changed) {
+            while (true) {
+                if (choices[key]?.activeKey == codecKey) return true
+                val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
+                if (remainingMs <= 0L) return false
+                try {
+                    changed.wait(remainingMs)
+                } catch (_: InterruptedException) {
+                    return false
+                }
+            }
+        }
+    }
+
+    fun setCodecError(address: String, text: String?, nowMs: Long) {
+        val key = BluetoothCodecRules.addressKey(address) ?: return
+        if (text == null) codecErrors.remove(key) else codecErrors[key] = text to nowMs
+    }
+
+    /**
+     * The codec list for the settings page: the phone's codecs (the last known ones when no headset is connected) and,
+     * per headset, the codec in use, the keys it supports and a recent failure text.
+     */
+    fun choicesJson(nowMs: Long, errorVisibleMs: Long): JSONObject {
+        val local = org.json.JSONArray()
+        for (offer in knownLocal) local.put(JSONObject().put("key", offer.key).put("name", offer.name))
+        val devices = JSONObject()
+        for ((address, value) in choices) {
+            val entry = JSONObject()
+            entry.put("active", value.activeKey ?: JSONObject.NULL)
+            entry.put("supported", org.json.JSONArray(value.selectable.map { it.key }))
+            codecErrors[address]?.let { (text, at) -> if (nowMs - at in 0..errorVisibleMs) entry.put("error", text) }
+            devices.put(address, entry)
+        }
+        return JSONObject().put("local", local).put("devices", devices)
+    }
 
     /** The last codec state announced for the address, or null. */
     fun state(address: String): BluetoothCodecState? = BluetoothCodecRules.addressKey(address)?.let { states[it] }
@@ -128,6 +203,7 @@ internal object BluetoothCodecWatch {
             val config = status?.codecConfig
             if (config == null) {
                 codecs.remove(key)
+                choices.remove(key)
                 states.remove(key)
                 ldacModes.remove(key)
                 return
@@ -137,6 +213,15 @@ internal object BluetoothCodecWatch {
                 if (capability.codecType == config.codecType) selectable = selectable or capability.sampleRate
             }
             states[key] = BluetoothCodecState(config.codecType, config.sampleRate, selectable)
+            val selectableOffers = status?.codecsSelectableCapabilities.orEmpty().mapNotNull(::codecOfferOf)
+            val localOffers = status?.codecsLocalCapabilities.orEmpty().mapNotNull(::codecOfferOf)
+            val announced = BluetoothCodecChoices(
+                codecKeyOf(config),
+                BluetoothCodecChoiceRules.deviceOrder(selectableOffers),
+                BluetoothCodecChoiceRules.deviceOrder(localOffers),
+            )
+            choices[key] = announced
+            noteLocal(announced.local)
             synchronized(changed) { changed.notifyAll() }
             val extendedName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
                 try {
@@ -159,8 +244,42 @@ internal object BluetoothCodecWatch {
                 )
             if (BluetoothCodecRules.codecJson(facts) == null) codecs.remove(key) else codecs[key] = facts
             device?.address?.let { address -> onAnnounced?.invoke(address, config.codecType) }
+            device?.address?.let { address -> onChoicesAnnounced?.invoke(address) }
         } catch (error: RuntimeException) {
             Log.w(TAG, "Could not read the Bluetooth codec", error)
         }
     }
+}
+
+/** The extended codec id of an Android 15+ vendor codec, or null (also when the platform does not say). */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+internal fun codecExtendedId(config: BluetoothCodecConfig): Long? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return null
+    return try {
+        config.extendedCodecType?.codecId
+    } catch (_: RuntimeException) {
+        null
+    }
+}
+
+/** The codec's key (`t<type>` or `x<id>`; ADR 0052), or null when it has neither. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+internal fun codecKeyOf(config: BluetoothCodecConfig): String? =
+    BluetoothCodecChoiceRules.keyOf(config.codecType, codecExtendedId(config))
+
+/** One stack codec in plain values with a readable name, or null when it cannot be told apart. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+internal fun codecOfferOf(config: BluetoothCodecConfig): CodecOffer? {
+    val key = codecKeyOf(config) ?: return null
+    val extendedName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        try {
+            config.extendedCodecType?.codecName
+        } catch (_: RuntimeException) {
+            null
+        }
+    } else {
+        null
+    }
+    val name = BluetoothCodecRules.codecName(config.codecType, extendedName) ?: key
+    return CodecOffer(key, name, config.codecPriority.toLong(), config.sampleRate, config.bitsPerSample, config.channelMode)
 }

@@ -55,7 +55,7 @@ internal class PrefsBluetoothRateStore(context: Context) : BluetoothRateStore {
     }
 }
 
-private class ExecutorScheduler : BluetoothRateScheduler {
+internal class ExecutorScheduler : BluetoothRateScheduler {
     private val executor = ScheduledThreadPoolExecutor(1) { runnable ->
         Thread(runnable, "moe-bt-rate").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }

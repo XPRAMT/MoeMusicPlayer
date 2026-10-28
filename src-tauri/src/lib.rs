@@ -7767,6 +7767,97 @@ async fn settings_set_android_bluetooth_rate_follow(
     Ok(saved)
 }
 
+#[tauri::command]
+fn settings_get_android_bluetooth_codec_custom(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_bluetooth_codec_custom)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn settings_get_android_bluetooth_codec_order(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_bluetooth_codec_order)
+        .map_err(|error| error.to_string())
+}
+
+/// Hand the Bluetooth codec priority list prefs (ADR 0052) to the playback service: remembered for its JNI read and
+/// pushed so a running service applies them now. A service that is not running reads them when it starts.
+#[cfg(target_os = "android")]
+async fn push_bluetooth_codec_prefs(app: AppHandle, enabled: bool, order: &[String]) {
+    android_output::set_bluetooth_codec_prefs(enabled, order);
+    let pushed = tauri::async_runtime::spawn_blocking(move || {
+        app.media_index()
+            .audio_output("setBluetoothCodecPrefs", serde_json::json!({ "enabled": enabled }))
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    match pushed {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => eprintln!("無法把藍牙編碼設定交給 Android 播放服務：{error}"),
+        Err(error) => eprintln!("無法把藍牙編碼設定交給 Android 播放服務：{error}"),
+    }
+}
+
+/// Persist the switch of the Bluetooth codec priority list (ADR 0052).
+#[tauri::command]
+async fn settings_set_android_bluetooth_codec_custom(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.android_bluetooth_codec_custom = enabled;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    push_bluetooth_codec_prefs(
+        app,
+        saved.android_bluetooth_codec_custom,
+        &saved.android_bluetooth_codec_order,
+    )
+    .await;
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+    Ok(saved.android_bluetooth_codec_custom)
+}
+
+/// Persist the one codec order of the Bluetooth codec priority list (ADR 0052); answers the stored order.
+#[tauri::command]
+async fn settings_set_android_bluetooth_codec_order(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    order: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let keys = settings::normalize_bluetooth_codec_keys(&order);
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.android_bluetooth_codec_order = keys;
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    push_bluetooth_codec_prefs(
+        app,
+        saved.android_bluetooth_codec_custom,
+        &saved.android_bluetooth_codec_order,
+    )
+    .await;
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+    Ok(saved.android_bluetooth_codec_order)
+}
+
 /// The state of the privileged sources of the real mixer rate (ADR 0048) for the explanation panel: root, Shizuku and
 /// the hidden switch. Reads only (an earlier opt-in re-probes `su` silently); null on other platforms.
 #[tauri::command]
@@ -13158,6 +13249,10 @@ pub fn run() {
             settings_set_android_usb_exclusive,
             settings_get_android_bluetooth_rate_follow,
             settings_set_android_bluetooth_rate_follow,
+            settings_get_android_bluetooth_codec_custom,
+            settings_set_android_bluetooth_codec_custom,
+            settings_get_android_bluetooth_codec_order,
+            settings_set_android_bluetooth_codec_order,
             android_request_usb_exclusive_permission,
             android_mixer_rate_source_status,
             android_mixer_rate_source_action,
@@ -13401,6 +13496,11 @@ pub fn run() {
             android_output::set_real_mixer_rate(initial_settings.android_real_mixer_rate);
             #[cfg(target_os = "android")]
             android_output::set_bluetooth_rate_follow(initial_settings.android_bluetooth_rate_follow);
+            #[cfg(target_os = "android")]
+            android_output::set_bluetooth_codec_prefs(
+                initial_settings.android_bluetooth_codec_custom,
+                &initial_settings.android_bluetooth_codec_order,
+            );
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
                 // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).
