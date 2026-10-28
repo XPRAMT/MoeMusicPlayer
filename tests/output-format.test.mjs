@@ -132,15 +132,15 @@ test('a track exclusive mode could not take says it plays in shared mode and why
 });
 
 test('Android Bluetooth ends with the codec step', () => {
-  // G8142: the mixer runs at the track's rate, LDAC at its best-effort setting.
-  assert.equal(describeAndroidPath(track(96_000, 96_000), bt({ ...ldac, ldacAdaptive: true })), '96 kHz → 96 kHz（系統） → 96 kHz（LDAC 最佳效果）．2 聲道');
-  // RedMagic / tablet: the mixer at 48 kHz, LDAC without a reported quality (codecSpecific1 0).
+  // G8142: the mixer runs at the track's rate, LDAC in its adaptive mode.
+  assert.equal(describeAndroidPath(track(96_000, 96_000), bt({ ...ldac, ldacAdaptive: true })), '96 kHz → 96 kHz（系統） → 96 kHz（LDAC 自適應）．2 聲道');
+  // No root / Shizuku: the mode was not read, so no mode is named.
   assert.equal(describeAndroidPath(track(96_000, 48_000), bt(ldac)), '96 kHz → 48 kHz（系統） → 96 kHz（LDAC）．2 聲道');
   assert.equal(describeAndroidPath(track(96_000, 48_000), bt({ ...ldac, ldacKbps: 990 })), '96 kHz → 48 kHz（系統） → 96 kHz（LDAC 990 kbps）．2 聲道');
   // The codec not broadcast yet: 藍牙 without a rate.
   assert.equal(describeAndroidPath(track(96_000, 48_000), bt(null)), '96 kHz → 48 kHz（系統） → （藍牙）．2 聲道');
   // The mixer rate unreadable: no 系統 step, never a guessed number.
-  assert.equal(describeAndroidPath(track(96_000, null), bt({ ...ldac, ldacAdaptive: true })), '96 kHz → 96 kHz（LDAC 最佳效果）．2 聲道');
+  assert.equal(describeAndroidPath(track(96_000, null), bt({ ...ldac, ldacAdaptive: true })), '96 kHz → 96 kHz（LDAC 自適應）．2 聲道');
   assert.equal(describeAndroidPath(track(44_100, 0)), '44.1 kHz．2 聲道');
   const sbc = { codec: 'SBC', sampleRate: null, bitsPerSample: null, channels: null, ldacKbps: null, ldacAdaptive: false };
   assert.equal(describeAndroidPath(track(48_000, 48_000), bt(sbc)), '48 kHz → 48 kHz（系統） → （SBC）．2 聲道');
@@ -150,7 +150,12 @@ test('Android Bluetooth ends with the codec step', () => {
 
 test('a codec step names the codec and LDAC quality', () => {
   assert.equal(codecStepName({ ...ldac, ldacKbps: 990 }), 'LDAC 990 kbps');
-  assert.equal(codecStepName({ ...ldac, ldacAdaptive: true }), 'LDAC 最佳效果');
+  assert.equal(codecStepName({ ...ldac, ldacKbps: 660 }), 'LDAC 660 kbps');
+  assert.equal(codecStepName({ ...ldac, ldacKbps: 330 }), 'LDAC 330 kbps');
+  assert.equal(codecStepName({ ...ldac, ldacAdaptive: true }), 'LDAC 自適應');
+  assert.equal(codecStepName({ ...ldac, ldacDefault: true }), 'LDAC 預設');
+  assert.equal(codecStepName(ldac), 'LDAC');
+  assert.equal(describeAndroidPath(track(96_000, 48_000), bt({ ...ldac, ldacDefault: true })), '96 kHz → 48 kHz（系統） → 96 kHz（LDAC 預設）．2 聲道');
   assert.equal(codecStepName({ codec: 'AAC', sampleRate: 44_100, bitsPerSample: 16, channels: 2, ldacKbps: null, ldacAdaptive: false }), 'AAC');
 });
 

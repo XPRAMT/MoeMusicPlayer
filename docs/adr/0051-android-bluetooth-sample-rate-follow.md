@@ -57,6 +57,12 @@ adb shell "su -c \"CLASSPATH=<base.apk> app_process /system/bin com.moemusicplay
 
 `settings.json` `androidBluetoothRateFollow`, **default off** (Rust `AppSettings::default` and `unwrap_or(false)`, front-end `DEFAULT_ANDROID_BLUETOOTH_RATE_FOLLOW`, locked by `tests/android-output-devices.test.mjs` and `settings::tests`). Commands `settings_get/set_android_bluetooth_rate_follow`; the setter stores the value for the service (`android_output::set_bluetooth_rate_follow`, read over JNI as `nativeBluetoothRateFollowEnabled`, -1 counts as off) and pushes it to a running service through the plugin command `setBluetoothRateFollow`. The page has a plain switch under the output-mode buttons in 「播放裝置」 (Android only, every device). Without root or an authorized Shizuku (`bluetoothRateSourceAvailable`, read from the mixer-rate panel status of ADR 0048) a one-line notice and a 「設定」 button that opens that same panel appear; the switch can still be saved. No new path-line text: the encoding step of ADR 0044 already shows the codec rate from the same broadcast.
 
+### LDAC bitrate mode (read through the same helper)
+
+The Bluetooth row's codec step names LDAC's bitrate mode: 「LDAC 990 kbps」 (`codecSpecific1` 1000; 909 in the 44.1 kHz family), 660 (1001), 330 (1002), 「LDAC 自適應」 (1003, adaptive bitrate), 「LDAC 預設」 (0), plain 「LDAC」 when the mode was not read. `getCodecSpecific1()` is a system API an app cannot call, so the value is read by the privileged helper: `state` now prints `codecSpecific=a,b,c,d` in the `INFO` line and `RESULT STATE <codec> <rateFlag> <selectableMask> <cs1> <cs2> <cs3> <cs4>` (`parseResult` still accepts the three-number form; a partial tail is an error). `BluetoothLdacModeReader` (own thread, separate from the follow and independent of its setting) runs it only when root or an authorized Shizuku exists, only while the stack announced LDAC for the address, on the codec-config-changed broadcast and on a track change when the mode is not known yet (the announcement drops the known mode); never polled. Requests are debounced (500 ms), coalesced and at least 2 s apart; 3 failed reads in a row stop the reading for the process. Without a source nothing is read and nothing is shown, no guess. The mode is kept in `BluetoothCodecWatch` (`ldacMode`) and merged into the codec JSON (`ldacKbps`, `ldacAdaptive`, `ldacDefault`); the app no longer reads `codecSpecific1` from the broadcast itself.
+
+What 0 means: the stack's codec-specific value is unset, i.e. the stack's own default, not one of the four user-selectable modes (those are 1000 to 1003, the numbers the developer-options "playback quality" sets). The Bluetooth stack log of the NX809J shows `mCodecSpecific1:0` for the current LDAC session. AOSP's LDAC encoder is believed to start in adaptive bitrate when nothing is set, but that is not confirmed here, so 0 is shown as 「LDAC 預設」 and never as adaptive. The instantaneous bitrate the adaptive mode picks is chosen inside the Qualcomm DSP / encoder and is not readable by any API; only the mode is shown, never a current bitrate.
+
 ## Consequences
 
 - Adds a helper class and some code that only does something with root or Shizuku and a Bluetooth codec that offers more than one rate; everything else behaves as before.
@@ -65,8 +71,14 @@ adb shell "su -c \"CLASSPATH=<base.apk> app_process /system/bin com.moemusicplay
 
 ## Tests
 
+LDAC mode: Kotlin `BluetoothLdacModeReaderTest` (rules, coalescing, interval, no source, failure stop), `BluetoothRateRulesTest` (state answer with and without the values), `BluetoothCodecRulesTest` (mode naming); JS `tests/output-format.test.mjs`.
+
+
 `BluetoothRateRulesTest` (rate pick, plan and skip reasons, restore rule, helper protocol and command quoting, breaker), `BluetoothRateControllerTest` (switch with a known and an unknown state, the original kept from the first switch, spacing and coalescing, no correction of a drift, every restore trigger, the breaker), `tests/android-output-devices.test.mjs` (default and notice), `settings::tests` (Rust), `android_playback` (the load command's `sampleRate`).
 
 ## Not done
+
+LDAC mode: not verified on a device that the helper's `state` returns `codecSpecific1` as the stack uses it (1000 to 1003 after the developer option is changed, 0 otherwise), nor which of these the NX809J reports for its default session.
+
 
 Not verified on any device: that `app_process` can load the app's APK from the root and Shizuku shells; that the service-manager hand-over and the adapter construction above work on Android 13 to 16 (the earlier system-context-only attempt returned no adapter) and that uid 0 and uid 2000 passes the Bluetooth service's `BLUETOOTH_PRIVILEGED` and package checks (any exception text comes back in the `ERR` line and the log); that `setCodecConfigPreference` with a changed sample rate takes effect on the WF-1000XM6 over LDAC on the NX809J and what the mute sounds like; the Shizuku path (`Shizuku.newProcess` with `sh -c`); the stack forgetting or keeping the rate across reconnects (decides how useful the disconnect restore is); LE Audio and codecs whose selectable list is empty.

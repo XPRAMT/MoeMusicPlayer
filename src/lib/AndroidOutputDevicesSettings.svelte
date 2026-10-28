@@ -52,7 +52,7 @@
     sameChoice,
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
-  import { mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
+  import { mixerRateEntryVisible, mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
 
   interface Props {
     /** Told when the output mode is read or changed (the DSD passthrough text under 「DSD」 depends on it). */
@@ -355,7 +355,7 @@
   </div>
 </div>
 
-{#if mixerSource.status}
+{#if mixerRateEntryVisible(mixerSource.status)}
   <p class="mixer-source-line">
     {mixerRateSummary(mixerSource.status)}
     <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>

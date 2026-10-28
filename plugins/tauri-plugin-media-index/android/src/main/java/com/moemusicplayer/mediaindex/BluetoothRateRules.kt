@@ -175,10 +175,11 @@ internal object BluetoothRateRules {
     }
 
     /** The human-readable line the helper prints before the `RESULT STATE` line of the `state` command. */
-    fun describeState(codecType: Int, rateFlag: Int, selectableMask: Int): String {
+    fun describeState(codecType: Int, rateFlag: Int, selectableMask: Int, specifics: List<Long> = emptyList()): String {
         val current = hzOfFlag(rateFlag)?.toString() ?: "flag $rateFlag"
         val offered = ratesIn(selectableMask).joinToString(",") { it.second.toString() }.ifEmpty { "none" }
-        return "INFO codec=${codecName(codecType)}($codecType) sampleRate=$current selectable=$offered"
+        val extra = if (specifics.isEmpty()) "" else " codecSpecific=${specifics.joinToString(",")}"
+        return "INFO codec=${codecName(codecType)}($codecType) sampleRate=$current selectable=$offered$extra"
     }
 
     // ---- the helper process (app_process, shell or root) ---------------------------------------------------------
@@ -218,14 +219,22 @@ internal object BluetoothRateRules {
     /** The helper's one result line. */
     sealed class HelperResult {
         data class Switched(val codecType: Int, val from: Int, val to: Int, val changed: Boolean) : HelperResult()
-        data class State(val codecType: Int, val rateFlag: Int, val selectableMask: Int) : HelperResult()
+        /** [specifics] are the codec's `codecSpecific1..4` (empty when the helper did not report them). */
+        data class State(
+            val codecType: Int,
+            val rateFlag: Int,
+            val selectableMask: Int,
+            val specifics: List<Long> = emptyList(),
+        ) : HelperResult()
         data class Failed(val reason: String) : HelperResult()
         object TimedOut : HelperResult()
     }
 
     fun formatResult(result: HelperResult): String = when (result) {
         is HelperResult.Switched -> "RESULT OK ${result.codecType} ${result.from} ${result.to} ${if (result.changed) 1 else 0}"
-        is HelperResult.State -> "RESULT STATE ${result.codecType} ${result.rateFlag} ${result.selectableMask}"
+        is HelperResult.State ->
+            "RESULT STATE ${result.codecType} ${result.rateFlag} ${result.selectableMask}" +
+                result.specifics.joinToString("") { " $it" }
         is HelperResult.Failed -> "RESULT ERR ${result.reason.replace('\n', ' ').take(300)}"
         HelperResult.TimedOut -> "RESULT ERR timeout"
     }
@@ -244,8 +253,13 @@ internal object BluetoothRateRules {
             }
             "STATE" -> {
                 val values = (2..4).map(::number)
-                if (values.any { it == null }) HelperResult.Failed("unreadable result: $line")
-                else HelperResult.State(values[0]!!, values[1]!!, values[2]!!)
+                // Older helpers print three numbers; newer ones add codecSpecific1..4 (all four or none).
+                val specifics = parts.drop(5).map { it.toLongOrNull() }
+                if (values.any { it == null } || specifics.any { it == null } || (specifics.size != 0 && specifics.size != 4)) {
+                    HelperResult.Failed("unreadable result: $line")
+                } else {
+                    HelperResult.State(values[0]!!, values[1]!!, values[2]!!, specifics.map { it!! })
+                }
             }
             "ERR" -> HelperResult.Failed(line.removePrefix("RESULT ERR").trim().ifEmpty { "unknown" })
             else -> HelperResult.Failed("unreadable result: $line")

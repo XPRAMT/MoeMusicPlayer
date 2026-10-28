@@ -63,3 +63,14 @@ test('the summary names the source in use', () => {
   assert.match(mixerRateSummary(status('none')), /串流值/);
   assert.equal(mixerRateSummary(null), null);
 });
+
+test('the settings entry shows only while root and an authorized Shizuku are both missing', async () => {
+  const { mixerRateEntryVisible } = await import('../src/lib/mixer-rate-source.js');
+  assert.equal(mixerRateEntryVisible(null), false);
+  for (const state of ['none', 'shizukuNotRunning', 'shizukuDenied', 'shizukuNeedsPermission']) {
+    assert.equal(mixerRateEntryVisible(status(state)), true, state);
+  }
+  for (const state of ['rootActive', 'shizukuActive', 'tripped', 'disabled']) {
+    assert.equal(mixerRateEntryVisible(status(state)), false, state);
+  }
+});

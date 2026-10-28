@@ -83,29 +83,30 @@ internal class BluetoothRateFollow private constructor(context: Context) {
     private val store = PrefsBluetoothRateStore(appContext)
     @Volatile private var enabled = false
     private val controller = BluetoothRateController(Environment(), store, scheduler)
+    private val ldacScheduler = ExecutorScheduler()
+    private val ldacReader = BluetoothLdacModeReader(LdacEnvironment(), ldacScheduler)
+
+    private inner class LdacEnvironment : BluetoothLdacModeEnvironment {
+        override fun nowMs() = SystemClock.elapsedRealtime()
+        override fun supported() = BluetoothCodecWatch.supported()
+        override fun source() = privilegedSource(appContext)
+        override fun backend(source: MixerRateRules.Source) = privilegedBackend(appContext, source)
+        override fun codecType(address: String) = BluetoothCodecWatch.state(address)?.codecType
+        override fun known(address: String) = BluetoothCodecWatch.ldacMode(address) != null
+        override fun store(address: String, mode: Long) = BluetoothCodecWatch.setLdacMode(address, mode)
+        override fun log(message: String) {
+            Log.i(TAG, message)
+        }
+    }
 
     private inner class Environment : BluetoothRateEnvironment {
         override fun nowMs() = SystemClock.elapsedRealtime()
         override fun settingEnabled() = enabled
         override fun androidSupported() = BluetoothCodecWatch.supported()
 
-        override fun source(): MixerRateRules.Source {
-            if (RootAccess.state == MixerRateRules.RootState.UNKNOWN && MixerRatePrefs.rootOptIn(appContext)) {
-                RootAccess.probe(MixerRateConfig.ROOT_SILENT_TIMEOUT_MS)
-            }
-            return MixerRateRules.selectSource(
-                RootAccess.state, ShizukuAccess.state(appContext), true, true, false,
-            )
-        }
+        override fun source() = privilegedSource(appContext)
 
-        override fun backend(source: MixerRateRules.Source): BluetoothRateBackend? {
-            val apk = appContext.applicationInfo.sourceDir ?: return null
-            return when (source) {
-                MixerRateRules.Source.ROOT -> RootBluetoothRateBackend(apk)
-                MixerRateRules.Source.SHIZUKU -> ShizukuBluetoothRateBackend(apk)
-                MixerRateRules.Source.PLATFORM -> null
-            }
-        }
+        override fun backend(source: MixerRateRules.Source) = privilegedBackend(appContext, source)
 
         override fun codecState(address: String) = BluetoothCodecWatch.state(address)
 
@@ -130,6 +131,18 @@ internal class BluetoothRateFollow private constructor(context: Context) {
         if (enabled) controller.request(request)
     }
 
+    /** Listens for codec announcements so an LDAC codec gets its bitrate mode read (the service owns one follow). */
+    private fun attach() {
+        BluetoothCodecWatch.onAnnounced = { address, codecType ->
+            if (codecType == BluetoothCodecRules.CODEC_LDAC) ldacReader.request(address)
+        }
+    }
+
+    /** A track is loaded on the A2DP device [address] (main thread; only memory is read). */
+    fun onTrackLoaded(address: String?) {
+        if (address != null) ldacReader.request(address)
+    }
+
     /** The attached A2DP devices' addresses changed (main thread). */
     fun devicesChanged(attachedA2dp: Set<String>) = controller.devicesChanged(attachedA2dp)
 
@@ -138,6 +151,8 @@ internal class BluetoothRateFollow private constructor(context: Context) {
 
     /** The service ends: the original rates are put back on the worker thread, which then stops. */
     fun shutdown() {
+        BluetoothCodecWatch.onAnnounced = null
+        ldacScheduler.finish()
         controller.restoreAll("service ended")
         scheduler.finish()
     }
@@ -150,7 +165,26 @@ internal class BluetoothRateFollow private constructor(context: Context) {
     companion object {
         private const val TAG = "MoeMediaIndex"
 
-        fun create(context: Context): BluetoothRateFollow = BluetoothRateFollow(context)
+        fun create(context: Context): BluetoothRateFollow = BluetoothRateFollow(context).also { it.attach() }
+
+        /** Root or an authorized Shizuku, or the platform (neither); root is only probed after the user's opt-in. */
+        internal fun privilegedSource(appContext: Context): MixerRateRules.Source {
+            if (RootAccess.state == MixerRateRules.RootState.UNKNOWN && MixerRatePrefs.rootOptIn(appContext)) {
+                RootAccess.probe(MixerRateConfig.ROOT_SILENT_TIMEOUT_MS)
+            }
+            return MixerRateRules.selectSource(
+                RootAccess.state, ShizukuAccess.state(appContext), true, true, false,
+            )
+        }
+
+        internal fun privilegedBackend(appContext: Context, source: MixerRateRules.Source): BluetoothRateBackend? {
+            val apk = appContext.applicationInfo.sourceDir ?: return null
+            return when (source) {
+                MixerRateRules.Source.ROOT -> RootBluetoothRateBackend(apk)
+                MixerRateRules.Source.SHIZUKU -> ShizukuBluetoothRateBackend(apk)
+                MixerRateRules.Source.PLATFORM -> null
+            }
+        }
 
         /** The setting was turned off while no playback service runs: a short-lived worker puts the rates back. */
         fun restoreWithoutService(context: Context) {

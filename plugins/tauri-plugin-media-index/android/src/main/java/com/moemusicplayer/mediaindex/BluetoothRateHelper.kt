@@ -112,7 +112,7 @@ object BluetoothRateHelper {
     @Synchronized
     private fun finish(result: BluetoothRateRules.HelperResult) {
         if (result is BluetoothRateRules.HelperResult.State) {
-            println(BluetoothRateRules.describeState(result.codecType, result.rateFlag, result.selectableMask))
+            println(BluetoothRateRules.describeState(result.codecType, result.rateFlag, result.selectableMask, result.specifics))
         }
         println(BluetoothRateRules.formatResult(result))
         System.out.flush()
@@ -199,7 +199,12 @@ object BluetoothRateHelper {
         val mask = maskOf(status, current)
         val target = when (request) {
             is BluetoothRateRules.HelperRequest.State ->
-                return BluetoothRateRules.HelperResult.State(current.codecType, current.sampleRate, mask)
+                return BluetoothRateRules.HelperResult.State(
+                    current.codecType,
+                    current.sampleRate,
+                    mask,
+                    listOf(current.codecSpecific1, current.codecSpecific2, current.codecSpecific3, current.codecSpecific4),
+                )
             is BluetoothRateRules.HelperRequest.Follow ->
                 BluetoothRateRules.pickRate(request.trackHz, mask)
                     ?: return BluetoothRateRules.HelperResult.Failed("the codec offers no rate for ${request.trackHz} Hz")

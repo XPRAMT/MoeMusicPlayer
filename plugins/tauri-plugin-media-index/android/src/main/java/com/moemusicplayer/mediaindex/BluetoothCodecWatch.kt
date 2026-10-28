@@ -27,7 +27,11 @@ internal object BluetoothCodecWatch {
     /** The broadcast the Bluetooth stack sends with the codec status (an action string, not an API call). */
     private const val ACTION_CODEC_CONFIG_CHANGED = "android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED"
 
-    private val codecs = ConcurrentHashMap<String, JSONObject>()
+    private val codecs = ConcurrentHashMap<String, BluetoothCodecFacts>()
+    /** LDAC's `codecSpecific1` per address, read by the privileged helper (ADR 0051); dropped at every codec announcement. */
+    private val ldacModes = ConcurrentHashMap<String, Long>()
+    /** Called (on the broadcast thread, memory only) with the address and codec type after each announcement. */
+    @Volatile var onAnnounced: ((address: String, codecType: Int) -> Unit)? = null
     /** The same announcement in plain values, with the rates the codec offers (the sample-rate follow, ADR 0051). */
     private val states = ConcurrentHashMap<String, BluetoothCodecState>()
     private val changed = Object()
@@ -97,8 +101,23 @@ internal object BluetoothCodecWatch {
         }
     }
 
-    /** The last codec of each device, by upper-case address. */
-    fun snapshot(): Map<String, JSONObject> = HashMap(codecs)
+    /** The mode the helper read for the address since the last announcement, or null. */
+    fun ldacMode(address: String): Long? = BluetoothCodecRules.addressKey(address)?.let { ldacModes[it] }
+
+    /** Keeps what the helper read for the address. */
+    fun setLdacMode(address: String, codecSpecific1: Long) {
+        BluetoothCodecRules.addressKey(address)?.let { ldacModes[it] = codecSpecific1 }
+    }
+
+    /** The last codec of each device, by upper-case address; LDAC carries the mode the helper read, if it did. */
+    fun snapshot(): Map<String, JSONObject> {
+        val out = HashMap<String, JSONObject>()
+        for ((key, facts) in codecs) {
+            val withMode = if (facts.codecType == BluetoothCodecRules.CODEC_LDAC) facts.copy(codecSpecific1 = ldacModes[key]) else facts
+            BluetoothCodecRules.codecJson(withMode)?.let { out[key] = it }
+        }
+        return out
+    }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun remember(intent: Intent) {
@@ -110,6 +129,7 @@ internal object BluetoothCodecWatch {
             if (config == null) {
                 codecs.remove(key)
                 states.remove(key)
+                ldacModes.remove(key)
                 return
             }
             var selectable = config.sampleRate
@@ -127,17 +147,18 @@ internal object BluetoothCodecWatch {
             } else {
                 null
             }
-            val json = BluetoothCodecRules.codecJson(
+            ldacModes.remove(key)
+            val facts =
                 BluetoothCodecFacts(
                     codecType = config.codecType,
                     sampleRateFlag = config.sampleRate,
                     bitsPerSampleFlag = config.bitsPerSample,
                     channelModeFlag = config.channelMode,
-                    codecSpecific1 = config.codecSpecific1,
+                    codecSpecific1 = null,
                     extendedName = extendedName,
-                ),
-            )
-            if (json == null) codecs.remove(key) else codecs[key] = json
+                )
+            if (BluetoothCodecRules.codecJson(facts) == null) codecs.remove(key) else codecs[key] = facts
+            device?.address?.let { address -> onAnnounced?.invoke(address, config.codecType) }
         } catch (error: RuntimeException) {
             Log.w(TAG, "Could not read the Bluetooth codec", error)
         }

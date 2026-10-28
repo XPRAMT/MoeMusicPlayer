@@ -207,12 +207,14 @@ export function describeExclusiveFallback(format, channels = null) {
 }
 
 /**
- * The name of an Android Bluetooth codec step: 「LDAC 990 kbps」, 「LDAC 最佳效果」 (the adaptive setting), 「AAC」.
+ * The name of an Android Bluetooth codec step: 「LDAC 990 kbps」 (a fixed mode), 「LDAC 自適應」 (the adaptive mode),
+ * 「LDAC 預設」 (the mode is not set: the stack's default), 「LDAC」 (the mode was not read: no root / Shizuku), 「AAC」.
  * @param {import('./ipc').AndroidBluetoothCodec} codec
  */
 export function codecStepName(codec) {
   if (codec.ldacKbps) return `${codec.codec} ${codec.ldacKbps} kbps`;
-  if (codec.ldacAdaptive) return tr('{0} 最佳效果', [codec.codec]);
+  if (codec.ldacAdaptive) return tr('{0} 自適應', [codec.codec]);
+  if (codec.ldacDefault) return tr('{0} 預設', [codec.codec]);
   return codec.codec;
 }
 

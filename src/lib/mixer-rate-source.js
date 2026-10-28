@@ -110,3 +110,13 @@ export function mixerRatePanel(status) {
       };
   }
 }
+
+/**
+ * Whether the 「設定」 entry under 「裝置」 is shown: only while a permission is missing (no root, and no authorized
+ * Shizuku), hidden once one is granted. 「tripped」 and 「disabled」 have nothing to grant, so no entry either.
+ * @param {MixerRateSourceStatus | null} status
+ */
+export function mixerRateEntryVisible(status) {
+  if (!status) return false;
+  return ['none', 'shizukuNotRunning', 'shizukuDenied', 'shizukuNeedsPermission'].includes(status.state);
+}

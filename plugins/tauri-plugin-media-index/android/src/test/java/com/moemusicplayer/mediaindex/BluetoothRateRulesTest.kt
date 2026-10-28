@@ -209,4 +209,18 @@ class BluetoothRateRulesTest {
         assertEquals(BluetoothRateRules.HelperResult.State(4, 2, mask), BluetoothRateRules.parseResult(output))
         assertEquals("INFO codec=SBC(0) sampleRate=flag 0 selectable=none", BluetoothRateRules.describeState(0, 0, 0))
     }
+
+    @Test fun theStateAnswerCarriesTheCodecSpecificValuesAndStaysReadableWithoutThem() {
+        val specifics = listOf(1003L, 0L, 0L, 0L)
+        val state = HelperResult.State(4, 8, 15, specifics)
+        assertEquals("RESULT STATE 4 8 15 1003 0 0 0", BluetoothRateRules.formatResult(state))
+        val output = BluetoothRateRules.describeState(4, 8, 15, specifics) + '\n' + BluetoothRateRules.formatResult(state)
+        assertTrue(output.lineSequence().first().endsWith(" codecSpecific=1003,0,0,0"))
+        assertEquals(state, BluetoothRateRules.parseResult(output))
+        // An older helper prints three numbers only.
+        assertEquals(HelperResult.State(4, 2, 15), BluetoothRateRules.parseResult("RESULT STATE 4 2 15"))
+        // A partial or non-numeric tail is not guessed at.
+        assertTrue(BluetoothRateRules.parseResult("RESULT STATE 4 2 15 1003") is HelperResult.Failed)
+        assertTrue(BluetoothRateRules.parseResult("RESULT STATE 4 2 15 1 2 3 x") is HelperResult.Failed)
+    }
 }

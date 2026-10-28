@@ -8,7 +8,8 @@ internal data class BluetoothCodecFacts(
     val sampleRateFlag: Int,
     val bitsPerSampleFlag: Int,
     val channelModeFlag: Int,
-    val codecSpecific1: Long,
+    /** `codecSpecific1`, read by the privileged helper (not readable by the app); null when it was not read. */
+    val codecSpecific1: Long?,
     /** `BluetoothCodecType.getCodecName()` (Android 15+), for codecs without a `SOURCE_CODEC_TYPE_*` constant. */
     val extendedName: String? = null,
 )
@@ -24,6 +25,9 @@ internal object BluetoothCodecRules {
     const val CODEC_LC3 = 5
     const val CODEC_OPUS = 6
     const val CODEC_INVALID = 1_000_000
+
+    /** Not set: the stack's own default (see ADR 0051 "LDAC bitrate mode"). */
+    const val LDAC_QUALITY_DEFAULT = 0L
 
     /** LDAC's playback quality in `codecSpecific1` (the values Android's developer options set). */
     const val LDAC_QUALITY_HIGH = 1000L
@@ -72,7 +76,7 @@ internal object BluetoothCodecRules {
      * LDAC's bitrate for its quality setting: 990 / 660 / 330 kbps in the 48 kHz family and 909 / 606 / 303 kbps in the
      * 44.1 kHz family; null for "best effort" (adaptive) and for anything else.
      */
-    fun ldacKbps(quality: Long, sampleRateHz: Int?): Int? {
+    fun ldacKbps(quality: Long?, sampleRateHz: Int?): Int? {
         val family44 = sampleRateHz != null && sampleRateHz % 44_100 == 0
         return when (quality) {
             LDAC_QUALITY_HIGH -> if (family44) 909 else 990
@@ -95,6 +99,8 @@ internal object BluetoothCodecRules {
             put("channels", channels(facts.channelModeFlag) ?: JSONObject.NULL)
             put("ldacKbps", if (ldac) ldacKbps(facts.codecSpecific1, rate) ?: JSONObject.NULL else JSONObject.NULL)
             put("ldacAdaptive", ldac && facts.codecSpecific1 == LDAC_QUALITY_ADAPTIVE)
+            // 0 is "not set" (the stack's default), which is not claimed to be any of the named modes.
+            put("ldacDefault", ldac && facts.codecSpecific1 == LDAC_QUALITY_DEFAULT)
         }
     }
 

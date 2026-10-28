@@ -68,6 +68,18 @@ class BluetoothCodecRulesTest {
         assertTrue("codecSpecific1 means nothing outside LDAC", aac.isNull("ldacKbps"))
         assertNull(BluetoothCodecRules.codecJson(BluetoothCodecFacts(1_000_000, 0, 0, 0, 0)))
         assertNull(BluetoothCodecRules.codecJson(BluetoothCodecFacts(9, 2, 1, 2, 0)))
+        // A mode that was not read (no root / Shizuku) names nothing; 0 is "not set" and claims no mode.
+        val unread = BluetoothCodecRules.codecJson(BluetoothCodecFacts(4, 8, 4, 2, null))!!
+        assertTrue(unread.isNull("ldacKbps"))
+        assertFalse(unread.getBoolean("ldacAdaptive"))
+        assertFalse(unread.getBoolean("ldacDefault"))
+        val unset = BluetoothCodecRules.codecJson(BluetoothCodecFacts(4, 8, 4, 2, 0))!!
+        assertTrue(unset.isNull("ldacKbps"))
+        assertFalse(unset.getBoolean("ldacAdaptive"))
+        assertTrue(unset.getBoolean("ldacDefault"))
+        assertEquals(660, BluetoothCodecRules.codecJson(BluetoothCodecFacts(4, 2, 4, 2, 1001))!!.getInt("ldacKbps"))
+        assertEquals(330, BluetoothCodecRules.codecJson(BluetoothCodecFacts(4, 2, 4, 2, 1002))!!.getInt("ldacKbps"))
+        assertFalse(BluetoothCodecRules.codecJson(BluetoothCodecFacts(1, 1, 1, 2, 0))!!.getBoolean("ldacDefault"))
         assertEquals("AA:BB:CC:DD:EE:FF", BluetoothCodecRules.addressKey(" aa:bb:cc:dd:ee:ff "))
         assertNull(BluetoothCodecRules.addressKey(""))
     }

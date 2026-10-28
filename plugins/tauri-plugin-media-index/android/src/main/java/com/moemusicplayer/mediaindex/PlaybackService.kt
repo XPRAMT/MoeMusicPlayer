@@ -1180,6 +1180,7 @@ class PlaybackService : MediaSessionService() {
             readUsbDevices(),
         ) is UsbExclusiveRules.Route.Exclusive
         follow.onLoad(BluetoothRateRequest(address, usbExclusive, dsd, trackHz.takeIf { it > 0 }))
+        follow.onTrackLoaded(address)
     }
 
     private fun onDevicesChanged() {

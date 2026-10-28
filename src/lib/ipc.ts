@@ -432,9 +432,12 @@ export interface AndroidBluetoothCodec {
   sampleRate: number | null;
   bitsPerSample: number | null;
   channels: number | null;
-  /** LDAC's bitrate for its quality setting; null for adaptive ("best effort") or other codecs. */
+  /** LDAC's bitrate for a fixed mode; null for adaptive, default, unread or other codecs. Needs root / Shizuku. */
   ldacKbps: number | null;
+  /** LDAC's adaptive-bitrate mode (codecSpecific1 1003). */
   ldacAdaptive: boolean;
+  /** LDAC with codecSpecific1 0: no mode is set, the stack's default. Absent in older answers. */
+  ldacDefault?: boolean;
 }
 
 /** Answer of `floating_lyrics_android('floatingLyricsStatus')`. */
