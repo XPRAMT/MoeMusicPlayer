@@ -122,6 +122,10 @@ internal object RootAccess {
     fun dumpsys(service: String, timeoutMs: Long, maxBytes: Int): ProcessResult =
         BoundedProcess.read(ProcessBuilder("su", "-c", "dumpsys $service").start(), timeoutMs, maxBytes)
 
+    /** Any shell command as root (the Bluetooth rate helper, ADR 0051). */
+    fun exec(command: String, timeoutMs: Long, maxBytes: Int): ProcessResult =
+        BoundedProcess.read(ProcessBuilder("su", "-c", command).start(), timeoutMs, maxBytes)
+
     private const val TAG = "MoeMediaIndex"
 }
 
@@ -207,6 +211,19 @@ internal object ShizukuAccess {
         )
         method.isAccessible = true
         val process = method.invoke(null, arrayOf("dumpsys", service), null, null) as Process
+        return BoundedProcess.read(process, timeoutMs, maxBytes)
+    }
+
+    /** Any shell command as the shell user (the Bluetooth rate helper, ADR 0051), through the same reflective call. */
+    fun exec(command: String, timeoutMs: Long, maxBytes: Int): ProcessResult {
+        val method = Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java,
+        )
+        method.isAccessible = true
+        val process = method.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
         return BoundedProcess.read(process, timeoutMs, maxBytes)
     }
 }

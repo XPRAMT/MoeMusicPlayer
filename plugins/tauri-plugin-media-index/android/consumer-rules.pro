@@ -22,3 +22,5 @@
 # Real mixer rate (ADR 0048): Shizuku.newProcess is private in API 13 and reached by reflection.
 -keep class rikka.shizuku.Shizuku { *; }
 -keep class rikka.shizuku.ShizukuRemoteProcess { *; }
+# Bluetooth sample-rate follow (ADR 0051): app_process starts this class by name from the APK.
+-keep class com.moemusicplayer.mediaindex.BluetoothRateHelper { public static void main(java.lang.String[]); }

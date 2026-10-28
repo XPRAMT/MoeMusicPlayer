@@ -28,7 +28,37 @@ internal object BluetoothCodecWatch {
     private const val ACTION_CODEC_CONFIG_CHANGED = "android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED"
 
     private val codecs = ConcurrentHashMap<String, JSONObject>()
+    /** The same announcement in plain values, with the rates the codec offers (the sample-rate follow, ADR 0051). */
+    private val states = ConcurrentHashMap<String, BluetoothCodecState>()
+    private val changed = Object()
     @Volatile private var registered = false
+
+    /** Whether the receiver is registered (an announcement can be heard at all). */
+    fun listening(): Boolean = registered
+
+    /** The last codec state announced for the address, or null. */
+    fun state(address: String): BluetoothCodecState? = BluetoothCodecRules.addressKey(address)?.let { states[it] }
+
+    /**
+     * Waits up to [timeoutMs] until the announced rate of the address is [rateFlag]; true when it is. Never call it on
+     * the main thread.
+     */
+    fun awaitRate(address: String, rateFlag: Int, timeoutMs: Long): Boolean {
+        val key = BluetoothCodecRules.addressKey(address) ?: return false
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        synchronized(changed) {
+            while (true) {
+                if (states[key]?.rateFlag == rateFlag) return true
+                val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
+                if (remainingMs <= 0L) return false
+                try {
+                    changed.wait(remainingMs)
+                } catch (_: InterruptedException) {
+                    return false
+                }
+            }
+        }
+    }
 
     /** Whether the codec can be read here at all (Android 13+). */
     @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.TIRAMISU)
@@ -79,8 +109,15 @@ internal object BluetoothCodecWatch {
             val config = status?.codecConfig
             if (config == null) {
                 codecs.remove(key)
+                states.remove(key)
                 return
             }
+            var selectable = config.sampleRate
+            for (capability in status?.codecsSelectableCapabilities.orEmpty()) {
+                if (capability.codecType == config.codecType) selectable = selectable or capability.sampleRate
+            }
+            states[key] = BluetoothCodecState(config.codecType, config.sampleRate, selectable)
+            synchronized(changed) { changed.notifyAll() }
             val extendedName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
                 try {
                     config.extendedCodecType?.codecName
