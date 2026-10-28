@@ -4240,6 +4240,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "md-5 0.10.6",
+ "player-dsd",
  "player-flac",
  "serde",
  "serde_json",

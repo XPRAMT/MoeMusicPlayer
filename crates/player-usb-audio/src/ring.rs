@@ -10,7 +10,15 @@
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::dsd;
 use crate::pcm::InputEncoding;
+
+/// What a native-DSD ring (ADR 0049) does on top of a PCM ring: it drops the start of what Media3 writes (Media3's
+/// volume ramp scaled those words) and sends idle fill for it.
+struct DsdSide {
+    /// Bytes of the first writes still to be replaced by idle fill.
+    discard_left: AtomicU64,
+}
 
 pub struct Ring {
     buffer: Box<[UnsafeCell<u8>]>,
@@ -24,6 +32,7 @@ pub struct Ring {
     /// The device failed or was taken away while this ring was attached: the output is stalled.
     failed: AtomicBool,
     underruns: AtomicU64,
+    dsd: Option<DsdSide>,
 }
 
 // SAFETY: the producer only writes bytes in `[written, played + capacity)` and publishes them with a release store of
@@ -46,7 +55,24 @@ impl Ring {
             ended: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
+            dsd: None,
         }
+    }
+
+    /// A ring for native DSD at `rate` frames per second (ADR 0049). The carrier is 4 channels of 16-bit PCM, 8 bytes
+    /// per frame, the same as two 32-bit slots. The first [`dsd::discard_frames`] of what is written are replaced by
+    /// idle fill.
+    pub fn new_dsd(capacity_frames: usize, rate: u32) -> Self {
+        let mut ring = Self::new(capacity_frames, InputEncoding::S16, 4);
+        debug_assert_eq!(ring.frame_bytes, dsd::FRAME_BYTES);
+        ring.dsd = Some(DsdSide {
+            discard_left: AtomicU64::new((dsd::discard_frames(rate) * dsd::FRAME_BYTES) as u64),
+        });
+        ring
+    }
+
+    pub fn is_dsd(&self) -> bool {
+        self.dsd.is_some()
     }
 
     pub fn encoding(&self) -> InputEncoding {
@@ -80,8 +106,26 @@ impl Ring {
             std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(start), first);
             std::ptr::copy_nonoverlapping(data.as_ptr().add(first), base, take - first);
         }
+        if let Some(side) = &self.dsd {
+            let drop = side.discard_left.load(Ordering::Relaxed).min(take as u64);
+            if drop > 0 {
+                side.discard_left.fetch_sub(drop, Ordering::Relaxed);
+                self.fill_range(start, drop as usize, dsd::IDLE_BYTE);
+            }
+        }
         self.written.store(written + take as u64, Ordering::Release);
         take
+    }
+
+    /// Producer: set `count` bytes from ring offset `start` (wrapping) to `byte`, inside the region it just wrote.
+    fn fill_range(&self, start: usize, count: usize, byte: u8) {
+        let first = count.min(self.buffer.len() - start);
+        // SAFETY: the range lies in the producer's region (see the `Sync` impl).
+        unsafe {
+            let base = self.buffer.as_ptr() as *mut u8;
+            std::ptr::write_bytes(base.add(start), byte, first);
+            std::ptr::write_bytes(base, byte, count - first);
+        }
     }
 
     pub fn written_frames(&self) -> u64 {
@@ -251,5 +295,66 @@ mod tests {
         ring.count_underrun();
         assert!(ring.is_ended() && ring.is_failed());
         assert_eq!(ring.underruns(), 1);
+    }
+
+    #[test]
+    fn a_dsd_ring_replaces_the_first_25_ms_written_by_idle_fill() {
+        let ring = Ring::new_dsd(10_000, 88_200);
+        assert!(ring.is_dsd());
+        assert_eq!(ring.frame_bytes(), 8);
+        assert_eq!(ring.capacity_frames(), 10_000);
+        let discard = dsd::discard_frames(88_200) * 8;
+        let music = vec![0x11_u8; discard + 80];
+        assert_eq!(ring.push(&music), music.len());
+        let mut cursor = Cursor::at(&ring);
+        let mut got = vec![0_u8; music.len()];
+        assert_eq!(cursor.take(&ring, got.len(), &mut got), music.len());
+        assert!(got[..discard].iter().all(|&b| b == dsd::IDLE_BYTE));
+        assert!(got[discard..].iter().all(|&b| b == 0x11));
+        assert!(!got.contains(&0), "no zero word anywhere");
+        Cursor::complete(&ring, got.len());
+        assert_eq!(ring.played_frames(), (music.len() / 8) as u64);
+    }
+
+    #[test]
+    fn the_discard_spans_several_writes_and_is_used_up_once() {
+        let ring = Ring::new_dsd(100_000, 88_200);
+        let discard = dsd::discard_frames(88_200) * 8;
+        let mut cursor = Cursor::at(&ring);
+        let mut sink = vec![0_u8; 1 << 20];
+        // Three writes: the first two stay inside the discard, the third crosses its end.
+        let chunk = (discard / 2 / 8 - 1) * 8;
+        for _ in 0..3 {
+            assert_eq!(ring.push(&vec![0x22; chunk]), chunk);
+        }
+        let n = cursor.take(&ring, 3 * chunk, &mut sink);
+        assert_eq!(n, 3 * chunk);
+        assert!(sink[..discard].iter().all(|&b| b == dsd::IDLE_BYTE));
+        assert!(sink[discard..n].iter().all(|&b| b == 0x22));
+        // Later writes are untouched.
+        ring.push(&[0x33; 64]);
+        let mut tail = [0_u8; 64];
+        assert_eq!(cursor.take(&ring, 64, &mut tail), 64);
+        assert!(tail.iter().all(|&b| b == 0x33));
+    }
+
+    #[test]
+    fn a_discard_that_wraps_the_buffer_end_is_replaced_in_both_parts() {
+        // Capacity is smaller than the discard: write and play in pieces so the discard crosses the wrap.
+        let ring = Ring::new_dsd(1_000, 88_200);
+        let discard = dsd::discard_frames(88_200) * 8;
+        let mut cursor = Cursor::at(&ring);
+        let mut seen = Vec::new();
+        let mut out = vec![0_u8; 4_000];
+        let mut written = 0;
+        while written < discard + 800 {
+            let pushed = ring.push(&[0x55; 2_000]);
+            written += pushed;
+            let n = cursor.take(&ring, out.len(), &mut out);
+            seen.extend_from_slice(&out[..n]);
+            Cursor::complete(&ring, n);
+        }
+        assert!(seen[..discard].iter().all(|&b| b == dsd::IDLE_BYTE));
+        assert!(seen[discard..written].iter().all(|&b| b == 0x55));
     }
 }

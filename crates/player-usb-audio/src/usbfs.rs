@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use crate::descriptors::{parse_configuration, Configuration, StreamPlan};
 use crate::diagnostics::{DataUrbStats, FeedbackUrbStats};
+use crate::dsd;
 use crate::engine::{self, Action, Event, State, StreamFormat};
 use crate::feedback::Feedback;
 use crate::format::{self, NotBitPerfect, Source};
@@ -118,6 +119,12 @@ impl Shared {
         // The volume can change at any time: the bit-perfect answer follows it.
         let gain = self.gain();
         status.gain = gain;
+        // Native DSD ignores the volume and is not "bit-perfect" PCM: the card says `dsdNative` instead.
+        if status.dsd_native {
+            status.not_bit_perfect.clear();
+            status.bit_perfect = false;
+            return status;
+        }
         status
             .not_bit_perfect
             .retain(|reason| *reason != NotBitPerfect::Volume);
@@ -216,6 +223,9 @@ struct Stream {
     device_frame_bytes: usize,
     container: Container,
     scratch: Vec<u8>,
+    /// The alt carries native DSD (ADR 0049): gaps are filled with the idle pattern, the ring bytes go out unchanged,
+    /// and the gate paces the lead-in and the lead-out.
+    dsd: Option<dsd::Gate>,
     feedback_urbs: FeedbackUrbStats,
     data_urbs: DataUrbStats,
 }
@@ -509,6 +519,7 @@ impl Runtime<'_> {
                 bits: format.map(|f| f.bits),
                 source_bits: source.bits,
                 dsd: source.dsd,
+                dsd_native: source.native_dsd,
                 not_bit_perfect,
                 bit_perfect: false,
                 gain: status.gain,
@@ -561,6 +572,7 @@ impl Runtime<'_> {
             Action::Configure(format) => self.configure(&plan, format.rate),
             Action::StartStreaming => self.start_streaming(&plan),
             Action::StopStreaming => {
+                self.lead_out();
                 self.stop_streaming();
                 let interface = u32::from(plan.streaming_interface);
                 self.device
@@ -688,6 +700,7 @@ impl Runtime<'_> {
             device_frame_bytes,
             container,
             scratch: vec![0; max_frames * 4 * usize::from(format.channels.max(1))],
+            dsd: plan.raw.then(|| dsd::Gate::new(format.rate)),
             feedback_urbs: FeedbackUrbStats::default(),
             data_urbs: DataUrbStats::default(),
         };
@@ -731,6 +744,24 @@ impl Runtime<'_> {
         ));
         self.stream = Some(stream);
         Ok(())
+    }
+
+    /// Native DSD only: keep streaming idle fill for [`dsd::LEAD_OUT_MS`] (and the URBs already queued) before the alt goes
+    /// back to 0, so the DAC is never cut off in the middle of music. The ring is left alone, so the music not yet
+    /// played goes out again on the next start.
+    fn lead_out(&mut self) {
+        match self.stream.as_mut().and_then(|stream| stream.dsd.as_mut()) {
+            Some(gate) => gate.start_lead_out(),
+            None => return,
+        }
+        let bus_rate = if self.high_speed { 8000 } else { 1000 };
+        let queued_ms = (DATA_URBS * PACKETS_PER_URB * 1000 / bus_rate) as u64;
+        let until = Instant::now() + Duration::from_millis(u64::from(dsd::LEAD_OUT_MS) + queued_ms);
+        while Instant::now() < until {
+            if self.service().is_err() {
+                break;
+            }
+        }
     }
 
     /// Discard and reap every URB; what was packed but not played goes out again on the next start.
@@ -884,9 +915,20 @@ impl Runtime<'_> {
         rate: u32,
         source: Source,
     ) -> Result<AttachReply, String> {
-        let channels = ring.channels();
+        // Native DSD: the ring's carrier is 4 channels of 16-bit PCM, the device gets two 32-bit slots per frame.
+        let channels = if source.native_dsd {
+            2
+        } else {
+            ring.channels()
+        };
         let ranges = format::known_ranges(self.config.vendor_id, self.config.product_id);
-        let chosen = format::choose(&self.config, rate, channels, source, ranges.as_deref());
+        let chosen = if source.native_dsd && !ring.is_dsd() {
+            Err(format::Unsupported::NoDsdAlt)
+        } else if source.native_dsd {
+            format::choose_dsd(&self.config, rate, ranges.as_deref())
+        } else {
+            format::choose(&self.config, rate, channels, source, ranges.as_deref())
+        };
         let (plan, container) = match chosen {
             Ok(chosen) => chosen,
             Err(reason) => {
@@ -999,6 +1041,8 @@ fn plan_alt(plan: Option<&StreamPlan>) -> u8 {
 }
 
 /// Fill data URB `index` for the next packets: ring bytes packed with `gain`, silence for what the ring does not have.
+/// Native DSD (`stream.dsd`) copies the ring bytes unchanged (the volume does not apply), fills gaps with the idle
+/// pattern, starts with a lead-in of it and, while `silence_only`, sends nothing else.
 fn fill(
     stream: &mut Stream,
     index: usize,
@@ -1009,6 +1053,7 @@ fn fill(
     let frame = stream.device_frame_bytes;
     let container = stream.container;
     let feedback = stream.parser.current_q16();
+    let fill_byte = dsd::fill_byte(stream.dsd.is_some());
     let slot = &mut stream.data[index];
     slot.ring = attached.as_ref().map(|attached| Arc::clone(&attached.ring));
     let mut at = 0;
@@ -1017,29 +1062,51 @@ fn fill(
         let frames = stream.sizer.next_frames(feedback);
         let bytes = frames * frame;
         let mut got_frames = 0;
-        if let Some(attached) = attached.as_deref_mut() {
-            let in_frame = attached.ring.frame_bytes();
-            let wanted = (frames * in_frame).min(stream.scratch.len());
-            let got = attached
-                .cursor
-                .take(&attached.ring, wanted, &mut stream.scratch[..wanted]);
-            got_frames = got / in_frame;
-            pcm::pack(
-                attached.ring.encoding(),
-                &stream.scratch[..got],
-                container,
-                gain,
-                &mut slot.buffer[at..at + got_frames * frame],
-            );
-            slot.credits[packet] = got;
-            if got > 0 {
-                attached.started = true;
+        if let Some(gate) = stream.dsd.as_mut() {
+            // The lead-in and the lead-out are idle fill: the ring is not read.
+            let silent = gate.next_packet_silent(frames);
+            let attached = attached.as_deref_mut();
+            if let Some(attached) = attached {
+                let out = &mut slot.buffer[at..at + bytes];
+                let got = dsd::fill_packet(&mut attached.cursor, &attached.ring, silent, out);
+                slot.credits[packet] = got;
+                if got > 0 {
+                    attached.started = true;
+                }
+                short |= !silent && got < bytes;
+            } else {
+                slot.buffer[at..at + bytes].fill(dsd::IDLE_BYTE);
+                slot.credits[packet] = 0;
             }
-            short |= got < wanted;
-        } else {
-            slot.credits[packet] = 0;
+            slot.urb.packets[packet].length = bytes as c_uint;
+            at += bytes;
+            continue;
         }
-        slot.buffer[at + got_frames * frame..at + bytes].fill(0);
+        match attached.as_deref_mut() {
+            Some(attached) => {
+                let in_frame = attached.ring.frame_bytes();
+                let wanted = (frames * in_frame).min(stream.scratch.len());
+                let got =
+                    attached
+                        .cursor
+                        .take(&attached.ring, wanted, &mut stream.scratch[..wanted]);
+                got_frames = got / in_frame;
+                pcm::pack(
+                    attached.ring.encoding(),
+                    &stream.scratch[..got],
+                    container,
+                    gain,
+                    &mut slot.buffer[at..at + got_frames * frame],
+                );
+                slot.credits[packet] = got;
+                if got > 0 {
+                    attached.started = true;
+                }
+                short |= got < wanted;
+            }
+            None => slot.credits[packet] = 0,
+        }
+        slot.buffer[at + got_frames * frame..at + bytes].fill(fill_byte);
         slot.urb.packets[packet].length = bytes as c_uint;
         at += bytes;
     }

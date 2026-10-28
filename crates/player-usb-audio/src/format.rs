@@ -13,8 +13,11 @@ use crate::pcm::{Container, InputEncoding};
 pub struct Source {
     /// The file's bits per sample (lossless codecs only; `None`: unknown, e.g. a lossy file).
     pub bits: Option<u8>,
-    /// A DSD file, played through the DSD-to-PCM converter (DSD over the bus is not done).
+    /// A DSD file. Without `native_dsd` it is played through the DSD-to-PCM converter.
     pub dsd: bool,
+    /// The DSD file's raw slots go to the device as they are, on its RAW_DATA alt (ADR 0049). The load chose this
+    /// (Kotlin `DsdPassthrough`); the data Media3 hands the output is then the slots, not audio.
+    pub native_dsd: bool,
 }
 
 const C2_16: Container = Container { bytes: 2, bits: 16 };
@@ -43,6 +46,10 @@ pub enum Unsupported {
     Channels(u8),
     /// No PCM alt with a container that holds the source.
     Bits(Option<u8>),
+    /// Native DSD: the frame rate (DSD bit rate ÷ 32) is not one the device's clock takes.
+    DsdRate(u32),
+    /// Native DSD: the device has no RAW_DATA alt for stereo 32-bit slots.
+    NoDsdAlt,
 }
 
 impl std::fmt::Display for Unsupported {
@@ -52,6 +59,10 @@ impl std::fmt::Display for Unsupported {
             Self::Channels(channels) => write!(f, "USB 音訊裝置沒有 {channels} 聲道的 PCM 格式"),
             Self::Bits(Some(bits)) => write!(f, "USB 音訊裝置沒有可放 {bits} bit 的 PCM 格式"),
             Self::Bits(None) => f.write_str("USB 音訊裝置沒有合適的 PCM 格式"),
+            Self::DsdRate(rate) => {
+                write!(f, "音響沒有 DSD 取樣率 {} kHz", crate::dsd::khz_text(*rate))
+            }
+            Self::NoDsdAlt => f.write_str("音響沒有 DSD 直通格式"),
         }
     }
 }
@@ -86,6 +97,28 @@ pub fn choose(
     } else {
         Unsupported::Channels(channels)
     })
+}
+
+/// Choose the RAW_DATA alt for native DSD at `rate` frames per second (DSD64/128/256 → 88.2/176.4/352.8 kHz), stereo,
+/// 32-bit slots. `ranges` (the clock's RANGE, when known) must list the rate.
+pub fn choose_dsd(
+    config: &Configuration,
+    rate: u32,
+    ranges: Option<&[(u32, u32, u32)]>,
+) -> Result<(StreamPlan, Container), Unsupported> {
+    if !crate::dsd::is_frame_rate(rate) {
+        return Err(Unsupported::DsdRate(rate));
+    }
+    if let Some(ranges) = ranges.filter(|ranges| !ranges.is_empty()) {
+        if !crate::uac::rate_in_ranges(ranges, rate) {
+            return Err(Unsupported::DsdRate(rate));
+        }
+    }
+    match crate::descriptors::plan_raw_stream(config, rate) {
+        Ok(plan) => Ok((plan, C4_32)),
+        Err(PlanError::NoMatchingFormat(_)) => Err(Unsupported::NoDsdAlt),
+        Err(error) => Err(Unsupported::Plan(error)),
+    }
 }
 
 fn pcm_format(container: Container, channels: u8, rate: u32) -> PcmFormat {
@@ -143,6 +176,10 @@ pub fn bit_perfect(
     gain: f32,
 ) -> Vec<NotBitPerfect> {
     let mut reasons = Vec::new();
+    // Native DSD is neither PCM nor scaled: the slots go out untouched, at any volume (the status says `dsdNative`).
+    if source.native_dsd {
+        return reasons;
+    }
     if source.dsd {
         reasons.push(NotBitPerfect::Dsd);
     } else {
@@ -180,7 +217,7 @@ mod tests {
         // Alts: 1 = 4/32, 2 = 4/24, 3 = 4/16, 4 = 3/24, 5 = 3/16, 6 = 2/16.
         let bits = |bits| Source {
             bits: Some(bits),
-            dsd: false,
+            ..Source::default()
         };
         assert_eq!(alt_of(bits(16)), (6, C2_16));
         assert_eq!(alt_of(bits(24)), (4, C3_24));
@@ -189,7 +226,8 @@ mod tests {
         assert_eq!(
             alt_of(Source {
                 bits: Some(1),
-                dsd: true
+                dsd: true,
+                ..Source::default()
             }),
             (4, C3_24)
         );
@@ -234,7 +272,7 @@ mod tests {
         let f = InputEncoding::F32;
         let s = |bits| Source {
             bits: Some(bits),
-            dsd: false,
+            ..Source::default()
         };
         assert!(bit_perfect(s(16), f, C2_16, 1.0).is_empty());
         assert!(bit_perfect(s(16), f, C3_24, 1.0).is_empty());
@@ -260,13 +298,67 @@ mod tests {
             bit_perfect(
                 Source {
                     bits: Some(1),
-                    dsd: true
+                    dsd: true,
+                    ..Source::default()
                 },
                 f,
                 C3_24,
                 1.0
             ),
             vec![NotBitPerfect::Dsd]
+        );
+    }
+
+    #[test]
+    fn native_dsd_picks_alt_7_when_the_clock_lists_the_rate() {
+        let ranges = [
+            (32_000, 32_000, 0),
+            (44_100, 44_100, 0),
+            (88_200, 88_200, 0),
+            (96_000, 96_000, 0),
+            (176_400, 176_400, 0),
+            (192_000, 192_000, 0),
+            (352_800, 352_800, 0),
+            (384_000, 384_000, 0),
+        ];
+        for rate in [88_200, 176_400, 352_800] {
+            let (plan, container) = choose_dsd(&sony(), rate, Some(&ranges)).unwrap();
+            assert_eq!((plan.alt, plan.raw, container), (7, true, C4_32), "{rate}");
+        }
+        assert_eq!(choose_dsd(&sony(), 88_200, None).unwrap().0.alt, 7);
+    }
+
+    #[test]
+    fn native_dsd_is_refused_for_a_rate_the_clock_lacks_or_a_device_without_the_alt() {
+        let without_88k = [(44_100, 48_000, 3_900), (176_400, 176_400, 0)];
+        assert_eq!(
+            choose_dsd(&sony(), 88_200, Some(&without_88k)).unwrap_err(),
+            Unsupported::DsdRate(88_200)
+        );
+        // DSD512 (705.6 kHz) and other rates never get this far.
+        for rate in [705_600, 44_100, 96_000, 0] {
+            assert_eq!(
+                choose_dsd(&sony(), rate, None).unwrap_err(),
+                Unsupported::DsdRate(rate)
+            );
+        }
+        // No ranges known: the alt decides; the sony fixture has it.
+        let text = Unsupported::DsdRate(88_200).to_string();
+        assert!(text.contains("DSD") && text.contains("88.2 kHz"), "{text}");
+        assert!(Unsupported::NoDsdAlt.to_string().contains("DSD"));
+    }
+
+    #[test]
+    fn native_dsd_has_no_bit_perfect_reasons_and_no_volume_reason() {
+        let native = Source {
+            bits: None,
+            dsd: true,
+            native_dsd: true,
+        };
+        assert!(bit_perfect(native, InputEncoding::S16, C4_32, 1.0).is_empty());
+        assert!(
+            bit_perfect(native, InputEncoding::S16, C4_32, 0.3).is_empty(),
+            "the volume does not apply to DSD"
         );
     }
 }

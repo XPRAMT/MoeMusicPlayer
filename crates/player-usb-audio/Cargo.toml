@@ -12,6 +12,8 @@ serde = { version = "1", features = ["derive"] }
 libc = "0.2"
 
 [dev-dependencies]
+# The idle pattern the DSD packing pads with is the one the engine fills gaps with.
+player-dsd = { path = "../player-dsd" }
 # Decoding the FLAC fixtures to float as the Android converter does; the STREAMINFO signature is an MD5 of the raw
 # samples: the bit-exact check of the packing.
 player-flac = { path = "../player-flac" }

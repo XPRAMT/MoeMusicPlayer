@@ -186,6 +186,8 @@ pub struct StreamPlan {
     pub data_endpoint: Endpoint,
     pub feedback_endpoint: Option<Endpoint>,
     pub bytes_per_frame: usize,
+    /// The alternate setting carries RAW_DATA (native DSD, ADR 0049) instead of PCM.
+    pub raw: bool,
     /// UAC1: the rates the alternate setting lists (empty: continuous, see `uac1_rate_range`).
     pub uac1_rates: Vec<u32>,
     pub uac1_rate_range: Option<(u32, u32)>,
@@ -277,6 +279,8 @@ fn terminal_clock(ac: &AltSetting, terminal: u8) -> Option<u8> {
 struct Uac2Format {
     terminal: u8,
     pcm: bool,
+    /// Type I RAW_DATA (bmFormats bit 31): native DSD slots.
+    raw: bool,
     channels: u8,
     subslot: u8,
     bits: u8,
@@ -299,6 +303,7 @@ fn uac2_format(alt: &AltSetting) -> Option<Uac2Format> {
             && format[3] == 0x01
             && bm_formats & 1 != 0
             && bm_formats & (1 << 31) == 0,
+        raw: general[5] == 0x01 && format[3] == 0x01 && bm_formats & (1 << 31) != 0,
         channels: general[10],
         subslot: format[4],
         bits: format[5],
@@ -353,6 +358,29 @@ fn uac1_format(alt: &AltSetting) -> Option<Uac1Format> {
 
 /// Choose the alternate setting, endpoints and clock for `format`.
 pub fn plan_stream(config: &Configuration, format: PcmFormat) -> Result<StreamPlan, PlanError> {
+    plan_stream_of(config, format, false)
+}
+
+/// The RAW_DATA alternate setting that carries native DSD as 32-bit slots, stereo, at `rate` frames per second (the DSD
+/// bit rate ÷ 32, ADR 0049). UAC2 only.
+pub fn plan_raw_stream(config: &Configuration, rate: u32) -> Result<StreamPlan, PlanError> {
+    plan_stream_of(
+        config,
+        PcmFormat {
+            subslot_bytes: 4,
+            bits: 32,
+            channels: 2,
+            rate,
+        },
+        true,
+    )
+}
+
+fn plan_stream_of(
+    config: &Configuration,
+    format: PcmFormat,
+    raw: bool,
+) -> Result<StreamPlan, PlanError> {
     let ac = config
         .alts
         .iter()
@@ -390,7 +418,7 @@ pub fn plan_stream(config: &Configuration, format: PcmFormat) -> Result<StreamPl
             let Some(found) = uac2_format(alt) else {
                 continue;
             };
-            let matches = found.pcm
+            let matches = (if raw { found.raw } else { found.pcm })
                 && found.channels == format.channels
                 && found.subslot == format.subslot_bytes
                 && found.bits == format.bits;
@@ -400,7 +428,8 @@ pub fn plan_stream(config: &Configuration, format: PcmFormat) -> Result<StreamPl
             let Some(found) = uac1_format(alt) else {
                 continue;
             };
-            let matches = found.pcm
+            let matches = !raw
+                && found.pcm
                 && found.channels == format.channels
                 && found.subframe == format.subslot_bytes
                 && found.bits == format.bits;
@@ -445,6 +474,7 @@ pub fn plan_stream(config: &Configuration, format: PcmFormat) -> Result<StreamPl
             data_endpoint: data,
             feedback_endpoint: feedback,
             bytes_per_frame: usize::from(format.subslot_bytes) * usize::from(format.channels),
+            raw,
             uac1_rates,
             uac1_rate_range,
             audio_interfaces,
@@ -546,6 +576,48 @@ pub(crate) mod tests {
             .find(|alt| alt.interface == 1 && alt.alt == 7)
             .unwrap();
         assert!(!uac2_format(alt7).unwrap().pcm);
+    }
+
+    #[test]
+    fn the_sony_dac_plans_native_dsd_on_alt_7_with_the_same_clock_and_endpoints() {
+        let config = parse_configuration(&sony());
+        for rate in [88_200, 176_400, 352_800] {
+            let plan = plan_raw_stream(&config, rate).unwrap();
+            assert!(plan.raw, "{rate}");
+            assert_eq!((plan.streaming_interface, plan.alt), (1, 7), "{rate}");
+            assert_eq!(plan.clock_id, Some(0x29));
+            assert_eq!(plan.data_endpoint.address, 0x01);
+            assert_eq!(plan.feedback_endpoint.unwrap().address, 0x81);
+            // Two 4-byte slots per frame.
+            assert_eq!(plan.bytes_per_frame, 8);
+        }
+        // A PCM plan is never the raw alt, and a raw plan is never a PCM alt.
+        let pcm = plan_stream(
+            &config,
+            PcmFormat {
+                subslot_bytes: 4,
+                bits: 32,
+                channels: 2,
+                rate: 88_200,
+            },
+        )
+        .unwrap();
+        assert_eq!((pcm.alt, pcm.raw), (1, false));
+    }
+
+    #[test]
+    fn a_device_without_a_raw_data_alt_has_no_native_dsd_plan() {
+        // The UAC1 DAC has PCM alts only.
+        let config = parse_configuration(&uac1());
+        assert_eq!(
+            plan_raw_stream(&config, 88_200),
+            Err(PlanError::NoMatchingFormat(PcmFormat {
+                subslot_bytes: 4,
+                bits: 32,
+                channels: 2,
+                rate: 88_200
+            }))
+        );
     }
 
     #[test]

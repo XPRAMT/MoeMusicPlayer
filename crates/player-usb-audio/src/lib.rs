@@ -12,6 +12,7 @@
 
 pub mod descriptors;
 pub mod diagnostics;
+pub mod dsd;
 pub mod engine;
 pub mod feedback;
 pub mod format;
@@ -36,7 +37,6 @@ pub struct AttachReply {
     pub container: Container,
 }
 
-
 /// What the exclusive output is doing, for the settings page (`android_audio_output_status` → `exclusive`) and the log.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +56,8 @@ pub struct EngineStatus {
     /// The track's own bit depth, when the library knows it.
     pub source_bits: Option<u8>,
     pub dsd: bool,
+    /// The raw DSD slots of the file go to the device as they are (ADR 0049): no PCM, no gain, no volume.
+    pub dsd_native: bool,
     /// Why the bus does not carry the file's samples bit for bit (empty: bit-perfect), at the current volume.
     pub not_bit_perfect: Vec<NotBitPerfect>,
     pub bit_perfect: bool,
