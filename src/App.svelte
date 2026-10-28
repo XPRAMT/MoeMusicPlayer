@@ -189,6 +189,17 @@
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
   import { formatSlideshowFolderLabel } from './lib/background-source-label.js';
   import { swipeDismiss } from './lib/swipe-dismiss.js';
+  import {
+    START_PAGE_NOW_PLAYING_WAIT_MS,
+    START_PAGE_SAVE_DELAY_MS,
+    createStartPageSaver,
+    lateRestoreStillWanted,
+    nowPlayingRestoreAction,
+    planStartRestore,
+    resolveStartPage,
+    startPageFromState,
+    startPageKind,
+  } from './lib/start-page.js';
   import { coverZoom, coverZoomFromFractions, coverZoomToFractions, COVER_ZOOM_MIN } from './lib/cover-zoom.js';
   import {
     DSD_GAIN_MAX_DB,
@@ -1503,6 +1514,136 @@
     }
   }
 
+  // Remembering the page (ADR 0053): the page the app is on is written to settings.json after a short quiet time
+  // (and at once when the page is hidden or closing); the next start opens it again.
+  let startPageReady = $state(false);
+  let nowPlayingRestoreWanted = $state(false);
+  let nowPlayingRestoreTimedOut = $state(false);
+  let nowPlayingRestoreTimer: ReturnType<typeof setTimeout> | undefined;
+  const startPageSaver = createStartPageSaver({
+    delayMs: START_PAGE_SAVE_DELAY_MS,
+    save: (page) => {
+      void invokeCommand('settings_set_last_page', { page }).catch((error) => {
+        console.warn(tr('無法保存目前頁面：'), getErrorText(error));
+      });
+    },
+  });
+
+  $effect(() => {
+    const page = startPageFromState({
+      activeView,
+      selectedPlaylistId,
+      settingsSection,
+      artistKey: selectedArtist?.key ?? null,
+      albumKey: selectedAlbum?.key ?? null,
+      nowPlayingOpen: isNowPlayingOpen || nowPlayingRestoreWanted,
+    });
+    if (startPageReady) startPageSaver.schedule(page);
+  });
+
+  $effect(() => {
+    if (!isTauri()) return;
+    const flush = (): void => {
+      startPageSaver.flush();
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  });
+
+  $effect(() => {
+    if (!nowPlayingRestoreWanted) return;
+    const action = nowPlayingRestoreAction({
+      hasCurrentTrack: Boolean(playback?.currentTrack),
+      timedOut: nowPlayingRestoreTimedOut,
+    });
+    if (action === 'wait') return;
+    nowPlayingRestoreWanted = false;
+    if (nowPlayingRestoreTimer !== undefined) clearTimeout(nowPlayingRestoreTimer);
+    nowPlayingRestoreTimer = undefined;
+    if (action === 'open') untrack(() => void openNowPlaying());
+  });
+
+  /** Open the page remembered from the last run, unless this start has its own intent (ADR 0053). */
+  type StartPagePlan = ReturnType<typeof planStartRestore>;
+  async function loadStartPagePlan(): Promise<StartPagePlan> {
+    try {
+      const stored = await invokeCommand('settings_get_last_page', {});
+      return planStartRestore(stored.lastPage, { externalLaunch: stored.externalLaunch });
+    } catch (error) {
+      console.warn(tr('無法讀取上次的頁面：'), getErrorText(error));
+      return planStartRestore(undefined);
+    }
+  }
+
+  /** Pages that need no lookup open before anything else loads, so the library does not flash first. */
+  function applyDirectStartPage(plan: StartPagePlan): void {
+    if (!plan.restore || startPageKind(plan.page) !== 'direct') return;
+    activeView = plan.page.view as View;
+    if (plan.page.settingsSection) settingsSection = plan.page.settingsSection as SettingsSection;
+    startNowPlayingRestore(plan.page.nowPlaying);
+  }
+
+  function startNowPlayingRestore(wanted: boolean): void {
+    if (!wanted) return;
+    nowPlayingRestoreTimedOut = false;
+    nowPlayingRestoreWanted = true;
+    nowPlayingRestoreTimer = setTimeout(() => {
+      nowPlayingRestoreTimedOut = true;
+    }, START_PAGE_NOW_PLAYING_WAIT_MS);
+  }
+
+  /** Playlist, artist and album pages: the target is looked up first; a missing one is the default page. */
+  async function finishStartPage(plan: StartPagePlan, viewAtStart: View): Promise<void> {
+    try {
+      if (plan.restore && startPageKind(plan.page) !== 'direct') {
+        const page = plan.page;
+        const found: { playlistIds?: string[]; artistFound?: boolean; albumFound?: boolean } = {};
+        let artist: ArtistEntry | null = null;
+        let album: AlbumEntry | null = null;
+        try {
+          if (page.view === 'playlists' && libraryReady) {
+            found.playlistIds = (await invokeCommand('playlist_list', {})).map((playlist) => playlist.id);
+          } else if (page.view === 'artist-detail' && page.artistKey && libraryReady) {
+            artist = await resolveArtistEntryByKey(page.artistKey);
+            found.artistFound = artist !== null;
+          } else if (page.view === 'album-detail' && page.albumKey && libraryReady) {
+            album = await resolveAlbumEntryByKey(page.albumKey);
+            found.albumFound = album !== null;
+          }
+        } catch (error) {
+          console.warn(tr('無法確認上次的頁面：'), getErrorText(error));
+        }
+        const resolved = resolveStartPage(page, found);
+        if (resolved === page && lateRestoreStillWanted(activeView, viewAtStart)) {
+          if (page.view === 'playlists' && page.playlistId) {
+            await selectPlaylist(page.playlistId);
+          } else if (page.view === 'artist-detail' && artist) {
+            selectedArtist = artist;
+            rememberedArtistView = 'artist-detail';
+            activeView = 'artist-detail';
+          } else if (page.view === 'album-detail' && album) {
+            selectedAlbumInitialCoverSources = [];
+            selectedAlbum = album;
+            rememberedAlbumView = 'album-detail';
+            activeView = 'album-detail';
+          }
+          startNowPlayingRestore(page.nowPlaying);
+        }
+      }
+    } finally {
+      startPageSaver.setBaseline(plan.page);
+      startPageReady = true;
+    }
+  }
+
   $effect(() => {
     const stage = coverStageElement;
     const artworkUrl = activeArtwork.objectUrl;
@@ -1593,6 +1734,8 @@
     }
 
     async function initializeTauri(): Promise<void> {
+      // Read first, applied before anything else loads (ADR 0053).
+      const startPagePlanRequest = loadStartPagePlan();
       let unlistenProgress: (() => void) | null = null;
       let unlistenFinished: (() => void) | null = null;
       try {
@@ -1624,10 +1767,14 @@
 
       unlistenSyncProgress = unlistenProgress;
       unlistenSyncFinished = unlistenFinished;
+      const startPagePlan = await startPagePlanRequest;
+      const viewAtStart = activeView;
+      applyDirectStartPage(startPagePlan);
       await Promise.all([
         loadCapabilities(),
         loadThemePreferences(),
       ]);
+      void finishStartPage(startPagePlan, viewAtStart);
       await Promise.all([
         loadMainBackground(),
         loadSettingsRecoveryWarning(),

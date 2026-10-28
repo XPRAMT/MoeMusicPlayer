@@ -978,6 +978,120 @@ fn lenient_cover_zoom(value: Option<serde_json::Value>) -> CoverZoomSettings {
     CoverZoomSettings { scale }.normalized()
 }
 
+/// The main pages the app can restore at the next start (ADR 0053). The same list lives in
+/// `src/lib/start-page.js` (`START_PAGE_VIEWS`); `tests/start-page.test.mjs` checks they match.
+pub const LAST_PAGE_VIEWS: [&str; 8] = [
+    "library",
+    "artists",
+    "artist-detail",
+    "albums",
+    "album-detail",
+    "playlists",
+    "queue",
+    "settings",
+];
+/// The settings tabs that can be restored (stable ids; same list as `START_PAGE_SETTINGS_SECTIONS`).
+pub const LAST_PAGE_SETTINGS_SECTIONS: [&str; 8] = [
+    "appearance",
+    "track-columns",
+    "now-playing",
+    "lyrics",
+    "playback",
+    "shortcuts",
+    "sources",
+    "about",
+];
+const LAST_PAGE_KEY_MAX_CHARS: usize = 1024;
+
+/// The page the app was on when it last ran, restored at the next start: the main page, the open playlist, album
+/// or artist detail (by identity key), the settings tab, and whether the Now Playing page was open. Never the
+/// scroll position, the search text or a dialog.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastPageSettings {
+    pub view: String,
+    pub playlist_id: Option<String>,
+    pub settings_section: Option<String>,
+    pub artist_key: Option<String>,
+    pub album_key: Option<String>,
+    pub now_playing: bool,
+}
+
+impl Default for LastPageSettings {
+    fn default() -> Self {
+        Self {
+            view: "library".to_owned(),
+            playlist_id: None,
+            settings_section: None,
+            artist_key: None,
+            album_key: None,
+            now_playing: false,
+        }
+    }
+}
+
+fn last_page_key(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.is_empty() && text.chars().count() <= LAST_PAGE_KEY_MAX_CHARS)
+}
+
+impl LastPageSettings {
+    /// Keeps only what the chosen view needs; an unknown view, or a view whose target is missing, becomes the
+    /// default start page (the library).
+    pub fn normalized(self) -> Self {
+        if !LAST_PAGE_VIEWS.contains(&self.view.as_str()) {
+            return Self::default();
+        }
+        let mut page = Self {
+            view: self.view,
+            now_playing: self.now_playing,
+            ..Self::default()
+        };
+        match page.view.as_str() {
+            "playlists" => page.playlist_id = last_page_key(self.playlist_id),
+            "artist-detail" => page.artist_key = last_page_key(self.artist_key),
+            "album-detail" => page.album_key = last_page_key(self.album_key),
+            "settings" => {
+                page.settings_section = self
+                    .settings_section
+                    .filter(|id| LAST_PAGE_SETTINGS_SECTIONS.contains(&id.as_str()));
+            }
+            _ => {}
+        }
+        let missing_target = (page.view == "playlists" && page.playlist_id.is_none())
+            || (page.view == "artist-detail" && page.artist_key.is_none())
+            || (page.view == "album-detail" && page.album_key.is_none());
+        if missing_target {
+            return Self::default();
+        }
+        page
+    }
+}
+
+/// Missing or malformed values (or fields from another version) are ignored; a damaged value is the library.
+fn lenient_last_page(value: Option<serde_json::Value>) -> LastPageSettings {
+    let Some(object) = value.as_ref().and_then(serde_json::Value::as_object) else {
+        return LastPageSettings::default();
+    };
+    let text = |name: &str| {
+        object
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    LastPageSettings {
+        view: text("view").unwrap_or_default(),
+        playlist_id: text("playlistId"),
+        settings_section: text("settingsSection"),
+        artist_key: text("artistKey"),
+        album_key: text("albumKey"),
+        now_playing: object
+            .get("nowPlaying")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
+    .normalized()
+}
+
 /// Where the text sits inside that stretch.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -2268,6 +2382,9 @@ pub struct AppSettings {
     /// Now Playing cover size remembered across restarts (shrunk only; see `CoverZoomSettings`).
     #[serde(default)]
     pub cover_zoom: CoverZoomSettings,
+    /// The page the app was on when it closed (restored at the next start; see `LastPageSettings`).
+    #[serde(default)]
+    pub last_page: LastPageSettings,
     /// Lyrics on the Windows taskbar (Settings → lyrics).
     #[serde(default)]
     pub taskbar_lyrics: TaskbarLyricsSettings,
@@ -2449,6 +2566,7 @@ impl Default for AppSettings {
             output_volume_sync: true,
             library_source_scope: player_db::LibrarySourceScope::All,
             cover_zoom: CoverZoomSettings::default(),
+            last_page: LastPageSettings::default(),
             taskbar_lyrics: TaskbarLyricsSettings::default(),
             floating_lyrics: FloatingLyricsSettings::default(),
             language: UiLanguage::default(),
@@ -2950,6 +3068,7 @@ struct RawSettings {
     output_volume_sync: Option<bool>,
     library_source_scope: Option<serde_json::Value>,
     cover_zoom: Option<serde_json::Value>,
+    last_page: Option<serde_json::Value>,
     taskbar_lyrics: Option<serde_json::Value>,
     floating_lyrics: Option<serde_json::Value>,
     language: Option<serde_json::Value>,
@@ -3035,6 +3154,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default(),
         cover_zoom: lenient_cover_zoom(raw.cover_zoom),
+        last_page: lenient_last_page(raw.last_page),
         taskbar_lyrics: lenient_taskbar_lyrics(raw.taskbar_lyrics),
         floating_lyrics: lenient_floating_lyrics(raw.floating_lyrics),
         language: lenient_language(raw.language),
@@ -3695,6 +3815,62 @@ mod tests {
             CoverZoomSettings::default()
         );
         assert_eq!(lenient_cover_zoom(None), CoverZoomSettings::default());
+    }
+
+    #[test]
+    fn the_last_page_is_remembered_and_read_leniently() {
+        let default = LastPageSettings::default();
+        assert_eq!(default.view, "library");
+        assert!(default.playlist_id.is_none() && !default.now_playing);
+
+        let directory = test_directory("last-page");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert_eq!(store.snapshot().unwrap().last_page, default);
+        let album = LastPageSettings {
+            view: "album-detail".to_owned(),
+            album_key: Some("album:key".to_owned()),
+            now_playing: true,
+            ..LastPageSettings::default()
+        };
+        store
+            .update(|settings| {
+                settings.last_page = album.clone();
+                Ok(())
+            })
+            .expect("persist last page");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(reopened.snapshot().unwrap().last_page, album);
+
+        // Absent, damaged, unknown or half-filled values are the library, never an error.
+        assert_eq!(lenient_last_page(None), default);
+        assert_eq!(lenient_last_page(Some(serde_json::json!("x"))), default);
+        assert_eq!(
+            lenient_last_page(Some(serde_json::json!({"view": "from-the-future", "nowPlaying": true}))),
+            default
+        );
+        assert_eq!(
+            lenient_last_page(Some(serde_json::json!({"view": "playlists"}))),
+            default,
+            "a playlist page without a playlist is the library"
+        );
+        assert_eq!(
+            lenient_last_page(Some(serde_json::json!({"view": "album-detail", "albumKey": 3}))),
+            default
+        );
+        // Only what the view needs survives; the settings tab must be a known id.
+        let settings = lenient_last_page(Some(serde_json::json!({
+            "view": "settings", "settingsSection": "lyrics", "playlistId": "p1", "nowPlaying": "yes"
+        })));
+        assert_eq!(settings.settings_section.as_deref(), Some("lyrics"));
+        assert!(settings.playlist_id.is_none() && !settings.now_playing);
+        assert_eq!(
+            lenient_last_page(Some(serde_json::json!({"view": "settings", "settingsSection": "nope"})))
+                .settings_section,
+            None
+        );
+        let queue = lenient_last_page(Some(serde_json::json!({"view": "queue", "nowPlaying": true})));
+        assert!(queue.now_playing);
     }
 
     #[test]

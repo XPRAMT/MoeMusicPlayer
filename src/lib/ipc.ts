@@ -474,6 +474,22 @@ export interface CoverZoomSettings {
   scale: number;
 }
 
+/** The page the app was on when it closed, restored at the next start (ADR 0053). */
+export interface LastPageSettings {
+  view: string;
+  playlistId: string | null;
+  settingsSection: string | null;
+  artistKey: string | null;
+  albumKey: string | null;
+  nowPlaying: boolean;
+}
+
+export interface StartPageRestore {
+  lastPage: LastPageSettings;
+  /** The program was started to play a file; the remembered page is not restored over that. */
+  externalLaunch: boolean;
+}
+
 export type ResamplingMode = 'windowsBuiltin' | 'highQuality';
 export type CoverCornerStyle = 'rounded' | 'square';
 export type TimelineStyle = 'edge';
@@ -1408,6 +1424,14 @@ interface IpcContract {
   settings_set_cover_zoom: {
     args: { scale: number };
     result: CoverZoomSettings;
+  };
+  settings_get_last_page: {
+    args: Record<string, never>;
+    result: StartPageRestore;
+  };
+  settings_set_last_page: {
+    args: { page: LastPageSettings };
+    result: void;
   };
   settings_get_shortcuts: {
     args: Record<string, never>;

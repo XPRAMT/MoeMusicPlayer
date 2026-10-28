@@ -7124,6 +7124,50 @@ fn settings_set_cover_zoom(
         .map_err(|error| error.to_string())
 }
 
+/// How this run was started; the page remembered from last time is not restored over an explicit launch intent.
+struct LaunchIntent {
+    external_file: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartPageRestore {
+    last_page: settings::LastPageSettings,
+    external_launch: bool,
+}
+
+#[tauri::command]
+fn settings_get_last_page(
+    state: State<'_, AppState>,
+    intent: State<'_, LaunchIntent>,
+) -> Result<StartPageRestore, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| StartPageRestore {
+            last_page: settings.last_page,
+            external_launch: intent.external_file,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Remember the page the app is on (ADR 0053). Anything unknown is stored as the library.
+#[tauri::command]
+fn settings_set_last_page(
+    state: State<'_, AppState>,
+    page: settings::LastPageSettings,
+) -> Result<(), String> {
+    let requested = page.normalized();
+    state
+        .settings
+        .update(|settings| {
+            settings.last_page = requested;
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 /// One playback device as the output settings list it.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13118,6 +13162,11 @@ pub fn run() {
         let working_directory = std::env::current_dir().ok();
         first_supported_audio_argument(std::env::args_os().skip(1), working_directory.as_deref())
     };
+    // A start that opens an audio file (Explorer "open with") keeps the remembered page out of the way (ADR 0053).
+    #[cfg(target_os = "windows")]
+    let launched_with_external_file = initial_audio_path.is_some();
+    #[cfg(not(target_os = "windows"))]
+    let launched_with_external_file = false;
     let builder = tauri::Builder::default();
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, arguments, cwd| {
@@ -13283,6 +13332,8 @@ pub fn run() {
             settings_set_dsd,
             settings_get_cover_zoom,
             settings_set_cover_zoom,
+            settings_get_last_page,
+            settings_set_last_page,
             settings_get_shortcuts,
             settings_set_shortcuts,
             get_runtime_capabilities,
@@ -13605,6 +13656,9 @@ pub fn run() {
             let remote_connections: Arc<remote_connections::RemoteConnections> = Arc::default();
             app.manage(updater::UpdateService::default());
             app.manage(sleep_timer::SleepTimer::default());
+            app.manage(LaunchIntent {
+                external_file: launched_with_external_file,
+            });
             // Every reader of remote files (engine, covers, lyrics) goes through this one provider.
             album_artwork_cache::set_limit_bytes(
                 None,
