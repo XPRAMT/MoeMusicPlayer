@@ -1,0 +1,46 @@
+Audio flinger dump (trimmed excerpt, real NX809J capture, A2DP: one mixer thread per rate)
+Output thread 0xb4000078bf558650, name AudioOut_1CD, tid 9092, type 0 (MIXER):
+  I/O handle: 461
+  Standby: yes
+  Sample rate: 88200 Hz
+  Output devices: 0x80 (AUDIO_DEVICE_OUT_BLUETOOTH_A2DP)
+  1 Tracks of which 0 are active
+    Type     Id Active Client(pid/uid) Session Port Id S  Flags   Format Chn mask  SRate ST Usg CT  G db  L dB  R dB  VS dB  PortVol dB  PortMuted   Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect InternalMute   Latency   MuteCheck   MutedPlaying
+            353     no    2467/   1041       0       0 I  0x000 00000005 00000003  88200 13   f  0  -inf     0     0     0            0      false 00000000  10608       0 I         0        0      false        false       new       false          false
+  0 Effect Chains
+Output thread 0xb4000078b8b1e650, name AudioOut_1DD, tid 9096, type 0 (MIXER):
+  I/O handle: 477
+  Standby: no
+  Sample rate: 48000 Hz
+Bluetooth latency modes are enabled
+HAL does support Bluetooth latency modes
+Supported latency modes: { FREE }
+
+  2 Tracks of which 1 are active
+    Type     Id Active Client(pid/uid) Session Port Id S  Flags   Format Chn mask  SRate ST Usg CT  G db  L dB  R dB  VS dB  PortVol dB  PortMuted   Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect InternalMute   Latency   MuteCheck   MutedPlaying
+            355     no    2467/   1041       0       0 I  0x000 00000005 00000003  48000 13   f  0  -inf     0     0     0            0      false 00000000   5760       0 I         0        0      false        false       new       false          false
+            367    yes   19779/  10710    1081     440 A  0x000 00000005 00000003  48000  3   1  2     0     0     0     0            0      false 001D9E80  24000   18240 A         0        0      false        false  768.66 t       false          false
+  0 Effect Chains
+  Local log:
+                                                         Type     Id Active Client(pid/uid) Session Port Id S  Flags   Format Chn mask  SRate ST Usg CT  G db  L dB  R dB  VS dB  PortVol dB  PortMuted   Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect InternalMute   Latency   MuteCheck   MutedPlaying
+   10-28 20:58:53.208 CFG_EVENT_CREATE_AUDIO_PATCH: old device  (Empty device types) new device 0x80 (AUDIO_DEVICE_OUT_BLUETOOTH_A2DP)
+   10-28 20:59:20.225 CFG_EVENT_CREATE_AUDIO_PATCH: old device 0x80 (AUDIO_DEVICE_OUT_BLUETOOTH_A2DP) new device 0x80 (AUDIO_DEVICE_OUT_BLUETOOTH_A2DP)
+   10-28 20:59:20.228 AT::add       (0xb4000077e7a17df8)         366     no   19779/  10710    1081     439 A  0x000 00000005 00000003  48000  3   1  2  -inf     0     0     0            0      false 00000000  24000   24000 f         0        0      false        false       new       false          false
+Output thread 0xb4000078b86a9650, name AudioOut_1ED, tid 9105, type 0 (MIXER):
+  I/O handle: 493
+  Standby: yes
+  Sample rate: 44100 Hz
+  3 Tracks of which 0 are active
+    Type     Id Active Client(pid/uid) Session Port Id S  Flags   Format Chn mask  SRate ST Usg CT  G db  L dB  R dB  VS dB  PortVol dB  PortMuted   Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect InternalMute   Latency   MuteCheck   MutedPlaying
+            364     no   16656/  10285     161     431 I  0x000 00000001 00000001  24000  3   1  0  -inf     0     0     0            0      false 00000000  11568   11568 I         0        0      false        false       new       false          false
+            363     no   16656/  10285     177     430 I  0x000 00000001 00000001  24000  3   1  0  -inf     0     0     0            0      false 00000000  11568   11568 I         0        0      false        false       new       false          false
+            357     no    2467/   1041       0       0 I  0x000 00000005 00000003  44100 13   f  0  -inf     0     0     0            0      false 00000000   5328       0 I         0        0      false        false       new       false          false
+  0 Effect Chains
+Output thread 0xb4000078b7d25650, name AudioOut_1FD, tid 9110, type 0 (MIXER):
+  I/O handle: 509
+  Standby: yes
+  Sample rate: 96000 Hz
+  1 Tracks of which 0 are active
+    Type     Id Active Client(pid/uid) Session Port Id S  Flags   Format Chn mask  SRate ST Usg CT  G db  L dB  R dB  VS dB  PortVol dB  PortMuted   Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect InternalMute   Latency   MuteCheck   MutedPlaying
+            359     no    2467/   1041       0       0 I  0x000 00000005 00000003  96000 13   f  0  -inf     0     0     0            0      false 00000000  11520       0 I         0        0      false        false       new       false          false
+  0 Effect Chains

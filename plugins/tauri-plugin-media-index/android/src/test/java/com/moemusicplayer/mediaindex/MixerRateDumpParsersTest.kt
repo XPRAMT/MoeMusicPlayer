@@ -114,4 +114,28 @@ class MixerRateDumpParsersTest {
         val text = "audio.track.5:\n  event#=create threadId=7\naudio.thread.7:\n  event#=readParameters effective.sampleRate=11111\n"
         assertNull(MixerRateDumpParsers.fromMetricsDump(text, 5))
     }
+
+    private fun resource(name: String): String =
+        checkNotNull(javaClass.classLoader!!.getResourceAsStream(name)) { name }.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+    // Real capture (NX809J, A2DP): one mixer thread per rate; the app's row has an empty Type column and a split "pid/ uid".
+    @Test fun realFlingerDumpGivesTheRateOfEachThread() {
+        val real = resource("flinger-a2dp-excerpt.txt")
+        assertEquals(48000, MixerRateDumpParsers.fromFlingerDump(real, 440))
+        assertEquals(44100, MixerRateDumpParsers.fromFlingerDump(real, 430))
+        assertEquals(44100, MixerRateDumpParsers.fromFlingerDump(real, 431))
+        assertNull(MixerRateDumpParsers.fromFlingerDump(real, 439)) // only in the Local log
+        assertNull(MixerRateDumpParsers.fromFlingerDump(real, 999))
+    }
+
+    @Test fun realFlingerDumpKeepsTheBluetoothLinesInsideTheThread() {
+        val sections = MixerRateDumpParsers.threadSections(resource("flinger-a2dp-excerpt.txt"))
+        assertEquals(listOf(88200, 48000, 44100, 96000), sections.map { it.sampleRate })
+        val mixer = sections.first { it.sampleRate == 48000 }
+        assertEquals(listOf(true), mixer.trackRows.filter { it.portId == 440 }.map { it.active })
+    }
+
+    @Test fun realMetricsDumpGivesTheThreadRateOfALiveTrack() {
+        assertEquals(48000, MixerRateDumpParsers.fromMetricsDump(resource("metrics-a2dp-excerpt.txt"), 440))
+    }
 }

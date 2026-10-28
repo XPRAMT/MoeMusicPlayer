@@ -59,6 +59,7 @@ internal object MixerRateDumpParsers {
         var portColumn = -1
         var activeColumn = -1
         var columnCount = 0
+        var typeColumn = false
         var headerIndent = 0
         var inLog = false
         var inTerminated = false
@@ -76,8 +77,9 @@ internal object MixerRateDumpParsers {
             }
             val section = current ?: continue
             if (raw.isNotEmpty() && !raw[0].isWhitespace()) {
-                // Another top-level block of the dump (not a thread): this section is over.
-                current = null
+                // An unindented line that is not a thread header (real dumps put "Bluetooth latency modes are enabled"
+                // between a thread's lines) does not end the section; it only ends a track table.
+                portColumn = -1
                 continue
             }
             val trimmed = line.trim()
@@ -113,19 +115,20 @@ internal object MixerRateDumpParsers {
                 portColumn = columns.indexOf("Port Id")
                 activeColumn = columns.indexOf("Active")
                 columnCount = columns.size
+                typeColumn = columns.firstOrNull() == "Type"
                 headerIndent = line.length - line.trimStart().length
                 continue
             }
             if (portColumn >= 0 && !inTerminated) {
-                val tokens = trimmed.split(WHITESPACE)
-                // The table's columns before "Port Id" are one token each; a row too short for it is not a track row.
-                if (tokens.size > portColumn) {
-                    val port = tokens[portColumn].toIntOrNull()
-                    // A track row starts with its type/id and carries as many tokens as the header (a few may be missing
-                    // at the end on some ROMs); a stray line with a number in that place is not taken for one.
-                    if (port != null && tokens.size >= (columnCount - 4).coerceAtLeast(portColumn + 1)) {
-                        section.trackRows.add(TrackRow(port, isActive(tokens, activeColumn)))
-                    }
+                // "19779/  10710" (pid/uid) is one column printed as two tokens.
+                val tokens = trimmed.replace(Regex("""(\d+/)\s+(\d+)"""), "$1$2").split(WHITESPACE)
+                // A plain track has an empty "Type" column, so its row starts at "Id"; a typed row (e.g. "F") starts at "Type".
+                val shift = if (typeColumn && tokens.first().toIntOrNull() != null) 1 else 0
+                val port = tokens.getOrNull(portColumn - shift)?.toIntOrNull()
+                // A track row carries about as many tokens as the header (a few may be missing at the end on some ROMs);
+                // a stray line with a number in that place is not taken for one.
+                if (port != null && tokens.size >= (columnCount - 4 - shift).coerceAtLeast(portColumn - shift + 1)) {
+                    section.trackRows.add(TrackRow(port, isActive(tokens, activeColumn - shift)))
                 }
             }
         }
@@ -164,7 +167,7 @@ internal object MixerRateDumpParsers {
     internal class MetricsRecord(val kind: String, val id: Int, val events: MutableList<MetricsEvent> = ArrayList())
 
     private val recordKey = Regex("""audio\.(track|thread)\.(\d+)""")
-    private val keyValue = Regex("""(?<![\w.])([A-Za-z][\w.]*)=([^\s,;\]]+)""")
+    private val keyValue = Regex("""(?<![\w.])([A-Za-z][\w.]*)=([^\s,;\])}]+)""")
 
     /**
      * The `audio.track.<id>` and `audio.thread.<id>` records: a record starts at a line that names it and runs to the
