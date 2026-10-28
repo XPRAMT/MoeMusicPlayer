@@ -1825,6 +1825,7 @@
         loadMainBackground(),
         loadSettingsRecoveryWarning(),
         loadTrackColumnSettings(),
+        refreshRemoteSourceNames(),
         loadNowPlayingLayout(),
         loadDseeHx(),
         loadDsdSettings(),
@@ -1841,7 +1842,6 @@
     }
 
     return () => {
-        refreshRemoteSourceNames(),
       disposed = true;
       window.removeEventListener('resize', updateTrackHeaderTextOffset);
       window.removeEventListener('popstate', handleDetailHistoryPopState);
