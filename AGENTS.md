@@ -95,6 +95,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 - 每次開始工作先讀根目錄及工作路徑上適用的 `AGENTS.md`；採信最新程式碼、測試與使用者需求，文件衝突時修正文件。需求不清楚時先查證或提問，不得擅自補需求。
 - 先追查資料流與真正根因；跨領域／大型設計按需讀取 ADR 並釐清需求。保留工作樹中與任務無關的修改。
+- **介面修改先臨時、再永久（使用者定案）**：使用者要求改 UI 時，先用 CDP 在執行中的頁面臨時注入樣式或腳本（Windows 用 9222 埠；Android 要裝 debug 版 `npm run android:build:arm64`，`fast` 與 release 版連不上 WebView），讓使用者在真機上看效果；使用者滿意並明確同意後，才派工寫成永久程式。臨時改動只在頁面上，重新載入即消失，量測用的探針量完立刻關掉。
 - 每次修改程式碼、設定或文件後提交 Git；只 stage 本次修改。新檔優先 UTF-8 BOM，依工具鏈既有格式例外處理。README 變更需同步 `README.md`、`README_TW.md`。
 - 建置、替換 Windows 執行檔、重新啟動播放器與安裝 APK 由主工作階段執行；子代理只修改程式碼與執行測試。
 - 建置時間上限：`release:windows:fast` 5 分鐘、`android:build:arm64:fast` 10 分鐘、`release:windows` 15 分鐘、`android:build:arm64:release` 20 分鐘。建置輸出一律導向記錄檔（`> <log> 2>&1`），不得接管線（`| Select-Object`），因為 Gradle daemon 會一直佔住管線，指令不會結束；背景建置要同時設定到期檢查。到了上限就檢查產物（exe／APK 的修改時間是否晚於開始時間、記錄檔最後幾行、`cargo`／`rustc`／Gradle 是否還在執行）：產物已產生且沒有編譯程序就視為完成，停止該背景工作並繼續；仍在編譯就回報實際進度；卡住或失敗就讀記錄檔找原因，不得乾等。
