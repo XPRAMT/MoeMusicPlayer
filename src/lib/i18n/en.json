@@ -748,7 +748,7 @@
   "DSD 直通（獨佔模式）": "DSD passthrough (exclusive mode)",
   "DSD 直通只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。": "DSD passthrough is only used in exclusive mode; choose exclusive under \"Output mode\" above first.",
   "DSD 直通無法使用：{0}": "DSD passthrough is unavailable: {0}",
-  "DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。": "DSD files go to the USB audio device unchanged, with no PCM conversion. The gain and output sample rate above and the player volume do not apply; set the volume on the audio device or amplifier. Only stereo DSD64, DSD128 and DSD256 DSF files are supported; the device must offer the matching sample rate, otherwise that track is converted to PCM automatically.",
+  "DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。": "DSD files go to the USB audio device unchanged, with no PCM conversion. The gain and output sample rate above and the player volume do not apply; set the volume on the audio device or amplifier. Only stereo DSD64, DSD128 and DSD256 in DSF and WavPack-DSD files are supported; the device must offer the matching sample rate, otherwise that track is converted to PCM automatically.",
   "DSD{0} 超出 USB 音訊的取樣率上限": "DSD{0} is beyond the sample rate limit of USB audio",
   "USB 獨佔輸出無法使用": "The USB exclusive output cannot be used",
   "DSD 增益": "DSD gain",
