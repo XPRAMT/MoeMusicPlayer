@@ -75,6 +75,15 @@
   background-clip: padding-box;
 }
 
+/* List headers and group rows are never text-selectable (a missed column-resize drag must not select text). */
+.track-table-head,
+.track-list-header,
+.paged-virtual-header,
+.list-group-row-surface {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 * {
   box-sizing: border-box;
 }

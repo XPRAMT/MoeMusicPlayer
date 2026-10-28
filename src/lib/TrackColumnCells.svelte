@@ -272,9 +272,9 @@
   .column-resize-handle {
     position: absolute;
     top: 0;
-    right: -5px;
+    right: -10px;
     z-index: 2;
-    width: 10px;
+    width: 20px;
     height: 100%;
     cursor: col-resize;
     touch-action: none;
@@ -285,7 +285,7 @@
     position: absolute;
     top: 20%;
     bottom: 20%;
-    left: 4px;
+    left: 9px;
     width: 1px;
     border-radius: 1px;
     background: var(--divider-color);
