@@ -803,6 +803,23 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * USB exclusive test (ADR 0046, P0, development only): USB permission, `openDevice`, then the Rust run on its own
+     * thread, which detaches the kernel driver, plays `path` straight over usbfs and gives the DAC back. Answers
+     * `{ started, reason }` as soon as the run started (or could not).
+     */
+    @Command
+    fun usbExclusiveStart(invoke: Invoke) {
+        val path = JSONObject(invoke.getArgs().toString()).optString("path", "")
+        activity.runOnUiThread {
+            try {
+                UsbExclusiveTest.start(activity, path) { result -> invoke.resolve(JSObject(result.toString())) }
+            } catch (error: Exception) {
+                invoke.reject("Could not start the USB exclusive test: ${error.message}")
+            }
+        }
+    }
+
     /** The user chose another output device: the playback service pins the player to it whenever it is attached. */
     @Command
     @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])

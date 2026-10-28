@@ -90,6 +90,9 @@ mod android_output;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_playback;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(test, allow(dead_code))]
+mod android_usb_exclusive;
 mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
@@ -7670,6 +7673,92 @@ async fn android_usb_audio_descriptors(
     }
 }
 
+/// USB exclusive test (ADR 0046, P0, development only): play the current local 16-bit stereo FLAC for at most 30 s
+/// straight to the USB DAC over usbfs, bypassing the Android audio system, then hand the DAC back to the kernel driver.
+/// Refused while the player plays. Answers `{ running, report }` at once (the test runs on its own thread); null on
+/// other platforms.
+#[tauri::command]
+async fn android_usb_exclusive_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let snapshot = android_playback_service(&state)?.snapshot();
+        android_usb_exclusive::refuse_while_playing(&snapshot.state)?;
+        let track = snapshot
+            .current_track
+            .ok_or_else(|| "沒有目前曲目".to_owned())?;
+        let database = state
+            .database
+            .as_ref()
+            .ok_or_else(|| "曲庫資料庫無法使用".to_owned())?;
+        let path = database
+            .track_locators(track.id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find_map(|locator| match locator {
+                MediaLocator::FileSystem(path) if path.is_file() => Some(path),
+                _ => None,
+            })
+            .ok_or_else(|| "只支援本機 FLAC 檔".to_owned())?;
+        android_usb_exclusive::check_track(&path)?;
+        android_usb_exclusive::begin()?;
+        let payload = serde_json::json!({ "path": path.to_string_lossy() });
+        let answer = tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output("usbExclusiveStart", payload)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|answer| answer);
+        match answer {
+            Ok(answer) if answer["started"] == true => {}
+            Ok(answer) => android_usb_exclusive::fail_start(
+                answer["reason"]
+                    .as_str()
+                    .unwrap_or("無法開始 USB 獨佔試播")
+                    .to_owned(),
+            ),
+            Err(error) => android_usb_exclusive::fail_start(error),
+        }
+        Ok(android_usb_exclusive::status())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, state);
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// Stop the USB exclusive test (ADR 0046); the DAC is handed back as the run ends. Null on other platforms.
+#[tauri::command]
+fn android_usb_exclusive_stop() -> serde_json::Value {
+    #[cfg(target_os = "android")]
+    {
+        android_usb_exclusive::request_stop();
+        android_usb_exclusive::status()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        serde_json::Value::Null
+    }
+}
+
+/// Whether the USB exclusive test runs and the report of the last one (ADR 0046). Null on other platforms.
+#[tauri::command]
+fn android_usb_exclusive_status() -> serde_json::Value {
+    #[cfg(target_os = "android")]
+    {
+        android_usb_exclusive::status()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        serde_json::Value::Null
+    }
+}
+
 /// Persist the interface language and tell every window (each reloads itself to apply it).
 #[tauri::command]
 fn settings_set_language(
@@ -12961,6 +13050,9 @@ pub fn run() {
             android_audio_output_status,
             android_request_bluetooth_connect,
             android_usb_audio_descriptors,
+            android_usb_exclusive_start,
+            android_usb_exclusive_stop,
+            android_usb_exclusive_status,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,

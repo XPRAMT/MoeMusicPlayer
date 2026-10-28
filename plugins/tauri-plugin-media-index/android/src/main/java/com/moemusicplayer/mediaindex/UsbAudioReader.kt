@@ -37,7 +37,7 @@ internal object UsbAudioReader {
     private fun isAudio(device: UsbDevice): Boolean =
         (0 until device.interfaceCount).any { device.getInterface(it).interfaceClass == UsbConstants.USB_CLASS_AUDIO }
 
-    private fun audioDevices(usb: UsbManager): List<UsbDevice> =
+    internal fun audioDevices(usb: UsbManager): List<UsbDevice> =
         usb.deviceList.values.filter(::isAudio).sortedBy { it.deviceName }
 
     /**
@@ -113,7 +113,7 @@ internal object UsbAudioReader {
         )
     }
 
-    private fun askInTurn(context: Context, usb: UsbManager, main: Handler, devices: List<UsbDevice>, then: () -> Unit) {
+    internal fun askInTurn(context: Context, usb: UsbManager, main: Handler, devices: List<UsbDevice>, then: () -> Unit) {
         val device = devices.firstOrNull() ?: return then()
         var answered = false
         lateinit var receiver: BroadcastReceiver
@@ -193,7 +193,7 @@ internal object UsbAudioReader {
     }
 
     /** logcat cuts a line at about 4 kB: the JSON goes out in numbered parts, read back with `adb logcat -s MoeMediaIndex`. */
-    private fun logInParts(prefix: String, text: String) {
+    internal fun logInParts(prefix: String, text: String) {
         val parts = maxOf((text.length + LOG_CHUNK - 1) / LOG_CHUNK, 1)
         for (i in 0 until parts) {
             Log.i(TAG, "$prefix ${i + 1}/$parts: ${text.substring(i * LOG_CHUNK, minOf(text.length, (i + 1) * LOG_CHUNK))}")
