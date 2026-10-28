@@ -196,6 +196,7 @@
     createStartPageSaver,
     lateRestoreStillWanted,
     nowPlayingRestoreAction,
+    startTimingMark,
     planStartRestore,
     resolveStartPage,
     startPageFromState,
@@ -1564,12 +1565,15 @@
     const action = nowPlayingRestoreAction({
       hasCurrentTrack: Boolean(playback?.currentTrack),
       timedOut: nowPlayingRestoreTimedOut,
+      stillOpen: isNowPlayingOpen,
     });
     if (action === 'wait') return;
     nowPlayingRestoreWanted = false;
     if (nowPlayingRestoreTimer !== undefined) clearTimeout(nowPlayingRestoreTimer);
     nowPlayingRestoreTimer = undefined;
-    if (action === 'open') untrack(() => void openNowPlaying());
+    if (action === 'open') startTimingMark('current track known');
+    // No track after the wait: the empty page is not worth showing, go back to the page underneath.
+    if (action === 'drop') untrack(() => void closeNowPlaying());
   });
 
   /** Open the page remembered from the last run, unless this start has its own intent (ADR 0053). */
@@ -1586,14 +1590,24 @@
 
   /** Pages that need no lookup open before anything else loads, so the library does not flash first. */
   function applyDirectStartPage(plan: StartPagePlan): void {
-    if (!plan.restore || startPageKind(plan.page) !== 'direct') return;
-    activeView = plan.page.view as View;
-    if (plan.page.settingsSection) settingsSection = plan.page.settingsSection as SettingsSection;
+    if (!plan.restore) return;
+    if (startPageKind(plan.page) === 'direct') {
+      activeView = plan.page.view as View;
+      if (plan.page.settingsSection) settingsSection = plan.page.settingsSection as SettingsSection;
+    }
     startNowPlayingRestore(plan.page.nowPlaying);
   }
 
+  /**
+   * The Now Playing page opens at once, before the playback snapshot, the session restore or the artwork are
+   * there (it is null-safe: placeholder cover, empty title); the track fills in when it arrives (ADR 0053).
+   */
   function startNowPlayingRestore(wanted: boolean): void {
     if (!wanted) return;
+    startTimingMark('now playing opened');
+    nowPlayingReturnView = activeView;
+    isNowPlayingMounted = true;
+    isNowPlayingOpen = true;
     nowPlayingRestoreTimedOut = false;
     nowPlayingRestoreWanted = true;
     nowPlayingRestoreTimer = setTimeout(() => {
@@ -1636,7 +1650,8 @@
             rememberedAlbumView = 'album-detail';
             activeView = 'album-detail';
           }
-          startNowPlayingRestore(page.nowPlaying);
+          // The Now Playing page may already be open over the page that was lookup-pending.
+          if (isNowPlayingOpen) nowPlayingReturnView = activeView;
         }
       }
     } finally {
@@ -1769,6 +1784,7 @@
       unlistenSyncProgress = unlistenProgress;
       unlistenSyncFinished = unlistenFinished;
       const startPagePlan = await startPagePlanRequest;
+      startTimingMark('last page read');
       const viewAtStart = activeView;
       applyDirectStartPage(startPagePlan);
       await Promise.all([

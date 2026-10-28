@@ -11,6 +11,7 @@ import {
   lateRestoreStillWanted,
   normalizeStartPage,
   nowPlayingRestoreAction,
+  startTimingMark,
   planStartRestore,
   resolveStartPage,
   startPageFromState,
@@ -122,8 +123,8 @@ test('pages with a target wait for it; a missing target is the default page', ()
   assert.deepEqual([playlist, artist, album].map(startPageKind), ['playlist', 'artist', 'album']);
 
   assert.equal(resolveStartPage(playlist, { playlistIds: ['p0', 'p1'] }), playlist);
-  assert.deepEqual(resolveStartPage(playlist, { playlistIds: ['p0'] }), DEFAULT_START_PAGE);
-  assert.deepEqual(resolveStartPage(playlist, {}), DEFAULT_START_PAGE);
+  assert.deepEqual(resolveStartPage(playlist, { playlistIds: ['p0'] }), { ...DEFAULT_START_PAGE, nowPlaying: true });
+  assert.deepEqual(resolveStartPage(playlist, {}), { ...DEFAULT_START_PAGE, nowPlaying: true });
   assert.equal(resolveStartPage(artist, { artistFound: true }), artist);
   assert.deepEqual(resolveStartPage(artist, { artistFound: false }), DEFAULT_START_PAGE);
   assert.equal(resolveStartPage(album, { albumFound: true }), album);
@@ -137,11 +138,43 @@ test('a late restore does not undo the user navigating meanwhile', () => {
   assert.equal(lateRestoreStillWanted('queue', 'library'), false);
 });
 
-test('the Now Playing page waits for a current track, then opens, or gives up', () => {
+test('the Now Playing page is open at once; it then completes, is cancelled by the user, or gives up', () => {
   assert.equal(nowPlayingRestoreAction({ hasCurrentTrack: false, timedOut: false }), 'wait');
   assert.equal(nowPlayingRestoreAction({ hasCurrentTrack: true, timedOut: false }), 'open');
   assert.equal(nowPlayingRestoreAction({ hasCurrentTrack: true, timedOut: true }), 'open');
   assert.equal(nowPlayingRestoreAction({ hasCurrentTrack: false, timedOut: true }), 'drop');
+  // The user closed the page while it waited: nothing is closed again, nothing is reopened.
+  assert.equal(nowPlayingRestoreAction({ hasCurrentTrack: false, timedOut: true, stillOpen: false }), 'cancel');
+  assert.equal(nowPlayingRestoreAction({ hasCurrentTrack: true, timedOut: false, stillOpen: false }), 'cancel');
+});
+
+test('a missing page target keeps the Now Playing flag (the page opens over the library)', () => {
+  const album = normalizeStartPage({ view: 'album-detail', albumKey: 'b', nowPlaying: true });
+  assert.deepEqual(resolveStartPage(album, {}), { ...DEFAULT_START_PAGE, nowPlaying: true });
+});
+
+test('the Now Playing restore does not wait for the playback snapshot', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const start = app.slice(app.indexOf('function startNowPlayingRestore'));
+  const body = start.slice(0, start.indexOf('\n  }\n'));
+  assert.match(body, /isNowPlayingOpen = true/);
+  assert.doesNotMatch(body, /currentTrack/);
+});
+
+test('start timing marks print only when switched on', () => {
+  const lines = [];
+  const info = console.info;
+  console.info = (line) => lines.push(line);
+  try {
+    startTimingMark('off');
+    globalThis.localStorage = { getItem: (name) => (name === 'moe.startTiming' ? '1' : null) };
+    startTimingMark('on');
+  } finally {
+    console.info = info;
+    delete globalThis.localStorage;
+  }
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /\[start-timing\] on @ \d+ ms/);
 });
 
 function fakeClock() {

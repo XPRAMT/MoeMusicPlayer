@@ -139,17 +139,18 @@ export function startPageKind(page) {
 }
 
 /**
- * After the lookup: the page itself when its target still exists, otherwise the default start page (silently,
- * including the Now Playing flag).
+ * After the lookup: the page itself when its target still exists, otherwise the default start page (silently; the
+ * Now Playing flag is its own target and stays).
  * @param {StartPage} page
  * @param {{ playlistIds?: readonly string[], artistFound?: boolean, albumFound?: boolean }} found
  * @returns {StartPage}
  */
 export function resolveStartPage(page, found) {
   const kind = startPageKind(page);
-  if (kind === 'playlist' && !(found.playlistIds ?? []).includes(page.playlistId ?? '')) return { ...DEFAULT_START_PAGE };
-  if (kind === 'artist' && found.artistFound !== true) return { ...DEFAULT_START_PAGE };
-  if (kind === 'album' && found.albumFound !== true) return { ...DEFAULT_START_PAGE };
+  const fallback = { ...DEFAULT_START_PAGE, nowPlaying: page.nowPlaying };
+  if (kind === 'playlist' && !(found.playlistIds ?? []).includes(page.playlistId ?? '')) return fallback;
+  if (kind === 'artist' && found.artistFound !== true) return fallback;
+  if (kind === 'album' && found.albumFound !== true) return fallback;
   return page;
 }
 
@@ -162,14 +163,30 @@ export function lateRestoreStillWanted(currentView, viewAtStart) {
 }
 
 /**
- * The remembered Now Playing page opens once the playback snapshot names a current track (the session may still be
- * restoring when the first snapshot arrives, so it waits); it is dropped when the wait ran out.
- * @param {{ hasCurrentTrack: boolean, timedOut: boolean }} state
- * @returns {'wait' | 'open' | 'drop'}
+ * The remembered Now Playing page is opened at once, empty; this decides what happens next. 'open': the playback
+ * snapshot named a current track, the page is complete. 'cancel': the user closed it meanwhile (nothing to do).
+ * 'drop': the wait ran out with no track (the page goes back to the page underneath). The session may still be restoring when
+ * the first snapshot arrives, so it waits.
+ * @param {{ hasCurrentTrack: boolean, timedOut: boolean, stillOpen?: boolean }} state
+ * @returns {'wait' | 'open' | 'drop' | 'cancel'}
  */
-export function nowPlayingRestoreAction({ hasCurrentTrack, timedOut }) {
+export function nowPlayingRestoreAction({ hasCurrentTrack, timedOut, stillOpen = true }) {
+  if (!stillOpen) return 'cancel';
   if (hasCurrentTrack) return 'open';
   return timedOut ? 'drop' : 'wait';
+}
+
+/**
+ * Startup timeline marks, printed to the console only when localStorage `moe.startTiming` is "1".
+ * @param {string} label
+ */
+export function startTimingMark(label) {
+  try {
+    if (globalThis.localStorage?.getItem('moe.startTiming') !== '1') return;
+    console.info(`[start-timing] ${label} @ ${Math.round(globalThis.performance?.now?.() ?? 0)} ms`);
+  } catch {
+    // Timing is a diagnostic only.
+  }
 }
 
 /**
