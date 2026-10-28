@@ -26,6 +26,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 - **Android 裝置**（`docs/status/android-platform.md`）：手機 NX809J（`adb connect 192.168.1.10:5555`，位址可能改變）與平板 23046RP50C（192.168.1.92，無線偵錯埠每次不同，先 `adb mdns services` 找埠再 `adb connect`）；連得上的都以 `adb -s <序號> install -r <apk>` 安裝並測試驗收，連不上的略過，結案報告註明哪台已安裝與測試、哪台略過。任何裝置都不得重新啟動。啟動 App 一律 `adb -s <序號> shell am start -n com.moemusicplayer.app/.MainActivity`，**不得用 `adb shell monkey`**（會打開 NX809J 的自動旋轉）。用 adb 操作畫面前先確認方向，不在使用者手持操作時點擊。使用者測試音訊時，不在裝置上執行 `dumpsys media.audio_flinger` 這類重型 dump（除非事先談好；dump 規則見 ADR 0048）。
 - **Android 建置**：`npm run android:build:arm64`（debug）；日常小修改用 `npm run android:build:arm64:fast`（同一把金鑰、不做 LTO、不產 AAB，輸出 `release/moemusicplayer-android-arm64-fast.apk`，可直接覆蓋安裝）；使用者說「上傳 github」時才跑完整最佳化版 `npm run android:build:arm64:release`（ADR 0023）。Android 專屬程式碼只在 aarch64-linux-android 目標編譯，變更共用 Rust 後須實際跑一次 APK 建置。release 版不可除錯，WebView CDP 驗收用 debug 版。
+- **共同功能不得區分平台（使用者定案）**：Windows 與 Android 都有的功能，行為、規則、介面、數值與資料流必須相同，共用同一份程式（Rust 核心、前端元件、純函式）；只有平台才有的功能（例如 Windows 的 DoP／工作列歌詞、Android 的藍牙／USB 獨佔）可以不同。不得為共同功能寫只在某平台生效的分支、預設值或規則；發現既有分支一律改為共用。兩份實作時必須有共用測試向量。
 - **Android 權限**：懸浮窗權限只能由使用者在系統設定頁開啟，禁止 adb 授權；權限提示一律先顯示說明面板、按「前往授權」才請求（ADR 0039，規則見 `src/lib/AGENTS.md`）。
 - **授權補充**：不得複製 Spek 的 GPL 程式碼（頻譜圖「Spek」配色是依色階重新實作）；GPL／AGPL 禁令見「授權與定位」。
 - **機密與使用者資料**：SMB 測試帳密（使用者的 `Downloads\smb.txt`）不得寫進程式、文件或日誌；不得觸碰 `UserData/`；`待辦清單.md` 除使用者明確要求外不得編輯。
