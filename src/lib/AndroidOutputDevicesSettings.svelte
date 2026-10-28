@@ -58,9 +58,8 @@
   import {
     androidOutputHeader,
     androidOutputModes,
-    bluetoothCodecNotice,
     bluetoothCodecSection,
-    bluetoothRateNotice,
+    bluetoothPermissionNotice,
     buildAndroidRows,
     buildCodecRows,
     moveCodecInOrder,
@@ -179,7 +178,7 @@
     }
   }
 
-  let btRateNotice = $derived(bluetoothRateNotice(btRate.enabled, mixerSource.status));
+  let btNotice = $derived(bluetoothPermissionNotice(mixerSource.status));
 
   // ---- Bluetooth codec priority list (ADR 0052): a switch and a list the user reorders by long-press drag (the same
   // gesture as 設定 → 曲目欄位). The order is one list for every headset; with the switch off it is still editable and
@@ -503,7 +502,7 @@
 {#if mixerRateEntryVisible(mixerSource.status)}
   <p class="mixer-source-line">
     {mixerRateSummary(mixerSource.status)}
-    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('前往授權')}</button>
   </p>
 {/if}
 
@@ -578,6 +577,13 @@
   </div>
 </div>
 
+{#if btNotice}
+  <p class="mixer-source-line">
+    {btNotice}
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('前往授權')}</button>
+  </p>
+{/if}
+
 <label class="bluetooth-rate-follow">
   <input
     type="checkbox"
@@ -590,21 +596,9 @@
     <small>{tr('換歌時把藍牙編碼的取樣率改成接近這首歌的值（需要 root 或 Shizuku）。')}</small>
   </span>
 </label>
-{#if btRateNotice}
-  <p class="mixer-source-line">
-    {btRateNotice}
-    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
-  </p>
-{/if}
 {#if btRate.failure}<p class="source-error-message" role="alert">{btRate.failure}</p>{/if}
 
-{#if codecSection === 'notice'}
-  <p class="mixer-source-line">
-    {bluetoothCodecNotice()}
-    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
-  </p>
-{:else}
-  <label class="bluetooth-rate-follow">
+<label class="bluetooth-rate-follow">
     <input
       type="checkbox"
       checked={btCodec.custom}
@@ -618,7 +612,7 @@
   </label>
   {#if codecSection === 'connect'}
     <p class="mixer-source-line">{tr('連接藍牙耳機後可選擇編碼')}</p>
-  {:else}
+  {:else if codecSection === 'list'}
     <ol class="track-column-settings bluetooth-codec-list" use:longPressDragGuard={() => codecDrag !== null} aria-label={tr('藍牙編碼順序')}>
       {#each codecRows as row, index (row.key)}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -648,7 +642,6 @@
     {#if codecDevice?.error}<p class="source-error-message" role="alert">{tr('無法切換藍牙編碼')}</p>{/if}
   {/if}
   {#if btCodec.failure}<p class="source-error-message" role="alert">{btCodec.failure}</p>{/if}
-{/if}
 
 
 <dialog

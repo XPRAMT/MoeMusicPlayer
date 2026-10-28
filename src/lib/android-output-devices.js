@@ -22,17 +22,16 @@ export function bluetoothRateSourceAvailable(sources) {
 }
 
 /**
- * The short notice under the switch: why it does nothing yet. Null when it can work (or the sources are not known).
- * @param {boolean} enabled
+ * The one short notice of the 「藍牙」 section: the sample-rate follow and the codec switching both need root or an
+ * authorized Shizuku. Null when one exists (or the sources are not known), so it is shown only while a permission is
+ * missing.
  * @param {import('./ipc').AndroidMixerRateSourceStatus | null | undefined} sources
  * @returns {string | null}
  */
-export function bluetoothRateNotice(enabled, sources) {
-  const available = bluetoothRateSourceAvailable(sources);
-  if (available !== false) return null;
-  return enabled
-    ? tr('需要 root 或已授權的 Shizuku 才能切換藍牙取樣率；目前沒有，所以不會變更。')
-    : tr('此功能需要 root 或已授權的 Shizuku。');
+export function bluetoothPermissionNotice(sources) {
+  return bluetoothRateSourceAvailable(sources) === false
+    ? tr('藍牙取樣率跟隨與編碼切換需要 root 或已授權的 Shizuku。')
+    : null;
 }
 
 /**
@@ -384,7 +383,8 @@ export const DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM = false;
 
 /**
  * What the 「藍牙」 codec section shows, from the privileged sources and the codecs the service reported.
- * `notice`: neither root nor an authorized Shizuku, so only the short permission notice (no switch, no list);
+ * `notice`: neither root nor an authorized Shizuku, so nothing can be applied and the list is not shown (the switch
+ * row stays; the section's one permission notice explains);
  * `connect`: the phone's codec list is not known yet, so the plain line; `list`: the switch and the list.
  * The sources not being read yet counts as available (nothing is shown that could be wrong).
  * @param {import('./ipc').AndroidMixerRateSourceStatus | null | undefined} sources
@@ -394,11 +394,6 @@ export const DEFAULT_ANDROID_BLUETOOTH_CODEC_CUSTOM = false;
 export function bluetoothCodecSection(sources, choices) {
   if (bluetoothRateSourceAvailable(sources) === false) return 'notice';
   return (choices?.local?.length ?? 0) > 0 ? 'list' : 'connect';
-}
-
-/** The permission notice that replaces the switch and the list. @returns {string} */
-export function bluetoothCodecNotice() {
-  return tr('需要 root 或已授權的 Shizuku 才能切換藍牙編碼。');
 }
 
 /**

@@ -28,6 +28,7 @@ test('no root and no Shizuku: the explanation offers the root check first', () =
   const panel = mixerRatePanel(status('none'));
   assert.deepEqual(panel.buttons.map((b) => b.action), ['checkRoot']);
   assert.equal(panel.buttons[0].primary, true);
+  assert.equal(panel.buttons[0].label, '授權');
   const installed = mixerRatePanel(status('none', { shizukuInstalled: true }));
   assert.deepEqual(installed.buttons.map((b) => b.action), ['checkRoot', 'openShizuku']);
 });
@@ -41,7 +42,7 @@ test('Shizuku installed but not running offers to open it', () => {
 test('a permission the user can still give is requested only by a button', () => {
   const panel = mixerRatePanel(status('shizukuNeedsPermission'));
   assert.equal(panel.buttons[0].action, 'requestShizuku');
-  assert.equal(panel.buttons[0].label, '前往授權');
+  assert.equal(panel.buttons[0].label, '授權');
 });
 
 test('denied for good points to the Shizuku app, not to a request', () => {
@@ -72,5 +73,17 @@ test('the settings entry shows only while root and an authorized Shizuku are bot
   }
   for (const state of ['rootActive', 'shizukuActive', 'tripped', 'disabled']) {
     assert.equal(mixerRateEntryVisible(status(state)), false, state);
+  }
+});
+
+test('the one panel names all three features that need root or Shizuku and no button is labelled 設定', () => {
+  for (const state of ['none', 'shizukuNotRunning', 'shizukuDenied', 'shizukuNeedsPermission']) {
+    const panel = mixerRatePanel(status(state));
+    const text = panel.paragraphs.join('\n');
+    assert.match(text, /系統（混音）取樣率/, state);
+    assert.match(text, /藍牙取樣率跟隨曲目/, state);
+    assert.match(text, /藍牙編碼切換/, state);
+    assert.equal(panel.buttons[0].label, '授權', state);
+    assert.ok(panel.buttons.every((b) => b.label !== '設定' && b.label !== '前往授權'), state);
   }
 });

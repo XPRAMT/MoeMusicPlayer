@@ -6,7 +6,7 @@ import {
   androidOutputHeader,
   androidOutputModes,
   bluetoothCodecSection,
-  bluetoothRateNotice,
+  bluetoothPermissionNotice,
   bluetoothRateSourceAvailable,
   buildAndroidRows,
   buildCodecRows,
@@ -517,20 +517,17 @@ test('Bluetooth sample-rate follow is off by default on both sides and saved by 
   assert.match(component, /settings_get_android_bluetooth_rate_follow/);
 });
 
-test('the Bluetooth rate switch shows a notice only when neither root nor an authorized Shizuku exists', () => {
+test('the Bluetooth section shows one notice only when neither root nor an authorized Shizuku exists', () => {
   const sources = (root, shizuku) => ({ state: 'none', root, shizuku, shizukuInstalled: false, source: 'platform' });
   assert.equal(bluetoothRateSourceAvailable(null), null);
   assert.equal(bluetoothRateSourceAvailable(sources('available', 'not_installed')), true);
   assert.equal(bluetoothRateSourceAvailable(sources('unavailable', 'granted')), true);
   assert.equal(bluetoothRateSourceAvailable(sources('unknown', 'needs_permission')), false);
-  assert.equal(bluetoothRateNotice(true, null), null);
-  assert.equal(bluetoothRateNotice(true, sources('available', 'not_installed')), null);
-  assert.ok(bluetoothRateNotice(true, sources('unavailable', 'not_running')));
-  assert.ok(bluetoothRateNotice(false, sources('unavailable', 'not_running')));
-  assert.notEqual(
-    bluetoothRateNotice(true, sources('unavailable', 'not_running')),
-    bluetoothRateNotice(false, sources('unavailable', 'not_running')),
-  );
+  // One notice for the whole 「藍牙」 section, only while a permission is missing.
+  assert.equal(bluetoothPermissionNotice(null), null);
+  assert.equal(bluetoothPermissionNotice(sources('available', 'not_installed')), null);
+  assert.equal(bluetoothPermissionNotice(sources('unavailable', 'granted')), null);
+  assert.ok(bluetoothPermissionNotice(sources('unavailable', 'not_running')));
 });
 
 // ---- Bluetooth codec priority list (ADR 0052) ----
@@ -619,4 +616,13 @@ test('the list refers to the headset that plays, else the first one with codec d
   assert.equal(pickCodecDevice({ ...status, routed: null }).address, 'AA:BB:CC:DD:EE:01');
   assert.equal(pickCodecDevice({ bluetoothCodecChoices: { local: codecLocal, devices: {} } }), null);
   assert.equal(pickCodecDevice(null), null);
+});
+
+test('the 「藍牙」 section has one permission button and no button is labelled 設定', () => {
+  const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
+  assert.doesNotMatch(component, /tr\('設定'\)/);
+  const bluetooth = component.slice(component.indexOf('<h3>{tr("藍牙")}</h3>'), component.indexOf('<dialog'));
+  assert.equal(bluetooth.match(/openMixerPanel/g)?.length, 1);
+  const devices = component.slice(component.indexOf('{#if mixerRateEntryVisible'), component.indexOf('<div class="output-device-list"'));
+  assert.equal(devices.match(/openMixerPanel/g)?.length, 1);
 });
