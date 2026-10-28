@@ -1429,6 +1429,11 @@ interface IpcContract {
     args: Record<string, never>;
     result: StartPageRestore;
   };
+  /** Android 「開啟方式」 (ADR 0054): take the file another app opened and play it; false when none waits. */
+  android_external_open: {
+    args: Record<string, never>;
+    result: boolean;
+  };
   settings_set_last_page: {
     args: { page: LastPageSettings };
     result: void;

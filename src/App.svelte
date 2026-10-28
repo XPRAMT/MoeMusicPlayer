@@ -202,6 +202,7 @@
     startPageFromState,
     startPageKind,
   } from './lib/start-page.js';
+  import { createExternalOpenTaker } from './lib/external-open.js';
   import { coverZoom, coverZoomFromFractions, coverZoomToFractions, COVER_ZOOM_MIN } from './lib/cover-zoom.js';
   import {
     DSD_GAIN_MAX_DB,
@@ -1557,6 +1558,34 @@
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', flush);
       flush();
+    };
+  });
+
+  /**
+   * A file another app opened with this one (Android 「開啟方式」, ADR 0054): the file plays at once, the queue is its
+   * folder. Asked once the start page is decided (a start with a request keeps the remembered page out of the way), when
+   * a running app is sent a new request, and when the app comes forward again.
+   */
+  $effect(() => {
+    if (!isTauri() || !isAndroidPlatform || !startPageReady) return;
+    const take = createExternalOpenTaker(
+      () => invokeCommand('android_external_open', {}),
+      (error) => {
+        playbackError = getErrorText(error);
+      },
+    );
+    const onExternalOpen = (): void => {
+      void take();
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') void take();
+    };
+    window.addEventListener('moe:android-external-open', onExternalOpen);
+    document.addEventListener('visibilitychange', onVisibility);
+    void take();
+    return () => {
+      window.removeEventListener('moe:android-external-open', onExternalOpen);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   });
 

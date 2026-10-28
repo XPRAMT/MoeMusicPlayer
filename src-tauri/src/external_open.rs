@@ -277,6 +277,8 @@ mod android {
     /// Takes the file another app opened with this one and starts it (ADR 0054). `false`: nothing was waiting.
     pub(super) async fn open(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
         let _database_work = enter_database_work(&state)?;
+        // The service first: a request is taken only when it can be started (else it stays for the next ask).
+        let service = crate::android_playback_service(&state)?.clone();
         let taking = app.clone();
         let request = tauri::async_runtime::spawn_blocking(move || {
             taking
@@ -295,7 +297,6 @@ mod android {
                 request.error.unwrap_or_else(|| "讀不到檔案內容".to_owned())
             ));
         };
-        let service = crate::android_playback_service(&state)?.clone();
         let planning = app.clone();
         let copied = request.copied;
         let plan = tauri::async_runtime::spawn_blocking(move || -> Result<OpenPlan, String> {
