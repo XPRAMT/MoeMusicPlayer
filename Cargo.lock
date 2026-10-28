@@ -3174,6 +3174,7 @@ dependencies = [
  "player-platform-windows",
  "player-remote",
  "player-tags",
+ "player-usb-audio",
  "player-wavpack",
  "player-zh",
  "reqwest 0.12.28",
@@ -4231,6 +4232,17 @@ dependencies = [
  "player-formats",
  "player-wavpack",
  "symphonia",
+]
+
+[[package]]
+name = "player-usb-audio"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "md-5 0.10.6",
+ "player-flac",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

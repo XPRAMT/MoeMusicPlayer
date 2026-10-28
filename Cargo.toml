@@ -8,6 +8,7 @@ members = [
     "crates/player-opus",
     "crates/player-wavpack",
     "crates/player-flac",
+    "crates/player-usb-audio",
     "crates/player-remote",
     "crates/player-track-metadata",
     "crates/player-db",

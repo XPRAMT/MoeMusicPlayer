@@ -1,0 +1,18 @@
+[package]
+name = "player-usb-audio"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "USB Audio Class output over Linux usbfs for the Android USB exclusive test (ADR 0046): descriptor plan, clock requests, feedback, packet sizing"
+
+[dependencies]
+player-flac = { path = "../player-flac" }
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# The FLAC STREAMINFO signature is an MD5 of the raw samples: the bit-exact check of the 16-bit path.
+md-5 = "0.10.6"
+serde_json = "1"
