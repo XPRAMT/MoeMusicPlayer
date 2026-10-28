@@ -34,7 +34,9 @@ impl RemoteFile for Served {
     }
 }
 
-fn served(bytes: Vec<u8>) -> (Served, Arc<Mutex<Vec<(u64, u64)>>>) {
+type Requests = Arc<Mutex<Vec<(u64, u64)>>>;
+
+fn served(bytes: Vec<u8>) -> (Served, Requests) {
     let requests = Arc::new(Mutex::new(Vec::new()));
     (
         Served {
