@@ -13,6 +13,12 @@ internal object DsdPassthroughRules {
     /** Media3 drops this much of the start of a new output's data, which its volume ramp scaled (mirrors Rust `dsd.rs`). */
     const val RAMP_DISCARD_MS = 25
 
+    /** The reason shown when a track cannot be carried, whatever the cause is a file the carrier cannot take. */
+    const val UNSUPPORTED_FILE = "只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD"
+
+    /** The load schemes of a track that may play natively: a local DSF, a local WavPack file, a remote file (local or remote alike). */
+    val PASSTHROUGH_SCHEMES = setOf(DSD_URI_SCHEME, WAVPACK_URI_SCHEME, REMOTE_URI_SCHEME)
+
     /** What the data source reported about the file (`nativeRawPlan`): [reason] is null when it can be carried at [rate]. */
     data class FilePlan(val rate: Int, val reason: String?)
 
@@ -28,10 +34,18 @@ internal object DsdPassthroughRules {
     }
 
     /**
+     * Whether the file's header must be read for the decision (which may mean a round trip to a server, so the caller
+     * does it on a worker thread, before [decide]): the cheap conditions that come before the file in [decide].
+     */
+    fun wantsFilePlan(featureOn: Boolean, isDsd: Boolean, scheme: String?, exclusive: Boolean): Boolean =
+        featureOn && isDsd && scheme in PASSTHROUGH_SCHEMES && exclusive
+
+    /**
      * The decision at load time. The checks run in this order and the lambdas only when everything before them passed
-     * (they read the file and the USB descriptors): the setting, a DSD track, a local `moedsd` DSF, the exclusive mode,
-     * a USB device the mode plays on ([routedToUsb]), its permission, the file (stereo DSD64/128/256), the device (the
-     * rate, the RAW_DATA alt).
+     * (they read the file and the USB descriptors): the setting, a DSD track, a load scheme that can be carried (a
+     * local or remote DSF or WavPack-DSD file; whether the file itself is stereo DSD64/128/256 is the file plan's
+     * answer), the exclusive mode, a USB device the mode plays on ([routedToUsb]), its permission, the file, the device
+     * (the rate, the RAW_DATA alt).
      */
     fun decide(
         featureOn: Boolean,
@@ -44,7 +58,7 @@ internal object DsdPassthroughRules {
         deviceReason: (Int) -> String?,
     ): Decision {
         if (!featureOn || !isDsd) return Decision.Off
-        if (scheme != DSD_URI_SCHEME) return Decision.Pcm("只支援本機的 DSF 檔")
+        if (scheme !in PASSTHROUGH_SCHEMES) return Decision.Pcm(UNSUPPORTED_FILE)
         if (!exclusive) return Decision.Pcm("不是獨佔模式")
         if (!routedToUsb) return Decision.Pcm("沒有 USB 音訊裝置")
         if (!permitted) return Decision.Pcm("未取得 USB 權限")
@@ -54,9 +68,16 @@ internal object DsdPassthroughRules {
         return Decision.Raw(plan.rate)
     }
 
-    /** The raw-slots form of a `moedsd:///…` load URI, or null for anything else. */
-    fun rawUriOf(uri: String): String? =
-        if (uri.startsWith("$DSD_URI_SCHEME:///")) "$DSD_RAW_URI_SCHEME:" + uri.removePrefix("$DSD_URI_SCHEME:") else null
+    /**
+     * The raw-slots form of a load URI, or null for anything else: `moedsd:///…` becomes `moedsdraw:///…`, `moewv:///…`
+     * becomes `moewvraw:///…` and `moeremote://…` becomes `moeremoteraw://…` (the rest unchanged).
+     */
+    fun rawUriOf(uri: String): String? = when {
+        uri.startsWith("$DSD_URI_SCHEME:///") -> "$DSD_RAW_URI_SCHEME:" + uri.removePrefix("$DSD_URI_SCHEME:")
+        uri.startsWith("$WAVPACK_URI_SCHEME:///") -> "$WAVPACK_RAW_URI_SCHEME:" + uri.removePrefix("$WAVPACK_URI_SCHEME:")
+        uri.startsWith("$REMOTE_URI_SCHEME://") -> "$REMOTE_RAW_URI_SCHEME:" + uri.removePrefix("$REMOTE_URI_SCHEME:")
+        else -> null
+    }
 
     /** Reads the answer of `nativeRawPlan`: [FilePlan] with a null reason, or the reason (also for an unreadable answer). */
     fun parseFilePlan(json: String?): FilePlan {

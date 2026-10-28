@@ -507,6 +507,7 @@ class PlaybackService : MediaSessionService() {
                         uri,
                         isDsd,
                         outputRouter?.currentPreference(),
+                        precomputedRawPlans.remove(commandId),
                     )
                     val loadUri = (dsdDecision as? DsdPassthroughRules.Decision.Raw)
                         ?.let { DsdPassthroughRules.rawUriOf(uri) } ?: uri
@@ -632,6 +633,12 @@ class PlaybackService : MediaSessionService() {
 
     private val preparedArtworkBytes = HashMap<String, ByteArray>()
 
+    /**
+     * The file plan of a DSD load (`nativeRawPlan`, ADR 0049), by command id: read on the preflight thread, where a
+     * remote header may take a round trip, and used by the decision on the main thread.
+     */
+    private val precomputedRawPlans = HashMap<String, String>()
+
     private fun dispatchCommand(raw: String) {
         val command = try {
             JSONObject(raw)
@@ -652,7 +659,18 @@ class PlaybackService : MediaSessionService() {
             return
         }
         loadGate.begin(commandId)
-        preflightLoad(commandId, requestId, contentUri) {
+        // A DSD load that may play natively has its file header read on the preflight thread (the setting and the
+        // exclusive switch are read the way the load will read them).
+        val planUri = Uri.parse(contentUri)
+        val wantsPlan = DsdPassthroughRules.wantsFilePlan(
+            readDsdPassthrough() ?: false,
+            metadata.optBoolean("dsd", false),
+            planUri.scheme,
+            readUsbExclusive() ?: UsbExclusiveEngine.enabled,
+        )
+        preflightLoad(commandId, requestId, contentUri, wantsPlan) { rawPlan ->
+            precomputedRawPlans.clear()
+            if (rawPlan != null) precomputedRawPlans[commandId] = rawPlan
             continueLoad(raw, commandId, requestId, contentUri, command, metadata)
         }
     }
@@ -662,10 +680,16 @@ class PlaybackService : MediaSessionService() {
      * [onPassed] goes on to switch tracks. A refused load is answered with an error that says the track that plays was
      * left alone ([rejectLoad]); a load that a newer one replaced, or Rust gave up on, is dropped without an answer.
      */
-    private fun preflightLoad(commandId: String, requestId: String, contentUri: String, onPassed: () -> Unit) {
+    private fun preflightLoad(
+        commandId: String,
+        requestId: String,
+        contentUri: String,
+        wantsPlan: Boolean,
+        onPassed: (rawPlan: String?) -> Unit,
+    ) {
         val preflight = mediaPreflight
         if (preflight == null) {
-            onPassed()
+            onPassed(null)
             return
         }
         preflightCommandId = commandId
@@ -680,6 +704,18 @@ class PlaybackService : MediaSessionService() {
                 } catch (error: Throwable) {
                     PreflightResult.Failed(error.message ?: "Cannot open the file", serverUnreachable = false)
                 }
+                // The file is known to open: its header decides whether it can be carried natively. A failure here is
+                // not a failed load; the track then plays through the PCM converter, as the decision's reason says.
+                val rawPlan = if (wantsPlan && result is PreflightResult.Passed) {
+                    try {
+                        DsdPassthrough.readFilePlan(Uri.parse(contentUri))
+                    } catch (error: Throwable) {
+                        android.util.Log.w("MoeMediaIndex", "DSD passthrough: reading the file header failed: $error")
+                        null
+                    }
+                } else {
+                    null
+                }
                 mainHandler.post {
                     if (serviceDestroyed) return@post
                     if (preflightCommandId == commandId) {
@@ -690,7 +726,7 @@ class PlaybackService : MediaSessionService() {
                     loadGate.finish(commandId)
                     if (!wanted) return@post
                     when (result) {
-                        is PreflightResult.Passed -> onPassed()
+                        is PreflightResult.Passed -> onPassed(rawPlan)
                         is PreflightResult.Failed -> rejectLoad(
                             commandId,
                             requestId,

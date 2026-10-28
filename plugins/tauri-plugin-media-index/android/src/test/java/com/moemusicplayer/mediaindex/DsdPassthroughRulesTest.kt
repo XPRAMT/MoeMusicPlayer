@@ -45,6 +45,45 @@ class DsdPassthroughRulesTest {
     }
 
     @Test
+    fun localAndRemoteDsfAndWavPackDsdAreTreatedAlike() {
+        // The scheme only says where the bytes come from; whether the file can be carried is the file plan's answer.
+        for (scheme in listOf("moedsd", "moewv", "moeremote")) {
+            assertEquals(scheme, DsdPassthroughRules.Decision.Raw(88_200), decide(scheme = scheme))
+            assertEquals(
+                scheme,
+                DsdPassthroughRules.Decision.Pcm("不是雙聲道"),
+                decide(scheme = scheme, filePlan = DsdPassthroughRules.FilePlan(0, "不是雙聲道")),
+            )
+        }
+    }
+
+    @Test
+    fun theFileHeaderIsOnlyWantedWhenTheCheapConditionsBeforeItPass() {
+        fun wants(
+            featureOn: Boolean = true,
+            isDsd: Boolean = true,
+            scheme: String? = "moeremote",
+            exclusive: Boolean = true,
+        ) = DsdPassthroughRules.wantsFilePlan(featureOn, isDsd, scheme, exclusive)
+        for (scheme in listOf("moedsd", "moewv", "moeremote")) assertTrue(scheme, wants(scheme = scheme))
+        assertFalse(wants(featureOn = false))
+        assertFalse(wants(isDsd = false))
+        assertFalse(wants(exclusive = false))
+        for (scheme in listOf("file", "content", "moeflac", "moedsdraw", "moeremoteraw", null)) {
+            assertFalse("$scheme", wants(scheme = scheme))
+        }
+        // It agrees with the decision: whenever the plan is wanted and the route holds, decide reads it, and when it is
+        // not wanted decide never gets that far.
+        for (featureOn in listOf(true, false)) for (isDsd in listOf(true, false)) {
+            for (scheme in listOf("moedsd", "moewv", "moeremote", "file")) for (exclusive in listOf(true, false)) {
+                var read = false
+                decide(featureOn = featureOn, isDsd = isDsd, scheme = scheme, exclusive = exclusive, onFile = { read = true })
+                if (read) assertTrue(wants(featureOn, isDsd, scheme, exclusive))
+            }
+        }
+    }
+
+    @Test
     fun theSettingOffOrANonDsdTrackSaysNothing() {
         assertEquals(DsdPassthroughRules.Decision.Off, decide(featureOn = false))
         assertEquals(DsdPassthroughRules.Decision.Off, decide(isDsd = false))
@@ -58,8 +97,9 @@ class DsdPassthroughRulesTest {
     @Test
     fun everyConditionHasItsOwnReasonAndAnEarlierOneWins() {
         fun pcm(text: String) = DsdPassthroughRules.Decision.Pcm(text)
-        assertEquals(pcm("只支援本機的 DSF 檔"), decide(scheme = "moewv"))
-        assertEquals(pcm("只支援本機的 DSF 檔"), decide(scheme = "moeremote"))
+        assertEquals(pcm("只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD"), decide(scheme = "file"))
+        assertEquals(pcm("只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD"), decide(scheme = "moeflac"))
+        assertEquals(pcm("只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD"), decide(scheme = "moedsdraw"))
         assertEquals(pcm("不是獨佔模式"), decide(exclusive = false))
         assertEquals(pcm("沒有 USB 音訊裝置"), decide(routedToUsb = false))
         assertEquals(pcm("未取得 USB 權限"), decide(permitted = false))
@@ -74,7 +114,7 @@ class DsdPassthroughRulesTest {
         assertEquals(pcm("音響沒有 DSD 取樣率 88.2 kHz"), decide(deviceReason = "音響沒有 DSD 取樣率 88.2 kHz"))
         assertEquals(pcm("音響沒有 DSD 直通格式"), decide(deviceReason = "音響沒有 DSD 直通格式"))
         // Order: scheme before mode before route before permission before file before device.
-        assertEquals(pcm("只支援本機的 DSF 檔"), decide(scheme = null, exclusive = false, routedToUsb = false))
+        assertEquals(pcm("只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD"), decide(scheme = null, exclusive = false, routedToUsb = false))
         assertEquals(pcm("不是獨佔模式"), decide(exclusive = false, routedToUsb = false, permitted = false))
         assertEquals(pcm("沒有 USB 音訊裝置"), decide(routedToUsb = false, permitted = false))
         assertEquals(
@@ -115,16 +155,41 @@ class DsdPassthroughRulesTest {
     }
 
     @Test
-    fun theRawUriReplacesOnlyTheSchemeOfALocalDsdUri() {
+    fun theRawUriReplacesOnlyTheSchemeOfALoadUri() {
         assertEquals("moedsdraw:///storage/emulated/0/a.dsf", DsdPassthroughRules.rawUriOf("moedsd:///storage/emulated/0/a.dsf"))
         assertEquals("moedsdraw:///x/A%20B.dsf", DsdPassthroughRules.rawUriOf("moedsd:///x/A%20B.dsf"))
-        assertNull(DsdPassthroughRules.rawUriOf("moewv:///x/a.wv"))
+        assertEquals("moewvraw:///x/A%20B.wv", DsdPassthroughRules.rawUriOf("moewv:///x/A%20B.wv"))
+        assertEquals("moeremoteraw://id/Music/a%20b.dsf", DsdPassthroughRules.rawUriOf("moeremote://id/Music/a%20b.dsf"))
         assertNull(DsdPassthroughRules.rawUriOf("file:///x/a.dsf"))
-        assertNull(DsdPassthroughRules.rawUriOf("moeremote://id/a.dsf"))
+        assertNull(DsdPassthroughRules.rawUriOf("moeflac:///x/a.flac"))
         assertNull(DsdPassthroughRules.rawUriOf("moedsdraw:///x/a.dsf"))
-        // The raw scheme is one of the schemes the Rust data source serves, and maps back to the file.
-        assertTrue(isRustServedScheme(DSD_RAW_URI_SCHEME))
+        assertNull(DsdPassthroughRules.rawUriOf("moewvraw:///x/a.wv"))
+        assertNull(DsdPassthroughRules.rawUriOf("moeremoteraw://id/a.dsf"))
+        // Every raw scheme is one the Rust data source serves and reads as raw slots; the local ones map back to the file.
+        for (scheme in listOf(DSD_RAW_URI_SCHEME, WAVPACK_RAW_URI_SCHEME, REMOTE_RAW_URI_SCHEME)) {
+            assertTrue(scheme, isRustServedScheme(scheme))
+            assertTrue(scheme, scheme in RAW_URI_SCHEMES)
+        }
+        assertFalse(isRustServedScheme("moeremoterawx"))
         assertEquals("file:///x/a.dsf", fileUriOfConverted("moedsdraw:///x/a.dsf"))
+        assertEquals("file:///x/a.wv", fileUriOfConverted("moewvraw:///x/a.wv"))
+        assertEquals("moeremoteraw://id/a.dsf", fileUriOfConverted("moeremoteraw://id/a.dsf"))
+        assertTrue(isRemoteScheme(REMOTE_URI_SCHEME) && isRemoteScheme(REMOTE_RAW_URI_SCHEME))
+        assertFalse(isRemoteScheme(DSD_RAW_URI_SCHEME))
+    }
+
+    @Test
+    fun anUnreadableAnswerIsAReasonAndAFileTheCarrierCannotTakeSaysSo() {
+        assertEquals(DsdPassthroughRules.FilePlan(0, "無法讀取 DSD 檔案"), DsdPassthroughRules.parseFilePlan(null))
+        assertEquals(DsdPassthroughRules.FilePlan(0, "無法讀取 DSD 檔案"), DsdPassthroughRules.parseFilePlan("not json"))
+        assertEquals(
+            DsdPassthroughRules.FilePlan(0, "不支援直通"),
+            DsdPassthroughRules.parseFilePlan("""{"ok":false}"""),
+        )
+        assertEquals(
+            DsdPassthroughRules.FilePlan(0, "不是 DSF 或 WavPack-DSD 檔案"),
+            DsdPassthroughRules.parseFilePlan("""{"ok":false,"reason":"不是 DSF 或 WavPack-DSD 檔案"}"""),
+        )
     }
 
     @Test

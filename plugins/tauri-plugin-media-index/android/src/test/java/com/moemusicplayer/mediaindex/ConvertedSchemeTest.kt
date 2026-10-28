@@ -8,10 +8,10 @@ import org.junit.Test
 class ConvertedSchemeTest {
     @Test
     fun convertedLocalAndRemoteSchemesAreReadThroughTheRustDataSource() {
-        for (scheme in listOf("moedsd", "moedsdraw", "moewv", "moeflac", "moeremote")) {
+        for (scheme in listOf("moedsd", "moedsdraw", "moewv", "moewvraw", "moeflac", "moeremote", "moeremoteraw")) {
             assertTrue(scheme, isRustServedScheme(scheme))
         }
-        for (scheme in listOf("file", "content", "http", "moeflacx", "moedsdrawx", null)) {
+        for (scheme in listOf("file", "content", "http", "moeflacx", "moedsdrawx", "moeremoterawx", null)) {
             assertFalse("$scheme", isRustServedScheme(scheme))
         }
     }

@@ -14,8 +14,11 @@ internal object DsdPassthrough {
     private const val TAG = "MoeMediaIndex"
 
     /**
-     * Whether the DSD track at [uri] (the `moedsd://` URI Rust sent) plays as raw slots on the USB device or converted to
-     * PCM, with the reason for the card in the second case. [featureOn] is `dsd.nativePassthrough`.
+     * Whether the DSD track at [uri] (the `moedsd://`, `moewv://` or `moeremote://` URI Rust sent) plays as raw slots on
+     * the USB device or converted to PCM, with the reason for the card in the second case. [featureOn] is
+     * `dsd.nativePassthrough`. [rawPlanJson] is the answer of `DsdBridge.nativeRawPlan` for the file, read earlier on
+     * a worker thread (a remote header is a round trip to the server; this runs on the main thread); null when it was
+     * not read or failed.
      */
     fun decide(
         context: Context,
@@ -23,6 +26,7 @@ internal object DsdPassthrough {
         uri: String,
         isDsd: Boolean,
         preference: OutputDevicePreference?,
+        rawPlanJson: String?,
     ): DsdPassthroughRules.Decision {
         val usb = context.getSystemService(Context.USB_SERVICE) as? UsbManager
         val parsed = Uri.parse(uri)
@@ -37,7 +41,7 @@ internal object DsdPassthrough {
                 exclusive = wish.enabled,
                 routedToUsb = route is UsbExclusiveRules.Route.Exclusive,
                 permitted = usb != null && device != null && usb.hasPermission(device),
-                filePlan = { DsdPassthroughRules.parseFilePlan(DsdBridge.nativeRawPlan(parsed.path ?: "")) },
+                filePlan = { DsdPassthroughRules.parseFilePlan(rawPlanJson) },
                 deviceReason = { rate ->
                     val raw = if (usb != null && device != null) UsbExclusiveEngine.descriptorsOf(usb, device) else null
                     if (raw == null) "無法讀取 USB 描述元" else UsbExclusiveNative.nativeSupportsDsd(raw, rate)
@@ -50,6 +54,12 @@ internal object DsdPassthrough {
         Log.i(TAG, "DSD passthrough: ${describe(decision)} (setting=$featureOn dsd=$isDsd scheme=${parsed.scheme})")
         return decision
     }
+
+    /**
+     * The header-based answer of `nativeRawPlan` for the file at [uri]. Blocks while a server answers: call it from a
+     * worker thread (see `PlaybackService.preflightLoad`).
+     */
+    fun readFilePlan(uri: Uri): String? = bridgePathOf(uri)?.let(DsdBridge::nativeRawPlan)
 
     fun describe(decision: DsdPassthroughRules.Decision): String = when (decision) {
         DsdPassthroughRules.Decision.Off -> "off"

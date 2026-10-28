@@ -215,7 +215,7 @@ test('a DSD track converted to PCM although native passthrough is on carries the
   assert.equal(dsdFallbackNotice(''), null);
   // No reason: the line is the one it was.
   assert.equal(describeAndroidExclusive(/** @type {any} */ (pcm))?.notice, 'DSD 已轉成 PCM（不是位元完美）');
-  for (const reason of ['只支援本機的 DSF 檔', '不是獨佔模式', '沒有 USB 音訊裝置', '未取得 USB 權限', '不是雙聲道', 'DSD512 超出 USB 音訊的取樣率上限', '音響沒有 DSD 取樣率 88.2 kHz', '音響沒有 DSD 直通格式']) {
+  for (const reason of ['只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD', '不是 DSF 或 WavPack-DSD 檔案', '這不是 DSD 的 WavPack 檔案', '不是獨佔模式', '沒有 USB 音訊裝置', '未取得 USB 權限', '不是雙聲道', 'DSD512 超出 USB 音訊的取樣率上限', '音響沒有 DSD 取樣率 88.2 kHz', '音響沒有 DSD 直通格式']) {
     assert.match(dsdFallbackNotice(reason) ?? '', /^DSD 直通無法使用：/);
   }
 });

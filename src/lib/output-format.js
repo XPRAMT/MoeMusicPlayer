@@ -271,7 +271,9 @@ export function dsdFallbackNotice(reason) {
  */
 export function translateDsdReason(reason) {
   switch (reason) {
-    case '只支援本機的 DSF 檔': return tr('只支援本機的 DSF 檔');
+    case '只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD': return tr('只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD');
+    case '不是 DSF 或 WavPack-DSD 檔案': return tr('不是 DSF 或 WavPack-DSD 檔案');
+    case '這不是 DSD 的 WavPack 檔案': return tr('這不是 DSD 的 WavPack 檔案');
     case '不是獨佔模式': return tr('不是獨佔模式');
     case '沒有 USB 音訊裝置': return tr('沒有 USB 音訊裝置');
     case '播放裝置不是 USB': return tr('播放裝置不是 USB');
