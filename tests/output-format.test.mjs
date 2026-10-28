@@ -4,6 +4,7 @@ import {
   codecStepName,
   describeAndroidExclusive,
   describeAndroidPath,
+  dsdFallbackNotice,
   describeExclusive,
   describeExclusiveFallback,
   describeMirrorPath,
@@ -190,4 +191,31 @@ test('the Android USB exclusive output uses the Windows exclusive line and says 
   );
   assert.equal(describeAndroidExclusive(null), null);
   assert.equal(describeAndroidExclusive(/** @type {any} */ ({ ...engine, rate: null })), null);
+});
+
+test('native DSD is DSD rate → frame rate（DSD 直通）．channels, with nothing about bits, bit-perfect or volume', () => {
+  const native = { rate: 88_200, channels: 2, bits: 32, notBitPerfect: [], bitPerfect: false, underruns: 0, dsd: true, dsdNative: true, gain: 0.3 };
+  assert.deepEqual(describeAndroidExclusive(/** @type {any} */ (native)), { text: 'DSD64 → 88.2 kHz（DSD 直通）．2 聲道', notice: null });
+  assert.equal(describeAndroidExclusive(/** @type {any} */ ({ ...native, rate: 176_400 }))?.text, 'DSD128 → 176.4 kHz（DSD 直通）．2 聲道');
+  assert.equal(describeAndroidExclusive(/** @type {any} */ ({ ...native, rate: 352_800 }))?.text, 'DSD256 → 352.8 kHz（DSD 直通）．2 聲道');
+  const text = describeAndroidExclusive(/** @type {any} */ (native))?.text ?? '';
+  assert.doesNotMatch(text, /位元完美|bit|獨佔/);
+  // A fallback reason does not belong to a track that plays natively.
+  assert.equal(describeAndroidExclusive(/** @type {any} */ (native), '不是雙聲道')?.notice, null);
+});
+
+test('a DSD track converted to PCM although native passthrough is on carries the reason in its notice', () => {
+  const pcm = { rate: 176_400, channels: 2, bits: 24, notBitPerfect: ['dsd'], bitPerfect: false, underruns: 0, dsd: true };
+  assert.equal(
+    describeAndroidExclusive(/** @type {any} */ (pcm), '沒有 USB 音訊裝置')?.notice,
+    'DSD 已轉成 PCM（不是位元完美）；DSD 直通無法使用：沒有 USB 音訊裝置',
+  );
+  assert.equal(dsdFallbackNotice('不是雙聲道'), 'DSD 直通無法使用：不是雙聲道');
+  assert.equal(dsdFallbackNotice(null), null);
+  assert.equal(dsdFallbackNotice(''), null);
+  // No reason: the line is the one it was.
+  assert.equal(describeAndroidExclusive(/** @type {any} */ (pcm))?.notice, 'DSD 已轉成 PCM（不是位元完美）');
+  for (const reason of ['只支援本機的 DSF 檔', '不是獨佔模式', '沒有 USB 音訊裝置', '未取得 USB 權限', '不是雙聲道', 'DSD512 超出 USB 音訊的取樣率上限', '音響沒有 DSD 取樣率 88.2 kHz', '音響沒有 DSD 直通格式']) {
+    assert.match(dsdFallbackNotice(reason) ?? '', /^DSD 直通無法使用：/);
+  }
 });

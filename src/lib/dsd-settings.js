@@ -8,7 +8,16 @@ export const DSD_DEFAULT_GAIN_DB = 3;
 export const DSD_OUTPUT_RATES_HZ = Object.freeze([176_400, 352_800]);
 export const DSD_DEFAULT_OUTPUT_RATE_HZ = 176_400;
 
-/** @typedef {{ gainDb: number, outputRateHz: number, dop: boolean }} DsdSettings */
+/**
+ * @typedef {{ gainDb: number, outputRateHz: number, dop: boolean, nativePassthrough: boolean, nativeByteOrder: 'a' | 'b' }} DsdSettings
+ * `nativePassthrough` (Android, ADR 0049): a DSF's raw DSD goes to the USB audio device in the exclusive mode, no PCM.
+ * `nativeByteOrder` is hidden (no UI): how the four DSD bytes of a 32-bit slot are laid out, `'a'` by default.
+ */
+
+/** `dsd.nativePassthrough` when settings.json does not say (Rust `DsdPlaybackSettings::default`). */
+export const DSD_DEFAULT_NATIVE_PASSTHROUGH = false;
+/** `dsd.nativeByteOrder` when settings.json does not say. */
+export const DSD_DEFAULT_NATIVE_BYTE_ORDER = 'a';
 
 /**
  * Repair a settings object: the gain is clamped to 0 to 6 dB (a non-number becomes 3 dB), an unsupported rate becomes
@@ -24,7 +33,13 @@ export function normalizeDsdSettings(value) {
   const rate = DSD_OUTPUT_RATES_HZ.includes(/** @type {number} */ (source.outputRateHz))
     ? /** @type {number} */ (source.outputRateHz)
     : DSD_DEFAULT_OUTPUT_RATE_HZ;
-  return { gainDb: gain, outputRateHz: rate, dop: source.dop === true };
+  return {
+    gainDb: gain,
+    outputRateHz: rate,
+    dop: source.dop === true,
+    nativePassthrough: source.nativePassthrough === true,
+    nativeByteOrder: typeof source.nativeByteOrder === 'string' && source.nativeByteOrder.trim().toLowerCase() === 'b' ? 'b' : DSD_DEFAULT_NATIVE_BYTE_ORDER,
+  };
 }
 
 /** "DSD64", "DSD128" for a 1-bit rate that is a multiple of 44.1 kHz. @param {number} dsdRateHz */

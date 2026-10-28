@@ -613,7 +613,7 @@
   /** WASAPI exclusive output is on (the output settings page reports it). */
   let outputExclusive = $state(false);
   let dseeHxState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
-  let dsdSettings = $state<DsdPlaybackSettings>({ gainDb: 3, outputRateHz: 176_400, dop: false });
+  let dsdSettings = $state<DsdPlaybackSettings>({ gainDb: 3, outputRateHz: 176_400, dop: false, nativePassthrough: false, nativeByteOrder: 'a' });
   let dsdSettingsState = $state<'loading' | 'saved' | 'saving' | 'error' | 'preview'>('loading');
   let dsdSettingsError = $state<string | null>(null);
   let dsdSettingsRevision = 0;
@@ -2569,7 +2569,7 @@
     dsdSettingsQueue = dsdSettingsQueue.catch(() => undefined).then(async () => {
       if (revision !== dsdSettingsRevision) return;
       try {
-        const saved = await invokeCommand('settings_set_dsd', { gainDb: next.gainDb, outputRateHz: next.outputRateHz, dop: next.dop });
+        const saved = await invokeCommand('settings_set_dsd', { gainDb: next.gainDb, outputRateHz: next.outputRateHz, dop: next.dop, nativePassthrough: next.nativePassthrough });
         if (revision !== dsdSettingsRevision) return;
         dsdSettings = normalizeDsdSettings(saved);
         dsdSettingsState = 'saved';
@@ -4640,7 +4640,7 @@
                   <p class="dsd-setting-hint">{tr("獨佔模式不使用 DSEE HX；裝置不接受檔案的取樣率時，播放器會自動轉換成裝置接受的最接近取樣率。")}</p>
                 {/if}
                 {:else if capabilities?.platform === 'android'}
-                <AndroidOutputDevicesSettings />
+                <AndroidOutputDevicesSettings onExclusiveChange={(value) => (outputExclusive = value)} />
                 {/if}
                 <div class="settings-panel-header">
                   <div>
@@ -4694,6 +4694,22 @@
                         <small>{outputExclusive
                           ? tr("DSD 以 DoP 原樣送給 DAC，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在 DAC 或擴大機調整。裝置必須接受 24-bit 的 DoP 取樣率（DSD64 為 176.4 kHz，DSD128 為 352.8 kHz，DSD256 為 705.6 kHz），否則該曲自動改為轉換成 PCM。只支援雙聲道 DSD64、DSD128、DSD256。")
                           : tr("DoP 只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。")}</small>
+                      </span>
+                    </label>
+                  {/if}
+                  {#if capabilities?.platform === 'android'}
+                    <label class="resampling-option">
+                      <input
+                        type="checkbox"
+                        checked={dsdSettings.nativePassthrough}
+                        disabled={dsdSettingsState === 'loading'}
+                        onchange={(event) => setDsdSettings({ nativePassthrough: event.currentTarget.checked })}
+                      />
+                      <span class="resampling-option-copy">
+                        <strong>{tr("DSD 直通（獨佔模式）")}</strong>
+                        <small>{outputExclusive
+                          ? tr("DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。")
+                          : tr("DSD 直通只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。")}</small>
                       </span>
                     </label>
                   {/if}

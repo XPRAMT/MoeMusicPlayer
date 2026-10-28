@@ -255,14 +255,70 @@ function androidExclusiveReason(reason) {
 }
 
 /**
+ * Why a DSD track plays as PCM although native passthrough is on (ADR 0049), as the card's notice.
+ * @param {string | null | undefined} reason
+ * @returns {string | null}
+ */
+export function dsdFallbackNotice(reason) {
+  return reason ? tr('DSD 直通無法使用：{0}', [translateDsdReason(reason)]) : null;
+}
+
+/**
+ * The reasons the native side gives for a DSD track that plays as PCM (Kotlin `DsdPassthroughRules`, Rust
+ * `player_dsd::raw` and `player_usb_audio::format`), in the interface language. An unknown text stays as it is.
+ * @param {string} reason
+ * @returns {string}
+ */
+export function translateDsdReason(reason) {
+  switch (reason) {
+    case '只支援本機的 DSF 檔': return tr('只支援本機的 DSF 檔');
+    case '不是獨佔模式': return tr('不是獨佔模式');
+    case '沒有 USB 音訊裝置': return tr('沒有 USB 音訊裝置');
+    case '播放裝置不是 USB': return tr('播放裝置不是 USB');
+    case '未取得 USB 權限': return tr('未取得 USB 權限');
+    case '不是雙聲道': return tr('不是雙聲道');
+    case '不是 44.1 kHz 系列的 DSD': return tr('不是 44.1 kHz 系列的 DSD');
+    case '音響沒有 DSD 直通格式': return tr('音響沒有 DSD 直通格式');
+    case '無法讀取 USB 描述元': return tr('無法讀取 USB 描述元');
+    case '無法讀取 DSD 檔案': return tr('無法讀取 DSD 檔案');
+    case '不支援直通': return tr('不支援直通');
+    case 'USB 獨佔輸出無法使用': return tr('USB 獨佔輸出無法使用');
+    default: break;
+  }
+  const tooFast = /^DSD(\d+) 超出 USB 音訊的取樣率上限$/.exec(reason);
+  if (tooFast) return tr('DSD{0} 超出 USB 音訊的取樣率上限', [tooFast[1]]);
+  const rate = /^音響沒有 DSD 取樣率 ([\d.]+) kHz$/.exec(reason);
+  if (rate) return tr('音響沒有 DSD 取樣率 {0} kHz', [rate[1]]);
+  return reason;
+}
+
+/**
  * The Android USB exclusive output (ADR 0047) in the Windows exclusive line's format (no conversion: the device runs
  * at the file's rate): 「44.1 kHz → 44.1 kHz（獨佔）．2 聲道．16bit．位元完美」; what kept it from being bit-perfect is
- * the notice.
+ * the notice. Native DSD (ADR 0049) is the DSD rate, then the frame rate on the bus: 「DSD64 → 88.2 kHz（DSD 直通）．
+ * 2 聲道」, with no bit depth, no 「位元完美」 and no volume reason (the volume does not apply).
  * @param {import('./ipc').AndroidUsbExclusiveEngine | null | undefined} engine
+ * @param {string | null} [dsdFallbackReason] why a DSD track plays as PCM although native passthrough is on
  * @returns {OutputFormatStatus | null} null while no format is set
  */
-export function describeAndroidExclusive(engine) {
+export function describeAndroidExclusive(engine, dsdFallbackReason = null) {
   if (!engine?.rate || !engine.bits || !engine.channels) return null;
+  if (engine.dsdNative) {
+    const steps = [{ rateHz: engine.rate, name: tr('DSD 直通') }];
+    return { text: formatOutputPath(formatDsdName(engine.rate * 32), steps, engine.channels), notice: null };
+  }
+  const described = describePcmExclusive(engine);
+  const fallback = dsdFallbackNotice(dsdFallbackReason);
+  if (!described || !fallback) return described;
+  return { text: described.text, notice: [described.notice, fallback].filter(Boolean).join('；') };
+}
+
+/**
+ * @param {import('./ipc').AndroidUsbExclusiveEngine} engine
+ * @returns {OutputFormatStatus | null}
+ */
+function describePcmExclusive(engine) {
+  if (!engine.rate || !engine.bits || !engine.channels) return null;
   const reasons = engine.notBitPerfect ?? [];
   /** @type {string[]} */
   const otherReasons = reasons

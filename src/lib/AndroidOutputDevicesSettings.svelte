@@ -43,6 +43,17 @@
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
 
+  interface Props {
+    /** Told when the output mode is read or changed (the DSD passthrough text under 「DSD 播放」 depends on it). */
+    onExclusiveChange?: (exclusive: boolean) => void;
+  }
+
+  let { onExclusiveChange = () => {} }: Props = $props();
+
+  $effect(() => {
+    onExclusiveChange(usbExclusive.enabled);
+  });
+
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
    *  this often while it is shown. */

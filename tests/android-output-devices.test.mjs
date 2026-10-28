@@ -124,7 +124,7 @@ test('Android shows its own device list in Settings → playback; the Windows-on
   const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
   assert.equal(app.match(/<AndroidOutputDevicesSettings\b/g)?.length, 1, 'inside the shared settingsPanels snippet once');
   const windows = app.indexOf("{#if capabilities?.platform === 'windows'}\n                <OutputDevicesSettings");
-  const android = app.indexOf("{:else if capabilities?.platform === 'android'}\n                <AndroidOutputDevicesSettings />");
+  const android = app.indexOf("{:else if capabilities?.platform === 'android'}\n                <AndroidOutputDevicesSettings onExclusiveChange=");
   assert.ok(windows > 0 && android > windows, 'Windows list (with DSEE HX) or the Android list');
   // Shared state lives in the module script (both copies draw the same list).
   assert.match(component, /<script module lang="ts">[\s\S]*const s = \$state\(/);
@@ -425,4 +425,73 @@ test('the exclusive mode hints of the routing table', () => {
   );
   assert.equal(rows[0].hint?.text, '獨佔模式：沒有 USB 音訊裝置，以共享方式播放');
   assert.equal(rows[1].hint, null);
+});
+
+test('native DSD shows the DSD rate and the frame rate on the bus, no bit depth, no bit-perfect, no volume reason', () => {
+  const saved = { kind: 'usb', productName: 'KA3' };
+  const native = engine({ rate: 88_200, bits: 32, subslotBytes: 4, alt: 7, dsd: true, dsdNative: true, notBitPerfect: [], bitPerfect: false, gain: 0.4 });
+  const playing = buildAndroidRows(
+    exclusiveStatus({ enabled: true, active: true, state: 'streaming', fallbackReason: null, dsdNative: true, dsdFallbackReason: null, engine: native }),
+    saved,
+  );
+  assert.deepEqual(playing[1].path, { text: 'DSD64 → 88.2 kHz（DSD 直通）．2 聲道', tone: 'ok', notice: null });
+  for (const [rate, name, shown] of [[176_400, 'DSD128', '176.4'], [352_800, 'DSD256', '352.8']]) {
+    const rows = buildAndroidRows(
+      exclusiveStatus({ enabled: true, active: true, state: 'streaming', fallbackReason: null, dsdNative: true, engine: { ...native, rate } }),
+      saved,
+    );
+    assert.equal(rows[1].path?.text, `${name} → ${shown} kHz（DSD 直通）．2 聲道`);
+  }
+});
+
+test('a DSD track that plays as PCM although native passthrough is on says why on the card it plays on', () => {
+  const saved = { kind: 'usb', productName: 'KA3' };
+  const reason = '音響沒有 DSD 取樣率 88.2 kHz';
+  // The USB output plays the PCM conversion: the exclusive line gets the reason as its notice.
+  const exclusive = buildAndroidRows(
+    exclusiveStatus({ enabled: true, active: true, state: 'streaming', fallbackReason: null, dsdFallbackReason: reason, engine: engine({ rate: 176_400, bits: 24, dsd: true, notBitPerfect: ['dsd'], bitPerfect: false }) }),
+    saved,
+  );
+  assert.equal(exclusive[1].path?.text, '176.4 kHz → 176.4 kHz（獨佔）．2 聲道．24bit');
+  assert.equal(exclusive[1].path?.notice, 'DSD 已轉成 PCM（不是位元完美）；DSD 直通無法使用：音響沒有 DSD 取樣率 88.2 kHz');
+  // Shared mode: the Android path of the chosen card carries it.
+  for (const text of ['不是獨佔模式', '沒有 USB 音訊裝置', '不是雙聲道']) {
+    const shared = buildAndroidRows(
+      exclusiveStatus({ enabled: false, active: false, state: null, fallbackReason: null, dsdFallbackReason: text, engine: null }, { routed: usb }),
+      saved,
+    );
+    assert.deepEqual(shared[1].path, { text: '48 kHz．2 聲道', tone: 'ok', notice: `DSD 直通無法使用：${text}` });
+  }
+  // The system default row too.
+  const system = buildAndroidRows(
+    exclusiveStatus({ enabled: false, active: false, state: null, fallbackReason: null, dsdFallbackReason: '不是獨佔模式', engine: null }, { routed: speaker }),
+    null,
+  );
+  assert.equal(system[0].path?.notice, 'DSD 直通無法使用：不是獨佔模式');
+  // Nothing to say without a reason (the setting is off, or the track is not DSD).
+  const plain = buildAndroidRows(exclusiveStatus({ enabled: false, active: false, state: null, fallbackReason: null, dsdFallbackReason: null, engine: null }, { routed: usb }), saved);
+  assert.deepEqual(plain[1].path, { text: '48 kHz．2 聲道', tone: 'ok' });
+});
+
+test('the settings page reads the output mode from the Android list and shows the DSD passthrough checkbox like the DoP one', () => {
+  const app = readFileSync(new URL('../src/App.svelte', import.meta.url), 'utf8');
+  const component = readFileSync(new URL('../src/lib/AndroidOutputDevicesSettings.svelte', import.meta.url), 'utf8');
+  assert.match(app, /<AndroidOutputDevicesSettings onExclusiveChange=\{\(value\) => \(outputExclusive = value\)\} \/>/);
+  assert.match(component, /\$effect\(\(\) => \{\s*onExclusiveChange\(usbExclusive\.enabled\);/);
+  // The checkbox: Android only, the DoP checkbox's markup, the two texts by mode, saved through settings_set_dsd.
+  const block = app.slice(app.indexOf("{#if capabilities?.platform === 'android'}\n                    <label class=\"resampling-option\">"));
+  assert.ok(block.length > 0, 'the Android DSD checkbox is there');
+  const checkbox = block.slice(0, block.indexOf('</label>'));
+  assert.match(checkbox, /<strong>\{tr\("DSD 直通（獨佔模式）"\)\}<\/strong>/);
+  assert.match(checkbox, /checked=\{dsdSettings\.nativePassthrough\}/);
+  assert.match(checkbox, /setDsdSettings\(\{ nativePassthrough: event\.currentTarget\.checked \}\)/);
+  assert.match(checkbox, /\{outputExclusive\s*\?\s*tr\("DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。"\)\s*:\s*tr\("DSD 直通只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。"\)\}/);
+  assert.match(app, /settings_set_dsd', \{ gainDb: next\.gainDb, outputRateHz: next\.outputRateHz, dop: next\.dop, nativePassthrough: next\.nativePassthrough \}/);
+  // The Windows DoP checkbox is unchanged and Windows-only; no confirmation dialog, no test button.
+  assert.match(app, /\{#if capabilities\?\.platform !== 'android'\}[\s\S]*使用 DoP 輸出 DSD（獨佔模式）/);
+  assert.doesNotMatch(checkbox, /<button|confirm\(|dialog/i);
+  // The byte order has no UI: it is not in the DSD settings group's markup.
+  const group = app.slice(app.indexOf('<div class="dsd-settings"'), app.indexOf("{:else if settingsSection === 'now-playing'}"));
+  assert.ok(group.length > 500);
+  assert.doesNotMatch(group, /nativeByteOrder|位元組順序|byte order/i);
 });

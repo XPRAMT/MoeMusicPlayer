@@ -2,7 +2,7 @@
 // identity rule (which devices are listed, what is stored, which device a stored choice is) lives in the Kotlin
 // `AudioOutputRules`; this file only turns its answer into rows.
 import { tr } from './i18n.js';
-import { describeAndroidExclusive, describeAndroidPath, formatSupportedFormats } from './output-format.js';
+import { describeAndroidExclusive, describeAndroidPath, dsdFallbackNotice, formatSupportedFormats } from './output-format.js';
 
 /** `androidUsbExclusive` when settings.json does not say (Rust `AppSettings::default`, ADR 0047): the shared mode. */
 export const DEFAULT_ANDROID_USB_EXCLUSIVE = false;
@@ -177,7 +177,7 @@ export function usbExclusivePath(status, androidPath) {
   const exclusive = status?.exclusive;
   if (!exclusive?.enabled) return null;
   if (exclusive.active) {
-    const described = describeAndroidExclusive(exclusive.engine);
+    const described = describeAndroidExclusive(exclusive.engine, exclusive.dsdFallbackReason);
     if (described) return { text: described.text, tone: 'ok', notice: described.notice };
     // No format yet (the device is being claimed), or the device went back to Android while paused.
     const idle = exclusive.state === 'handedBack' ? tr('USB 獨佔：裝置已暫時交還系統，播放時再取得') : tr('USB 獨佔：準備中');
@@ -187,6 +187,19 @@ export function usbExclusivePath(status, androidPath) {
     return { text: androidPath, tone: 'warn', notice: tr('USB 獨佔無法播放這首：{0}', [exclusive.fallbackReason]) };
   }
   return null;
+}
+
+/**
+ * A path line with the reason a DSD track plays as PCM although native passthrough is on (ADR 0049, 「DSD 直通無法使用：…」)
+ * added to its notice. The exclusive line already carries it ([usbExclusivePath]), so this is for the Android lines.
+ * @param {RowPath | null} path
+ * @param {AndroidAudioOutputStatus | null} status
+ * @returns {RowPath | null}
+ */
+export function withDsdNotice(path, status) {
+  const notice = dsdFallbackNotice(status?.exclusive?.dsdFallbackReason);
+  if (!path || !notice) return path;
+  return { ...path, notice: [path.notice, notice].filter(Boolean).join('；') };
 }
 
 /**
@@ -275,7 +288,7 @@ export function buildAndroidRows(status, saved, exclusiveMode = status?.exclusiv
     connected: true,
     capabilities: '',
     bluetooth: null,
-    path: systemFallback ?? (!saved && path && !systemExclusive ? { text: path, tone: 'ok' } : null),
+    path: systemFallback ? withDsdNotice(systemFallback, status) : (!saved && path && !systemExclusive ? withDsdNotice({ text: path, tone: 'ok' }, status) : null),
     hint: saved ? null : exclusiveHint(status, saved, exclusiveMode, 'system'),
   }];
   for (const device of devices) {
@@ -299,9 +312,9 @@ export function buildAndroidRows(status, saved, exclusiveMode = status?.exclusiv
     } else if (playing && path !== null) {
       // Without a routing report the track plays where the player is pinned: this device (its codec step included).
       const own = trackRoute === null ? playingPath(status, device) ?? path : path;
-      rowPath = elsewhere && trackRoute
+      rowPath = withDsdNotice(elsewhere && trackRoute
         ? { text: tr('目前由 {0} 播放：{1}', [deviceLabel(trackRoute), path]), tone: 'warn' }
-        : { text: own, tone: 'ok' };
+        : { text: own, tone: 'ok' }, status);
     }
     rows.push({
       key: `device-${device.id}`,

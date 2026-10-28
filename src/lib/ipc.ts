@@ -158,6 +158,10 @@ export interface DsdPlaybackSettings {
   outputRateHz: number;
   /** Send DSD to the device as DoP in exclusive mode instead of converting it to PCM. */
   dop: boolean;
+  /** Android: send a DSF's raw DSD to the USB audio device in exclusive mode, no PCM (ADR 0049). */
+  nativePassthrough: boolean;
+  /** Hidden (no UI): the byte order inside a 32-bit DSD slot, `a` by default (ADR 0049). */
+  nativeByteOrder: 'a' | 'b';
 }
 
 /** Where one output channel of a device takes its sound from (`source` is 0-based; null is silence). */
@@ -337,6 +341,8 @@ export interface AndroidUsbExclusiveEngine {
   bits: number | null;
   sourceBits: number | null;
   dsd: boolean;
+  /** The raw DSD slots of the file go to the device as they are (ADR 0049). */
+  dsdNative?: boolean;
   /** Why the bus does not carry the file's samples bit for bit (empty: bit-perfect). */
   notBitPerfect: Array<'volume' | 'float32' | 'unknownBits' | 'dsd' | 'truncated'>;
   bitPerfect: boolean;
@@ -359,6 +365,10 @@ export interface AndroidUsbExclusiveStatus {
   state: AndroidUsbExclusiveEngine['state'] | null;
   /** Why the current track plays through Android although the exclusive mode would drive a USB device. */
   fallbackReason: string | null;
+  /** The track plays as native DSD (ADR 0049). */
+  dsdNative?: boolean;
+  /** Why the DSD track plays as PCM although native passthrough is on (ADR 0049), else null. */
+  dsdFallbackReason?: string | null;
   engine: AndroidUsbExclusiveEngine | null;
   /** Where the exclusive mode plays the saved choice (the routing table, `UsbExclusiveRules.route`). */
   route?: AndroidUsbExclusiveRoute | null;
@@ -1323,7 +1333,7 @@ interface IpcContract {
     result: DsdPlaybackSettings;
   };
   settings_set_dsd: {
-    args: { gainDb: number; outputRateHz: number; dop?: boolean };
+    args: { gainDb: number; outputRateHz: number; dop?: boolean; nativePassthrough?: boolean; nativeByteOrder?: 'a' | 'b' };
     result: DsdPlaybackSettings;
   };
   settings_get_cover_zoom: {
