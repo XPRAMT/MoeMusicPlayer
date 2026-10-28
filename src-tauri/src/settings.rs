@@ -1432,6 +1432,34 @@ pub struct DsdPlaybackSettings {
     /// then do not apply). Default off.
     #[serde(default)]
     pub dop: bool,
+    /// Android: send a DSF's raw DSD to the USB audio device in exclusive mode instead of converting it to PCM (the
+    /// gain, the rate above and the app volume then do not apply; ADR 0049). Default off.
+    #[serde(default)]
+    pub native_passthrough: bool,
+    /// How the four DSD bytes of a 32-bit slot are laid out for native passthrough (hidden, no UI; ADR 0049).
+    #[serde(default)]
+    pub native_byte_order: DsdNativeByteOrder,
+}
+
+/// `"a"`: the oldest DSD byte first on the wire (default); `"b"`: the 32-bit word reversed.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DsdNativeByteOrder {
+    #[default]
+    #[serde(rename = "a")]
+    A,
+    #[serde(rename = "b")]
+    B,
+}
+
+impl DsdNativeByteOrder {
+    /// `"b"` (any case) is [`B`](Self::B); anything else is the default.
+    pub fn from_text(text: &str) -> Self {
+        if text.trim().eq_ignore_ascii_case("b") {
+            Self::B
+        } else {
+            Self::A
+        }
+    }
 }
 
 impl DsdPlaybackSettings {
@@ -1456,6 +1484,8 @@ impl DsdPlaybackSettings {
             gain_db,
             output_rate_hz,
             dop: self.dop,
+            native_passthrough: self.native_passthrough,
+            native_byte_order: self.native_byte_order,
         }
     }
 }
@@ -1466,6 +1496,8 @@ impl Default for DsdPlaybackSettings {
             gain_db: Self::DEFAULT_GAIN_DB,
             output_rate_hz: Self::OUTPUT_RATES_HZ[0],
             dop: false,
+            native_passthrough: false,
+            native_byte_order: DsdNativeByteOrder::A,
         }
     }
 }
@@ -1490,6 +1522,14 @@ fn lenient_dsd_settings(value: Option<serde_json::Value>) -> DsdPlaybackSettings
             .get("dop")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(defaults.dop),
+        native_passthrough: object
+            .get("nativePassthrough")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(defaults.native_passthrough),
+        native_byte_order: object
+            .get("nativeByteOrder")
+            .and_then(serde_json::Value::as_str)
+            .map_or(defaults.native_byte_order, DsdNativeByteOrder::from_text),
     }
     .normalized()
 }
@@ -3364,7 +3404,7 @@ mod tests {
         let odd = DsdPlaybackSettings {
             gain_db: 40.0,
             output_rate_hz: 192_000,
-            dop: false,
+            ..DsdPlaybackSettings::default()
         }
         .normalized();
         assert_eq!((odd.gain_db, odd.output_rate_hz), (6.0, 176_400));
@@ -3372,7 +3412,7 @@ mod tests {
             DsdPlaybackSettings {
                 gain_db: -0.2,
                 output_rate_hz: 352_800,
-                dop: false
+                ..DsdPlaybackSettings::default()
             }
             .normalized()
             .gain_db,
@@ -3382,7 +3422,7 @@ mod tests {
             DsdPlaybackSettings {
                 gain_db: f32::NAN,
                 output_rate_hz: 352_800,
-                dop: false
+                ..DsdPlaybackSettings::default()
             }
             .normalized()
             .gain_db,
@@ -3398,7 +3438,7 @@ mod tests {
                 settings.dsd = DsdPlaybackSettings {
                     gain_db: 5.0,
                     output_rate_hz: 352_800,
-                    dop: false,
+                    ..DsdPlaybackSettings::default()
                 };
                 Ok(())
             })
@@ -3409,7 +3449,7 @@ mod tests {
             DsdPlaybackSettings {
                 gain_db: 5.0,
                 output_rate_hz: 352_800,
-                dop: false
+                ..DsdPlaybackSettings::default()
             }
         );
         let persisted: serde_json::Value =
@@ -3461,6 +3501,66 @@ mod tests {
             .expect("persist");
         let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
         assert!(reopened.snapshot().unwrap().dsd.dop);
+    }
+
+    #[test]
+    fn native_dsd_passthrough_is_off_by_default_with_byte_order_a_and_survives_restart() {
+        let defaults = DsdPlaybackSettings::default();
+        assert!(!defaults.native_passthrough);
+        assert_eq!(defaults.native_byte_order, DsdNativeByteOrder::A);
+        // A file written before the feature has neither key.
+        let old = lenient_dsd_settings(Some(serde_json::json!({"gainDb": 4, "dop": true})));
+        assert!(!old.native_passthrough && old.dop);
+        assert_eq!(old.native_byte_order, DsdNativeByteOrder::A);
+        let on = lenient_dsd_settings(Some(
+            serde_json::json!({"nativePassthrough": true, "nativeByteOrder": "b"}),
+        ));
+        assert!(on.native_passthrough);
+        assert_eq!(on.native_byte_order, DsdNativeByteOrder::B);
+        // Junk falls back field by field.
+        let junk = lenient_dsd_settings(Some(
+            serde_json::json!({"nativePassthrough": "yes", "nativeByteOrder": 7}),
+        ));
+        assert!(!junk.native_passthrough);
+        assert_eq!(junk.native_byte_order, DsdNativeByteOrder::A);
+        assert_eq!(
+            lenient_dsd_settings(Some(serde_json::json!({"nativeByteOrder": "x"})))
+                .native_byte_order,
+            DsdNativeByteOrder::A
+        );
+        assert_eq!(
+            lenient_dsd_settings(Some(serde_json::json!({"nativeByteOrder": "B"})))
+                .native_byte_order,
+            DsdNativeByteOrder::B
+        );
+        // Normalising keeps both.
+        let kept = DsdPlaybackSettings {
+            native_passthrough: true,
+            native_byte_order: DsdNativeByteOrder::B,
+            ..DsdPlaybackSettings::default()
+        }
+        .normalized();
+        assert!(kept.native_passthrough);
+        assert_eq!(kept.native_byte_order, DsdNativeByteOrder::B);
+
+        let directory = test_directory("dsd-native");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        store
+            .update(|settings| {
+                settings.dsd.native_passthrough = true;
+                settings.dsd.native_byte_order = DsdNativeByteOrder::B;
+                Ok(())
+            })
+            .expect("persist");
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        let dsd = reopened.snapshot().unwrap().dsd;
+        assert!(dsd.native_passthrough);
+        assert_eq!(dsd.native_byte_order, DsdNativeByteOrder::B);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["dsd"]["nativePassthrough"], true);
+        assert_eq!(persisted["dsd"]["nativeByteOrder"], "b");
     }
 
     #[test]

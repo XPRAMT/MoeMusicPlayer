@@ -3,7 +3,8 @@
 //! `settings.json` keeps the choice (`androidOutputDevice`); this module holds a copy for the Media3 service, which
 //! reads it over JNI when it is created and before every load, so the choice applies with no Activity or WebView. A
 //! change made on the settings page is also pushed to a running service through the plugin (`setAudioOutputPreference`).
-//! The USB exclusive switch (`androidUsbExclusive`, ADR 0047) travels the same way (`setUsbExclusive`).
+//! The USB exclusive switch (`androidUsbExclusive`, ADR 0047) travels the same way (`setUsbExclusive`); the DSD native
+//! passthrough switch (`dsd.nativePassthrough`, ADR 0049) is only read by the service before each load.
 
 use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::RwLock;
@@ -46,6 +47,20 @@ pub(crate) fn usb_exclusive_state() -> i8 {
     USB_EXCLUSIVE.load(Ordering::Relaxed)
 }
 
+/// The DSD native passthrough switch for the service (`dsd.nativePassthrough`, ADR 0049): -1 until the settings were read.
+static DSD_PASSTHROUGH: AtomicI8 = AtomicI8::new(-1);
+
+/// Remember the DSD native passthrough switch for the service (at startup and whenever the user changes it). The
+/// service reads it before every load, so a change applies from the next track on.
+pub(crate) fn set_dsd_passthrough(enabled: bool) {
+    DSD_PASSTHROUGH.store(i8::from(enabled), Ordering::Relaxed);
+}
+
+/// The switch as the service reads it: -1 not known yet (keep what it has), 0 off, 1 on.
+pub(crate) fn dsd_passthrough_state() -> i8 {
+    DSD_PASSTHROUGH.load(Ordering::Relaxed)
+}
+
 #[cfg(target_os = "android")]
 mod jni_exports {
     use jni::{objects::JObject, sys::jstring, JNIEnv};
@@ -70,6 +85,15 @@ mod jni_exports {
         _service: JObject,
     ) -> jni::sys::jint {
         jni::sys::jint::from(super::usb_exclusive_state())
+    }
+
+    /// `PlaybackService.nativeDsdPassthroughEnabled()`: -1 while the settings have not been read, else 0 or 1.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_PlaybackService_nativeDsdPassthroughEnabled(
+        _env: JNIEnv,
+        _service: JObject,
+    ) -> jni::sys::jint {
+        jni::sys::jint::from(super::dsd_passthrough_state())
     }
 }
 
@@ -111,5 +135,14 @@ mod tests {
         assert_eq!(usb_exclusive_state(), 1);
         set_usb_exclusive(false);
         assert_eq!(usb_exclusive_state(), 0);
+    }
+
+    #[test]
+    fn the_dsd_passthrough_switch_is_unknown_until_read() {
+        assert_eq!(dsd_passthrough_state(), -1);
+        set_dsd_passthrough(true);
+        assert_eq!(dsd_passthrough_state(), 1);
+        set_dsd_passthrough(false);
+        assert_eq!(dsd_passthrough_state(), 0);
     }
 }

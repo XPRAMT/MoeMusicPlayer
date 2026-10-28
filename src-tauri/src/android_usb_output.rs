@@ -15,13 +15,15 @@ use player_usb_audio::format::Source;
 use player_usb_audio::ring::Ring;
 
 /// The track as the library knows it: the bit depth Rust sent with the load (`metadata.bitsPerSample`, 0 = unknown)
-/// and whether it is DSD (played through the DSD-to-PCM converter).
-pub(crate) fn source_of(bits: i32, dsd: bool) -> Source {
+/// whether it is DSD, and whether the load chose native passthrough (the data is then the DSD slots, ADR 0049); without
+/// passthrough a DSD track is played through the DSD-to-PCM converter.
+pub(crate) fn source_of(bits: i32, dsd: bool, native_dsd: bool) -> Source {
     Source {
         bits: u8::try_from(bits)
             .ok()
             .filter(|bits| (8..=32).contains(bits)),
-        dsd,
+        dsd: dsd || native_dsd,
+        native_dsd,
     }
 }
 
@@ -288,7 +290,16 @@ mod jni_exports {
         capacity_frames: jint,
         encoding: jint,
         channels: jint,
+        dsd_rate: jint,
     ) -> jlong {
+        // Native DSD (`dsd_rate` is the frame rate, DSD bit rate / 32): the carrier ring of ADR 0049.
+        if dsd_rate > 0 {
+            let ring = Arc::new(Ring::new_dsd(
+                capacity_frames.max(1) as usize,
+                dsd_rate as u32,
+            ));
+            return Box::into_raw(Box::new(ring)) as jlong;
+        }
         let (Some(encoding), Ok(channels)) = (
             InputEncoding::from_android(encoding),
             u8::try_from(channels),
@@ -394,12 +405,13 @@ mod jni_exports {
         rate: jint,
         source_bits: jint,
         dsd: jboolean,
+        native_dsd: jboolean,
     ) -> jstring {
         let answer = match ring_of(handle) {
             Some(ring) => engine::attach(
                 ring,
                 rate.max(0) as u32,
-                source_of(source_bits, dsd != JNI_FALSE),
+                source_of(source_bits, dsd != JNI_FALSE, native_dsd != JNI_FALSE),
             ),
             None => Err("沒有輸出緩衝".to_owned()),
         };
@@ -493,9 +505,22 @@ mod jni_exports {
                 &raw,
                 rate,
                 channels,
-                source_of(source_bits, dsd != JNI_FALSE),
+                source_of(source_bits, dsd != JNI_FALSE, false),
             ),
         )
+    }
+
+    /// Whether the device of `raw` descriptors can take native DSD at `rate` frames per second (DSD bit rate / 32): a
+    /// Java null when it can, else the reason (ADR 0049).
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_UsbExclusiveNative_nativeSupportsDsd(
+        env: JNIEnv,
+        _class: JClass,
+        raw: JByteArray,
+        rate: jint,
+    ) -> jstring {
+        let raw = env.convert_byte_array(&raw).unwrap_or_default();
+        outcome(&env, super::supports_dsd(&raw, rate))
     }
 }
 
@@ -513,6 +538,21 @@ pub(crate) fn supports(raw: &[u8], rate: i32, channels: i32, source: Source) -> 
         .map_err(|reason| reason.to_string())
 }
 
+/// Whether the device of `raw` descriptors has the RAW_DATA alt for native DSD at `rate` frames per second, and, when
+/// its clock ranges are known from an earlier claim, lists the rate. Otherwise the rate is checked when the device is
+/// configured (and a refusal there makes the track fall back).
+pub(crate) fn supports_dsd(raw: &[u8], rate: i32) -> Result<(), String> {
+    use player_usb_audio::{descriptors::parse_configuration, format};
+    let Ok(rate) = u32::try_from(rate) else {
+        return Err("格式不明".to_owned());
+    };
+    let config = parse_configuration(raw);
+    let ranges = format::known_ranges(config.vendor_id, config.product_id);
+    format::choose_dsd(&config, rate, ranges.as_deref())
+        .map(|_| ())
+        .map_err(|reason| reason.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,17 +560,40 @@ mod tests {
     #[test]
     fn the_source_bit_depth_is_known_only_for_real_depths() {
         assert_eq!(
-            source_of(16, false),
+            source_of(16, false, false),
             Source {
                 bits: Some(16),
-                dsd: false
+                dsd: false,
+                native_dsd: false
             }
         );
-        assert_eq!(source_of(24, false).bits, Some(24));
-        assert_eq!(source_of(0, false).bits, None);
-        assert_eq!(source_of(-1, false).bits, None);
-        assert_eq!(source_of(64, false).bits, None);
-        assert!(source_of(1, true).dsd);
+        assert_eq!(source_of(24, false, false).bits, Some(24));
+        assert_eq!(source_of(0, false, false).bits, None);
+        assert_eq!(source_of(-1, false, false).bits, None);
+        assert_eq!(source_of(64, false, false).bits, None);
+        assert!(source_of(1, true, false).dsd);
+        assert!(!source_of(1, true, false).native_dsd);
+    }
+
+    #[test]
+    fn native_dsd_is_a_dsd_source() {
+        let native = source_of(0, false, true);
+        assert!(native.dsd && native.native_dsd);
+    }
+
+    #[test]
+    fn native_dsd_support_follows_the_raw_alt_of_the_descriptors() {
+        let raw = sony();
+        for rate in [88_200, 176_400, 352_800] {
+            assert_eq!(supports_dsd(&raw, rate), Ok(()), "{rate}");
+        }
+        // DSD512 needs 705.6 kHz; PCM rates are not frame rates of DSD.
+        let refused = supports_dsd(&raw, 705_600).unwrap_err();
+        assert!(refused.contains("705.6"), "{refused}");
+        assert!(supports_dsd(&raw, 44_100).is_err());
+        // Not a USB audio configuration at all, and a bad rate.
+        assert!(supports_dsd(&[], 88_200).is_err());
+        assert!(supports_dsd(&raw, -1).is_err());
     }
 
     #[test]
@@ -565,13 +628,19 @@ mod tests {
     #[test]
     fn support_follows_the_descriptors() {
         let raw = sony();
-        assert_eq!(supports(&raw, 44_100, 2, source_of(16, false)), Ok(()));
-        assert_eq!(supports(&raw, 96_000, 2, source_of(24, false)), Ok(()));
-        assert!(supports(&raw, 48_000, 6, source_of(16, false))
+        assert_eq!(
+            supports(&raw, 44_100, 2, source_of(16, false, false)),
+            Ok(())
+        );
+        assert_eq!(
+            supports(&raw, 96_000, 2, source_of(24, false, false)),
+            Ok(())
+        );
+        assert!(supports(&raw, 48_000, 6, source_of(16, false, false))
             .unwrap_err()
             .contains('6'));
         // Not a USB audio configuration at all.
-        assert!(supports(&[], 44_100, 2, source_of(16, false)).is_err());
-        assert!(supports(&[], -1, 2, source_of(16, false)).is_err());
+        assert!(supports(&[], 44_100, 2, source_of(16, false, false)).is_err());
+        assert!(supports(&[], -1, 2, source_of(16, false, false)).is_err());
     }
 }

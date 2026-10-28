@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use player_dsd::dsf::DsfReader;
+use player_dsd::raw::{RawDsdWavStream, SlotByteOrder};
 use player_dsd::reader::DsdPcmReader;
 use player_dsd::wav::DsdWavStream;
 use player_flac::wav::FlacWavStream;
@@ -31,6 +32,10 @@ use player_wavpack::wav::WavPackWavStream;
 
 /// URI scheme of a DSD track handed to the Kotlin data source.
 pub(crate) const DSD_URI_SCHEME: &str = "moedsd";
+/// URI scheme of a local DSF served as the raw 32-bit DSD slots of native passthrough to the USB exclusive output
+/// (ADR 0049). Only Kotlin's load-time decision (`DsdPassthrough`) makes it from a `moedsd://` URI (`raw_uri_of`);
+/// Rust never produces it. Kotlin lists it in `LOCAL_CONVERTED_SCHEMES`.
+pub(crate) const DSD_RAW_URI_SCHEME: &str = "moedsdraw";
 /// URI scheme of a WavPack track handed to the Kotlin data source.
 pub(crate) const WAVPACK_URI_SCHEME: &str = "moewv";
 /// URI scheme of a FLAC track handed to the Kotlin data source.
@@ -46,6 +51,8 @@ pub(crate) const ANDROID_DSD_OUTPUT_RATE: u32 = 176_400;
 /// A file served to Media3 as a float WAV, or, for a remote file Media3 can decode itself, as the file's own bytes.
 enum Served {
     Dsd(Box<DsdWavStream<DsfReader<BufReader<File>>>>),
+    /// A local DSF as raw DSD slots (native passthrough, ADR 0049).
+    DsdRaw(Box<RawDsdWavStream<DsfReader<BufReader<File>>>>),
     /// A remote DSF file, converted like a local one.
     DsdRemote(Box<DsdWavStream<DsfReader<BufReader<Box<dyn player_wavpack::ReadSeek>>>>>),
     /// A remote file passed through unchanged (FLAC, MP3, AAC, Opus…): Media3 reads and seeks it like a local file.
@@ -92,6 +99,7 @@ impl Served {
     fn total_len(&self) -> u64 {
         match self {
             Self::Dsd(stream) => stream.total_len(),
+            Self::DsdRaw(stream) => stream.total_len(),
             Self::DsdRemote(stream) => stream.total_len(),
             Self::Raw(file) => file.len,
             Self::DsdWavPack(stream) => stream.total_len(),
@@ -103,6 +111,9 @@ impl Served {
     fn read_at(&mut self, position: u64, out: &mut [u8]) -> Result<usize, String> {
         match self {
             Self::Dsd(stream) => stream
+                .read_at(position, out)
+                .map_err(|error| error.to_string()),
+            Self::DsdRaw(stream) => stream
                 .read_at(position, out)
                 .map_err(|error| error.to_string()),
             Self::DsdRemote(stream) => stream
@@ -144,16 +155,32 @@ pub(crate) fn to_converted_uri(uri: &str) -> String {
     }
 }
 
-/// Whether the data source serves this load URI as a converted float WAV stream (the service then tells Media3 it is
+/// The native-passthrough form of a `moedsd://` load URI (`moedsdraw://`, same path), or `None` for anything else.
+/// Kotlin does the same swap when it decides on passthrough; this pins the contract.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn raw_uri_of(converted: &str) -> Option<String> {
+    converted
+        .strip_prefix(DSD_URI_SCHEME)
+        .filter(|rest| rest.starts_with("://"))
+        .map(|rest| format!("{DSD_RAW_URI_SCHEME}{rest}"))
+}
+
+/// Whether the data source serves this load URI as a converted WAV stream (the service then tells Media3 it is
 /// `audio/wav`, since the extension says otherwise): a converter scheme, or a remote track whose format is converted.
+/// The raw DSD scheme is a WAV of raw slots, not audio, but it is read the same way.
 pub(crate) fn serves_converted_wav(uri: &str) -> bool {
     let has_scheme = |scheme: &str| {
         uri.strip_prefix(scheme)
             .is_some_and(|rest| rest.starts_with("://"))
     };
-    if [DSD_URI_SCHEME, WAVPACK_URI_SCHEME, FLAC_URI_SCHEME]
-        .into_iter()
-        .any(has_scheme)
+    if [
+        DSD_URI_SCHEME,
+        DSD_RAW_URI_SCHEME,
+        WAVPACK_URI_SCHEME,
+        FLAC_URI_SCHEME,
+    ]
+    .into_iter()
+    .any(has_scheme)
     {
         return true;
     }
@@ -212,6 +239,55 @@ fn open_dsf(path: &Path) -> Result<Served, String> {
     let reader = DsdPcmReader::new(dsf, ANDROID_DSD_OUTPUT_RATE, Arc::clone(gain()))
         .map_err(|error| error.to_string())?;
     Ok(Served::Dsd(Box::new(DsdWavStream::new(reader))))
+}
+
+static RAW_BYTE_ORDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Set the byte order of the slots native passthrough serves (`dsd.nativeByteOrder`, hidden; ADR 0049). It applies to
+/// the next file opened.
+pub(crate) fn set_native_byte_order(order: crate::settings::DsdNativeByteOrder) {
+    RAW_BYTE_ORDER.store(
+        u8::from(order == crate::settings::DsdNativeByteOrder::B),
+        Ordering::Relaxed,
+    );
+}
+
+fn native_byte_order() -> SlotByteOrder {
+    if RAW_BYTE_ORDER.load(Ordering::Relaxed) == 1 {
+        SlotByteOrder::NewestFirst
+    } else {
+        SlotByteOrder::OldestFirst
+    }
+}
+
+fn open_dsf_raw(path: &Path) -> Result<Served, String> {
+    let file = File::open(path).map_err(|error| format!("無法開啟 DSD 檔案：{error}"))?;
+    let dsf = DsfReader::open(BufReader::with_capacity(256 * 1024, file))
+        .map_err(|error| error.to_string())?;
+    let stream =
+        RawDsdWavStream::new(dsf, native_byte_order()).map_err(|error| error.to_string())?;
+    Ok(Served::DsdRaw(Box::new(stream)))
+}
+
+/// Whether the DSF at `path` can be carried natively and at which frame rate (DSD bit rate / 32): JSON
+/// `{ "ok": true, "rate": 88200, "name": "DSD64" }` or `{ "ok": false, "reason": "..." }`. Reads the header only.
+pub(crate) fn raw_plan_json(path: &Path) -> String {
+    let plan = (|| -> Result<(u32, String), String> {
+        let file = File::open(path).map_err(|error| format!("無法開啟 DSD 檔案：{error}"))?;
+        let dsf = DsfReader::open(BufReader::with_capacity(4096, file))
+            .map_err(|error| error.to_string())?;
+        let info = player_dsd::stream::DsdStream::info(&dsf);
+        match player_dsd::raw::raw_transport_rate(&info) {
+            Some(rate) => Ok((rate, info.rate_name())),
+            None => Err(player_dsd::raw::raw_unsupported_reason(&info)
+                .unwrap_or_else(|| "不支援直通".to_owned())),
+        }
+    })();
+    match plan {
+        Ok((rate, name)) => serde_json::json!({ "ok": true, "rate": rate, "name": name }),
+        Err(reason) => serde_json::json!({ "ok": false, "reason": reason }),
+    }
+    .to_string()
 }
 
 fn flac_stream(reader: player_flac::FlacReader) -> Result<Served, String> {
@@ -343,6 +419,11 @@ impl std::io::Seek for RemoteStreamAdapter {
     }
 }
 
+/// Open a local DSF as raw DSD slots (native passthrough, ADR 0049); the handle is used like `open`'s.
+pub(crate) fn open_raw(path: &Path) -> Result<i64, String> {
+    Ok(register(open_dsf_raw(path)?))
+}
+
 /// Open a DSF, WavPack or FLAC file (or a remote track); the handle (never 0) is used with the other functions until
 /// `close`.
 pub(crate) fn open(path: &Path) -> Result<i64, String> {
@@ -449,6 +530,41 @@ mod jni_exports {
                 0
             }
         }
+    }
+
+    /// Opens a local DSF as the raw slots of native passthrough (`moedsdraw://`, ADR 0049); 0 when it cannot be carried.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_DsdBridge_nativeOpenRaw(
+        mut env: JNIEnv,
+        _class: JClass,
+        path: JString,
+    ) -> jlong {
+        let Ok(path) = env.get_string(&path) else {
+            return 0;
+        };
+        match open_raw(Path::new(&path.to_string_lossy().into_owned())) {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("[dsd] raw open failed: {error}");
+                0
+            }
+        }
+    }
+
+    /// Whether the DSF at `path` can be played natively: the JSON of `raw_plan_json`.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_DsdBridge_nativeRawPlan<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        path: JString<'local>,
+    ) -> jni::sys::jstring {
+        let Ok(path) = env.get_string(&path) else {
+            return std::ptr::null_mut();
+        };
+        let json = raw_plan_json(Path::new(&path.to_string_lossy().into_owned()));
+        env.new_string(json)
+            .map(|value| value.into_raw())
+            .unwrap_or(std::ptr::null_mut())
     }
 
     /// The cover of a remote track (`moeremote://…`) as the file's own picture bytes, or null. Blocks on the server, so
@@ -779,6 +895,84 @@ mod tests {
         set_gain_db(3.0);
         assert!(quiet > 0.1, "{quiet}");
         assert!((loud / quiet - 1.995).abs() < 0.05, "{quiet} -> {loud}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_raw_scheme_is_a_converted_wav_and_comes_from_a_dsd_uri_only() {
+        assert_eq!(
+            raw_uri_of("moedsd:///storage/emulated/0/Music/a.dsf").as_deref(),
+            Some("moedsdraw:///storage/emulated/0/Music/a.dsf")
+        );
+        assert_eq!(raw_uri_of("moewv:///x/a.wv"), None);
+        assert_eq!(raw_uri_of("file:///x/a.dsf"), None);
+        assert_eq!(raw_uri_of("moedsdraw:///x/a.dsf"), None);
+        assert!(serves_converted_wav("moedsdraw:///x/a.dsf"));
+        assert!(serves_converted_wav("moedsd:///x/a.dsf"));
+        assert!(!serves_converted_wav("moedsdrawx:///x/a.dsf"));
+        // Rust never produces the raw scheme on its own.
+        assert_eq!(to_converted_uri("file:///x/a.dsf"), "moedsd:///x/a.dsf");
+    }
+
+    #[test]
+    fn a_dsf_is_served_as_raw_slots_in_the_chosen_byte_order() {
+        use crate::settings::DsdNativeByteOrder;
+        let path = write_dsf("raw");
+        let plan: serde_json::Value = serde_json::from_str(&raw_plan_json(&path)).unwrap();
+        assert_eq!(plan["ok"], true);
+        assert_eq!(plan["rate"], 88_200);
+        assert_eq!(plan["name"], "DSD64");
+
+        set_native_byte_order(DsdNativeByteOrder::A);
+        let handle = open_raw(&path).unwrap();
+        let total = length(handle).unwrap();
+        let mut header = [0_u8; 44];
+        assert_eq!(read(handle, 0, &mut header).unwrap(), 44);
+        assert_eq!(&header[0..4], b"RIFF");
+        assert_eq!(u16::from_le_bytes(header[20..22].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(header[22..24].try_into().unwrap()), 4);
+        assert_eq!(
+            u32::from_le_bytes(header[24..28].try_into().unwrap()),
+            88_200
+        );
+        assert_eq!(u16::from_le_bytes(header[34..36].try_into().unwrap()), 16);
+        // 0.25 s of DSD64 = 705 600 bits per channel = 22 050 frames of 8 bytes.
+        assert_eq!(total, 44 + 22_050 * 8);
+        let mut a = vec![0_u8; 4_096];
+        let middle = 44 + 8_000 * 8;
+        assert_eq!(read(handle, middle, &mut a).unwrap(), 4_096);
+        close(handle);
+
+        set_native_byte_order(DsdNativeByteOrder::B);
+        let handle = open_raw(&path).unwrap();
+        let mut b = vec![0_u8; 4_096];
+        assert_eq!(read(handle, middle, &mut b).unwrap(), 4_096);
+        close(handle);
+        set_native_byte_order(DsdNativeByteOrder::A);
+        for (a, b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            let mut reversed = a.to_vec();
+            reversed.reverse();
+            assert_eq!(reversed, b);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_carried_natively_says_why() {
+        let path =
+            std::env::temp_dir().join(format!("moe-android-dsd-mono-{}.dsf", std::process::id()));
+        std::fs::write(
+            &path,
+            build_dsf(2_822_400, 800, 4096, true, &[vec![0x55; 100]]),
+        )
+        .unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&raw_plan_json(&path)).unwrap();
+        assert_eq!(plan["ok"], false);
+        assert!(plan["reason"].as_str().unwrap().contains("雙聲道"));
+        assert!(open_raw(&path).is_err());
+        let missing: serde_json::Value =
+            serde_json::from_str(&raw_plan_json(Path::new("/definitely/not/here.dsf"))).unwrap();
+        assert_eq!(missing["ok"], false);
         let _ = std::fs::remove_file(path);
     }
 }

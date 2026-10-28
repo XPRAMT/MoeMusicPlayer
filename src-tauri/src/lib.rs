@@ -8001,6 +8001,8 @@ async fn settings_set_dsd(
     gain_db: f32,
     output_rate_hz: u32,
     dop: Option<bool>,
+    native_passthrough: Option<bool>,
+    native_byte_order: Option<String>,
 ) -> Result<settings::DsdPlaybackSettings, String> {
     let current = state
         .settings
@@ -8011,6 +8013,10 @@ async fn settings_set_dsd(
         gain_db,
         output_rate_hz,
         dop: dop.unwrap_or(current.dop),
+        native_passthrough: native_passthrough.unwrap_or(current.native_passthrough),
+        native_byte_order: native_byte_order
+            .as_deref()
+            .map_or(current.native_byte_order, settings::DsdNativeByteOrder::from_text),
     }
     .normalized();
     let saved = state
@@ -8022,7 +8028,12 @@ async fn settings_set_dsd(
         .map(|settings| settings.dsd)
         .map_err(|error| error.to_string())?;
     #[cfg(target_os = "android")]
-    android_dsd::set_gain_db(saved.gain_db);
+    {
+        android_dsd::set_gain_db(saved.gain_db);
+        // The playback service reads these when it loads a track (ADR 0049): nothing to push to a track that plays.
+        android_dsd::set_native_byte_order(saved.native_byte_order);
+        android_output::set_dsd_passthrough(saved.native_passthrough);
+    }
     #[cfg(target_os = "windows")]
     {
         if let Some(service) = state.playback.as_ref() {
@@ -13269,6 +13280,10 @@ pub fn run() {
                 .map_err(|error| format!("讀取使用者設定失敗：{error}"))?;
             #[cfg(target_os = "android")]
             android_dsd::set_gain_db(initial_settings.dsd.gain_db);
+            #[cfg(target_os = "android")]
+            android_dsd::set_native_byte_order(initial_settings.dsd.native_byte_order);
+            #[cfg(target_os = "android")]
+            android_output::set_dsd_passthrough(initial_settings.dsd.native_passthrough);
             #[cfg(target_os = "android")]
             android_output::set_preference(initial_settings.android_output_device.as_ref());
             #[cfg(target_os = "android")]
