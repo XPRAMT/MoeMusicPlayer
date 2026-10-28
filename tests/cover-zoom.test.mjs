@@ -1090,7 +1090,7 @@ test('the overlay hides and clears its feedback in the same write the stage rele
   assert.match(mirror, /swipeFeedbackReleased\(mirrored, next\)/);
   assert.match(mirror, /overlay\.mirror\(null\);\s*hideOverlay\(\);/);
   // No redraw while the stage's settle transition runs; no layer property is toggled on the stage.
-  assert.match(source, /if \(feedbackSettling\(\)\) \{ layerGate\.poke\(\); return; \}/);
+  assert.match(source, /planSettledOverlay\(\{ settling: feedbackSettling\(\) \}\) === 'wait'/);
   assert.doesNotMatch(source, /style\.(willChange|zIndex|contain|isolation|position)\b/);
   // hide() leaves no feedback on the canvas; draw() applies the stage's current feedback.
   const hide = source.slice(source.indexOf('    hide() {'), source.indexOf('    remove()'));
@@ -1098,4 +1098,84 @@ test('the overlay hides and clears its feedback in the same write the stage rele
   assert.match(source, /overlayFeedbackStyle\(feedback\)/);
   // The overlay is also dropped when the artwork source differs from the one it was drawn from (track change).
   assert.match(source, /overlayMatchesSource\(overlay\.drawnSource, currentSource\(\)\)/);
+});
+
+test('ghost regression: the overlay is never visible with a pinned rect that differs from the stage rect (drag, release, settle, idle draw; both directions; scale below and above 1)', async () => {
+  const { planSettledOverlay, verifyShownOverlay, rectsAlign, swipeFeedbackAtRest, withoutSwipeFeedback } = await import('../src/lib/cover-overlay.js');
+  const SETTLE_MS = 180; // swipe-dismiss SWIPE_SETTLE_MS: its timer clears the transition string, the transition itself runs on
+  const IDLE_MS = 50;
+  for (const scale of [0.53, 1.8]) {
+    for (const direction of [-1, 1]) {
+      for (const policy of ['fixed', 'string-only']) {
+        const rest = { left: 101.8, top: 146.3, width: 321 * scale, height: 321 * scale };
+        const centre = { x: rest.left + rest.width / 2, y: rest.top + rest.height / 2 };
+        const releaseAt = 400;
+        const transitionStartsAt = releaseAt + 40; // the transition begins a few frames after the release write
+        const transitionEndsAt = transitionStartsAt + SETTLE_MS;
+        const stringClearedAt = releaseAt + SETTLE_MS; // before the transition ends
+        // The stage's feedback at time t (what getComputedStyle reports) and its raw painted rect.
+        const feedbackAt = (t) => {
+          if (t < 100) return { x: 0, y: 0, scale: 1 };
+          if (t < releaseAt) return { x: direction * 22 * Math.min(1, (t - 100) / 100), y: 0, scale: 0.973 };
+          if (t < transitionStartsAt) return { x: direction * 22, y: 0, scale: 0.973 };
+          if (t < transitionEndsAt) { const k = 1 - (t - transitionStartsAt) / SETTLE_MS; return { x: direction * 22 * k, y: 0, scale: 1 - 0.027 * k }; }
+          return { x: 0, y: 0, scale: 1 };
+        };
+        const rawRect = (t) => {
+          const fb = feedbackAt(t);
+          const w = rest.width * fb.scale;
+          const h = rest.height * fb.scale;
+          return { left: centre.x + fb.x - w / 2, top: centre.y + fb.y - h / 2, width: w, height: h };
+        };
+        const stringSet = (t) => (t >= releaseAt && t < stringClearedAt) || (t >= 100 && t < releaseAt);
+        const transitionRunning = (t) => t >= transitionStartsAt && t < transitionEndsAt;
+        // The stage rect as the action reads it: with the feedback removed while the stage can carry some.
+        const settling = (t) => stringSet(t) || (policy === 'fixed' && (transitionRunning(t) || !swipeFeedbackAtRest(feedbackAt(t))));
+        const stageRest = (t) => (settling(t) ? withoutSwipeFeedback(rawRect(t), feedbackAt(t), { x: 0, y: 0 }) : rawRect(t));
+        let shown = false;
+        let pinned = null;
+        let gateOnAt = -Infinity;
+        let violations = 0;
+        for (let t = 0; t <= 1000; t += 4) {
+          if (t === 100) { shown = false; pinned = null; } // the swipe starts: the overlay is hidden with its feedback
+          if (t === releaseAt) { shown = false; pinned = null; gateOnAt = t; } // released: hidden, the gate is poked
+          if (t >= gateOnAt + IDLE_MS && gateOnAt >= 0 && !shown && t >= releaseAt) {
+            if (planSettledOverlay({ settling: settling(t) }) === 'wait') gateOnAt = t; // poke again
+            else {
+              pinned = stageRest(t); // re-pinned from the live rect, in the same write that shows it
+              shown = true;
+              // read back from the geometry as the actual stage is painted: the verification of the draw
+              if (verifyShownOverlay(pinned, rawRect(t)) === 'hide' && policy === 'fixed') { shown = false; pinned = null; gateOnAt = t; }
+            }
+          }
+          if (shown && !rectsAlign(pinned, stageRest(t))) violations += 1;
+          if (shown && !rectsAlign(pinned, rawRect(t)) && policy === 'fixed') violations += 1;
+        }
+        if (policy === 'fixed') assert.equal(violations, 0, `scale ${scale} direction ${direction}: overlay shown with a stale pinned rect`);
+        else assert.ok(violations > 0, 'control: deciding by the transition string alone does show a displaced ghost');
+        if (policy === 'fixed') assert.equal(shown, true, 'the settled overlay returns after the bounce');
+      }
+    }
+  }
+});
+
+test('ghost regression: the settled draw waits for the bounce, pins from the live rect, and is verified before paint (source shape)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const settled = source.slice(source.indexOf('  function drawSettled'), source.indexOf('  /** Keep a shown overlay on the stage'));
+  assert.match(settled, /planSettledOverlay\(\{ settling: feedbackSettling\(\) \}\) === 'wait'\) \{[^}]*layerGate\.poke\(\); return; \}/);
+  assert.ok(settled.indexOf("=== 'wait'") < settled.indexOf('stageRect()'), 'wait before the live rect is read');
+  assert.ok(settled.indexOf('drawOverlay(visual') < settled.indexOf('verifyShownOverlay('), 'verified after the draw, in the same task');
+  // A running transition counts as settling even after the transition string was cleared.
+  const settling = source.slice(source.indexOf('  function feedbackSettling'), source.indexOf('  /** Whether the stage may carry swipe feedback'));
+  assert.match(settling, /feedbackTransitionRunning\(\)/);
+  assert.match(settling, /swipeFeedbackAtRest\(/);
+  assert.match(source, /released \|\| \(next && \/translate\|scale\/\.test\(next\.transition\)\)\) swipeSettling = true/);
+  // Write order inside draw(): every pinned property before the opacity that shows the canvas.
+  const draw = source.slice(source.indexOf('    draw(image, plan, visible'), source.indexOf('    hide() {'));
+  const order = ['style.left', 'style.top', 'style.width', 'style.height', 'style.transform = ', 'setOrigin(', 'style.opacity = shownOpacity()'].map((needle) => draw.indexOf(needle));
+  assert.ok(order.every((index) => index >= 0), 'all writes present');
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'left, top, size, transform, origin first; opacity last');
+  // The only place that shows the canvas is draw().
+  assert.equal([...source.matchAll(/style\.opacity = (?!'0')/g)].length, 2, 'draw() and the mirrored feedback opacity of a shown overlay');
 });

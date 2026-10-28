@@ -33,3 +33,5 @@ Android：Media3 的 `ExoPlayer.setMediaItem` 會立刻拆掉正在播放的項�
 ### 覆蓋 canvas 的放手（彈回）規則
 
 拖曳中 canvas 複製 stage 的回饋以同步移動；放手時 stage 以 CSS transition 彈回，若 canvas 也複製這段 transition，一旦它的結尾沒有套用（合成層上的 transition 被打斷），canvas 會停在放手時的位移，成為不會彈回的第二張封面（只在 overlay 顯示時，也就是封面縮放過或已重畫高解析時出現）。因此放手的同一次寫入就清除 canvas 的回饋並隱藏它（stage 自己的圖顯示彈回），彈回結束後才重畫；重畫與隱藏都不保留任何回饋屬性。圖層屬性規則不變（只動 opacity 與 canvas 自己的 inline 樣式）。
+
+補記（重影）：放手後 swipe-dismiss 的計時器在彈回動畫的最後幾幀前就清掉 transition 字串，清掉字串並不會停止仍在跑的 CSS transition；若以字串判斷「已靜止」，重畫會用還在位移的 stage 矩形釘住 canvas 並顯示，彈回結束後 canvas 停在舊位置，形成 0.15–0.3 秒的第二張封面。因此靜止判斷改看仍在跑的 feedback transition 與計算後的 translate／scale，canvas 顯示前由當下靜止的矩形重新釘住（opacity 為最後一個寫入），畫完再比對一次，不一致就隱藏重畫（上限 3 次）。測試 `tests/cover-zoom.test.mjs`（重影迴歸：模擬拖曳、放手、彈回、靜止重畫，兩個方向、縮小與放大）。

@@ -3,7 +3,7 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-reserve in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
-import { coverDrawPlan, coverOverlayWanted, intersectRects, overlayDrawRegion, overlayFeedbackStyle, overlayFollowTransform, overlayMatchesSource, overlayOrigin, overlayTransformCss, parseSwipeFeedback, snapRectToDevicePixels, swipeFeedbackReleased, withoutSwipeFeedback } from './cover-overlay.js';
+import { coverDrawPlan, coverOverlayWanted, intersectRects, overlayDrawRegion, overlayFeedbackStyle, overlayFollowTransform, overlayMatchesSource, overlayOrigin, overlayTransformCss, parseSwipeFeedback, planSettledOverlay, snapRectToDevicePixels, swipeFeedbackAtRest, swipeFeedbackReleased, verifyShownOverlay, withoutSwipeFeedback } from './cover-overlay.js';
 
 export const COVER_ZOOM_MIN = 0.5;
 export const COVER_ZOOM_REST = 1;
@@ -266,6 +266,10 @@ export function coverZoom(node, params) {
   let ownStyle = nonFeedbackStyle(node.style);
   /** The swipe feedback as last mirrored onto the overlay (null: none). @type {{ translate: string, scale: string, opacity: string, transition: string } | null} */
   let mirrored = null;
+  /** A swipe's bounce-back may still be running (set at its release / a settle transition, cleared once the computed
+   *  translate / scale are at rest and no feedback transition runs): the stage rect is moving, the overlay stays hidden. */
+  let swipeSettling = false;
+  let verifyRetries = 0;
   const debugSwipe = (() => { try { return globalThis.localStorage?.getItem('moe.debug.coverSwipe') === '1'; } catch { return false; } })();
   /** The scale the stage's layer was promoted (first rasterised) at: when the action starts and each time the page opens. */
   let promotedScale = 1;
@@ -343,14 +347,25 @@ export function coverZoom(node, params) {
   function drawSettled() {
     if (destroyed || resetting || layerGate.active || !active()) return;
     // The stage is still bouncing back from a swipe (its settle transition runs): draw after it, never mid-bounce.
-    if (feedbackSettling()) { layerGate.poke(); return; }
+    if (planSettledOverlay({ settling: feedbackSettling() }) === 'wait') { if (debugSwipe) logDraw('wait'); layerGate.poke(); return; }
     if (!coverOverlayWanted(state.scale, promotedScale)) { hideOverlay(); return; }
     // Drawn for the stage without its swipe feedback: the mirrored feedback keeps applying on top of the new drawing.
     const visual = stageRect();
     const visible = visual.width > 0 ? clipToAncestors(node, visual) : null;
     const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1;
     const region = visible ? overlayDrawRegion({ visible, cover: visual, dpr }) : null;
-    if (!region || !drawOverlay(visual, state.scale, region, false)) hideOverlay();
+    if (!region || !drawOverlay(visual, state.scale, region, false)) { hideOverlay(); return; }
+    // Pinned from the live settled rect in the draw's own write; checked again against the live rect before paint: a
+    // drawing whose pinned rect is older than the last layout or feedback change is dropped and drawn again.
+    if (verifyShownOverlay(overlay?.pinnedVisual ?? visual, stageRect()) === 'hide' && verifyRetries < 3) {
+      verifyRetries += 1;
+      hideOverlay();
+      layerGate.poke();
+      if (debugSwipe) logDraw('stale');
+      return;
+    }
+    verifyRetries = 0;
+    if (debugSwipe) logDraw('shown');
   }
 
   /** Keep a shown overlay on the stage now painted at `visual`: compositor transform only (no redraw). `paneBox` is the
@@ -367,13 +382,33 @@ export function coverZoom(node, params) {
 
   /** The stage's bounce-back transition (translate / scale) is set: its settle is still running. */
   function feedbackSettling() {
-    return /translate|scale/.test(node.style.transition || '');
+    const style = node.style;
+    if (/translate|scale/.test(style.transition || '')) return true;
+    if (!swipeSettling) return false;
+    // The release cleared the transition string, but clearing it does not stop a running transition (swipe-dismiss's
+    // timer fires before the last frames of the bounce): only the running transitions and the computed values say.
+    if (style.translate || style.scale || feedbackTransitionRunning()) return true;
+    if (typeof getComputedStyle === 'function') {
+      const computed = getComputedStyle(node);
+      if (!swipeFeedbackAtRest(parseSwipeFeedback(computed.translate, computed.scale))) return true;
+    }
+    swipeSettling = false;
+    return false;
   }
 
-  /** Whether the stage may carry swipe feedback now: an inline translate/scale, or its settle transition still running. */
+  /** A feedback (translate / scale / opacity) CSS transition of the stage is still running. */
+  function feedbackTransitionRunning() {
+    if (typeof node.getAnimations !== 'function') return false;
+    return node.getAnimations().some((/** @type {any} */ animation) => typeof animation.transitionProperty === 'string'
+      && /^(translate|scale|opacity)$/.test(animation.transitionProperty)
+      && animation.playState !== 'finished' && animation.playState !== 'idle');
+  }
+
+  /** Whether the stage may carry swipe feedback now: an inline translate/scale, its settle transition string, or a
+   *  bounce-back that has not finished (see `swipeSettling`). */
   function feedbackLive() {
     const style = node.style;
-    return Boolean(style.translate || style.scale || /translate|scale/.test(style.transition || ''));
+    return Boolean(style.translate || style.scale || /translate|scale/.test(style.transition || '') || swipeSettling);
   }
 
   /** The stage's painted client rect without the swipe feedback (`translate` / `scale`, which getBoundingClientRect
@@ -386,6 +421,12 @@ export function coverZoom(node, params) {
     return withoutSwipeFeedback(rect, parseSwipeFeedback(computed.translate, computed.scale), state);
   }
 
+  /** Opt-in debug: one line per settled-draw decision with the pinned overlay rect against the stage's. */
+  function logDraw(/** @type {string} */ decision) {
+    if (!overlay) return;
+    console.log('[cover-swipe-draw]', JSON.stringify({ decision, swipeSettling, shown: overlay.shown, stageRaw: debugRect(node.getBoundingClientRect()), stageRest: debugRect(stageRect()), pinned: debugRect(overlay.pinnedVisual), overlayBox: debugRect(overlay.element.getBoundingClientRect()), style: overlay.element.style.cssText }));
+  }
+
   /** Copy the stage's swipe feedback (translate, scale, opacity, transition) onto the overlay: called from the change
    *  observer (before paint) for every style change of the stage, so both move, fade and settle together. Not during the
    *  reset glide, whose copy runs its own animation. */
@@ -395,6 +436,8 @@ export function coverZoom(node, params) {
     const next = resetting ? null : { translate: style.translate || '', scale: style.scale || '', opacity: style.opacity || '', transition: style.transition || '' };
     const released = !pinch && swipeFeedbackReleased(mirrored, next); // a pinch keeps its overlay shown (it follows the stage)
     mirrored = next;
+    // From the release (or any settle transition) until the stage is back at rest its rect is moving.
+    if (released || (next && /translate|scale/.test(next.transition))) swipeSettling = true;
     if (released) {
       // The swipe ended and the stage bounces back by its own transition. Cover and overlay return in the same write:
       // the overlay is cleared of every feedback property and hidden here (the stage's own image shows the bounce) and
@@ -415,7 +458,7 @@ export function coverZoom(node, params) {
     const step = () => {
       const s = getComputedStyle(node);
       const o = getComputedStyle(overlay.element);
-      console.log('[cover-swipe]', JSON.stringify({ released, left, stage: [s.translate, s.scale, s.opacity], overlay: [o.translate, o.scale, o.opacity, o.transform], shown: overlay.shown, sameSource: overlay.drawnSource === currentSource() }));
+      console.log('[cover-swipe]', JSON.stringify({ released, left, stage: [s.translate, s.scale, s.opacity], overlay: [o.translate, o.scale, o.opacity, o.transform], shown: overlay.shown, sameSource: overlay.drawnSource === currentSource(), swipeSettling, stageRect: debugRect(node.getBoundingClientRect()), overlayRect: debugRect(overlay.element.getBoundingClientRect()), pinned: debugRect(overlay.pinnedVisual) }));
       left -= 1;
       if (left > 0) requestAnimationFrame(step);
     };
@@ -783,6 +826,12 @@ function clipToAncestors(node, rect) {
   return visible;
 }
 
+/** A rect as [left, top, width, height] rounded to 0.1 px, for the opt-in debug log. @param {Rect | null | undefined} r */
+function debugRect(r) {
+  const round = (/** @type {number} */ n) => Math.round(n * 10) / 10;
+  return r ? [round(r.left), round(r.top), round(r.width), round(r.height)] : null;
+}
+
 /** The stage's swipe feedback properties (swipe-dismiss.js damped mode): mirrored onto the overlay, never a foreign change. */
 const FEEDBACK_PROPERTY = /^(translate|scale|opacity|transition(-.*)?)$/;
 
@@ -893,6 +942,8 @@ function createOverlayCanvas(node) {
     get drawnSource() { return shown ? drawnSource : ''; },
     /** Shown with a drawing that can follow the stage. */
     get following() { return shown && drawnAt !== null; },
+    /** The stage's painted rect (without swipe feedback) the shown drawing is pinned to; null when hidden. */
+    get pinnedVisual() { return shown && drawnAt ? drawnAt.visual : null; },
     paneRect() { return parent.getBoundingClientRect(); },
     /**
      * @param {Rect} visual the stage's painted client rect now (without swipe feedback) @param {Rect} paneBox the pane's
@@ -953,6 +1004,7 @@ function createOverlayCanvas(node) {
       }
       context.drawImage(image, plan.source.x, plan.source.y, plan.source.width, plan.source.height, plan.dest.x, plan.dest.y, plan.dest.width, plan.dest.height);
       context.restore();
+      // Last write: left / top / size / transform-origin / feedback above are pinned before the canvas becomes visible.
       canvas.style.opacity = shownOpacity();
       shown = true;
       return true;

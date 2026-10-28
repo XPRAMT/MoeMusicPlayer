@@ -246,3 +246,40 @@ export function overlayFeedbackStyle(f) {
 export function overlayMatchesSource(drawnSource, currentSource) {
   return (drawnSource || "") === (currentSource || "");
 }
+
+/** The overlay's pinned rect may differ from the stage's by at most this many px while it is visible (ADR 0036). */
+export const OVERLAY_ALIGN_TOLERANCE_PX = 1;
+
+/** Whether two client rects are the same box within `tolerance` px on every edge. @param {Rect} a @param {Rect} b @param {number} [tolerance] */
+export function rectsAlign(a, b, tolerance = OVERLAY_ALIGN_TOLERANCE_PX) {
+  return Math.abs(a.left - b.left) <= tolerance
+    && Math.abs(a.top - b.top) <= tolerance
+    && Math.abs(a.width - b.width) <= tolerance
+    && Math.abs(a.height - b.height) <= tolerance;
+}
+
+/** Whether a (computed) swipe feedback is back at rest: no displacement and no scale. @param {SwipeFeedback} feedback */
+export function swipeFeedbackAtRest(feedback) {
+  return Math.abs(feedback.x) < 0.01 && Math.abs(feedback.y) < 0.01 && Math.abs(feedback.scale - 1) < 1e-4;
+}
+
+/**
+ * What the settled draw may do now. The stage is "settling" while a swipe's bounce-back is not over: its transition
+ * string is still set, a feedback transition is still running (clearing the string does not stop a running transition,
+ * so the string alone says nothing), or its computed translate / scale are not at rest yet. A settling stage's rect is
+ * moving: the overlay stays hidden (`wait`). Otherwise the overlay is pinned from the live stage rect in the same write
+ * that shows it (`draw`).
+ * @param {{ settling: boolean }} input @returns {'wait' | 'draw'}
+ */
+export function planSettledOverlay({ settling }) {
+  return settling ? 'wait' : 'draw';
+}
+
+/**
+ * After a draw, before anything is painted: keep the overlay only if the stage rect it was pinned to still is the stage's
+ * live rect (within the tolerance); a pinned rect older than the last layout or feedback change is dropped.
+ * @param {Rect} pinnedVisual @param {Rect} liveVisual @returns {'keep' | 'hide'}
+ */
+export function verifyShownOverlay(pinnedVisual, liveVisual) {
+  return rectsAlign(pinnedVisual, liveVisual) ? 'keep' : 'hide';
+}
