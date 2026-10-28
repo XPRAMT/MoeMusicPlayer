@@ -303,18 +303,6 @@
     }
   }
 
-  function codecKeydown(event: KeyboardEvent, index: number): void {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    event.preventDefault();
-    event.stopPropagation();
-    const to = index + (event.key === 'ArrowUp' ? -1 : 1);
-    if (to < 0 || to >= codecRows.length) return;
-    moveCodec(index, to);
-    const list = (event.currentTarget as HTMLElement).closest('.bluetooth-codec-list');
-    // Keep the keyboard on the moved row once the new order is drawn.
-    setTimeout(() => list?.querySelectorAll<HTMLElement>('[data-codec-index]')[to]?.focus(), 0);
-  }
-
   // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Both buttons save at once; there is no panel of ours. In
   // 獨佔 the playback service asks Android's USB permission dialog by itself whenever the USB audio device the choice plays
   // on is attached and not permitted (the mode choice is the request, the system dialog the consent, so ADR 0039's panel
@@ -633,20 +621,18 @@
   {:else}
     <ol class="track-column-settings bluetooth-codec-list" use:longPressDragGuard={() => codecDrag !== null} aria-label={tr('藍牙編碼順序')}>
       {#each codecRows as row, index (row.key)}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <li
           class="track-column-setting-row"
           class:column-order-dragging={codecDrag?.fromIndex === index}
           class:column-order-drop-before={codecDrag !== null && codecDrag.toIndex === index && codecDrag.fromIndex > index}
           class:column-order-drop-after={codecDrag !== null && codecDrag.toIndex === index && codecDrag.fromIndex < index}
           data-codec-index={index}
-          tabindex="0"
-          use:appTooltip={tr('長按 300 毫秒後拖曳排序；鍵盤可用上下方向鍵')}
+          use:appTooltip={tr('長按 300 毫秒後拖曳排序')}
           onpointerdown={(event) => codecPointerDown(event, index)}
           onpointermove={codecPointerMove}
           onpointerup={codecPointerUp}
           onpointercancel={codecPointerCancel}
-          onkeydown={(event) => codecKeydown(event, index)}
         >
           <span class="track-column-setting-label">
             <span>{row.name}</span>

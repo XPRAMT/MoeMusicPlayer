@@ -1040,5 +1040,6 @@
   "使用中": "In use",
   "此耳機不支援": "Not supported by this headset",
   "第 {0} 項": "Item {0}",
-  "無法切換藍牙編碼": "Could not switch the Bluetooth codec"
+  "無法切換藍牙編碼": "Could not switch the Bluetooth codec",
+  "長按 300 毫秒後拖曳排序": "Long-press for 300 ms, then drag to reorder"
 }
