@@ -626,8 +626,13 @@ impl RodioBackend {
         self.last_device_check = now;
     }
 
-    fn plan_for(&self, path: &Path, decoder: &AudioDecoder) -> crate::dsee::DseePlan {
-        crate::dsee::plan(self.dsee_enabled, path, &track_signal(decoder))
+    fn plan_for(&mut self, path: &Path, decoder: &AudioDecoder) -> crate::dsee::DseePlan {
+        crate::dsee::plan(
+            self.dsee_enabled,
+            path,
+            &track_signal(decoder),
+            &mut self.track.dsee_probe,
+        )
     }
 }
 
@@ -681,6 +686,8 @@ impl AudioBackend for RodioBackend {
 
     fn load(&mut self, path: &Path) -> Result<Option<Duration>, AudioError> {
         let decoder = open_decoder_with(path, &self.config.dsd)?;
+        // A new load is a new track: its header is read again.
+        self.track.dsee_probe.clear();
         let plan = self.plan_for(path, &decoder);
         self.prepare_output_for(plan_rate(&decoder, plan.output_rate));
         self.track.load_decoder(path, decoder, plan.engagement)
@@ -1143,6 +1150,8 @@ struct TrackPlayer {
     /// Rate of the samples appended to the mixer, after DSEE HX when it is active.
     playback_rate: Option<SampleRate>,
     dsee_enabled: bool,
+    /// What DSEE HX learned from the loaded track's header (local or remote), so a seek does not read it again.
+    dsee_probe: crate::dsee::ProbeCache,
     dsee_state: DseeHxState,
     dsee_notice: Option<String>,
     /// The current source goes through the in-app high-quality resampler.
@@ -1177,6 +1186,7 @@ impl TrackPlayer {
             source_rate: None,
             playback_rate: None,
             dsee_enabled: false,
+            dsee_probe: crate::dsee::ProbeCache::default(),
             dsee_state: DseeHxState::Off,
             dsee_notice: None,
             in_app: false,
@@ -1349,7 +1359,12 @@ impl TrackPlayer {
         position: Duration,
     ) -> Result<Duration, AudioError> {
         let mut decoder = open_decoder_with(path, &self.dsd)?;
-        let plan = crate::dsee::plan(self.dsee_enabled, path, &track_signal(&decoder));
+        let plan = crate::dsee::plan(
+            self.dsee_enabled,
+            path,
+            &track_signal(&decoder),
+            &mut self.dsee_probe,
+        );
         decoder
             .try_seek(position)
             .map_err(|error| AudioError::Seek(error.to_string()))?;

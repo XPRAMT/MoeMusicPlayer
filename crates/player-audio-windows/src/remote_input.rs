@@ -32,12 +32,18 @@ static LINK_LOST: Mutex<Option<String>> = Mutex::new(None);
 
 /// Take the "server could not be reached" failure of the playing remote track, if its stream reported one.
 pub(crate) fn take_link_lost() -> Option<String> {
-    LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).take()
+    LINK_LOST
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
 }
 
 /// Whether the playing remote track's stream reported "server could not be reached" (not taken).
 pub(crate) fn link_lost_pending() -> bool {
-    LINK_LOST.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    LINK_LOST
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some()
 }
 
 thread_local! {
@@ -90,8 +96,10 @@ pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
     let text = path
         .to_str()
         .ok_or_else(|| failed("the remote location is not text".to_owned()))?;
-    let Some(player_core::MediaLocator::Remote { source_id, path: relative }) =
-        player_core::parse_remote_locator_uri(text)
+    let Some(player_core::MediaLocator::Remote {
+        source_id,
+        path: relative,
+    }) = player_core::parse_remote_locator_uri(text)
     else {
         return Err(failed("not a remote location".to_owned()));
     };
@@ -121,6 +129,22 @@ pub(crate) fn open(path: &Path) -> Result<RemoteInput, AudioError> {
     })
 }
 
+/// Open `path` for reading, a local file or a remote pseudo path alike, with its length in bytes. This is the one place
+/// that tells the two apart for code that only needs the bytes (the DSEE HX header probe); decoders keep their own
+/// opening because they also need the WavPack correction file and the like.
+pub(crate) fn open_reader(path: &Path) -> Result<(Box<dyn ReadSeek>, u64), AudioError> {
+    if is_remote(path) {
+        let input = open(path)?;
+        return Ok((input.main, input.len));
+    }
+    let file = std::fs::File::open(path).map_err(|error| AudioError::FileOpen {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let len = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    Ok((Box::new(file), len))
+}
+
 /// What rodio's decoders read from: a local file or a remote one, `Sync` as rodio requires.
 pub(crate) trait MediaRead: Read + Seek + Send + Sync {}
 impl<T: Read + Seek + Send + Sync> MediaRead for T {}
@@ -137,7 +161,10 @@ impl<R> SyncReader<R> {
 
 impl<R: Read> Read for SyncReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.get_mut().unwrap_or_else(PoisonError::into_inner).read(buf)
+        self.0
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .read(buf)
     }
 }
 
@@ -150,8 +177,78 @@ impl<R: Seek> Seek for SyncReader<R> {
     }
 }
 
+/// A remote provider for tests: it serves fixture files by name.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::collections::HashMap;
+    use std::io;
+    use std::sync::{Mutex, PoisonError};
+
+    /// Serves fixtures by name, so a remote pseudo path reads the same bytes a local path does.
+    pub(crate) struct FixtureContent;
+
+    /// How many times each name was opened.
+    static OPENS: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
+
+    pub(crate) fn opens_of(name: &str) -> usize {
+        OPENS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|opens| opens.get(name).copied())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn fixture_path(name: &str) -> std::path::PathBuf {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Some(temporary) = name.strip_prefix("tmp/") {
+            return std::env::temp_dir().join(temporary);
+        }
+        match name.strip_prefix("wv/") {
+            Some(wavpack) => manifest
+                .join("../player-wavpack/tests/fixtures")
+                .join(wavpack),
+            None => manifest.join("tests/fixtures").join(name),
+        }
+    }
+
+    /// The one source id the fixtures belong to.
+    pub(crate) fn fixtures_source() -> player_core::SourceId {
+        player_core::SourceId::parse("00000000-0000-4000-8000-000000000001").unwrap()
+    }
+
+    impl player_core::RemoteContent for FixtureContent {
+        fn open(
+            &self,
+            source_id: player_core::SourceId,
+            path: &str,
+        ) -> io::Result<player_core::RemoteFileHandle> {
+            if source_id != fixtures_source() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "unknown source"));
+            }
+            let file = std::fs::File::open(fixture_path(path))?;
+            let len = file.metadata()?.len();
+            *OPENS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_or_insert_with(HashMap::new)
+                .entry(path.to_owned())
+                .or_insert(0) += 1;
+            Ok(player_core::RemoteFileHandle {
+                reader: Box::new(file),
+                len,
+            })
+        }
+    }
+
+    pub(crate) fn pseudo(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(player_core::remote_locator_uri(fixtures_source(), name))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
     use super::*;
 
     #[test]
@@ -172,51 +269,10 @@ mod tests {
         assert_eq!(buffer, [3, 4]);
     }
 
-    /// Serves fixtures by name, so a remote pseudo path decodes the same bytes a local path does.
-    struct FixtureContent;
-
-    fn fixture_path(name: &str) -> std::path::PathBuf {
-        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        if let Some(temporary) = name.strip_prefix("tmp/") {
-            return std::env::temp_dir().join(temporary);
-        }
-        match name.strip_prefix("wv/") {
-            Some(wavpack) => manifest.join("../player-wavpack/tests/fixtures").join(wavpack),
-            None => manifest.join("tests/fixtures").join(name),
-        }
-    }
-
-    /// The one source id the fixtures belong to.
-    fn fixtures_source() -> player_core::SourceId {
-        player_core::SourceId::parse("00000000-0000-4000-8000-000000000001").unwrap()
-    }
-
-    impl player_core::RemoteContent for FixtureContent {
-        fn open(
-            &self,
-            source_id: player_core::SourceId,
-            path: &str,
-        ) -> io::Result<player_core::RemoteFileHandle> {
-            if source_id != fixtures_source() {
-                return Err(io::Error::new(io::ErrorKind::NotFound, "unknown source"));
-            }
-            let file = std::fs::File::open(fixture_path(path))?;
-            let len = file.metadata()?.len();
-            Ok(player_core::RemoteFileHandle {
-                reader: Box::new(file),
-                len,
-            })
-        }
-    }
-
-    fn pseudo(name: &str) -> std::path::PathBuf {
-        std::path::PathBuf::from(player_core::remote_locator_uri(fixtures_source(), name))
-    }
-
     #[test]
     fn remote_pseudo_paths_decode_exactly_like_local_files() {
-        use crate::DsdOptions;
         use crate::rodio_backend::open_decoder_with;
+        use crate::DsdOptions;
         use rodio::Source;
 
         player_core::set_remote_content(std::sync::Arc::new(FixtureContent));
@@ -274,16 +330,13 @@ mod tests {
 
     #[test]
     fn a_remote_file_that_cannot_be_opened_is_a_file_open_error() {
-        use crate::DsdOptions;
         use crate::rodio_backend::open_decoder_with;
+        use crate::DsdOptions;
 
         player_core::set_remote_content(std::sync::Arc::new(FixtureContent));
-        let error = open_decoder_with(
-            &pseudo("no-such-file.flac"),
-            &DsdOptions::default(),
-        )
-        .err()
-        .expect("opening fails");
+        let error = open_decoder_with(&pseudo("no-such-file.flac"), &DsdOptions::default())
+            .err()
+            .expect("opening fails");
         assert!(matches!(error, AudioError::FileOpen { .. }), "{error}");
         // A pseudo path for a server that was never configured fails the same way, not with a panic.
         let elsewhere = std::path::PathBuf::from(player_core::remote_locator_uri(

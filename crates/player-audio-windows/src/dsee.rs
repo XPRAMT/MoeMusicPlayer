@@ -5,8 +5,7 @@
 //! The helper is our program; the Sony filter is never copied or embedded.
 
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -20,7 +19,7 @@ use rodio::source::SeekError;
 use rodio::{ChannelCount, Sample, SampleRate, Source};
 use symphonia::core::codecs::{CODEC_TYPE_AAC, CODEC_TYPE_MP3, CODEC_TYPE_OPUS, CODEC_TYPE_VORBIS};
 use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
@@ -111,11 +110,41 @@ pub(crate) struct DseePlan {
     pub engagement: Engagement,
 }
 
-pub(crate) fn plan(enabled: bool, path: &Path, signal: &TrackSignal) -> DseePlan {
-    plan_with(enabled, filter_installed(), path, signal)
+/// What the plan learned about the loaded track by reading its header. Kept for as long as the track is loaded, so a
+/// seek that rebuilds the plan neither reads the file again nor changes the result mid-track.
+#[derive(Default)]
+pub(crate) struct ProbeCache(Option<(PathBuf, Probed)>);
+
+impl ProbeCache {
+    /// Forget the track: the next plan reads the file again (a new load).
+    pub(crate) fn clear(&mut self) {
+        self.0 = None;
+    }
+
+    fn get(&mut self, path: &Path) -> &Probed {
+        if self.0.as_ref().is_none_or(|(cached, _)| cached != path) {
+            self.0 = Some((path.to_path_buf(), probe(path)));
+        }
+        &self.0.as_ref().expect("just filled").1
+    }
 }
 
-fn plan_with(enabled: bool, installed: bool, path: &Path, signal: &TrackSignal) -> DseePlan {
+pub(crate) fn plan(
+    enabled: bool,
+    path: &Path,
+    signal: &TrackSignal,
+    cache: &mut ProbeCache,
+) -> DseePlan {
+    plan_with(enabled, filter_installed(), path, signal, cache)
+}
+
+fn plan_with(
+    enabled: bool,
+    installed: bool,
+    path: &Path,
+    signal: &TrackSignal,
+    cache: &mut ProbeCache,
+) -> DseePlan {
     if !enabled {
         return DseePlan {
             output_rate: signal.sample_rate,
@@ -128,11 +157,6 @@ fn plan_with(enabled: bool, installed: bool, path: &Path, signal: &TrackSignal) 
             engagement: Engagement::Unavailable(INSTALL_NOTICE.to_owned()),
         };
     }
-    let probed = probe_file(path);
-    let (bits_per_sample, lossy) = match probed {
-        Some(probed) => (probed.bits_per_sample, probed.lossy),
-        None => (None, false),
-    };
     if !eligible(signal.sample_rate, signal.channels) {
         return DseePlan {
             output_rate: signal.sample_rate,
@@ -141,12 +165,13 @@ fn plan_with(enabled: bool, installed: bool, path: &Path, signal: &TrackSignal) 
             ),
         };
     }
+    let probed = cache.get(path);
     DseePlan {
         output_rate: expected_hx_rate(signal.sample_rate),
         engagement: Engagement::Run {
-            bitrate_kbps: bitrate_kbps(average_kbps(path, signal.duration), lossy),
+            bitrate_kbps: bitrate_kbps(average_kbps(probed.bytes, signal.duration), probed.lossy),
             input_rate: signal.sample_rate,
-            input_bits: pcm_bits(bits_per_sample, lossy),
+            input_bits: pcm_bits(probed.bits_per_sample, probed.lossy),
         },
     }
 }
@@ -160,45 +185,91 @@ pub(crate) fn state_of(engagement: &Engagement) -> (DseeHxState, Option<String>)
     }
 }
 
+/// The header facts DSEE HX plans from. A track that could not be read leaves them unknown, which plans like an
+/// unprobeable lossless file (16-bit, top bitrate).
+#[derive(Default)]
 struct Probed {
     bits_per_sample: Option<u16>,
     lossy: bool,
+    /// The file's size, for the average bitrate.
+    bytes: Option<u64>,
 }
 
-fn probe_file(path: &Path) -> Option<Probed> {
-    let file = File::open(path).ok()?;
-    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+/// Lets the format probe read a local or a remote track through the same reader.
+struct ProbeSource {
+    reader: crate::remote_input::SyncReader<Box<dyn crate::remote_input::ReadSeek>>,
+    bytes: u64,
+}
+
+impl Read for ProbeSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl Seek for ProbeSource {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.reader.seek(position)
+    }
+}
+
+impl MediaSource for ProbeSource {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.bytes)
+    }
+}
+
+/// Read the header of `path`, a local file or a remote pseudo path alike. Only the first blocks are read, and a failure
+/// (the server cannot be reached, an unknown format) leaves the facts unknown instead of failing the track.
+fn probe(path: &Path) -> Probed {
+    // This read is not the playing track's: its failure must not look like the track's stream giving up.
+    crate::remote_input::probing(|| probe_reader(path)).unwrap_or_default()
+}
+
+fn probe_reader(path: &Path) -> Option<Probed> {
+    let (reader, bytes) = crate::remote_input::open_reader(path).ok()?;
+    let source = ProbeSource {
+        reader: crate::remote_input::SyncReader::new(reader),
+        bytes,
+    };
+    let mut probed = Probed {
+        bytes: Some(bytes),
+        ..Probed::default()
+    };
+    let stream = MediaSourceStream::new(Box::new(source), Default::default());
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
         hint.with_extension(extension);
     }
-    let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            stream,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .ok()?;
-    let track = probed.format.default_track()?;
-    let codec = track.codec_params.codec;
-    let lossy = matches!(
-        codec,
-        CODEC_TYPE_MP3 | CODEC_TYPE_AAC | CODEC_TYPE_VORBIS | CODEC_TYPE_OPUS
-    );
-    Some(Probed {
-        bits_per_sample: track.codec_params.bits_per_sample.map(|bits| bits as u16),
-        lossy,
-    })
+    let Ok(format) = symphonia::default::get_probe().format(
+        &hint,
+        stream,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    ) else {
+        return Some(probed);
+    };
+    if let Some(track) = format.format.default_track() {
+        let codec = track.codec_params.codec;
+        probed.lossy = matches!(
+            codec,
+            CODEC_TYPE_MP3 | CODEC_TYPE_AAC | CODEC_TYPE_VORBIS | CODEC_TYPE_OPUS
+        );
+        probed.bits_per_sample = track.codec_params.bits_per_sample.map(|bits| bits as u16);
+    }
+    Some(probed)
 }
 
-fn average_kbps(path: &Path, duration: Option<Duration>) -> Option<u32> {
+fn average_kbps(bytes: Option<u64>, duration: Option<Duration>) -> Option<u32> {
     let millis = u64::try_from(duration?.as_millis()).ok()?;
     if millis == 0 {
         return None;
     }
-    let bytes = std::fs::metadata(path).ok()?.len();
-    u32::try_from(bytes.saturating_mul(8) / millis).ok()
+    u32::try_from(bytes?.saturating_mul(8) / millis).ok()
 }
 
 struct RingInner {
@@ -969,6 +1040,11 @@ mod tests {
         player.stop();
     }
 
+    /// A plan made with no earlier probe of the track.
+    fn plan_with(enabled: bool, installed: bool, path: &Path, signal: &TrackSignal) -> DseePlan {
+        super::plan_with(enabled, installed, path, signal, &mut ProbeCache::default())
+    }
+
     /// A 16-bit/24-bit PCM WAV of silence, `frames` long.
     pub(crate) fn wav_bytes(bits: u16, frames: u32) -> Vec<u8> {
         let rate = 44_100u32;
@@ -1092,6 +1168,124 @@ mod tests {
             plan_with(true, true, &missing, &signal(44_100, 2, Some(1))),
             run(1021, 16)
         );
+    }
+
+    fn serve_fixtures() {
+        player_core::set_remote_content(std::sync::Arc::new(
+            crate::remote_input::test_support::FixtureContent,
+        ));
+    }
+
+    /// Write `bytes` where the fixture provider serves it as `tmp/<name>`, and return that name and the local path.
+    fn temporary_fixture(name: &str, bytes: &[u8]) -> (String, PathBuf) {
+        let name = format!("moe-dsee-{}-{name}", std::process::id());
+        let path = std::env::temp_dir().join(&name);
+        std::fs::write(&path, bytes).unwrap();
+        (format!("tmp/{name}"), path)
+    }
+
+    /// A track on a server plans exactly like the same bytes on disk.
+    #[test]
+    fn a_remote_track_plans_like_the_same_local_file() {
+        use crate::remote_input::test_support::{fixture_path, pseudo};
+        serve_fixtures();
+        let (wav24, wav24_local) = temporary_fixture("24.wav", &wav_bytes(24, 44_100));
+        let (wav16, wav16_local) = temporary_fixture("16.wav", &wav_bytes(16, 44_100));
+        let names = [
+            "seek-tone.flac",
+            "seek-tone.mp3",
+            "seek-tone.ogg",
+            "seek-tone.wav",
+            "aac-lc.m4a",
+            wav24.as_str(),
+            wav16.as_str(),
+        ];
+        let signals = [
+            signal(44_100, 2, Some(1)),
+            signal(44_100, 2, Some(10)),
+            signal(48_000, 2, Some(1)),
+            signal(44_100, 2, None),
+            signal(96_000, 2, Some(1)),
+            signal(44_100, 1, Some(1)),
+        ];
+        for name in names {
+            let remote = pseudo(name);
+            assert!(crate::remote_input::is_remote(&remote));
+            for signal in &signals {
+                let local = plan_with(true, true, &fixture_path(name), signal);
+                assert_eq!(
+                    plan_with(true, true, &remote, signal),
+                    local,
+                    "{name} at {} Hz, {} ch",
+                    signal.sample_rate,
+                    signal.channels
+                );
+            }
+        }
+        // The 24-bit file really is planned as 24-bit through the server.
+        assert_eq!(
+            plan_with(true, true, &pseudo(&wav24), &signal(44_100, 2, Some(10))),
+            run(211, 24)
+        );
+        let _ = std::fs::remove_file(wav24_local);
+        let _ = std::fs::remove_file(wav16_local);
+    }
+
+    /// A server that cannot be read leaves the facts unknown, like a local file that cannot be read.
+    #[test]
+    fn a_remote_probe_that_fails_plans_like_an_unreadable_local_file() {
+        use crate::remote_input::test_support::pseudo;
+        serve_fixtures();
+        let one_second = signal(44_100, 2, Some(1));
+        let expected = plan_with(true, true, &fixture("no-such-file.flac"), &one_second);
+        assert_eq!(expected, run(1021, 16));
+        assert_eq!(
+            plan_with(true, true, &pseudo("no-such-file.flac"), &one_second),
+            expected
+        );
+        let elsewhere = PathBuf::from(player_core::remote_locator_uri(
+            player_core::SourceId::new(),
+            "a.flac",
+        ));
+        assert_eq!(plan_with(true, true, &elsewhere, &one_second), expected);
+        // The server's failure to open must not look like the playing track giving up.
+        assert!(!crate::remote_input::link_lost_pending());
+    }
+
+    /// Only the header is read, and only once per loaded track: seeking while DSEE HX runs plans again.
+    #[test]
+    fn the_probe_is_made_once_per_loaded_track() {
+        use crate::remote_input::test_support::{opens_of, pseudo};
+        serve_fixtures();
+        let (name, local) = temporary_fixture("cache.wav", &wav_bytes(24, 44_100));
+        let (other, other_local) = temporary_fixture("other.wav", &wav_bytes(16, 44_100));
+        let remote = pseudo(&name);
+        let one_second = signal(44_100, 2, Some(1));
+        let mut cache = ProbeCache::default();
+        let first = super::plan_with(true, true, &remote, &one_second, &mut cache);
+        assert_eq!(first, run(1021, 24));
+        assert_eq!(opens_of(&name), 1);
+        for _ in 0..3 {
+            let again = super::plan_with(true, true, &remote, &one_second, &mut cache);
+            assert_eq!(again, first);
+        }
+        assert_eq!(opens_of(&name), 1, "a seek must not read the server again");
+        // A different track replaces the cached facts.
+        let second = super::plan_with(true, true, &pseudo(&other), &one_second, &mut cache);
+        assert_eq!(second, run(1021, 16));
+        assert_eq!(opens_of(&other), 1);
+        // A new load of the first track reads it again.
+        cache.clear();
+        super::plan_with(true, true, &remote, &one_second, &mut cache);
+        assert_eq!(opens_of(&name), 2);
+        // Nothing is read when DSEE HX does not run on the track.
+        cache.clear();
+        super::plan_with(true, true, &remote, &signal(96_000, 2, Some(1)), &mut cache);
+        super::plan_with(false, true, &remote, &one_second, &mut cache);
+        super::plan_with(true, false, &remote, &one_second, &mut cache);
+        assert_eq!(opens_of(&name), 2);
+        let _ = std::fs::remove_file(local);
+        let _ = std::fs::remove_file(other_local);
     }
 
     #[test]
