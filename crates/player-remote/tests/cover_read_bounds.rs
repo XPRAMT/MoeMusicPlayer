@@ -151,7 +151,8 @@ fn m4a(moov_first: bool) -> Vec<u8> {
 
 fn dsf() -> Vec<u8> {
     let payload = vec![0x69u8; AUDIO / 2];
-    let mut file = player_dsd::testing::build_dsf(2_822_400, 80_000, 4096, true, &[payload.clone(), payload]);
+    let mut file =
+        player_dsd::testing::build_dsf(2_822_400, 80_000, 4096, true, &[payload.clone(), payload]);
     let offset = file.len() as u64;
     file[20..28].copy_from_slice(&offset.to_le_bytes());
     let mut apic = vec![0];
@@ -168,7 +169,6 @@ fn dsf() -> Vec<u8> {
     file.extend_from_slice(&tag);
     file
 }
-
 
 /// The cover (its size) and the bytes the server was asked for.
 fn lookup(bytes: Vec<u8>, name: &str) -> (Option<usize>, u64) {
@@ -204,7 +204,10 @@ fn the_cover_of_a_28_mb_song_on_a_server_costs_about_the_size_of_its_tag() {
             asked <= COVER as u64 + 1_100_000,
             "{name}: the server was asked for {asked} bytes for a {COVER} byte cover"
         );
-        assert!(asked < 28_000_000 / 10, "{name}: nowhere near the whole song");
+        assert!(
+            asked < 28_000_000 / 10,
+            "{name}: nowhere near the whole song"
+        );
     }
 }
 

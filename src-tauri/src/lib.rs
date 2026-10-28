@@ -77,6 +77,7 @@ use settings::{
 };
 mod album_artwork_analysis;
 mod album_artwork_cache;
+mod album_detail_scan;
 #[cfg(any(target_os = "android", test))]
 mod android_artwork;
 #[cfg(any(target_os = "android", test))]
@@ -179,6 +180,85 @@ struct ThemePreferencesDto {
     auto_text_color_threshold_percent: u8,
 }
 
+#[cfg(test)]
+mod album_detail_cover_scan_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn png(shade: u8) -> Vec<u8> {
+        let image = image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([shade, (x * 30) as u8, (y * 30) as u8])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    fn songs(count: usize) -> Vec<(TrackId, Vec<MediaLocator>)> {
+        (0..count)
+            .map(|index| {
+                (
+                    TrackId::new(),
+                    vec![MediaLocator::FileSystem(std::path::PathBuf::from(format!(
+                        "song-{index}.flac"
+                    )))],
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_scan_looks_at_every_song_until_it_is_cancelled_and_then_stops_between_files() {
+        // Not cancelled: every song is read.
+        let reads = Cell::new(0);
+        let (selected, failed, files) = pick_album_artwork(songs(10), true, &|| false, |_| {
+            reads.set(reads.get() + 1);
+            Some(png(10))
+        });
+        assert_eq!((files, reads.get()), (10, 10));
+        assert!(!failed);
+        assert_eq!(
+            selected.len(),
+            1,
+            "the same cover on every song is one cover"
+        );
+
+        // Cancelled while the third song is read: no fourth song is looked at, and the third says nothing.
+        let cancelled = Cell::new(false);
+        let reads = Cell::new(0);
+        let (selected, _, files) = pick_album_artwork(songs(10), true, &|| cancelled.get(), |_| {
+            reads.set(reads.get() + 1);
+            if reads.get() == 3 {
+                cancelled.set(true);
+            }
+            Some(png(10))
+        });
+        assert_eq!(
+            (files, reads.get()),
+            (3, 3),
+            "it stopped at once, not after the album"
+        );
+        assert_eq!(
+            selected.len(),
+            1,
+            "only the two songs read before the cancel count"
+        );
+
+        // Cancelled before it starts: nothing is read.
+        let reads = Cell::new(0);
+        let (selected, _, files) = pick_album_artwork(songs(10), false, &|| true, |_| {
+            reads.set(reads.get() + 1);
+            Some(png(10))
+        });
+        assert_eq!((files, reads.get()), (0, 0));
+        assert!(selected.is_empty());
+    }
+}
 #[cfg(test)]
 mod album_artwork_responsiveness_tests {
     use super::*;
@@ -3844,6 +3924,59 @@ async fn album_artwork_selection_ensure(
     representative: bool,
     force_rebuild: bool,
 ) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
+    ensure_album_artwork_selection(
+        app,
+        key,
+        album_names,
+        track_count,
+        representative,
+        force_rebuild,
+        None,
+    )
+    .await
+}
+
+/// The covers of the album whose detail page is open (ADR 0037). Same answer as the card's command, but the scan is the one
+/// cover scan of the page: it replaces the scan of the page before it (at most one runs), it is cancelled by
+/// `album_detail_cover_cancel` when the page is left, and a cancelled scan answers `None` and writes nothing.
+#[tauri::command]
+async fn album_detail_cover_ensure(
+    app: AppHandle,
+    key: String,
+    album_names: Vec<String>,
+    track_count: u64,
+    representative: bool,
+    force_rebuild: bool,
+) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
+    // Registered first thing, before the database is asked anything: from here the page leaving can reach the scan.
+    let registration = album_detail_scan::register(&key);
+    ensure_album_artwork_selection(
+        app,
+        key,
+        album_names,
+        track_count,
+        representative,
+        force_rebuild,
+        Some(registration),
+    )
+    .await
+}
+
+/// The album detail page was left (or closed): the scan it asked for under one of `keys` ends at once.
+#[tauri::command]
+fn album_detail_cover_cancel(keys: Vec<String>) {
+    album_detail_scan::cancel(&keys);
+}
+
+async fn ensure_album_artwork_selection(
+    app: AppHandle,
+    key: String,
+    album_names: Vec<String>,
+    track_count: u64,
+    representative: bool,
+    force_rebuild: bool,
+    detail_scan: Option<album_detail_scan::Registration>,
+) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
     let app_for_directory = app.clone();
     let selection_key = key.clone();
     let (directory, cached, candidates, tree_uris) = run_database_work(app.clone(), move |state| {
@@ -3897,6 +4030,14 @@ async fn album_artwork_selection_ensure(
     if let Some(selection) = cached {
         return Ok(Some(selection));
     }
+    // The page was left while the database was asked: nothing is scanned.
+    if detail_scan
+        .as_ref()
+        .is_some_and(album_detail_scan::Registration::is_cancelled)
+    {
+        eprintln!("[art] album detail cover scan: 0 files, 0 bytes read, cancelled=true");
+        return Ok(None);
+    }
 
     let mut candidate_list = candidates.unwrap_or_default();
     // An album card takes the first cover that can be read and stops; the page of an album (representative) looks through every
@@ -3917,33 +4058,21 @@ async fn album_artwork_selection_ensure(
         stopped_early = true;
     }
     let app_for_scan = app.clone();
-    let (selected_ids, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
-        run_as_bulk_cover_work(|| {
-            let failed = std::cell::Cell::new(false);
-            let artwork = candidate_list
-                .into_iter()
-                .filter_map(|(track_id, locators)| {
-                    let bytes = read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris);
-                    if bytes.is_none()
-                        && !failed.get()
-                        && remote_cover_lookup_may_have_failed(&locators)
-                    {
-                        failed.set(true);
-                    }
-                    bytes.map(|bytes| (track_id, bytes))
-                });
-            let selected = if representative {
-                album_artwork_analysis::select_representative_artwork(artwork)
-            } else {
-                album_artwork_analysis::first_artwork(artwork)
-                    .into_iter()
-                    .collect()
-            };
-            (selected, failed.get())
-        })
+    let scan = tauri::async_runtime::spawn_blocking(move || {
+        scan_album_candidate_artwork(
+            &app_for_scan,
+            candidate_list,
+            &tree_uris,
+            representative,
+            detail_scan.as_ref(),
+        )
     })
     .await
     .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"))?;
+    let Some((selected_ids, may_have_failed)) = scan else {
+        // Cancelled: whatever was read is dropped, nothing is remembered.
+        return Ok(None);
+    };
     if selected_ids.is_empty() {
         let selection = album_artwork_cache::AlbumArtworkSelection {
             track_count,
@@ -3973,6 +4102,95 @@ async fn album_artwork_selection_ensure(
     Ok(Some(selection))
 }
 
+/// Read the covers of an album's songs and pick from them, on the calling (blocking) thread. `None` when `detail_scan` was
+/// cancelled: the scan stops between files and inside the read of a file, and its partial result is not returned. A scan of
+/// the detail page logs one line (files looked at, bytes read, cancelled).
+fn scan_album_candidate_artwork(
+    app: &AppHandle,
+    candidates: Vec<(TrackId, Vec<MediaLocator>)>,
+    tree_uris: &[String],
+    representative: bool,
+    detail_scan: Option<&album_detail_scan::Registration>,
+) -> Option<(Vec<String>, bool)> {
+    let cancelled = || detail_scan.is_some_and(album_detail_scan::Registration::is_cancelled);
+    // The scan of the detail page waits for the one before it to stop, then reads with its flag set for every reader.
+    let _turn = match detail_scan {
+        Some(registration) => match registration.wait_turn() {
+            Some(turn) => Some(turn),
+            None => {
+                eprintln!("[art] album detail cover scan: 0 files, 0 bytes read, cancelled=true");
+                return None;
+            }
+        },
+        None => None,
+    };
+    let read_before = player_tags::embedded::bytes_read_on_thread();
+    let fetched_before = player_remote::fs::fetched_bytes_on_thread();
+    let work = || {
+        run_as_bulk_cover_work(|| {
+            pick_album_artwork(candidates, representative, &cancelled, |locators| {
+                read_album_candidate_artwork(app, locators, tree_uris)
+            })
+        })
+    };
+    let (selected, failed, files) = match detail_scan {
+        Some(registration) => player_core::with_read_cancel(registration.flag(), work),
+        None => work(),
+    };
+    if detail_scan.is_some() {
+        let read = player_tags::embedded::bytes_read_on_thread() - read_before;
+        let fetched = player_remote::fs::fetched_bytes_on_thread() - fetched_before;
+        let fetched_note = if fetched > 0 {
+            format!(" ({fetched} fetched from servers)")
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "[art] album detail cover scan: {files} files, {read} bytes read{fetched_note}, cancelled={}",
+            cancelled()
+        );
+    }
+    if cancelled() {
+        return None;
+    }
+    Some((selected, failed))
+}
+
+/// Look through the songs of an album one after the other for covers and pick from them. Stops before the next song once
+/// `cancelled` says so, and a song whose read was cut short by it says nothing. Returns the picked track ids, whether a
+/// song without a cover may only have failed on the network, and how many songs were looked at.
+fn pick_album_artwork(
+    candidates: Vec<(TrackId, Vec<MediaLocator>)>,
+    representative: bool,
+    cancelled: &dyn Fn() -> bool,
+    mut read: impl FnMut(&[MediaLocator]) -> Option<Vec<u8>>,
+) -> (Vec<String>, bool, usize) {
+    let files = std::cell::Cell::new(0_usize);
+    let failed = std::cell::Cell::new(false);
+    let artwork = candidates
+        .into_iter()
+        .take_while(|_| !cancelled())
+        .filter_map(|(track_id, locators)| {
+            files.set(files.get() + 1);
+            let bytes = read(&locators);
+            // A read that was cut short by the page leaving says nothing about the song.
+            if cancelled() {
+                return None;
+            }
+            if bytes.is_none() && !failed.get() && remote_cover_lookup_may_have_failed(&locators) {
+                failed.set(true);
+            }
+            bytes.map(|bytes| (track_id, bytes))
+        });
+    let selected = if representative {
+        album_artwork_analysis::select_representative_artwork(artwork)
+    } else {
+        album_artwork_analysis::first_artwork(artwork)
+            .into_iter()
+            .collect()
+    };
+    (selected, failed.get(), files.get())
+}
 /// Run album-cover picking as bulk work (its remote lookups wait behind those a person is waiting for). Only Android reads
 /// covers of remote tracks through the shared lookup this applies to.
 #[cfg(target_os = "android")]
@@ -13396,6 +13614,8 @@ pub fn run() {
             album_artwork_cache_get,
             album_artwork_cache_put,
             album_artwork_selection_ensure,
+            album_detail_cover_ensure,
+            album_detail_cover_cancel,
             album_artwork_cache_get_for_track,
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,

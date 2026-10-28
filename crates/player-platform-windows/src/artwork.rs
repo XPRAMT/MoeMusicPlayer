@@ -68,6 +68,10 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
     let mut unreachable = false;
     if let Some(content) = player_core::remote_content() {
         for (source_id, path) in &remote {
+            // The album page that asked for this cover was left: nothing more is asked of the server.
+            if player_core::read_cancelled() {
+                break;
+            }
             match content.open(*source_id, path) {
                 Ok(handle) => {
                     let len = handle.len;
@@ -102,6 +106,9 @@ pub fn find_artwork(locators: &[MediaLocator]) -> ArtworkLookup {
             }
         }
         for (source_id, path) in remote.iter().filter(|_| !unreachable) {
+            if player_core::read_cancelled() {
+                break;
+            }
             let sidecar = player_core::remote_sibling(path, sidecar_name);
             match player_core::read_remote_file_capped_checked(
                 *source_id,

@@ -350,9 +350,8 @@ impl RemoteFile for CachedFile {
                     let in_chunk = CACHE_CHUNK - inside;
                     let want = (wanted - done).min(in_chunk);
                     // A reader whose work was cancelled asks the server for nothing more.
-                    player_core::check_read_cancel().map_err(|_| {
-                        RemoteError::Protocol("the read was cancelled".to_owned())
-                    })?;
+                    player_core::check_read_cancel()
+                        .map_err(|_| RemoteError::Protocol("the read was cancelled".to_owned()))?;
                     self.misses += 1;
                     let read = self.inner.read_at(position, &mut buf[done..done + want])?;
                     if read == 0 {

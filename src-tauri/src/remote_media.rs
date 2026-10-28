@@ -74,6 +74,10 @@ impl Drop for CoverLookupTurn {
 pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<u8>> {
     let content = remote_content()?;
     let _turn = CoverLookupTurn::wait();
+    // The album page that asked for this cover was left while it waited its turn.
+    if player_core::read_cancelled() {
+        return None;
+    }
     let started = std::time::Instant::now();
     let opened = content.open(source_id, path);
     let opened_in = started.elapsed().as_millis();
@@ -105,6 +109,9 @@ pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<
         }
     }
     for name in SIDECAR_COVERS {
+        if player_core::read_cancelled() {
+            return None;
+        }
         let sidecar_started = std::time::Instant::now();
         let read = read_remote_file_capped_checked(
             source_id,

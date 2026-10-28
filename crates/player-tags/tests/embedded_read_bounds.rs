@@ -18,7 +18,10 @@ impl Read for Counting {
         let start = self.inner.position();
         let count = self.inner.read(buf)?;
         if count > 0 {
-            self.ranges.lock().unwrap().push((start, start + count as u64));
+            self.ranges
+                .lock()
+                .unwrap()
+                .push((start, start + count as u64));
         }
         Ok(count)
     }
@@ -50,7 +53,11 @@ fn read_cover(bytes: Vec<u8>, name: &str) -> (Option<usize>, u64, u64) {
     }
     let distinct: u64 = merged.iter().map(|(s, e)| e - s).sum();
     let highest = merged.last().map_or(0, |r| r.1);
-    eprintln!("{name}: cover {cover:?}, read {distinct} bytes in {} runs {:?}", merged.len(), &merged[..merged.len().min(6)]);
+    eprintln!(
+        "{name}: cover {cover:?}, read {distinct} bytes in {} runs {:?}",
+        merged.len(),
+        &merged[..merged.len().min(6)]
+    );
     (cover, distinct, highest)
 }
 
@@ -159,7 +166,8 @@ fn m4a(moov_first: bool) -> Vec<u8> {
 
 fn dsf() -> Vec<u8> {
     let payload = vec![0x69u8; AUDIO / 2];
-    let mut file = player_dsd::testing::build_dsf(2_822_400, 80_000, 4096, true, &[payload.clone(), payload]);
+    let mut file =
+        player_dsd::testing::build_dsf(2_822_400, 80_000, 4096, true, &[payload.clone(), payload]);
     let offset = file.len() as u64;
     file[20..28].copy_from_slice(&offset.to_le_bytes());
     let mut apic = vec![0];

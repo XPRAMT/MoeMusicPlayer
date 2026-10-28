@@ -603,7 +603,7 @@ impl player_core::RemoteContent for RemoteFiles {
         if let Some(cache) = self.cache.as_ref() {
             let located = self.plan(source_id, path)?;
             if cache.meta(&source_id.to_string(), &located.full).is_some() {
-                let reader = player_remote::fs::RangeReader::new(self.cached_file(source_id, path, false)?);
+                let reader = player_remote::fs::metadata_reader(self.cached_file(source_id, path, false)?);
                 let len = reader.len();
                 return Ok(player_core::RemoteFileHandle {
                     reader: Box::new(reader),
@@ -612,10 +612,11 @@ impl player_core::RemoteContent for RemoteFiles {
             }
         }
         let (fs, full) = self.locate(source_id, path)?;
-        // Tags, covers and lyrics need the start of a file (and a little more): the default read-ahead of a few blocks is
-        // plenty. The SMB-tuned read-ahead (8 MiB per request) is for playing a file from start to end; with it, a screenful of
-        // album covers asked for at once is dozens of 8 MiB requests on one connection, which the server does not answer in time.
-        let reader = player_remote::fs::RangeReader::new(fs.open(&full)?);
+        // Tags, covers and lyrics need the tag of a file (its start or its end), never the song: the reader for tags asks for
+        // small blocks and grows its requests only while a picture is being read through. The SMB-tuned read-ahead (8 MiB per
+        // request) is for playing a file from start to end; with it, a screenful of album covers asked for at once is dozens of
+        // 8 MiB requests on one connection, which the server does not answer in time.
+        let reader = player_remote::fs::metadata_reader(fs.open(&full)?);
         let len = reader.len();
         Ok(player_core::RemoteFileHandle {
             reader: Box::new(reader),
