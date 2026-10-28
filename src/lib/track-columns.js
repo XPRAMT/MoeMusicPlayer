@@ -24,13 +24,13 @@ export const TRACK_COLUMN_DEFINITIONS = Object.freeze([
   { id: 'audioFormat', label: tr('音訊格式'), min: '163px', minPx: 163 },
   { id: 'duration', label: tr('長度'), min: '4em', minPx: 52 },
   { id: 'playCount', label: tr('播放次數'), min: '5em', minPx: 65 },
-  { id: 'source', label: tr('來源'), min: 'minmax(110px,0.9fr)', minPx: 110 },
+  { id: 'source', label: tr('來源'), min: 'auto', minPx: 64 },
 ]);
 
 /** Column values rendered as dates, counts, or durations use centered alignment. */
 const NUMERIC_LIST_COLUMN_IDS = new Set([
   'year', 'createdAt', 'modifiedAt', 'duration', 'playCount',
-  'trackCount', 'albumCount', 'trackDuration', 'played',
+  'trackCount', 'albumCount', 'trackDuration', 'played', 'source',
 ]);
 
 /** @param {string} id */
@@ -63,7 +63,7 @@ export const DEFAULT_TRACK_COLUMN_WIDTHS = Object.freeze({
   title: 184,
   artist: 144,
   album: 257,
-  source: 140,
+  source: 64,
 });
 
 export const DEFAULT_TRACK_ROW_HEIGHT_PX = 50;
@@ -80,7 +80,37 @@ export function normalizeTrackRowHeightPx(value) {
 export const DEFAULT_LIBRARY_SORT = Object.freeze({ field: 'createdAt', direction: 'asc' });
 
 /** @type {ReadonlySet<TrackColumnId>} */
-export const RESIZABLE_TRACK_COLUMN_IDS = Object.freeze(new Set(/** @type {TrackColumnId[]} */ (['title', 'artist', 'album', 'source'])));
+export const RESIZABLE_TRACK_COLUMN_IDS = Object.freeze(new Set(/** @type {TrackColumnId[]} */ (['title', 'artist', 'album'])));
+
+/** Width of the source column before its labels were measured (and what the settings file keeps in `widths.source`; the stored value is never read). */
+export const SOURCE_COLUMN_FALLBACK_PX = 64;
+/** Room the header keeps next to its title for the sort indicator (gap 4 px + the 9 px arrow). */
+export const SOURCE_HEADER_INDICATOR_PX = 14;
+/** Horizontal padding inside the source cell and a rounding margin so the widest label never reaches the ellipsis. */
+export const SOURCE_CELL_PADDING_PX = 4;
+
+/**
+ * The smallest width at which the source column shows all of its text: the widest of every label the list can show
+ * (the whole set of source names, not the rows on screen) and the header title with its sort indicator.
+ * @param {string[]} labels every source label
+ * @param {string} headerLabel the column title
+ * @param {(text: string, kind: 'cell' | 'header') => number} measure text width in px with the list's real font
+ */
+export function computeSourceColumnWidthPx(labels, headerLabel, measure) {
+  let widest = 0;
+  for (const label of labels) {
+    if (typeof label !== 'string' || label === '') continue;
+    widest = Math.max(widest, measure(label, 'cell'));
+  }
+  const header = measure(headerLabel, 'header') + SOURCE_HEADER_INDICATOR_PX;
+  const width = Math.ceil(Math.max(widest, header)) + SOURCE_CELL_PADDING_PX;
+  return Number.isFinite(width) && width > 0 ? width : SOURCE_COLUMN_FALLBACK_PX;
+}
+
+/** @param {unknown} value */
+function sourceWidthOrFallback(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : SOURCE_COLUMN_FALLBACK_PX;
+}
 
 /** @type {Set<TrackColumnId>} */
 const COLUMN_IDS = new Set(TRACK_COLUMN_DEFINITIONS.map(({ id }) => id));
@@ -116,9 +146,8 @@ export function normalizeTrackColumnWidths(value) {
     album: typeof record.album === 'number' && Number.isFinite(record.album)
       ? clampFlexibleWidth(record.album)
       : DEFAULT_TRACK_COLUMN_WIDTHS.album,
-    source: typeof record.source === 'number' && Number.isFinite(record.source)
-      ? clampFlexibleWidth(record.source)
-      : DEFAULT_TRACK_COLUMN_WIDTHS.source,
+    // The source column sizes itself; a stored width is ignored.
+    source: DEFAULT_TRACK_COLUMN_WIDTHS.source,
   };
 }
 
@@ -271,12 +300,14 @@ export function trackListColumnCount(preferences) {
 /**
  * @param {TrackColumnPreference[]} preferences
  * @param {TrackColumnWidths | null | undefined} [widths]
+ * @param {number} [sourceWidthPx] measured width of the source column (`computeSourceColumnWidthPx`)
  */
-export function trackListGridTemplate(preferences, widths) {
+export function trackListGridTemplate(preferences, widths, sourceWidthPx) {
   const flexible = normalizeTrackColumnWidths(widths);
   const informationColumns = visibleTrackColumns(preferences).map(({ id }) => {
+    if (id === 'source') return `${sourceWidthOrFallback(sourceWidthPx)}px`;
     if (RESIZABLE_TRACK_COLUMN_IDS.has(id)) {
-      return `${flexible[/** @type {'title' | 'artist' | 'album' | 'source'} */ (id)]}px`;
+      return `${flexible[/** @type {'title' | 'artist' | 'album'} */ (id)]}px`;
     }
     return COLUMN_DEFINITION_BY_ID.get(id)?.min ?? 'minmax(100px,1fr)';
   });
@@ -288,13 +319,15 @@ export function trackListGridTemplate(preferences, widths) {
  * Includes the index column, horizontal padding, and gaps.
  * @param {TrackColumnPreference[]} preferences
  * @param {TrackColumnWidths | null | undefined} [widths]
+ * @param {number} [sourceWidthPx]
  */
-export function trackListMinWidthPx(preferences, widths) {
+export function trackListMinWidthPx(preferences, widths, sourceWidthPx) {
   const flexible = normalizeTrackColumnWidths(widths);
   const visible = visibleTrackColumns(preferences);
   const information = visible.reduce((sum, column) => {
+    if (column.id === 'source') return sum + sourceWidthOrFallback(sourceWidthPx);
     if (RESIZABLE_TRACK_COLUMN_IDS.has(column.id)) {
-      return sum + flexible[/** @type {'title' | 'artist' | 'album' | 'source'} */ (column.id)];
+      return sum + flexible[/** @type {'title' | 'artist' | 'album'} */ (column.id)];
     }
     return sum + (COLUMN_DEFINITION_BY_ID.get(column.id)?.minPx ?? 100);
   }, 0);

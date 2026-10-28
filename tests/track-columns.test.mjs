@@ -36,6 +36,11 @@ import {
   trackColumnDropIndexFromPointer,
   trackListColumnCount,
   trackListGridTemplate,
+  computeSourceColumnWidthPx,
+  SOURCE_CELL_PADDING_PX,
+  SOURCE_HEADER_INDICATOR_PX,
+  RESIZABLE_TRACK_COLUMN_IDS,
+  trackListMinWidthPx,
   visibleTrackColumns,
 } from '../src/lib/track-columns.js';
 
@@ -539,13 +544,41 @@ test('Now Playing A and B keep artwork/lyrics order when stacked', () => {
   assert.deepEqual(nowPlayingLayoutOrder(undefined), ['artwork', 'lyrics']);
 });
 
-test('the source column is resizable, clamps, and older saved widths without it get the default', () => {
-  const widths = setTrackColumnWidth(DEFAULT_TRACK_COLUMN_WIDTHS, 'source', 12);
-  assert.equal(widths.source, 80);
-  assert.equal(setTrackColumnWidth(widths, 'source', 300).source, 300);
-  assert.equal(normalizeTrackColumnWidths({ title: 200, artist: 150, album: 260 }).source, DEFAULT_TRACK_COLUMN_WIDTHS.source);
+test('the source column sizes itself to its widest text and cannot be resized', () => {
+  const measure = (text, kind) => text.length * (kind === 'header' ? 10 : 8);
+  const labels = ['本地', 'NAS-server', 'a'];
+  // Widest label 10 chars * 8 = 80; header '來源' 2 * 10 + indicator 14 = 34; plus the padding.
+  assert.equal(computeSourceColumnWidthPx(labels, '來源', measure), 80 + SOURCE_CELL_PADDING_PX);
+  // A header wider than every label wins (title and sort indicator must fit too).
+  assert.equal(computeSourceColumnWidthPx(['a'], 'Source-title', measure), 12 * 10 + SOURCE_HEADER_INDICATOR_PX + SOURCE_CELL_PADDING_PX);
+  assert.equal(computeSourceColumnWidthPx([], '來源', measure), 2 * 10 + SOURCE_HEADER_INDICATOR_PX + SOURCE_CELL_PADDING_PX);
+  assert.ok(!RESIZABLE_TRACK_COLUMN_IDS.has('source'));
+  const widths = setTrackColumnWidth(DEFAULT_TRACK_COLUMN_WIDTHS, 'source', 300);
+  assert.equal(widths.source, DEFAULT_TRACK_COLUMN_WIDTHS.source);
+  // A stored width is ignored, in the template and in the minimum width.
+  assert.equal(normalizeTrackColumnWidths({ title: 200, artist: 150, album: 260, source: 999 }).source, DEFAULT_TRACK_COLUMN_WIDTHS.source);
   const columns = DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column, visible: true }));
-  assert.match(trackListGridTemplate(columns, { ...DEFAULT_TRACK_COLUMN_WIDTHS, source: 222 }), /222px/);
+  const template = trackListGridTemplate(columns, { ...DEFAULT_TRACK_COLUMN_WIDTHS, source: 999 }, 84);
+  assert.equal(template.split(' ').at(-1), '84px');
+  assert.doesNotMatch(template, /999px/);
+  const narrow = trackListMinWidthPx(columns, DEFAULT_TRACK_COLUMN_WIDTHS, 84);
+  assert.equal(trackListMinWidthPx(columns, DEFAULT_TRACK_COLUMN_WIDTHS, 184) - narrow, 100);
+  // Header and rows share the one template function: the same inputs give the same string.
+});
+
+test('the source column header and cells are centered like the numeric columns', async () => {
+  assert.equal(isNumericListColumn('source'), true);
+  const cells = await readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8');
+  assert.ok(cells.includes('class:is-numeric={isNumericListColumn(cell.id)}'));
+  assert.ok(cells.includes(".list-column.is-numeric .column-sort-button {"));
+});
+
+test('every track list feeds the measured source width into one template for header and rows', async () => {
+  for (const name of ['TrackList', 'PlaybackQueueList', 'PlaylistEntryList']) {
+    const source = await readFile(new URL(`../src/lib/${name}.svelte`, import.meta.url), 'utf8');
+    assert.ok(source.includes('trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx)'));
+    assert.ok(source.includes('trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx)'));
+  }
 });
 
 test('the modified column shows the file date like the created one and is off by default outside Android', async () => {

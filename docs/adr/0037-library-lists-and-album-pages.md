@@ -6,6 +6,10 @@ Status: 已採納
 
 曲目表格、欄位、專輯首頁與詳情頁的資料載入、封面預載、來源範圍篩選與從列表建立播放佇列的規則原本只記在 AGENTS.md，沒有對應的 ADR（專輯詳情捲動另見 ADR 0012）。此 ADR 記錄其目前設計。
 
+## 來源欄寬
+
+來源欄的文字集合很小且已知（「本地」與伺服器名稱），所以不開放手動調整：自動算成能完整顯示全部標籤與標題的最小寬度，使用者不必為了看完整名稱拖欄寬，而且依全部來源名稱（不是畫面上的列）計算，捲動時寬度不會跳動。量測用清單實際的字型，重算時機為來源變動與字型變動。標題與內容置中，與數值欄一致，較窄的欄看起來比較平衡。
+
 ## 目前設計
 
 專輯詳情資料：`AlbumDetail.svelte` 的 `loadDetailData` 讓 facets（快速索引與曲目數）與 artists 各自非同步取得、不等封面；封面先用卡片的第一張（`album_artwork_selection_ensure` 的 `representative: false`），再背景掃全部曲目換成拼貼（`representative: true`，發出 `album-artwork-selection-updated`）。「依專輯曲目編號排序」：`list_album_tracks_page_with_index_sort` 與分碟快速索引（`album_detail_facets`）同一規則：有碟號 ≥ 2 才算多碟，依碟號→音軌號→標題（`MUSIC_LOCALE_NATURAL`）→track_id 排序並分組（無碟號者排最後、歸「未知」）；碟號只有 0、1、空白時只依音軌號（缺者最後）→標題→track_id。專輯頁點歌用 `PlaybackQueueSource` 的 `album` 來源（`{ kind:'album', albumNames: string[], sort, indexSort }`，`onPlay(track, order)` 傳出目前排序，Rust `queue_for_track` 以 `Database::list_album_track_ids` 建佇列，Windows 與 Android 相同；別名精確比對）。測試 `album_queue_*`、`album_with_only_disc_zero_one_or_blank_sorts_by_track_number_alone`。

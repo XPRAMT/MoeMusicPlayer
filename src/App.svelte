@@ -184,6 +184,7 @@
   import { SLEEP_TIMER_DRAG_STEP_PX, SLEEP_TIMER_MAX_HOURS, SLEEP_TIMER_MAX_MINUTE_FIELD, SLEEP_TIMER_MAX_MINUTES, SLEEP_TIMER_WHEEL_STEP_PX, accumulateSleepTimerSteps, adjustSleepTimerField, splitSleepTimer, splitSleepTimerClock, beginSleepTimerEdit, getSleepTimerEditMinutes, stepSleepTimerEdit, SLEEP_TIMER_EDIT_IDLE_MS, formatSleepTimer, getSleepTimerDisplayMinutes, getSleepTimerRemainingMs } from './lib/sleep-timer.js';
   import type { SleepTimerSnapshot } from './lib/ipc';
   import { seekPlayback } from './lib/ipc';
+  import { refreshRemoteSourceNames } from './lib/source-column-width.js';
   import { acceptsTrackChoice, createPlaybackCommandOrder } from './lib/playback-command-order.js';
   import type { AlbumTrackOrder } from './lib/ipc';
   import type { AndroidAllFilesAccessStatus, AndroidWallpaperBackdropStatus } from './lib/ipc';
@@ -1795,6 +1796,7 @@
     }
 
     return () => {
+        refreshRemoteSourceNames(),
       disposed = true;
       window.removeEventListener('resize', updateTrackHeaderTextOffset);
       window.removeEventListener('popstate', handleDetailHistoryPopState);

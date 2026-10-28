@@ -1,4 +1,5 @@
 ﻿<script lang="ts">
+  import { setRemoteSourceNames } from './source-column-width.js';
   // Remote music sources (ADR 0026): the servers (accounts) and the folders of them that join the library.
   // A password is only ever typed here and sent to the backend, which seals it; the page never gets it back.
   import { onMount, tick, type Snippet } from 'svelte';
@@ -40,6 +41,7 @@
   async function loadAccounts(): Promise<void> {
     try {
       accounts = await invokeCommand('remote_accounts_list', {});
+      setRemoteSourceNames(accounts.map((account) => account.name));
     } catch (cause) {
       error = getErrorText(cause);
     } finally {

@@ -24,6 +24,7 @@
 </script>
 
 <script lang="ts">
+  import { sourceColumnWidthPx } from './source-column-width.js';
   import { tr } from './i18n.js';
   import { isGroupedSortField } from './grouped-sorts.js';
 import { getErrorText, invokeCommand, type PlaylistEntrySummary, type PlaylistListSort, type PlaylistPage, type TrackColumnWidths, type TrackListColumnPreference } from './ipc';
@@ -92,8 +93,8 @@ import { PagedListController } from './track-list-data.js';
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
-  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths));
-  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
   let sort = $state<PlaylistListSort>({ ...INITIAL_PLAYLIST_SORT });
   let sortPlaylistId = $state<string | null>(null);
