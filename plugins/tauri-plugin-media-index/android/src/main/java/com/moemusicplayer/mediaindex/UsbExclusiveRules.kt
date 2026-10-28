@@ -19,10 +19,11 @@ internal object UsbExclusiveRules {
 
     /** Everything the choice depends on, read by the provider when Media3 configures an output. */
     data class Facts(
+        /** The output mode (`androidUsbExclusive`): true for 獨佔, false for 共享. */
         val enabled: Boolean,
         /** The chosen output device's kind (`usb`, …), null for the system default. */
         val chosenKind: String?,
-        /** A USB audio device matching the choice is attached (the app may be holding it). */
+        /** The USB audio device the mode plays on for this choice is attached (the app may be holding it). */
         val deviceAttached: Boolean,
         val permitted: Boolean,
         val encoding: Int,
@@ -34,6 +35,8 @@ internal object UsbExclusiveRules {
         val rate: Int = 0,
         val channels: Int = 0,
         val source: Source = Source(0, false),
+        /** Only for the decision log: the USB device ([UsbDeviceFacts.key]) the choice was made for. */
+        val device: String? = null,
     )
 
     sealed class Choice {
@@ -45,9 +48,15 @@ internal object UsbExclusiveRules {
     fun isPcm(encoding: Int): Boolean = encoding == ENCODING_PCM_16BIT || encoding == ENCODING_PCM_FLOAT ||
         encoding == ENCODING_PCM_24BIT_PACKED || encoding == ENCODING_PCM_32BIT
 
-    /** The output for a track. Only the chosen USB device with the switch on is ever taken; anything else is Android's. */
+    /** Whether the exclusive mode plays a choice on a USB device: the system default or a USB device. */
+    fun usbChoice(chosenKind: String?): Boolean = chosenKind == null || chosenKind == "usb"
+
+    /**
+     * The output for a track. Only in the exclusive mode, with the system default or a USB device chosen and a USB
+     * audio device attached ([route]), is the USB output taken; anything else is Android's (shared).
+     */
     fun choose(facts: Facts): Choice = when {
-        !facts.enabled || facts.chosenKind != "usb" || !facts.deviceAttached -> Choice.AudioTrack(null)
+        !facts.enabled || !usbChoice(facts.chosenKind) || !facts.deviceAttached -> Choice.AudioTrack(null)
         !facts.permitted -> Choice.AudioTrack("未取得 USB 權限")
         facts.trackFallback != null -> Choice.AudioTrack(facts.trackFallback)
         !isPcm(facts.encoding) -> Choice.AudioTrack("不是 PCM 音訊")
@@ -57,9 +66,9 @@ internal object UsbExclusiveRules {
 
     /** Why [choose] decides as it does, in the same order, for the decision log. */
     fun explain(facts: Facts): String = when {
-        !facts.enabled -> "switch off"
-        facts.chosenKind != "usb" -> "chosen output is not USB (${facts.chosenKind ?: "system default"})"
-        !facts.deviceAttached -> "no matching USB audio device attached"
+        !facts.enabled -> "shared mode"
+        !usbChoice(facts.chosenKind) -> "chosen output is not USB (${facts.chosenKind}), shared"
+        !facts.deviceAttached -> "no USB audio device attached for ${facts.chosenKind ?: "system default"}, shared"
         !facts.permitted -> "no USB permission"
         facts.trackFallback != null -> "this track already fell back"
         !isPcm(facts.encoding) -> "encoding ${facts.encoding} is not linear PCM"
@@ -76,8 +85,10 @@ internal object UsbExclusiveRules {
             Choice.Usb -> "USB"
             is Choice.AudioTrack -> "AudioTrack" + (choice.reason?.let { " ($it)" } ?: "")
         }
-        return "USB exclusive: $where → $result: ${explain(facts)}; enabled=${facts.enabled} " +
-            "chosenKind=${facts.chosenKind} deviceAttached=${facts.deviceAttached} permitted=${facts.permitted} " +
+        val mode = if (facts.enabled) "exclusive" else "shared"
+        return "USB exclusive: $where → $result: ${explain(facts)}; mode=$mode " +
+            "chosen=${facts.chosenKind ?: "system default"} device=${facts.device} " +
+            "deviceAttached=${facts.deviceAttached} permitted=${facts.permitted} " +
             "encoding=${facts.encoding} rate=${facts.rate} channels=${facts.channels} " +
             "sourceBits=${facts.source.bits} dsd=${facts.source.dsd} trackFallback=${facts.trackFallback} " +
             "unsupported=${facts.unsupported}"
@@ -87,26 +98,74 @@ internal object UsbExclusiveRules {
     fun takesConfig(encoding: Int, isOffload: Boolean, isTunneling: Boolean, usePlaybackParameters: Boolean): Boolean =
         isPcm(encoding) && !isOffload && !isTunneling && !usePlaybackParameters
 
-    /** What the user asks of the output: the USB exclusive switch and the chosen output device (null: system default). */
+    /** What the user asks of the output: the output mode (true: 獨佔) and the chosen output device (null: system default). */
     data class Wish(val enabled: Boolean, val chosen: OutputDevicePreference?) {
-        /** The app's own USB output is wanted for the chosen device. */
-        val usb: Boolean get() = enabled && chosen?.kind == "usb"
+        /** The exclusive mode plays this choice on a USB audio device when one is attached ([route]). */
+        val usb: Boolean get() = enabled && usbChoice(chosen?.kind)
+    }
+
+    /** Where a track plays for a [Wish] and the attached USB audio devices (ADR 0047, the routing table). */
+    sealed class Route {
+        /** The app drives [device] itself (exclusive). */
+        data class Exclusive(val device: UsbDeviceFacts) : Route()
+
+        /**
+         * Android plays it (an AudioTrack, shared). [noUsbDevice]: the exclusive mode would have played it on a USB
+         * device, but none is attached (the card says so).
+         */
+        data class Shared(val noUsbDevice: Boolean) : Route()
     }
 
     /**
-     * What a change of the switch or of the chosen device does at once: [handBack] the device the app may hold (it is
-     * no longer the wanted one), [newOutput] retire the output Media3 plays through now, so Media3 asks the provider
-     * again and the new choice applies to the track that is playing (not only to the next one).
+     * The USB device the exclusive mode plays the choice [chosen] on: for the system default the first attached USB
+     * audio device ([devices] in `UsbManager` order by device name), for a USB device that device ([pickDevice]),
+     * for anything else (speaker, Bluetooth, …) none.
+     */
+    fun pickExclusiveDevice(chosen: OutputDevicePreference?, devices: List<UsbDeviceFacts>): UsbDeviceFacts? = when {
+        chosen == null -> devices.firstOrNull()
+        chosen.kind == "usb" -> pickDevice(chosen.productName, devices)
+        else -> null
+    }
+
+    /**
+     * The routing table: shared mode → shared; exclusive with a non-USB device chosen → shared on it; exclusive with
+     * the system default or a USB device chosen → exclusive on [pickExclusiveDevice], shared (with the hint) when no
+     * USB audio device is attached (also once the playing device is unplugged: on to the system default).
+     */
+    fun route(wish: Wish, devices: List<UsbDeviceFacts>): Route {
+        if (!wish.usb) return Route.Shared(noUsbDevice = false)
+        val device = pickExclusiveDevice(wish.chosen, devices) ?: return Route.Shared(noUsbDevice = true)
+        return Route.Exclusive(device)
+    }
+
+    /** The key of the USB device [route] plays on, null when it is shared. */
+    fun target(wish: Wish, devices: List<UsbDeviceFacts>): String? =
+        (route(wish, devices) as? Route.Exclusive)?.device?.key
+
+    /**
+     * What a change does at once: [handBack] the device the app holds (it is no longer the wanted one), [newOutput]
+     * retire the output Media3 plays through now, so Media3 asks the provider again and the new choice applies to the
+     * track that is playing (not only to the next one).
      */
     data class OutputChange(val handBack: Boolean, val newOutput: Boolean)
 
-    /** [hasOutput]: Media3 has an output open (a track is loaded). */
-    fun outputChange(before: Wish, after: Wish, hasOutput: Boolean): OutputChange {
-        if (before == after) return OutputChange(handBack = false, newOutput = false)
-        // Speaker, Bluetooth, another Android device: the router re-pins the AudioTrack; nothing to re-create.
-        val touchesUsb = before.usb || after.usb
-        return OutputChange(handBack = before.usb, newOutput = hasOutput && touchesUsb)
-    }
+    /**
+     * A change of the mode, of the chosen device or of the attached USB devices. [liveOn]: the USB device the output
+     * Media3 plays through now drives (null: an AudioTrack); [claimed]: the USB device the app holds (null: none);
+     * [target]: where the track should play now ([target]); [hasOutput]: Media3 has an output open (a track is loaded).
+     * Shared to shared (speaker, Bluetooth, another Android device) changes nothing here: the router re-pins the
+     * AudioTrack.
+     */
+    fun outputChange(liveOn: String?, claimed: String?, target: String?, hasOutput: Boolean): OutputChange =
+        OutputChange(handBack = claimed != null && claimed != target, newOutput = hasOutput && liveOn != target)
+
+    /**
+     * The attached USB audio devices changed ([before] → [after]): whether it matters (the exclusive mode wants USB
+     * for the choice and the device it plays on changed: attached → exclusive now, unplugged → shared). A device the
+     * app claims stays listed by `UsbManager`, so a claim itself is no change.
+     */
+    fun usbDevicesChanged(wish: Wish, before: List<UsbDeviceFacts>, after: List<UsbDeviceFacts>): Boolean =
+        wish.usb && target(wish, before) != target(wish, after)
 
     /** One attached USB device as `UsbManager` lists it. */
     data class UsbDeviceFacts(val key: String, val productName: String?)

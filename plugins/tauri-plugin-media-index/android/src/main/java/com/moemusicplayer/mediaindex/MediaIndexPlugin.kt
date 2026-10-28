@@ -821,17 +821,19 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * USB permission for the USB audio device named `productName` (the chosen output; the only USB audio device when
-     * the name matches none), only after the USB exclusive explanation panel (ADR 0039, ADR 0047). Answers
-     * `{ granted, found }`.
+     * USB permission for the USB audio device the exclusive mode plays on: the one named `productName` (a chosen USB
+     * output; the only USB audio device when the name matches none), or the first USB audio device when the name is
+     * empty (the system default), only after the exclusive mode explanation panel (ADR 0039, ADR 0047). Answers
+     * `{ granted, found }`; a grant applies to the playing track at once.
      */
     @Command
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     fun requestUsbExclusivePermission(invoke: Invoke) {
         val name = JSONObject(invoke.getArgs().toString()).optString("productName", "")
         activity.runOnUiThread {
             val usb = activity.getSystemService(Context.USB_SERVICE) as? UsbManager
             val device = usb?.let { manager ->
-                UsbExclusiveEngine.findDevice(manager, OutputDevicePreference("usb", name, null))
+                UsbExclusiveEngine.findDevice(manager, name.takeIf { it.isNotBlank() }?.let { OutputDevicePreference("usb", it, null) })
             }
             if (usb == null || device == null) {
                 invoke.resolve(JSObject().put("granted", false).put("found", false))
@@ -839,7 +841,9 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
             }
             val pending = if (usb.hasPermission(device)) emptyList() else listOf(device)
             UsbAudioReader.askInTurn(activity.applicationContext, usb, Handler(Looper.getMainLooper()), pending) {
-                invoke.resolve(JSObject().put("granted", usb.hasPermission(device)).put("found", true))
+                val granted = usb.hasPermission(device)
+                if (granted) PlaybackService.usbPermissionGranted()
+                invoke.resolve(JSObject().put("granted", granted).put("found", true))
             }
         }
     }

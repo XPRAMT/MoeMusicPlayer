@@ -28,12 +28,14 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - [play] / [pause] stream / stop streaming (the claim stays); [flush] drops what was written (a new ring, the stream
  *   keeps running with silence until new data); [stop] means "no more data": an empty ring is the end, not an underrun;
  *   [release] detaches the ring (the stream keeps running for the next output a moment, see `engine.rs`).
- * - When the device fails, is unplugged or the switch is turned off, the ring is failed: [write] takes nothing and
+ * - When the device fails, is unplugged or the mode is switched to shared, the ring is failed: [write] takes nothing and
  *   [isStalled] is true, so Media3 releases this output and asks the provider for a new one, which is an AudioTrack.
- * - [retire] (the switch or the chosen device changed) does the same on purpose: no fallback reason is recorded.
+ * - [retire] (the mode, the chosen device or the attached USB devices changed) does the same on purpose: no fallback reason is recorded.
  */
 @UnstableApi
 internal class UsbAudioOutput private constructor(
+    /** The USB device this output drives ([UsbExclusiveRules.UsbDeviceFacts.key]). */
+    val deviceKey: String,
     private val config: AudioOutputProvider.OutputConfig,
     private val channels: Int,
     private val source: UsbExclusiveRules.Source,
@@ -49,7 +51,7 @@ internal class UsbAudioOutput private constructor(
     private var scratch: ByteBuffer? = null
     @Volatile private var retired = false
 
-    /** The engine said no (a failed attach, a failed step, the device gone, the switch off), or [retire]d. */
+    /** The engine said no (a failed attach, a failed step, the device gone, the shared mode), or [retire]d. */
     val failed: Boolean
         get() = retired || released || ring == 0L || UsbExclusiveNative.nativeRingFailed(ring)
 
@@ -183,7 +185,7 @@ internal class UsbAudioOutput private constructor(
     override fun isStalled(): Boolean {
         if (released || !failed) return false
         // Media3 now releases this output and opens the next one through the provider: that one is an AudioTrack.
-        // A retired output or the switch turned off (the user changed the switch or the device) is not a failure of
+        // A retired output or the shared mode (the user changed the mode or the device) is not a failure of
         // this track.
         if (!retired && UsbExclusiveEngine.enabled && UsbExclusiveEngine.trackFallback == null) fallBack(engineError() ?: "USB 音訊裝置中斷")
         return true
@@ -222,13 +224,14 @@ internal class UsbAudioOutput private constructor(
 
         /** A started output, or null (the reason is the track's fallback) when the device cannot take it. */
         fun open(
+            deviceKey: String,
             config: AudioOutputProvider.OutputConfig,
             channels: Int,
             source: UsbExclusiveRules.Source,
             reopen: () -> Boolean,
             onReleased: (UsbAudioOutput) -> Unit,
         ): UsbAudioOutput? {
-            val output = UsbAudioOutput(config, channels, source, reopen, onReleased)
+            val output = UsbAudioOutput(deviceKey, config, channels, source, reopen, onReleased)
             if (!output.newRing()) {
                 output.release()
                 return null
@@ -241,7 +244,7 @@ internal class UsbAudioOutput private constructor(
 /**
  * An output of an AudioTrack provider that can be [retire]d: it then takes nothing more and reports itself stalled,
  * so Media3 releases it and asks the provider again (Media3's own "Resetting stalled audio output" path). This is how
- * a change of the USB exclusive switch or of the chosen device reaches the track that is playing (ADR 0047).
+ * a change of the output mode, of the chosen device or of the attached USB devices reaches the track that is playing (ADR 0047).
  */
 @UnstableApi
 internal class RetirableAudioOutput(
@@ -275,14 +278,15 @@ internal class RetirableAudioOutput(
 }
 
 /**
- * Media3's output provider with the USB exclusive output in front (ADR 0047). When the switch is on, the chosen output
- * device is a permitted USB audio device and the device's descriptors offer the track's rate, channels and bit depth,
+ * Media3's output provider with the USB exclusive output in front (ADR 0047). In the exclusive mode, when the choice
+ * (the system default or a USB device) plays on a permitted USB audio device ([UsbExclusiveRules.route]) and the
+ * device's descriptors offer the track's rate, channels and bit depth,
  * Media3 gets a [UsbAudioOutput]; otherwise everything is [delegate]'s (the AudioTrack provider, watched by the router),
  * unchanged. Format support is always the delegate's, so Media3 decodes and processes exactly as before.
  *
  * The choice is made when Media3 configures an output ([getOutputConfig]) and again when it opens one
  * ([getAudioOutput], from the config's own encoding, rate and channels), so an output re-created for the same config
- * (a seek, a stalled output, [retireCurrent]) follows the switch and the chosen device as they are now.
+ * (a seek, a stalled output, [retireCurrent]) follows the mode and the chosen device as they are now.
  */
 @UnstableApi
 internal class UsbAudioOutputProvider(
@@ -300,6 +304,10 @@ internal class UsbAudioOutputProvider(
     /** Media3 has an output open (a track is loaded). */
     val hasLiveOutput: Boolean
         get() = live != null
+
+    /** The USB device the output Media3 plays through now drives, null for an AudioTrack (or a failed USB output). */
+    val liveOn: String?
+        get() = (live as? UsbAudioOutput)?.takeIf { !it.failed }?.deviceKey
 
     private class Decision(
         val choice: UsbExclusiveRules.Choice,
@@ -330,6 +338,7 @@ internal class UsbAudioOutputProvider(
             rate = rate,
             channels = channels,
             source = source,
+            device = device?.deviceName,
         )
         val first = UsbExclusiveRules.choose(facts)
         if (first != UsbExclusiveRules.Choice.Usb || manager == null || device == null) {
@@ -353,7 +362,7 @@ internal class UsbAudioOutputProvider(
     private fun record(where: String, decision: Decision) {
         Log.i(TAG, UsbExclusiveRules.decisionLog(where, decision.facts, decision.choice))
         val choice = decision.choice
-        // Said only when the user expects the USB output (switch on, USB device chosen).
+        // Said only when the user expects the USB output (exclusive mode, a USB device to play on).
         if (choice is UsbExclusiveRules.Choice.AudioTrack && choice.reason != null) {
             UsbExclusiveEngine.trackFallback = choice.reason
         }
@@ -422,7 +431,7 @@ internal class UsbAudioOutputProvider(
             Log.w(TAG, "USB exclusive: openUsb → AudioTrack (無法開啟 USB 音訊裝置): ${device.deviceName}")
             return null
         }
-        val output = UsbAudioOutput.open(config, channels, UsbExclusiveEngine.source, reopen) { released ->
+        val output = UsbAudioOutput.open(device.deviceName, config, channels, UsbExclusiveEngine.source, reopen) { released ->
             if (live === released) live = null
         }
         if (output == null) {
@@ -444,7 +453,7 @@ internal class UsbAudioOutputProvider(
     }
 
     /**
-     * Any thread. The switch or the chosen device changed: the output Media3 plays through now is retired, so on its
+     * Any thread. The mode, the chosen device or the attached USB devices changed: the output Media3 plays through now is retired, so on its
      * next write Media3's playback thread releases it and opens the next one through this provider, which follows the
      * new choice (ADR 0047). False when there was none.
      */

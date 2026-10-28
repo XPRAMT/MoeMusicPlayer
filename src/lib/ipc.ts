@@ -360,14 +360,26 @@ export interface AndroidUsbExclusiveEngine {
 
 /** The USB exclusive output in `android_audio_output_status` (ADR 0047). */
 export interface AndroidUsbExclusiveStatus {
-  /** The `androidUsbExclusive` switch as the service applies it. */
+  /** The output mode `androidUsbExclusive` (true: 獨佔) as the service applies it. */
   enabled: boolean;
   /** The track plays through the USB exclusive output now. */
   active: boolean;
   state: AndroidUsbExclusiveEngine['state'] | null;
-  /** Why the current track plays through Android although the switch is on. */
+  /** Why the current track plays through Android although the exclusive mode would drive a USB device. */
   fallbackReason: string | null;
   engine: AndroidUsbExclusiveEngine | null;
+  /** Where the exclusive mode plays the saved choice (the routing table, `UsbExclusiveRules.route`). */
+  route?: AndroidUsbExclusiveRoute | null;
+}
+
+/** The routing table's answer for the saved choice in the exclusive mode (ADR 0047). */
+export interface AndroidUsbExclusiveRoute {
+  /** USB audio devices attached. */
+  usbDevices: number;
+  /** The system default or a USB device is chosen and no USB audio device is attached: shared as chosen. */
+  noUsbDevice: boolean;
+  /** The USB device the track plays on exclusively (the first one for the system default); null when shared. */
+  usbDevice: { key: string; productName: string | null; permitted: boolean } | null;
 }
 
 /** Answer of `android_audio_output_status` (ADR 0044). */

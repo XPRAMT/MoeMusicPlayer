@@ -243,6 +243,8 @@ class PlaybackService : MediaSessionService() {
         // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
         router.setPreference(readOutputPreference())
         readUsbExclusive()?.let(UsbExclusiveEngine::setEnabled)
+        lastUsbDevices = readUsbDevices()
+        router.onDevicesChanged = ::onDevicesChanged
         router.start()
         // Listen for the Bluetooth codec from the start, so a headset that connects while the app runs is known.
         BluetoothCodecWatch.ensure(this)
@@ -1037,24 +1039,67 @@ class PlaybackService : MediaSessionService() {
      */
     private fun changeOutput(after: UsbExclusiveRules.Wish, what: String, apply: () -> Unit) {
         val before = UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, outputRouter?.currentPreference())
-        val provider = usbOutputProvider
-        val change = UsbExclusiveRules.outputChange(before, after, provider?.hasLiveOutput == true)
         // The choice is made again for this track: an earlier fallback reason no longer holds.
         if (before != after) UsbExclusiveEngine.trackFallback = null
         // Stored first, so the output Media3 opens next is already chosen by the new state.
         apply()
+        if (before != after) applyRoute(after, "$what changed (${describeWish(before)} → ${describeWish(after)})")
+    }
+
+    /** The attached USB audio devices as last seen, to tell an attach or an unplug from other device changes. */
+    private var lastUsbDevices: List<UsbExclusiveRules.UsbDeviceFacts> = emptyList()
+
+    private fun readUsbDevices(): List<UsbExclusiveRules.UsbDeviceFacts> =
+        UsbExclusiveEngine.usbDevices(
+            getSystemService(android.content.Context.USB_SERVICE) as? android.hardware.usb.UsbManager,
+        )
+
+    /**
+     * Main thread. The attached devices changed (the router's callback, or the app took or gave back its device): in
+     * the exclusive mode a USB audio device that was attached or unplugged changes where the playing track goes at
+     * once (attached → exclusive on it now; unplugged → shared on the system default).
+     */
+    private fun onDevicesChanged() {
+        val before = lastUsbDevices
+        val after = readUsbDevices()
+        lastUsbDevices = after
+        val wish = UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, outputRouter?.currentPreference())
+        if (!UsbExclusiveRules.usbDevicesChanged(wish, before, after)) return
+        // Another device: the track gets a new chance on it.
+        UsbExclusiveEngine.trackFallback = null
+        applyRoute(wish, "USB audio devices changed (${before.map { it.key }} → ${after.map { it.key }})")
+    }
+
+    /** Re-create the output and hand the held device back as the routing table says for [wish] now (ADR 0047). */
+    private fun applyRoute(wish: UsbExclusiveRules.Wish, what: String) {
+        val provider = usbOutputProvider
+        val devices = readUsbDevices()
+        lastUsbDevices = devices
+        val route = UsbExclusiveRules.route(wish, devices)
+        val target = (route as? UsbExclusiveRules.Route.Exclusive)?.device?.key
+        val change = UsbExclusiveRules.outputChange(
+            liveOn = provider?.liveOn,
+            claimed = UsbExclusiveEngine.claimed,
+            target = target,
+            hasOutput = provider?.hasLiveOutput == true,
+        )
         if (change.newOutput) provider?.retireCurrent()
-        if (change.handBack) UsbExclusiveEngine.release("已變更播放裝置或 USB 獨佔")
-        if (before != after) {
-            android.util.Log.i(
-                "MoeMediaIndex",
-                "USB exclusive: $what changed (usb wanted ${before.usb} → ${after.usb}, " +
-                    "chosen ${before.chosen?.kind}:${before.chosen?.productName} → " +
-                    "${after.chosen?.kind}:${after.chosen?.productName}); " +
-                    (if (change.newOutput) "re-creating the output now" else "no output to re-create") +
-                    (if (change.handBack) ", device handed back" else ""),
-            )
-        }
+        if (change.handBack) UsbExclusiveEngine.release("已變更播放裝置或輸出模式")
+        android.util.Log.i(
+            "MoeMediaIndex",
+            "USB exclusive: $what; route ${describeRoute(route)}; " +
+                (if (change.newOutput) "re-creating the output now" else "the output stays") +
+                (if (change.handBack) ", device handed back" else ""),
+        )
+    }
+
+    private fun describeWish(wish: UsbExclusiveRules.Wish): String =
+        (if (wish.enabled) "exclusive" else "shared") + " " +
+            (wish.chosen?.let { "${it.kind}:${it.productName}" } ?: "system default")
+
+    private fun describeRoute(route: UsbExclusiveRules.Route): String = when (route) {
+        is UsbExclusiveRules.Route.Exclusive -> "exclusive on ${route.device.key} (${route.device.productName})"
+        is UsbExclusiveRules.Route.Shared -> if (route.noUsbDevice) "shared (no USB audio device)" else "shared"
     }
 
     /** The USB exclusive switch (ADR 0047), or null while the settings have not been read yet. */
@@ -1095,9 +1140,9 @@ class PlaybackService : MediaSessionService() {
         }
 
         /**
-         * Main thread. The user turned the USB exclusive switch (ADR 0047); it applies to the track that is playing at
-         * once. On: the output is re-created on the chosen USB device. Off: a device the app holds is handed back at
-         * once and the track goes on through Android.
+         * Main thread. The user switched the output mode (ADR 0047, true: 獨佔); it applies to the track that is
+         * playing at once, by the routing table: exclusive → the output is re-created on the USB device the choice
+         * plays on; shared → a device the app holds is handed back at once and the track goes on through Android.
          */
         internal fun applyUsbExclusive(enabled: Boolean) {
             val service = activeInstance
@@ -1106,9 +1151,19 @@ class PlaybackService : MediaSessionService() {
                 return
             }
             val chosen = service.outputRouter?.currentPreference()
-            service.changeOutput(UsbExclusiveRules.Wish(enabled, chosen), "switch") {
+            service.changeOutput(UsbExclusiveRules.Wish(enabled, chosen), "output mode") {
                 UsbExclusiveEngine.setEnabled(enabled)
             }
+        }
+
+        /** Main thread. USB permission was just granted: the playing track tries the exclusive output again now. */
+        internal fun usbPermissionGranted() {
+            val service = activeInstance ?: return
+            UsbExclusiveEngine.trackFallback = null
+            service.applyRoute(
+                UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, service.outputRouter?.currentPreference()),
+                "USB permission granted",
+            )
         }
 
         /** Main thread. The output devices for the settings page; [saved] is the choice in settings.json. */
@@ -1118,6 +1173,8 @@ class PlaybackService : MediaSessionService() {
             BluetoothCodecWatch.ensure(context)
             status.put("bluetoothPermission", BluetoothCodecWatch.permissionState(context))
             status.put("bluetoothCodecs", JSONObject(BluetoothCodecWatch.snapshot() as Map<*, *>))
+            // Where the exclusive mode plays the saved choice (the USB device, or none attached; ADR 0047).
+            status.optJSONObject("exclusive")?.put("route", UsbExclusiveEngine.routeJson(context, saved))
             return status
         }
 

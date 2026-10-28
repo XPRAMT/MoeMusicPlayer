@@ -1,5 +1,6 @@
 package com.moemusicplayer.mediaindex
 
+import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
@@ -39,7 +40,7 @@ internal object UsbExclusiveNative {
 }
 
 /**
- * The USB device the exclusive output drives (ADR 0047): the switch, which USB device is the chosen output, its
+ * The USB device the exclusive output drives (ADR 0047): the output mode, which USB device the mode plays on, its
  * `UsbDeviceConnection` while a claim runs, and the claim's thread. The thread (`moe-usb-audio`, URGENT_AUDIO) runs
  * the Rust device loop and closes the connection only after Rust has given the device back to the kernel driver.
  * While a claim runs, [held] is the output device as Android listed it before it disappeared (for the router).
@@ -48,7 +49,7 @@ internal object UsbExclusiveEngine {
     private const val TAG = "MoeMediaIndex"
     private const val JOIN_MS = 2_500L
 
-    /** The `androidUsbExclusive` switch, as the service last read it. */
+    /** The output mode `androidUsbExclusive` (true: 獨佔), as the service last read it. */
     @Volatile var enabled = false
         private set
 
@@ -68,13 +69,17 @@ internal object UsbExclusiveEngine {
     /** The output Media3 plays through now, when it is ours. */
     @Volatile var current: UsbAudioOutput? = null
 
+    /** The USB device ([UsbExclusiveRules.UsbDeviceFacts.key], its `deviceName`) a claim runs on, null when none. */
+    @Volatile var claimed: String? = null
+        private set
+
     private val lock = Any()
     private var thread: Thread? = null
     private val rawCache = HashMap<String, ByteArray>()
 
     fun setEnabled(value: Boolean) {
         enabled = value
-        if (!value) release("已關閉 USB 獨佔")
+        if (!value) release("已切換為共享模式")
     }
 
     /** A new track is loaded: it gets its own chance on the USB output. */
@@ -83,13 +88,50 @@ internal object UsbExclusiveEngine {
         trackFallback = null
     }
 
-    /** The USB device of [preference], or null. */
+    /** The attached USB audio devices, in `UsbManager` order (by device name). */
+    fun usbDevices(usb: UsbManager?): List<UsbExclusiveRules.UsbDeviceFacts> = try {
+        usb?.let(UsbAudioReader::audioDevices)?.map { UsbExclusiveRules.UsbDeviceFacts(it.deviceName, safeName(it)) }
+            ?: emptyList()
+    } catch (_: RuntimeException) {
+        emptyList()
+    }
+
+    /**
+     * The USB device the exclusive mode plays [preference] on (ADR 0047): the first USB audio device for the system
+     * default (null), the matching one for a USB device, none for anything else.
+     */
     fun findDevice(usb: UsbManager, preference: OutputDevicePreference?): UsbDevice? {
-        if (preference == null || preference.kind != "usb") return null
         val devices = UsbAudioReader.audioDevices(usb)
         val facts = devices.map { UsbExclusiveRules.UsbDeviceFacts(it.deviceName, safeName(it)) }
-        val picked = UsbExclusiveRules.pickDevice(preference.productName, facts) ?: return null
+        val picked = UsbExclusiveRules.pickExclusiveDevice(preference, facts) ?: return null
         return devices.firstOrNull { it.deviceName == picked.key }
+    }
+
+    /**
+     * The page's view of the routing table for the saved choice [saved] (ADR 0047): which USB device the exclusive
+     * mode plays on (`usbDevice`: its product name and whether the app may open it), whether none is attached
+     * (`noUsbDevice`) and how many USB audio devices there are.
+     */
+    fun routeJson(context: Context, saved: OutputDevicePreference?): JSONObject {
+        val usb = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+        val devices = usbDevices(usb)
+        val route = UsbExclusiveRules.route(UsbExclusiveRules.Wish(true, saved), devices)
+        return JSONObject().apply {
+            put("usbDevices", devices.size)
+            put("noUsbDevice", route is UsbExclusiveRules.Route.Shared && route.noUsbDevice)
+            val target = (route as? UsbExclusiveRules.Route.Exclusive)?.device
+            val device = target?.let { picked -> usb?.let(UsbAudioReader::audioDevices)?.firstOrNull { it.deviceName == picked.key } }
+            put(
+                "usbDevice",
+                target?.let {
+                    JSONObject().apply {
+                        put("key", it.key)
+                        put("productName", it.productName ?: JSONObject.NULL)
+                        put("permitted", device != null && usb?.hasPermission(device) == true)
+                    }
+                } ?: JSONObject.NULL,
+            )
+        }
     }
 
     private fun safeName(device: UsbDevice): String? = try {
@@ -144,6 +186,7 @@ internal object UsbExclusiveEngine {
             return false
         }
         rawCache[cacheKey(device)] = raw
+        claimed = device.deviceName
         if (facts != null) held = facts
         onHeldChanged?.invoke()
         Log.i(TAG, "USB exclusive: claim of ${device.deviceName} (${device.vendorId}:${device.productId})")
@@ -157,6 +200,7 @@ internal object UsbExclusiveEngine {
             } finally {
                 // Only now: Rust has released the interfaces and reattached the kernel driver.
                 connection.close()
+                claimed = null
                 held = null
                 onHeldChanged?.invoke()
                 Log.i(TAG, "USB exclusive: connection closed")
@@ -165,7 +209,7 @@ internal object UsbExclusiveEngine {
         true
     }
 
-    /** Give the device back now (stop, switch off, service gone). */
+    /** Give the device back now (stop, shared mode, service gone). */
     fun release(reason: String) {
         if (!UsbExclusiveNative.nativeAlive()) return
         UsbExclusiveNative.nativeRelease(reason)?.let { Log.i(TAG, "USB exclusive: release: $it") }

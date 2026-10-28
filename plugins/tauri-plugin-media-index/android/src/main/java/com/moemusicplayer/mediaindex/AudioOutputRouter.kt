@@ -44,9 +44,17 @@ internal class AudioOutputRouter(
     @Volatile private var mixerRate: Int? = null
     private var observedTrack: WeakReference<AudioTrack>? = null
 
+    /** Called (main thread) after the attached devices or the device the app holds changed (ADR 0047). */
+    var onDevicesChanged: (() -> Unit)? = null
+
+    private fun devicesChanged() {
+        reconcile()
+        onDevicesChanged?.invoke()
+    }
+
     private val deviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = reconcile()
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = reconcile()
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = devicesChanged()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = devicesChanged()
     }
 
     private val routingListener = AudioRouting.OnRoutingChangedListener { router ->
@@ -57,7 +65,7 @@ internal class AudioOutputRouter(
     /** The user's choice as applied now (null: the system default). */
     fun currentPreference(): OutputDevicePreference? = preference
 
-    private val heldChanged: () -> Unit = { handler.post { reconcile() } }
+    private val heldChanged: () -> Unit = { handler.post { devicesChanged() } }
 
     fun start() {
         if (registered) return
