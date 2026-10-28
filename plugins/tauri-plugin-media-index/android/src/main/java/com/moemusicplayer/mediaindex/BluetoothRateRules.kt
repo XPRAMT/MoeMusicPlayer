@@ -82,6 +82,24 @@ internal object BluetoothRateRules {
         return pool.minWith(compareBy({ kotlin.math.abs(it.second - trackHz) }, { it.second })).first
     }
 
+    /** The rate the Android DSD converter outputs (DSF and WavPack-DSD are converted to PCM at this rate). */
+    const val DSD_PCM_OUTPUT_HZ = 176_400
+
+    /** What the rate follow is told about a track: its PCM rate and whether it is raw DSD (nothing to follow). */
+    data class TrackRate(val trackHz: Int?, val dsd: Boolean)
+
+    /**
+     * The track rate the follow plans with. A DSD file that is converted to PCM is a normal PCM track whose rate is the
+     * converter's output ([DSD_PCM_OUTPUT_HZ]), not the DSD bit rate in the library (2.8224 MHz and so on), so it
+     * follows; only the native DSD passthrough (raw DSD to a USB device, where Bluetooth is not involved) is skipped.
+     * [metadataHz] is the library's rate, null or 0 when unknown.
+     */
+    fun trackRate(metadataHz: Int?, isDsd: Boolean, nativeDsd: Boolean): TrackRate = when {
+        nativeDsd -> TrackRate(null, true)
+        isDsd -> TrackRate(DSD_PCM_OUTPUT_HZ, false)
+        else -> TrackRate(metadataHz?.takeIf { it > 0 }, false)
+    }
+
     /** Why the feature does nothing for a track. */
     enum class SkipReason(val wire: String) {
         DISABLED("the setting or the code switch is off"),

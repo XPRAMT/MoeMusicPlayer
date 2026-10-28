@@ -232,4 +232,38 @@ class BluetoothRateRulesTest {
         assertEquals(BluetoothRateRules.RATE_96000, config.rateFlag)
         assertEquals(1_000_000, BluetoothRateRules.rateRequest(7, 5, 2).codecPriority)
     }
+
+    @Test fun aDsdFileConvertedToPcmFollowsWithTheConverterRateAndPicksTheFamilyRate() {
+        // The library holds the DSD bit rate; the AudioTrack runs at 176.4 kHz.
+        val converted = BluetoothRateRules.trackRate(2_822_400, isDsd = true, nativeDsd = false)
+        assertEquals(BluetoothRateRules.TrackRate(176_400, false), converted)
+        // LDAC offers 44.1/48/88.2/96 kHz: 176.4 kHz has no exact match, so the nearest of its 44.1 kHz family, 88.2 kHz.
+        val ldacMask = BluetoothRateRules.RATE_44100 or BluetoothRateRules.RATE_48000 or BluetoothRateRules.RATE_88200 or BluetoothRateRules.RATE_96000
+        assertEquals(BluetoothRateRules.RATE_88200, BluetoothRateRules.pickRate(converted.trackHz!!, ldacMask))
+        val plan = BluetoothRateRules.plan(
+            BluetoothRateRules.Input(
+                true, true, true, MixerRateRules.Source.ROOT, false, "AA:BB:CC:DD:EE:FF",
+                usbExclusive = false, dsd = converted.dsd, trackHz = converted.trackHz,
+                state = BluetoothCodecState(4, BluetoothRateRules.RATE_44100, ldacMask),
+            ),
+        )
+        assertEquals(BluetoothRateRules.Plan.Switch(BluetoothRateRules.RATE_88200), plan)
+    }
+
+    @Test fun nativeDsdPassthroughStillSkipsAndWavPackDsdFollowsLikeAnyConvertedDsd() {
+        val native = BluetoothRateRules.trackRate(2_822_400, isDsd = true, nativeDsd = true)
+        assertEquals(BluetoothRateRules.TrackRate(null, true), native)
+        val plan = BluetoothRateRules.plan(
+            BluetoothRateRules.Input(
+                true, true, true, MixerRateRules.Source.ROOT, false, "AA:BB:CC:DD:EE:FF",
+                usbExclusive = false, dsd = native.dsd, trackHz = native.trackHz, state = null,
+            ),
+        )
+        assertEquals(BluetoothRateRules.Plan.Skip(BluetoothRateRules.SkipReason.DSD), plan)
+        // A PCM track keeps its own rate; an unknown one stays unknown.
+        assertEquals(BluetoothRateRules.TrackRate(96_000, false), BluetoothRateRules.trackRate(96_000, false, false))
+        assertEquals(BluetoothRateRules.TrackRate(null, false), BluetoothRateRules.trackRate(0, false, false))
+        // The same input for a WavPack-DSD file converted to PCM as for a DSF file.
+        assertEquals(BluetoothRateRules.trackRate(5_644_800, true, false), BluetoothRateRules.trackRate(2_822_400, true, false))
+    }
 }

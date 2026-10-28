@@ -565,7 +565,9 @@ class PlaybackService : MediaSessionService() {
                         ),
                         (dsdDecision as? DsdPassthroughRules.Decision.Pcm)?.reason,
                     )
-                    requestBluetoothRate(metadata.optInt("sampleRate", 0), isDsd || nativeDsd)
+                    // A DSD file converted to PCM follows with the converter's rate; only native DSD is skipped (ADR 0051).
+                    val btRate = BluetoothRateRules.trackRate(metadata.optInt("sampleRate", 0), isDsd, nativeDsd)
+                    requestBluetoothRate(btRate.trackHz ?: 0, btRate.dsd)
                     endedEventLoadInstance = null
                     stopped = false
                     loadInstance = loadFence.begin(commandId, trackId)
