@@ -7641,6 +7641,33 @@ async fn android_request_bluetooth_connect(app: AppHandle) -> Result<serde_json:
     }
 }
 
+/// The attached USB audio devices with their parsed descriptors (ADR 0045), read only. `request` asks for USB
+/// permission first (the system dialog), only when the user pressed 「讀取 USB 規格」. Null on other platforms.
+#[tauri::command]
+async fn android_usb_audio_descriptors(
+    app: AppHandle,
+    request: bool,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output(
+                    "usbAudioDescriptors",
+                    serde_json::json!({ "request": request }),
+                )
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, request);
+        Ok(serde_json::Value::Null)
+    }
+}
+
 /// Persist the interface language and tell every window (each reloads itself to apply it).
 #[tauri::command]
 fn settings_set_language(
@@ -12931,6 +12958,7 @@ pub fn run() {
             settings_set_android_output_device,
             android_audio_output_status,
             android_request_bluetooth_connect,
+            android_usb_audio_descriptors,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
