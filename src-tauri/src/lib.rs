@@ -3834,24 +3834,6 @@ async fn album_artwork_cache_put(
 
 /// How many songs of an album with songs on a server an album card looks at for a cover (a network read each).
 const CARD_REMOTE_COVER_CANDIDATES: usize = 10;
-/// How many songs of an album with songs on a server the page of the album looks at to choose its representative covers
-/// (spread over the album): a network read each, so not every song.
-const DETAIL_REMOTE_COVER_CANDIDATES: usize = 12;
-
-static ARTWORK_SCANS: std::sync::LazyLock<album_artwork_analysis::ScanRegistry> =
-    std::sync::LazyLock::new(Default::default);
-/// Albums (selection key, song count, representative) whose covers were looked for in this run and certainly are not there
-/// (nothing failed): not looked for again until the app restarts, even where the answer is not kept on disk because only
-/// some of the songs were looked at.
-static ARTWORK_NONE_THIS_RUN: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<(String, u64, bool)>>,
-> = std::sync::LazyLock::new(Default::default);
-
-/// The page of an album was left (or its album changed): stop the cover scan still running for it.
-#[tauri::command]
-fn album_artwork_selection_cancel(key: String) {
-    ARTWORK_SCANS.cancel(&key);
-}
 
 #[tauri::command]
 async fn album_artwork_selection_ensure(
@@ -3864,11 +3846,6 @@ async fn album_artwork_selection_ensure(
 ) -> Result<Option<album_artwork_cache::AlbumArtworkSelection>, String> {
     let app_for_directory = app.clone();
     let selection_key = key.clone();
-    let none_this_run = !force_rebuild
-        && ARTWORK_NONE_THIS_RUN
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&(key.clone(), track_count, representative));
     let (directory, cached, candidates, tree_uris) = run_database_work(app.clone(), move |state| {
         // The album's songs as its card counts them (the same scope as the album list).
         let scope = list_scope(state)?;
@@ -3880,7 +3857,6 @@ async fn album_artwork_selection_ensure(
         let empty_but_remote = cached
             .as_ref()
             .is_some_and(|selection| selection.track_ids.is_empty())
-            && !none_this_run
             && state.database.as_ref().is_some_and(|database| {
                 database
                     .album_artwork_candidate_locators(scope, &album_names)
@@ -3929,40 +3905,24 @@ async fn album_artwork_selection_ensure(
     // "no cover" is only what the first few said, not what the album has: it is not remembered (see below), and the page of
     // the album, which looks through every song, will update the card when it finds a cover.
     let mut stopped_early = false;
-    let has_remote = candidate_list.iter().any(|(_, locators)| {
-        locators
-            .iter()
-            .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
-    });
-    let candidates_total = candidate_list.len();
-    if has_remote {
-        if !representative {
-            if candidate_list.len() > CARD_REMOTE_COVER_CANDIDATES {
-                candidate_list.truncate(CARD_REMOTE_COVER_CANDIDATES);
-                stopped_early = true;
-            }
-        } else if candidate_list.len() > DETAIL_REMOTE_COVER_CANDIDATES {
-            // Spread over the album, not every song: the covers of an album repeat across its songs.
-            candidate_list = album_artwork_analysis::spread_sample(
-                candidate_list,
-                DETAIL_REMOTE_COVER_CANDIDATES,
-            );
-        }
+    if !representative
+        && candidate_list.iter().any(|(_, locators)| {
+            locators
+                .iter()
+                .any(|locator| matches!(locator, MediaLocator::Remote { .. }))
+        })
+        && candidate_list.len() > CARD_REMOTE_COVER_CANDIDATES
+    {
+        candidate_list.truncate(CARD_REMOTE_COVER_CANDIDATES);
+        stopped_early = true;
     }
-    let candidates_scanned = candidate_list.len();
-    let cancelled = ARTWORK_SCANS.begin(&key);
-    let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let lookups_in_scan = lookups.clone();
-    let cancelled_in_scan = cancelled.clone();
     let app_for_scan = app.clone();
-    let scanned = tauri::async_runtime::spawn_blocking(move || {
+    let (selected_ids, may_have_failed) = tauri::async_runtime::spawn_blocking(move || {
         run_as_bulk_cover_work(|| {
             let failed = std::cell::Cell::new(false);
             let artwork = candidate_list
                 .into_iter()
-                .take_while(|_| !cancelled_in_scan.load(std::sync::atomic::Ordering::SeqCst))
                 .filter_map(|(track_id, locators)| {
-                    lookups_in_scan.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let bytes = read_album_candidate_artwork(&app_for_scan, &locators, &tree_uris);
                     if bytes.is_none()
                         && !failed.get()
@@ -3983,22 +3943,7 @@ async fn album_artwork_selection_ensure(
         })
     })
     .await
-    .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"));
-    let was_cancelled = cancelled.load(std::sync::atomic::Ordering::SeqCst);
-    ARTWORK_SCANS.finish(&key, &cancelled);
-    eprintln!(
-        "[art] {} cover lookups: {} (of {} songs, {} looked at{})",
-        if representative { "album detail" } else { "album card" },
-        lookups.load(std::sync::atomic::Ordering::SeqCst),
-        candidates_total,
-        candidates_scanned,
-        if was_cancelled { ", cancelled" } else { "" }
-    );
-    let (selected_ids, may_have_failed) = scanned?;
-    if was_cancelled {
-        // The page was left (or asked again): nothing is remembered from a scan that stopped part way.
-        return Ok(None);
-    }
+    .map_err(|error| format!("專輯封面候選分析工作失敗：{error}"))?;
     if selected_ids.is_empty() {
         let selection = album_artwork_cache::AlbumArtworkSelection {
             track_count,
@@ -4010,12 +3955,6 @@ async fn album_artwork_selection_ensure(
         // few songs of a longer album were looked at.
         if !may_have_failed && !stopped_early {
             album_artwork_cache::put_selection(&directory, &key, &selection)?;
-        }
-        if !may_have_failed {
-            ARTWORK_NONE_THIS_RUN
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert((key.clone(), track_count, representative));
         }
         return Ok(Some(selection));
     }
@@ -13457,7 +13396,6 @@ pub fn run() {
             album_artwork_cache_get,
             album_artwork_cache_put,
             album_artwork_selection_ensure,
-            album_artwork_selection_cancel,
             album_artwork_cache_get_for_track,
             album_artwork_cache_put_for_track,
             album_artwork_cache_mark_missing_for_track,

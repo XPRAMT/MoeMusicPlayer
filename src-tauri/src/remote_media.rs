@@ -71,37 +71,6 @@ impl Drop for CoverLookupTurn {
     }
 }
 
-/// How long a folder image that was certainly not there (the server answered "no such file") is not asked for again.
-/// The songs of one album share a folder: probing `cover.jpg` and `folder.jpg` once per song is a network round trip each
-/// for the same answer.
-const SIDECAR_MISS_TTL: std::time::Duration = std::time::Duration::from_secs(600);
-const SIDECAR_MISS_CAPACITY: usize = 4096;
-
-#[derive(Default)]
-struct SidecarMisses(std::collections::HashMap<(SourceId, String), std::time::Instant>);
-
-impl SidecarMisses {
-    fn is_missing(&self, source_id: SourceId, path: &str, now: std::time::Instant) -> bool {
-        self.0
-            .get(&(source_id, path.to_owned()))
-            .is_some_and(|since| now.duration_since(*since) < SIDECAR_MISS_TTL)
-    }
-
-    fn remember(&mut self, source_id: SourceId, path: &str, now: std::time::Instant) {
-        if self.0.len() >= SIDECAR_MISS_CAPACITY {
-            self.0
-                .retain(|_, since| now.duration_since(*since) < SIDECAR_MISS_TTL);
-            if self.0.len() >= SIDECAR_MISS_CAPACITY {
-                self.0.clear();
-            }
-        }
-        self.0.insert((source_id, path.to_owned()), now);
-    }
-}
-
-static SIDECAR_MISSES: std::sync::LazyLock<std::sync::Mutex<SidecarMisses>> =
-    std::sync::LazyLock::new(Default::default);
-
 pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<u8>> {
     let content = remote_content()?;
     let _turn = CoverLookupTurn::wait();
@@ -136,25 +105,12 @@ pub(crate) fn remote_cover_bytes(source_id: SourceId, path: &str) -> Option<Vec<
         }
     }
     for name in SIDECAR_COVERS {
-        let sidecar_path = remote_sibling(path, name);
         let sidecar_started = std::time::Instant::now();
-        if SIDECAR_MISSES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_missing(source_id, &sidecar_path, sidecar_started)
-        {
-            continue;
-        }
-        let read =
-            read_remote_file_capped_checked(source_id, &sidecar_path, MAX_ARTWORK_BYTES as u64);
-        if matches!(&read, Ok(None))
-            || matches!(&read, Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-        {
-            SIDECAR_MISSES
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remember(source_id, &sidecar_path, std::time::Instant::now());
-        }
+        let read = read_remote_file_capped_checked(
+            source_id,
+            &remote_sibling(path, name),
+            MAX_ARTWORK_BYTES as u64,
+        );
         eprintln!(
             "[remote] cover stages: {name} {} ms (found: {})",
             sidecar_started.elapsed().as_millis(),
@@ -353,19 +309,5 @@ mod tests {
                 player_remote::fs::RemoteError::Network("No route to host".to_owned()),
             ))
         }
-    }
-
-    #[test]
-    fn a_folder_image_known_to_be_absent_is_not_asked_for_again_until_the_memory_expires() {
-        let source = SourceId::new();
-        let other = SourceId::new();
-        let start = std::time::Instant::now();
-        let mut misses = SidecarMisses::default();
-        assert!(!misses.is_missing(source, "a/cover.jpg", start));
-        misses.remember(source, "a/cover.jpg", start);
-        assert!(misses.is_missing(source, "a/cover.jpg", start));
-        assert!(!misses.is_missing(source, "a/folder.jpg", start));
-        assert!(!misses.is_missing(other, "a/cover.jpg", start));
-        assert!(!misses.is_missing(source, "a/cover.jpg", start + SIDECAR_MISS_TTL));
     }
 }
