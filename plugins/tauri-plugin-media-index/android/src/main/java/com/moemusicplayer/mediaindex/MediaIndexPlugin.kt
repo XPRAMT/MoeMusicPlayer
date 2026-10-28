@@ -825,6 +825,17 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /** The Bluetooth sample-rate follow switch changed (ADR 0051); the playback service reads it at every load too. */
+    @Command
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    fun setBluetoothRateFollow(invoke: Invoke) {
+        val enabled = JSONObject(invoke.getArgs().toString()).optBoolean("enabled", false)
+        activity.runOnUiThread {
+            PlaybackService.applyBluetoothRateFollow(activity.applicationContext, enabled)
+            invoke.resolve(JSObject())
+        }
+    }
+
     /**
      * USB permission for the USB audio device the exclusive mode plays on: the one named `productName` (a chosen USB
      * output; the only USB audio device when the name matches none), or the first USB audio device when the name is

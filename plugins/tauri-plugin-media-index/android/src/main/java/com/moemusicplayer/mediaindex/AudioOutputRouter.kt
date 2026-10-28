@@ -81,6 +81,24 @@ internal class AudioOutputRouter(
     /** The user's choice as applied now (null: the system default). */
     fun currentPreference(): OutputDevicePreference? = preference
 
+    /**
+     * The address of the A2DP device the next track goes to (ADR 0051): the chosen device when it is attached, else the
+     * system's media route (Android 13+); null when that is no A2DP device. Main thread.
+     */
+    fun a2dpTargetAddress(): String? {
+        val attached = outputDevices()
+        val facts = AudioOutputRules.find(preference, attached.map(::factsOf)) ?: systemMediaRoute(audioManager, attached)
+        return facts?.takeIf { it.type == AudioOutputRules.TYPE_BLUETOOTH_A2DP }
+            ?.address?.takeIf { it.isNotBlank() }?.uppercase()
+    }
+
+    /** The addresses of the attached A2DP output devices (upper case). Main thread. */
+    fun attachedA2dpAddresses(): Set<String> = outputDevices()
+        .filter { it.type == AudioOutputRules.TYPE_BLUETOOTH_A2DP }
+        .mapNotNullTo(HashSet()) { device ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) device.address?.takeIf { it.isNotBlank() }?.uppercase() else null
+        }
+
     private val heldChanged: () -> Unit = { handler.post { devicesChanged() } }
 
     fun start() {

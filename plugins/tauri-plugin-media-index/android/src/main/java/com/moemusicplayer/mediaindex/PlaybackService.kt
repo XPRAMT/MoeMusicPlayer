@@ -65,6 +65,8 @@ class PlaybackService : MediaSessionService() {
     private var exoPlayer: ExoPlayer? = null
     /** The chosen output device and what the AudioTrack really uses (ADR 0044). */
     @Volatile private var outputRouter: AudioOutputRouter? = null
+    /** The Bluetooth sample-rate follow (ADR 0051). */
+    @Volatile private var bluetoothRate: BluetoothRateFollow? = null
     /** Media3's output provider with the USB exclusive output in front (ADR 0047). */
     @Volatile private var usbOutputProvider: UsbAudioOutputProvider? = null
     private var session: MediaSession? = null
@@ -244,12 +246,21 @@ class PlaybackService : MediaSessionService() {
             ) = router.onTrackReleased()
 
             // An audio sink or player error soon after a privileged dump trips the lookup's circuit breaker (ADR 0048).
-            override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) =
+            override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
                 router.mixerLookup.symptom("audio sink error")
+                bluetoothRate?.symptom("audio sink error")
+            }
 
-            override fun onPlayerError(eventTime: AnalyticsListener.EventTime, error: androidx.media3.common.PlaybackException) =
+            override fun onPlayerError(eventTime: AnalyticsListener.EventTime, error: androidx.media3.common.PlaybackException) {
                 router.mixerLookup.symptom("player error")
+                bluetoothRate?.symptom("player error")
+            }
         })
+        // Bluetooth sample-rate follow (ADR 0051): saved original rates of an earlier run go back when the setting is off.
+        bluetoothRate = BluetoothRateFollow.create(this).also { follow ->
+            follow.setEnabled(readBluetoothRateFollow())
+            follow.restorePendingIfOff()
+        }
         // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
         router.setPreference(readOutputPreference())
         readUsbExclusive()?.let(UsbExclusiveEngine::setEnabled)
@@ -371,6 +382,8 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
         outputRouter?.shutdown()
+        bluetoothRate?.shutdown()
+        bluetoothRate = null
         mainHandler.removeCallbacks(clockPoll)
         clockPolling = false
         LyricsClock.clear()
@@ -542,6 +555,7 @@ class PlaybackService : MediaSessionService() {
                         ),
                         (dsdDecision as? DsdPassthroughRules.Decision.Pcm)?.reason,
                     )
+                    requestBluetoothRate(metadata.optInt("sampleRate", 0), isDsd || nativeDsd)
                     endedEventLoadInstance = null
                     stopped = false
                     loadInstance = loadFence.begin(commandId, trackId)
@@ -1146,7 +1160,24 @@ class PlaybackService : MediaSessionService() {
      * the exclusive mode a USB audio device that was attached or unplugged changes where the playing track goes at
      * once (attached → exclusive on it now; unplugged → shared on the system default).
      */
+    /**
+     * A track is loaded (main thread): ask the Bluetooth sample-rate follow to move the A2DP codec to the track's rate
+     * (ADR 0051). Only memory is read here; the privileged call runs on the follow's own thread and never holds up the load.
+     */
+    private fun requestBluetoothRate(trackHz: Int, dsd: Boolean) {
+        val follow = bluetoothRate ?: return
+        follow.setEnabled(readBluetoothRateFollow())
+        val router = outputRouter ?: return
+        val address = router.a2dpTargetAddress()
+        val usbExclusive = address != null && UsbExclusiveRules.route(
+            UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, router.currentPreference()),
+            readUsbDevices(),
+        ) is UsbExclusiveRules.Route.Exclusive
+        follow.onLoad(BluetoothRateRequest(address, usbExclusive, dsd, trackHz.takeIf { it > 0 }))
+    }
+
     private fun onDevicesChanged() {
+        outputRouter?.let { bluetoothRate?.devicesChanged(it.attachedA2dpAddresses()) }
         val before = lastUsbDevices
         val after = readUsbDevices()
         lastUsbDevices = after
@@ -1228,6 +1259,14 @@ class PlaybackService : MediaSessionService() {
     private external fun nativeOutputDevicePreference(): String?
     private external fun nativeUsbExclusiveEnabled(): Int
     private external fun nativeDsdPassthroughEnabled(): Int
+    private external fun nativeBluetoothRateFollowEnabled(): Int
+
+    /** The Bluetooth sample-rate follow switch (`androidBluetoothRateFollow`, ADR 0051); off until the settings are read. */
+    private fun readBluetoothRateFollow(): Boolean = try {
+        nativeBluetoothRateFollowEnabled() == 1
+    } catch (_: UnsatisfiedLinkError) {
+        false
+    }
 
     /** The hidden `androidRealMixerRate` switch (ADR 0048): -1 not read yet, 0 off, 1 on. */
     private external fun nativeRealMixerRateEnabled(): Int
@@ -1283,6 +1322,19 @@ class PlaybackService : MediaSessionService() {
                 UsbExclusiveEngine.setEnabled(enabled)
             }
             service.autoAskUsbPermission("mode")
+        }
+
+        /**
+         * The Bluetooth sample-rate follow switch changed (ADR 0051): a running service follows it at once (off puts
+         * the original rates back); without a service, saved rates are put back by a short-lived worker.
+         */
+        internal fun applyBluetoothRateFollow(context: android.content.Context, enabled: Boolean) {
+            val service = activeInstance
+            if (service != null) {
+                service.bluetoothRate?.setEnabled(enabled)
+            } else if (!enabled) {
+                BluetoothRateFollow.restoreWithoutService(context)
+            }
         }
 
         /** The panel asked to check the privileged sources again: the current track is looked up again (rate-limited). */
