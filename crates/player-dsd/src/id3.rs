@@ -51,9 +51,21 @@ pub fn read_dsf(path: &Path) -> Result<(DsdInfo, Option<Tag>), DsdError> {
 }
 
 /// Like [`read_dsf`], for a file the caller already opened (for example with extra path-safety checks).
-pub fn read_dsf_from<R: Read + Seek + Send>(
+pub fn read_dsf_from<R: Read + Seek + Send>(reader: R) -> Result<(DsdInfo, Option<Tag>), DsdError> {
+    let (info, bytes) = read_dsf_id3_bytes(reader, true)?;
+    // A damaged tag must not hide a playable file.
+    let tag = bytes.and_then(|bytes| parse_id3v2_bytes(&bytes).unwrap_or(None));
+    Ok((info, tag))
+}
+
+/// Stream info and the bytes of the trailing ID3v2 tag. With `pictures` false the tag is returned without its `APIC`
+/// frames (a library scan never needs a cover, and a cover is megabytes that would be read for nothing): the frames are
+/// walked and the pictures skipped with a seek. A tag whose layout cannot be walked (ID3v2.2, an extended header,
+/// whole-tag unsynchronisation) is read whole.
+pub fn read_dsf_id3_bytes<R: Read + Seek + Send>(
     mut reader: R,
-) -> Result<(DsdInfo, Option<Tag>), DsdError> {
+    pictures: bool,
+) -> Result<(DsdInfo, Option<Vec<u8>>), DsdError> {
     let dsf = DsfReader::open(BufReader::new(&mut reader))?;
     let info = dsf.info();
     let Some(offset) = dsf.id3v2_offset() else {
@@ -62,14 +74,91 @@ pub fn read_dsf_from<R: Read + Seek + Send>(
     drop(dsf);
     let length = reader.seek(SeekFrom::End(0))?;
     let size = length.saturating_sub(offset);
-    if size == 0 || size > MAX_TAG_BYTES {
+    if size == 0 {
+        return Ok((info, None));
+    }
+    if !pictures {
+        reader.seek(SeekFrom::Start(offset))?;
+        if let Some(bytes) = id3_without_pictures(&mut reader, size) {
+            return Ok((info, Some(bytes)));
+        }
+    }
+    if size > MAX_TAG_BYTES {
         return Ok((info, None));
     }
     reader.seek(SeekFrom::Start(offset))?;
     let mut bytes = vec![0_u8; size as usize];
     reader.read_exact(&mut bytes)?;
-    // A damaged tag must not hide a playable file.
-    Ok((info, parse_id3v2_bytes(&bytes).unwrap_or(None)))
+    Ok((info, Some(bytes)))
+}
+
+/// The ID3v2.3/2.4 tag at the reader's position (`available` bytes to the end of the file) with its `APIC` frames left
+/// out and the size field rewritten. `None` when the tag is not one this walk understands or is damaged.
+fn id3_without_pictures<R: Read + Seek>(reader: &mut R, available: u64) -> Option<Vec<u8>> {
+    let mut header = [0_u8; 10];
+    reader.read_exact(&mut header).ok()?;
+    let version = header[3];
+    // 0x80: unsynchronisation of the whole tag (v2.3); 0x40: extended header, whose layout depends on the version.
+    if &header[..3] != b"ID3" || !matches!(version, 3 | 4) || header[5] & 0xC0 != 0 {
+        return None;
+    }
+    let tag_size = synchsafe(&header[6..10])?;
+    let tag_end = 10_u64
+        .checked_add(tag_size)
+        .filter(|end| *end <= available)?;
+    let mut frames: Vec<u8> = Vec::new();
+    let mut offset = 10_u64;
+    while offset + 10 <= tag_end {
+        let mut frame = [0_u8; 10];
+        reader.read_exact(&mut frame).ok()?;
+        if frame[0] == 0 {
+            break; // padding
+        }
+        let frame_size = if version == 4 {
+            synchsafe(&frame[4..8])?
+        } else {
+            u64::from(u32::from_be_bytes(frame[4..8].try_into().ok()?))
+        };
+        let end = (offset + 10)
+            .checked_add(frame_size)
+            .filter(|end| *end <= tag_end)?;
+        if &frame[..4] == b"APIC" {
+            reader.seek(SeekFrom::Current(frame_size as i64)).ok()?;
+        } else {
+            if frames.len() as u64 + 10 + frame_size > MAX_TAG_BYTES {
+                return None;
+            }
+            frames.extend_from_slice(&frame);
+            let start = frames.len();
+            frames.resize(start + frame_size as usize, 0);
+            reader.read_exact(&mut frames[start..]).ok()?;
+        }
+        offset = end;
+    }
+    let size = frames.len() as u32;
+    let mut out = Vec::with_capacity(10 + frames.len());
+    out.extend_from_slice(&header[..5]);
+    out.push(header[5] & !0x10); // no footer
+    out.extend_from_slice(&[
+        (size >> 21) as u8 & 0x7F,
+        (size >> 14) as u8 & 0x7F,
+        (size >> 7) as u8 & 0x7F,
+        size as u8 & 0x7F,
+    ]);
+    out.extend_from_slice(&frames);
+    Some(out)
+}
+
+fn synchsafe(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() != 4 || bytes.iter().any(|byte| byte & 0x80 != 0) {
+        return None;
+    }
+    Some(
+        (u64::from(bytes[0]) << 21)
+            | (u64::from(bytes[1]) << 14)
+            | (u64::from(bytes[2]) << 7)
+            | u64::from(bytes[3]),
+    )
 }
 
 /// Write `destination` as a copy of the DSF at `source` whose trailing ID3v2 tag is replaced by `tag` (written as
@@ -142,6 +231,48 @@ mod tests {
         assert_eq!(tag.artist().as_deref(), Some("演出者"));
         assert_eq!(tag.album().as_deref(), Some("專輯"));
         assert_eq!(tag.get_string(ItemKey::AlbumArtist), Some("Various"));
+    }
+
+    #[test]
+    fn a_scan_read_leaves_the_pictures_out_and_keeps_every_other_frame() {
+        use lofty::picture::{MimeType, Picture, PictureType};
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.set_title("DSD 曲名".to_owned());
+        tag.set_artist("演出者".to_owned());
+        tag.insert_text(ItemKey::RecordingDate, "2024-2-9".to_owned());
+        tag.insert_text(ItemKey::UnsyncLyrics, "[00:01.00]歌詞".to_owned());
+        tag.push_picture(
+            Picture::unchecked(vec![7_u8; 300_000])
+                .pic_type(PictureType::CoverFront)
+                .mime_type(MimeType::Png)
+                .build(),
+        );
+        let mut tag_bytes = Vec::new();
+        tag.dump_to(&mut tag_bytes, lofty::config::WriteOptions::default())
+            .unwrap();
+        let mut file =
+            crate::testing::build_dsf(2_822_400, 80_000, 4096, true, &[vec![0x69; 10_000]]);
+        let offset = file.len() as u64;
+        file[20..28].copy_from_slice(&offset.to_le_bytes());
+        file.extend_from_slice(&tag_bytes);
+
+        let (_, with) = read_dsf_id3_bytes(Cursor::new(file.clone()), true).unwrap();
+        let (_, without) = read_dsf_id3_bytes(Cursor::new(file), false).unwrap();
+        let (with, without) = (with.unwrap(), without.unwrap());
+        assert!(with.len() > 300_000);
+        assert!(without.len() < 1_000, "{} bytes", without.len());
+        let parsed = parse_id3v2_bytes(&without).unwrap().unwrap();
+        assert_eq!(parsed.title().as_deref(), Some("DSD 曲名"));
+        assert_eq!(parsed.artist().as_deref(), Some("演出者"));
+        assert_eq!(
+            parsed.get_string(ItemKey::UnsyncLyrics),
+            Some("[00:01.00]歌詞")
+        );
+        assert!(parsed.pictures().is_empty());
+        assert_eq!(
+            parse_id3v2_bytes(&with).unwrap().unwrap().pictures().len(),
+            1
+        );
     }
 
     #[test]

@@ -7,10 +7,12 @@ use std::path::Path;
 use lofty::{
     config::ParseOptions,
     file::{FileType, TaggedFile},
+    iff::aiff::{AiffCompressionType, AiffFile},
+    mp4::{Mp4Codec, Mp4File},
     mpeg::{Layer, MpegFile},
-    prelude::{Accessor, AudioFile, TaggedFileExt},
+    prelude::{AudioFile, TaggedFileExt},
     probe::Probe,
-    tag::ItemKey,
+    tag::{ItemKey, Tag},
 };
 use player_core::{TrackMetadata, TrackMetadataError};
 use symphonia::{
@@ -19,6 +21,13 @@ use symphonia::{
 };
 
 pub use player_wavpack::ReadSeek;
+
+pub mod labels;
+
+/// What joins the values of a tag field that holds several (two `ARTIST` fields of a Vorbis comment, an ID3v2.4 frame
+/// with two strings). The library's artist splitter (`music_split_artists_json`, `splitArtists`) splits on it, and `|`
+/// is the separator least likely to be part of a name.
+pub const MULTI_VALUE_JOINER: &str = " | ";
 
 /// Where a track's bytes come from. Every call to [`open`](Self::open) returns a fresh reader at the start, so the
 /// parser can read the file more than once (a tag frame, then the audio properties).
@@ -58,9 +67,102 @@ impl ByteSource for PathSource<'_> {
     }
 }
 
+/// A local file under another name: Android hands out the content of a `content://` document as a private copy whose name
+/// says nothing about the format, so the name comes from the document's MIME type.
+pub struct NamedPathSource<'a> {
+    pub path: &'a Path,
+    pub name: String,
+}
+
+impl ByteSource for NamedPathSource<'_> {
+    fn file_name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn open(&self) -> io::Result<Box<dyn ReadSeek>> {
+        Ok(Box::new(std::fs::File::open(self.path)?))
+    }
+}
+
 /// What a library scan parses: everything but the embedded pictures.
 fn scan_parse_options() -> ParseOptions {
     ParseOptions::new().read_cover_art(false)
+}
+
+/// The values of `key` joined by [`MULTI_VALUE_JOINER`]. A single value is returned as it is; with several, blank and
+/// repeated ones are dropped.
+pub fn joined_values(tag: &Tag, key: ItemKey) -> Option<String> {
+    join_values(tag.get_strings(key))
+}
+
+/// [`joined_values`] for values already collected.
+pub fn join_values<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let values: Vec<&str> = values.into_iter().collect();
+    if values.len() <= 1 {
+        return values.first().map(|value| (*value).to_owned());
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty() && !kept.contains(&value) {
+            kept.push(value);
+        }
+    }
+    (!kept.is_empty()).then(|| kept.join(MULTI_VALUE_JOINER))
+}
+
+/// The number before a `/` of a track or disc field (`3/12` is track 3; a Vorbis comment or an MP4 atom keeps it so).
+fn leading_number(value: Option<&str>) -> Option<u32> {
+    value?.split('/').next()?.trim().parse().ok()
+}
+
+/// The fields every tag format gives the library, read the same way for each.
+struct TagFields {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    album_artist: Option<String>,
+    track_number: Option<u32>,
+    disc_number: Option<u32>,
+    release_date: Option<String>,
+    year: Option<u16>,
+}
+
+/// `raw_date` is the tag's recording date as written, when the caller could read it without lofty's timestamp
+/// conversion (which turns `2024-2-9` into `2024-02`).
+fn tag_fields(tag: Option<&Tag>, raw_date: Option<&str>) -> TagFields {
+    let text = |key: ItemKey| tag.and_then(|tag| tag.get_string(key)).map(str::to_owned);
+    let release_date = match raw_date {
+        Some(value) => player_core::parse_recording_date(value),
+        None => tag
+            .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
+            .and_then(player_core::parse_recording_date),
+    };
+    let year = release_date
+        .as_deref()
+        .and_then(player_core::recording_date_year);
+    TagFields {
+        title: text(ItemKey::TrackTitle).filter(|value| !value.trim().is_empty()),
+        artist: tag.and_then(|tag| joined_values(tag, ItemKey::TrackArtist)),
+        album: text(ItemKey::AlbumTitle),
+        album_artist: tag.and_then(|tag| joined_values(tag, ItemKey::AlbumArtist)),
+        track_number: leading_number(tag.and_then(|tag| tag.get_string(ItemKey::TrackNumber))),
+        disc_number: leading_number(tag.and_then(|tag| tag.get_string(ItemKey::DiscNumber))),
+        release_date,
+        year,
+    }
+}
+
+fn properties_error(error: impl std::fmt::Display) -> TrackMetadataError {
+    TrackMetadataError {
+        message: format!("could not parse audio properties: {error}"),
+    }
+}
+
+fn open_error(what: &str, error: io::Error) -> TrackMetadataError {
+    TrackMetadataError {
+        message: format!("could not open {what}: {error}"),
+    }
 }
 
 /// Tags and audio properties of one track.
@@ -75,15 +177,12 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
         return read_matroska_audio_metadata(source);
     }
     if player_formats::decode_engine(name_path) == player_formats::DecodeEngine::Dsd {
-        let reader = source.open().map_err(|error| TrackMetadataError {
-            message: format!("could not open DSF file: {error}"),
-        })?;
-        return read_dsf_audio_metadata_from(reader);
+        return read_dsf_audio_metadata_from(source);
     }
 
-    let reader = source.open().map_err(|error| TrackMetadataError {
-        message: format!("could not open audio metadata: {error}"),
-    })?;
+    let reader = source
+        .open()
+        .map_err(|error| open_error("audio metadata", error))?;
     // `Probe::open` starts from the extension's file type; keep that behaviour for a stream.
     let mut probe = Probe::new(BufReader::new(reader));
     if let Some(file_type) = FileType::from_path(name_path) {
@@ -108,25 +207,47 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
     } else {
         None
     };
-    let (tagged_file, codec) = if file_type == FileType::Mpeg {
-        let mut reader = probe.into_inner();
-        reader
-            .seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| TrackMetadataError {
-                message: format!("could not rewind MPEG audio file: {error}"),
-            })?;
-        let mpeg_file = MpegFile::read_from(&mut reader, scan_parse_options()).map_err(|error| {
-            TrackMetadataError {
-                message: format!("could not parse MPEG audio properties: {error}"),
+    // The containers that can hold lossless or lossy audio are parsed by their own reader, which says which it is.
+    let mut codec = labels::container_label(file_type);
+    let mut lossless_pcm_depth: Option<u8> = None;
+    let tagged_file = match file_type {
+        FileType::Mpeg | FileType::Mp4 | FileType::Aiff => {
+            let mut reader = probe.into_inner();
+            reader
+                .seek(SeekFrom::Start(0))
+                .map_err(|error| TrackMetadataError {
+                    message: format!("could not rewind audio file: {error}"),
+                })?;
+            match file_type {
+                FileType::Mpeg => {
+                    let file = MpegFile::read_from(&mut reader, scan_parse_options())
+                        .map_err(properties_error)?;
+                    codec = mpeg_codec_name(*file.properties().layer()).to_owned();
+                    TaggedFile::from(file)
+                }
+                FileType::Mp4 => {
+                    let file = Mp4File::read_from(&mut reader, scan_parse_options())
+                        .map_err(properties_error)?;
+                    if file.properties().codec() == Some(Mp4Codec::ALAC) {
+                        codec = labels::ALAC.to_owned();
+                        lossless_pcm_depth = file.properties().bit_depth();
+                    }
+                    TaggedFile::from(file)
+                }
+                _ => {
+                    let file = AiffFile::read_from(&mut reader, scan_parse_options())
+                        .map_err(properties_error)?;
+                    let properties = file.properties();
+                    if aiff_is_pcm(properties.compression_type()) {
+                        lossless_pcm_depth = u8::try_from(properties.sample_size()).ok();
+                    }
+                    TaggedFile::from(file)
+                }
             }
-        })?;
-        let codec = mpeg_codec_name(*mpeg_file.properties().layer()).to_owned();
-        (TaggedFile::from(mpeg_file), codec)
-    } else {
-        let tagged_file = probe.read().map_err(|error| TrackMetadataError {
+        }
+        _ => probe.read().map_err(|error| TrackMetadataError {
             message: format!("could not parse audio metadata: {error}"),
-        })?;
-        (tagged_file, format!("{file_type:?}"))
+        })?,
     };
     let wavpack = if file_type == FileType::WavPack {
         source
@@ -141,26 +262,15 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
         .primary_tag()
         .or_else(|| tagged_file.first_tag());
     let properties = tagged_file.properties();
-    let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
-    let release_date = match raw_id3_recording_date.as_deref() {
-        Some(value) => player_core::parse_recording_date(value),
-        None => tag
-            .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-            .and_then(player_core::parse_recording_date),
-    };
-    let year = release_date
-        .as_deref()
-        .and_then(player_core::recording_date_year);
+    let fields = tag_fields(tag, raw_id3_recording_date.as_deref());
 
     Ok(TrackMetadata {
-        title: tag
-            .and_then(|tag| text(tag.title()))
-            .filter(|value| !value.trim().is_empty()),
-        artist: tag.and_then(|tag| text(tag.artist())),
-        album: tag.and_then(|tag| text(tag.album())),
-        album_artist: tag.and_then(|tag| tag.get_string(ItemKey::AlbumArtist).map(str::to_owned)),
-        track_number: tag.and_then(|tag| tag.track()),
-        disc_number: tag.and_then(|tag| tag.disk()),
+        title: fields.title,
+        artist: fields.artist,
+        album: fields.album,
+        album_artist: fields.album_artist,
+        track_number: fields.track_number,
+        disc_number: fields.disc_number,
         duration_ms: Some(properties.duration().as_millis().min(u64::MAX as u128) as u64),
         codec: Some(codec),
         bitrate_bps: properties
@@ -169,8 +279,8 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
         sample_rate_hz: wavpack
             .map(|summary| summary.sample_rate_hz)
             .or_else(|| properties.sample_rate()),
-        release_date,
-        year,
+        release_date: fields.release_date,
+        year: fields.year,
         bit_depth: if file_type == FileType::Wav {
             source
                 .open()
@@ -178,10 +288,26 @@ pub fn read_track_metadata(source: &dyn ByteSource) -> Result<TrackMetadata, Tra
                 .and_then(read_lossless_wav_bit_depth_from)
         } else if file_type == FileType::WavPack {
             wavpack.and_then(|summary| summary.bit_depth)
+        } else if lossless_pcm_depth.is_some() {
+            lossless_pcm_depth.filter(|depth| (8..=32).contains(depth))
         } else {
             reliable_source_bit_depth(file_type, properties.bit_depth())
         },
     })
+}
+
+/// An AIFF file (no compression field) or AIFC with one of the uncompressed sample formats.
+fn aiff_is_pcm(compression: Option<&AiffCompressionType>) -> bool {
+    matches!(
+        compression,
+        None | Some(
+            AiffCompressionType::None
+                | AiffCompressionType::sowt
+                | AiffCompressionType::fl32
+                | AiffCompressionType::fl64
+                | AiffCompressionType::FL32
+        )
+    )
 }
 
 /// Read an ID3v2 text frame without Lofty's semantic timestamp conversion. Lofty's timestamp
@@ -421,37 +547,41 @@ pub fn read_lossless_wav_bit_depth_from(mut file: impl Read + Seek) -> Option<u8
     None
 }
 
-/// DSF: properties from the file header, tags from the ID3v2 tag at the end of the file (lofty has no DSF reader).
+/// DSF: properties from the file header, tags from the ID3v2 tag at the end of the file (lofty has no DSF reader). The
+/// cover is left unread, like in every scan.
 fn read_dsf_audio_metadata_from(
-    reader: impl Read + Seek + Send,
+    source: &dyn ByteSource,
 ) -> Result<TrackMetadata, TrackMetadataError> {
-    let (info, tag) =
-        player_dsd::id3::read_dsf_from(reader).map_err(|error| TrackMetadataError {
+    let reader = source
+        .open()
+        .map_err(|error| open_error("DSF file", error))?;
+    let (info, bytes) =
+        player_dsd::id3::read_dsf_id3_bytes(reader, false).map_err(|error| TrackMetadataError {
             message: error.to_string(),
         })?;
-    let tag = tag.as_ref();
-    let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
-    let release_date = tag
-        .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-        .and_then(player_core::parse_recording_date);
-    let year = release_date
+    // A damaged tag must not hide a playable file.
+    let tag = bytes
         .as_deref()
-        .and_then(player_core::recording_date_year);
+        .and_then(|bytes| player_dsd::id3::parse_id3v2_bytes(bytes).ok().flatten());
+    let raw_date = bytes.as_deref().and_then(|bytes| {
+        read_id3v2_text_frame(io::Cursor::new(bytes), b"TDRC")
+            .ok()
+            .flatten()
+    });
+    let fields = tag_fields(tag.as_ref(), raw_date.as_deref());
     Ok(TrackMetadata {
-        title: tag
-            .and_then(|tag| text(tag.title()))
-            .filter(|value| !value.trim().is_empty()),
-        artist: tag.and_then(|tag| text(tag.artist())),
-        album: tag.and_then(|tag| text(tag.album())),
-        album_artist: tag.and_then(|tag| tag.get_string(ItemKey::AlbumArtist).map(str::to_owned)),
-        track_number: tag.and_then(|tag| tag.track()),
-        disc_number: tag.and_then(|tag| tag.disk()),
+        title: fields.title,
+        artist: fields.artist,
+        album: fields.album,
+        album_artist: fields.album_artist,
+        track_number: fields.track_number,
+        disc_number: fields.disc_number,
         duration_ms: Some(info.duration().as_millis().min(u64::MAX as u128) as u64),
         codec: Some(info.rate_name()),
         bitrate_bps: Some(info.sample_rate.saturating_mul(u32::from(info.channels))),
         sample_rate_hz: Some(info.sample_rate),
-        release_date,
-        year,
+        release_date: fields.release_date,
+        year: fields.year,
         bit_depth: Some(1),
     })
 }
@@ -631,7 +761,21 @@ fn read_matroska_audio_metadata(
                     .and_then(|track| track.name.clone())
             })
             .or_else(|| symphonia_tag_text(&["TITLE", "TRACK_NAME"])),
-        artist: tag_text(&["ARTIST", "LEAD_PERFORMER", "ARTIST/LEADPERFORMER"]),
+        artist: {
+            // Several ARTIST items are kept, like the fields of any other tag format.
+            let all: Vec<String> = container_tags
+                .iter()
+                .flat_map(|tag| tag.simple.iter())
+                .filter(|tag| tag.name.eq_ignore_ascii_case("ARTIST"))
+                .filter_map(|tag| match &tag.value {
+                    Some(matroska::TagValue::String(value)) => Some(value.clone()),
+                    _ => None,
+                })
+                .filter(|value| !value.trim().is_empty())
+                .collect();
+            join_values(all.iter().map(String::as_str))
+                .or_else(|| tag_text(&["ARTIST", "LEAD_PERFORMER", "ARTIST/LEADPERFORMER"]))
+        },
         album: tag_text(&["ALBUM"]),
         album_artist: tag_text(&["ALBUM_ARTIST", "ALBUMARTIST", "ARTIST/ALBUMARTIST"]),
         track_number: parse_number(&["PART_NUMBER", "TRACK_NUMBER", "TRACKNUMBER"]),
