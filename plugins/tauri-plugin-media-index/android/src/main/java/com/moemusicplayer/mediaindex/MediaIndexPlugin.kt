@@ -1336,8 +1336,12 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
                 artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST),
                 album = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM),
                 albumArtist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST),
-                trackNumber = parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)),
-                discNumber = parsePositiveInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)),
+                trackNumber = parseLeadingInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)),
+                discNumber = parseLeadingInt(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)),
+                releaseDate = retrieverReleaseDate(
+                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DATE),
+                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_YEAR),
+                ),
                 durationMs = parsePositiveLong(retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)),
                 codec = audioFormat?.stringOrNull(android.media.MediaFormat.KEY_MIME)
                     ?: retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE),
@@ -1710,6 +1714,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         bitrateBps: Int? = null,
         sampleRateHz: Int? = null,
         bitDepth: Int? = null,
+        releaseDate: String? = null,
     ): JSONObject = JSONObject().apply {
         put("title", title?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
         put("artist", artist ?: JSONObject.NULL)
@@ -1722,6 +1727,7 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         put("bitrateBps", bitrateBps ?: JSONObject.NULL)
         put("sampleRateHz", sampleRateHz ?: JSONObject.NULL)
         put("bitDepth", bitDepth ?: JSONObject.NULL)
+        put("releaseDate", releaseDate ?: JSONObject.NULL)
     }
 
     private fun Cursor.stringOrNull(column: Int): String? =
@@ -1731,6 +1737,23 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
         if (column < 0 || isNull(column)) null else getLong(column)
 
     private fun parsePositiveInt(value: String?): Int? = value?.toIntOrNull()?.takeIf { it >= 0 }
+
+    /** The number before a `/` of a track or disc field (`3/12` is 3), like the Rust tag reader reads it. */
+    private fun parseLeadingInt(value: String?): Int? =
+        value?.substringBefore('/')?.trim()?.toIntOrNull()?.takeIf { it >= 0 }
+
+    /**
+     * The retriever gives the date as `20240209T000000.000Z` (or only a year); the Rust side normalises the text, so
+     * this passes `YYYY-MM-DD` when the date is whole and the year otherwise.
+     */
+    private fun retrieverReleaseDate(date: String?, year: String?): String? {
+        val whole = date?.let { Regex("""^(\d{4})(\d{2})(\d{2})""").find(it) }
+        if (whole != null) {
+            val (y, m, d) = whole.destructured
+            return "$y-$m-$d"
+        }
+        return (date ?: year)?.trim()?.takeIf { it.length >= 4 && it.take(4).all(Char::isDigit) }?.take(4)
+    }
     private fun parsePositiveLong(value: String?): Long? = value?.toLongOrNull()?.takeIf { it >= 0L }
 
     companion object {

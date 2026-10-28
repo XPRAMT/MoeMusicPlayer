@@ -863,13 +863,17 @@ class PlaybackService : MediaSessionService() {
     }
 
     /**
-     * The cover for the notification: the picture the platform retriever finds in the file, else [coverFromRust] (a
-     * cover the Rust side read itself, for formats such as WavPack whose APEv2 cover the retriever cannot see), else
-     * the image at [artworkUri].
+     * The cover for the notification: [coverFromRust] (read by the one embedded-cover reader, every container, local or
+     * remote), else the picture the platform retriever finds in the file, else the image at [artworkUri].
      */
     private fun loadArtwork(loadUri: String, artworkUri: String?, coverFromRust: ByteArray? = null): ByteArray? {
         // A DSD, WavPack or FLAC track is loaded as moedsd://, moewv:// or moeflac://; the file (and embedded picture)
         // is the same path as file://.
+        // The cover Rust read with the one embedded-cover reader (every container, local or remote) comes first; the
+        // platform retriever is only the fallback for a file that reader could not give a picture.
+        if (coverFromRust != null && coverFromRust.size <= MAX_NOTIFICATION_SOURCE_BYTES) {
+            createNotificationArtwork(coverFromRust)?.let { return it }
+        }
         val contentUri = fileUriOfConverted(loadUri)
         val embedded = try {
             val retriever = android.media.MediaMetadataRetriever()
@@ -884,9 +888,6 @@ class PlaybackService : MediaSessionService() {
         }
         if (embedded != null && embedded.size <= MAX_NOTIFICATION_SOURCE_BYTES) {
             createNotificationArtwork(embedded)?.let { return it }
-        }
-        if (coverFromRust != null && coverFromRust.size <= MAX_NOTIFICATION_SOURCE_BYTES) {
-            createNotificationArtwork(coverFromRust)?.let { return it }
         }
         if (artworkUri.isNullOrBlank()) return null
         return try {
