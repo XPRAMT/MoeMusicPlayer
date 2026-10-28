@@ -215,3 +215,34 @@ export function overlayTransformCss(t) {
 export function coverOverlayWanted(scale, promotedScale) {
   return scale !== 1 || promotedScale !== 1;
 }
+
+/** @typedef {{ translate: string, scale: string, opacity: string, transition: string }} MirroredFeedback */
+
+/** Whether a mirrored swipe feedback carries a displacement, scale or fade (the settle transition alone does not count). @param {MirroredFeedback | null | undefined} f */
+export function swipeFeedbackActive(f) {
+  return Boolean(f && (f.translate || f.scale || f.opacity));
+}
+
+/**
+ * The stage's feedback just ended (it was displaced, faded or scaled and is back at rest, the bounce-back settling by a
+ * transition). The overlay must not run its own copy of that bounce: it is hidden in the same write with every feedback
+ * property cleared, and redrawn once the stage has settled (ADR 0036).
+ * @param {MirroredFeedback | null | undefined} previous @param {MirroredFeedback | null | undefined} next
+ */
+export function swipeFeedbackReleased(previous, next) {
+  return swipeFeedbackActive(previous) && !swipeFeedbackActive(next);
+}
+
+/** The inline feedback values a (re)drawn overlay carries: exactly the stage's now, no transition. @param {MirroredFeedback | null | undefined} f */
+export function overlayFeedbackStyle(f) {
+  return { translate: f?.translate || '', scale: f?.scale || '', opacity: f?.opacity || '' };
+}
+
+/**
+ * Whether a shown overlay still belongs to the cover image now on the stage (same source it was drawn from). A different
+ * or unknown current source means the drawing is stale: it is dropped and drawn again.
+ * @param {string | null | undefined} drawnSource @param {string | null | undefined} currentSource
+ */
+export function overlayMatchesSource(drawnSource, currentSource) {
+  return (drawnSource || "") === (currentSource || "");
+}

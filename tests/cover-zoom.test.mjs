@@ -836,20 +836,24 @@ test('swipe feedback on a zoomed stage is mirrored onto the overlay in the same 
     fire('pointerup', touch(285, 302, { timeStamp: 40 }));
     await settle();
     assert.equal(skipped, 0);
-    assert.equal(overlay.style.opacity, '1', 'the settle transition is mirrored, not hidden');
-    assert.equal(overlay.style.transition, node.style.transition);
-    assert.match(overlay.style.transition, /translate/);
+    // Release below the threshold: cover and overlay return in the same write. The overlay is hidden with no feedback
+    // left on it (no second copy that stays where the swipe left it); the stage's own image shows the bounce.
+    assert.equal(overlay.style.opacity, '0', 'hidden in the release write');
     assert.equal(overlay.style.translate, '');
-    // The settled redraw 50 ms after the fingers are up, then the swipe's delayed `transition = ''` write.
+    assert.equal(overlay.style.scale, '');
+    assert.equal(overlay.style.transition, '');
+    assert.match(node.style.transition, /translate/, 'the stage bounces back by its settle transition');
+    // No redraw while the bounce runs; after it, the stage's delayed `transition = ''` write, one sharp redraw.
     await wait(COVER_LAYER_IDLE_MS + 20);
-    assert.equal(drawn.length, 2, 'redrawn once quiet');
-    assert.equal(overlay.style.opacity, '1');
-    await wait(SWIPE_SETTLE_MS);
+    assert.equal(drawn.length, 1, 'not redrawn mid-bounce');
+    await wait(SWIPE_SETTLE_MS + COVER_LAYER_IDLE_MS * 2);
     await settle();
     assert.equal(node.style.transition, '');
-    assert.equal(overlay.style.opacity, '1', "the delayed transition = '' write does not hide it");
+    assert.equal(drawn.length, 2, 'redrawn once the stage has settled');
+    assert.equal(overlay.style.opacity, '1');
+    assert.equal(overlay.style.translate, '', 'overlay feedback == none, like the stage');
+    assert.equal(overlay.style.scale, '');
     assert.equal(overlay.style.transition, '');
-    assert.equal(drawn.length, 2);
     // A single-finger swipe far enough left still skips (far from the last release: not a double tap); the overlay
     // moved with the feedback and snaps back with it.
     fire('pointerdown', touch(300, 300, { timeStamp: 2000 }));
@@ -858,9 +862,11 @@ test('swipe feedback on a zoomed stage is mirrored onto the overlay in the same 
     assert.equal(overlay.style.translate, node.style.translate);
     fire('pointerup', touch(150, 300, { timeStamp: 2040 }));
     await settle();
-    assert.equal(skipped, 1, 'single-finger swipe still skips');
-    assert.equal(overlay.style.opacity, '1');
+    assert.equal(skipped, 1, 'single-finger swipe still skips (commit case)');
+    assert.equal(overlay.style.opacity, '0', 'hidden in the release write on a commit too');
     assert.equal(overlay.style.translate, '');
+    assert.equal(overlay.style.scale, '');
+    assert.equal(overlay.style.transition, '');
     // A foreign style write still hides the overlay.
     node.style.width = '320px';
     await settle();
@@ -1054,4 +1060,42 @@ test('source shape: the cover layer structure never changes at a gesture or anim
   // The stage itself is only animated without a drawable image (fallback art).
   const glide = source.slice(source.indexOf('  function startGlide'), source.indexOf('  function beginGlide'));
   assert.match(glide, /drawOverlay\(to, 1, to, true\) \? overlay\.element : node/);
+});
+
+test('swipe feedback ending is detected so the overlay returns with the cover (no ghost left displaced)', async () => {
+  const { swipeFeedbackReleased, swipeFeedbackActive, overlayFeedbackStyle, overlayMatchesSource } = await import('../src/lib/cover-overlay.js');
+  const dragging = { translate: '-19px 0', scale: '0.98', opacity: '0.9', transition: 'none' };
+  const bouncing = { translate: '', scale: '', opacity: '', transition: 'translate 180ms ease, scale 180ms ease, opacity 180ms ease' };
+  const rest = { translate: '', scale: '', opacity: '', transition: '' };
+  assert.equal(swipeFeedbackActive(dragging), true);
+  assert.equal(swipeFeedbackActive(bouncing), false, 'a settle transition alone is no feedback');
+  assert.equal(swipeFeedbackReleased(dragging, bouncing), true, 'the release frame');
+  assert.equal(swipeFeedbackReleased(dragging, dragging), false);
+  assert.equal(swipeFeedbackReleased(bouncing, rest), false);
+  assert.equal(swipeFeedbackReleased(null, bouncing), false);
+  // A (re)drawn overlay carries exactly the stage's feedback: nothing after the release.
+  assert.deepEqual(overlayFeedbackStyle(bouncing), { translate: '', scale: '', opacity: '' });
+  assert.deepEqual(overlayFeedbackStyle(null), { translate: '', scale: '', opacity: '' });
+  assert.deepEqual(overlayFeedbackStyle(dragging), { translate: '-19px 0', scale: '0.98', opacity: '0.9' });
+  // A drawing belongs to the cover image it was drawn from.
+  assert.equal(overlayMatchesSource('blob:a', 'blob:a'), true);
+  assert.equal(overlayMatchesSource('blob:a', 'blob:b'), false);
+  assert.equal(overlayMatchesSource('', ''), true, 'no source on either side (no img): nothing to compare');
+});
+
+test('the overlay hides and clears its feedback in the same write the stage releases, and draws only after the bounce', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../src/lib/cover-zoom.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const mirror = source.slice(source.indexOf('  function mirrorFeedback'), source.indexOf('  /** Opt-in (localStorage'));
+  assert.match(mirror, /swipeFeedbackReleased\(mirrored, next\)/);
+  assert.match(mirror, /overlay\.mirror\(null\);\s*hideOverlay\(\);/);
+  // No redraw while the stage's settle transition runs; no layer property is toggled on the stage.
+  assert.match(source, /if \(feedbackSettling\(\)\) \{ layerGate\.poke\(\); return; \}/);
+  assert.doesNotMatch(source, /style\.(willChange|zIndex|contain|isolation|position)\b/);
+  // hide() leaves no feedback on the canvas; draw() applies the stage's current feedback.
+  const hide = source.slice(source.indexOf('    hide() {'), source.indexOf('    remove()'));
+  assert.match(hide, /transition = ''[\s\S]*translate = ''[\s\S]*scale = ''/);
+  assert.match(source, /overlayFeedbackStyle\(feedback\)/);
+  // The overlay is also dropped when the artwork source differs from the one it was drawn from (track change).
+  assert.match(source, /overlayMatchesSource\(overlay\.drawnSource, currentSource\(\)\)/);
 });
