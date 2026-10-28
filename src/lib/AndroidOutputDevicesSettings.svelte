@@ -55,7 +55,7 @@
   import { mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
 
   interface Props {
-    /** Told when the output mode is read or changed (the DSD passthrough text under 「DSD 播放」 depends on it). */
+    /** Told when the output mode is read or changed (the DSD passthrough text under 「DSD」 depends on it). */
     onExclusiveChange?: (exclusive: boolean) => void;
   }
 
@@ -328,8 +328,7 @@
 
 <div class="settings-panel-header">
   <div>
-    <h3>{tr("播放裝置")}</h3>
-    <p>{androidOutputHeader(usbExclusive.enabled)}</p>
+    <h3>{tr("模式")}</h3>
   </div>
 </div>
 
@@ -356,25 +355,12 @@
   </p>
 {/if}
 
-<label class="bluetooth-rate-follow">
-  <input
-    type="checkbox"
-    checked={btRate.enabled}
-    disabled={btRate.busy}
-    onchange={(event) => void setBluetoothRateFollow(event.currentTarget.checked)}
-  />
-  <span>
-    <strong>{tr('藍牙取樣率跟隨曲目')}</strong>
-    <small>{tr('換歌時把藍牙編碼的取樣率改成接近這首歌的值（需要 root 或 Shizuku）。')}</small>
-  </span>
-</label>
-{#if btRateNotice}
-  <p class="mixer-source-line">
-    {btRateNotice}
-    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
-  </p>
-{/if}
-{#if btRate.failure}<p class="source-error-message" role="alert">{btRate.failure}</p>{/if}
+<div class="settings-panel-header">
+  <div>
+    <h3>{tr("裝置")}</h3>
+    <p>{androidOutputHeader(usbExclusive.enabled)}</p>
+  </div>
+</div>
 
 {#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
 {#if usbExclusive.failure}<p class="source-error-message" role="alert">{usbExclusive.failure}</p>{/if}
@@ -440,6 +426,33 @@
     </div>
   {/each}
 </div>
+
+<div class="settings-panel-header">
+  <div>
+    <h3>{tr("藍牙")}</h3>
+  </div>
+</div>
+
+<label class="bluetooth-rate-follow">
+  <input
+    type="checkbox"
+    checked={btRate.enabled}
+    disabled={btRate.busy}
+    onchange={(event) => void setBluetoothRateFollow(event.currentTarget.checked)}
+  />
+  <span>
+    <strong>{tr('藍牙取樣率跟隨曲目')}</strong>
+    <small>{tr('換歌時把藍牙編碼的取樣率改成接近這首歌的值（需要 root 或 Shizuku）。')}</small>
+  </span>
+</label>
+{#if btRateNotice}
+  <p class="mixer-source-line">
+    {btRateNotice}
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
+  </p>
+{/if}
+{#if btRate.failure}<p class="source-error-message" role="alert">{btRate.failure}</p>{/if}
+
 
 <dialog
   bind:this={permissionDialog}

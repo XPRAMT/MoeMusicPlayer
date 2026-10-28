@@ -49,7 +49,7 @@ export function androidOutputModes() {
     },
     {
       exclusive: true,
-      title: tr('獨佔'),
+      title: tr('獨佔優先'),
       description: tr('USB 音訊裝置由本程式直接輸出（位元完美）；其他 App 與通知音改從別處出聲，系統音量無效。'),
     },
   ];

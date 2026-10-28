@@ -4644,7 +4644,7 @@
                 {/if}
                 <div class="settings-panel-header">
                   <div>
-                    <h3>{tr("DSD 播放")}</h3>
+                    <h3>{tr("DSD")}</h3>
                     <p>{tr("DSD（.dsf）會先在播放器內轉成 PCM 再輸出。增益補償 DSD 較低的標稱電平；播放中調整增益會平滑漸變，不會突然變大聲。")}{#if capabilities?.platform === 'android'}{tr("Android 的音訊輸出上限為 192 kHz，所以輸出取樣率固定為 176.4 kHz。")}{:else}{tr("改變輸出取樣率時，正在播放的 DSD 曲目會從目前位置重新開始。")}{/if}</p>
                   </div>
                 </div>
@@ -4693,7 +4693,7 @@
                         <strong>{tr("使用 DoP 輸出 DSD（獨佔模式）")}</strong>
                         <small>{outputExclusive
                           ? tr("DSD 以 DoP 原樣送給 DAC，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在 DAC 或擴大機調整。裝置必須接受 24-bit 的 DoP 取樣率（DSD64 為 176.4 kHz，DSD128 為 352.8 kHz，DSD256 為 705.6 kHz），否則該曲自動改為轉換成 PCM。只支援雙聲道 DSD64、DSD128、DSD256。")
-                          : tr("DoP 只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。")}</small>
+                          : tr("DoP 只在獨佔模式下使用；請先在上方「模式」選擇獨佔優先。")}</small>
                       </span>
                     </label>
                   {/if}
@@ -4709,7 +4709,7 @@
                         <strong>{tr("DSD 直通（獨佔模式）")}</strong>
                         <small>{outputExclusive
                           ? tr("DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。")
-                          : tr("DSD 直通只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。")}</small>
+                          : tr("DSD 直通只在獨佔模式下使用；請先在上方「模式」選擇獨佔優先。")}</small>
                       </span>
                     </label>
                   {/if}

@@ -572,10 +572,7 @@
 
 <div class="settings-panel-header">
   <div>
-    <h3>{tr("播放裝置")}</h3>
-    <p>{s.exclusive
-      ? tr("獨佔模式只能選一台裝置。選好之後播放時，這台裝置會被播放器獨佔。")
-      : tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
+    <h3>{tr("模式")}</h3>
   </div>
 </div>
 
@@ -597,9 +594,18 @@
     aria-pressed={s.exclusive}
     onclick={() => void setExclusive(true)}
   >
-    <strong>{tr('獨佔')}</strong>
+    <strong>{tr('獨佔優先')}</strong>
     <span>{tr('獨佔一台裝置，音訊不經 Windows 混音，取樣率與位元深度照檔案原樣送出（位元完美）。其他程式在這台裝置上暫時沒有聲音，也不能同時輸出到多台；藍牙裝置通常不支援。')}</span>
   </button>
+</div>
+
+<div class="settings-panel-header">
+  <div>
+    <h3>{tr("裝置")}</h3>
+    <p>{s.exclusive
+      ? tr("獨佔模式只能選一台裝置。選好之後播放時，這台裝置會被播放器獨佔。")
+      : tr("勾選要輸出的裝置，可以同時輸出到多台。音量是 Windows 裝置本身的音量，延遲與聲道映射由播放器處理。同步輸出使用 Windows 共享模式，不是 bit-perfect。")}</p>
+  </div>
 </div>
 
 {#if !s.exclusive}

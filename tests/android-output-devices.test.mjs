@@ -337,7 +337,7 @@ test('the two output modes and the header follow the Windows page, in Android wo
   });
   assert.deepEqual(exclusive, {
     exclusive: true,
-    title: '獨佔',
+    title: '獨佔優先',
     description: 'USB 音訊裝置由本程式直接輸出（位元完美）；其他 App 與通知音改從別處出聲，系統音量無效。',
   });
   assert.match(androidOutputHeader(false), /^選擇要輸出的裝置；[\s\S]*不是位元完美。$/);
@@ -490,7 +490,7 @@ test('the settings page reads the output mode from the Android list and shows th
   assert.match(checkbox, /<strong>\{tr\("DSD 直通（獨佔模式）"\)\}<\/strong>/);
   assert.match(checkbox, /checked=\{dsdSettings\.nativePassthrough\}/);
   assert.match(checkbox, /setDsdSettings\(\{ nativePassthrough: event\.currentTarget\.checked \}\)/);
-  assert.match(checkbox, /\{outputExclusive\s*\?\s*tr\("DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。"\)\s*:\s*tr\("DSD 直通只在獨佔模式下使用；請先在上方「輸出模式」選擇獨佔。"\)\}/);
+  assert.match(checkbox, /\{outputExclusive\s*\?\s*tr\("DSD 檔直接送到 USB 音訊裝置，不轉成 PCM；上面的增益與輸出取樣率、播放器音量都不再適用，音量請在音響或擴大機調整。只支援雙聲道 DSD64、DSD128、DSD256 的 DSF 與 WavPack-DSD；音響必須提供對應的取樣率，否則該曲自動改為轉換成 PCM。"\)\s*:\s*tr\("DSD 直通只在獨佔模式下使用；請先在上方「模式」選擇獨佔優先。"\)\}/);
   assert.match(app, /settings_set_dsd', \{ gainDb: next\.gainDb, outputRateHz: next\.outputRateHz, dop: next\.dop, nativePassthrough: next\.nativePassthrough \}/);
   // The Windows DoP checkbox is unchanged and Windows-only; no confirmation dialog, no test button.
   assert.match(app, /\{#if capabilities\?\.platform !== 'android'\}[\s\S]*使用 DoP 輸出 DSD（獨佔模式）/);
