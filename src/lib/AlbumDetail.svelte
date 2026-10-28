@@ -10,6 +10,7 @@
   import TrackList from './TrackList.svelte';
   import { formatDurationHours, formatAlbumTrackNumber } from './format';
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
+  import { albumReflowProbeEnabled, startAlbumReflowProbe } from './album-reflow-debug.js';
   import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange } from './album-detail-collapse.js';
 
   interface Props {
@@ -78,6 +79,13 @@
     fallbackUrl: defaultCoverUrl,
     resolved: !scanning && !scanError,
   }));
+  let shellElement = $state<HTMLElement | null>(null);
+  let summaryElement = $state<HTMLElement | null>(null);
+  // Opt-in (localStorage moe.debug.albumReflow = "1"): logs the layout cost of the summary reflow while scrolling.
+  $effect(() => {
+    if (!shellElement || !summaryElement || !albumReflowProbeEnabled()) return;
+    return startAlbumReflowProbe(shellElement, summaryElement);
+  });
   let revision = 0;
   function currentOrder(): AlbumTrackOrder {
     return {
@@ -293,6 +301,7 @@
   class="album-detail-shell"
   class:scroll-driven-collapse={supportsScrollDrivenAlbumOverlay}
   style={shellStyle}
+  bind:this={shellElement}
 >
   <div class="album-detail-tracks">
     {#if sortReady}
@@ -317,7 +326,7 @@
     <div class="album-detail-art">
       <AlbumArtworkMosaic sources={displayedCoverUrls} label={tr("{0} 封面拼貼", [album.displayName])} />
     </div>
-    <div class="album-detail-summary">
+    <div class="album-detail-summary" bind:this={summaryElement}>
       <div class="album-detail-artists">
         <span class="album-detail-value">{artists.length ? artists.join('．') : tr('未知')}</span>
       </div>
@@ -340,7 +349,7 @@
    * progress, so the cover's visual size is base - scrollTop px and the summary stays beside it and vertically centred on it.
    * Without scroll timelines, the script writes --album-detail-collapse-progress (0..1) and the same declarations apply.
    */
-  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-base-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; }
+  .album-detail-heading { position:absolute; z-index:4; top:0; right:0; left:0; display:flex; height:var(--album-detail-heading-base-height); box-sizing:border-box; align-items:center; gap:18px; padding:18px clamp(18px,2vw,34px); pointer-events:none; contain:layout style size; }
   @supports (animation-timeline: scroll()) and (timeline-scope: --album-detail-scroll) {
     .album-detail-shell.scroll-driven-collapse { timeline-scope: --album-detail-scroll; }
 
@@ -364,8 +373,12 @@
     }
 
     @keyframes album-detail-summary-collapse {
-      from { transform: translate(0, 0); }
-      to { transform: translate(calc(var(--album-detail-collapse-range, 0px) * -1), calc(var(--album-detail-collapse-range, 0px) * -0.5)); }
+      from { transform: translateY(0); margin-left: 0; max-height: var(--album-detail-heading-base-height); }
+      to {
+        transform: translateY(calc(var(--album-detail-collapse-range, 0px) * -0.5));
+        margin-left: calc(var(--album-detail-collapse-range, 0px) * -1);
+        max-height: calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range, 0px));
+      }
     }
   }
   .album-detail-heading > * { pointer-events:auto; }
@@ -376,7 +389,23 @@
     transform:scale(calc(1 - (1 - var(--album-detail-cover-end-scale, 1)) * var(--album-detail-collapse-progress, 0)));
     will-change:transform;
   }
-  .album-detail-summary { display:flex; min-width:0; flex-direction:column; gap:10px; transform:translate(calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -1), calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -0.5)); }
+  /*
+   * Exception to the transform-only rule (ADR 0012), for this text block only: the text beside the cover re-wraps into the
+   * room the shrinking cover frees. Its left edge moves left by the collapse range with the cover (margin-left) so its width
+   * grows by the range, and its height limit shrinks by the range so it stays between the top of the page and the column
+   * header, which rises by the same range (bottom edge = header top at every progress; the artists, the one block that may
+   * not fit, are clipped, the stats stay). Containment (the heading's `contain: layout style size`, the summary's own
+   * `contain: layout style`) keeps this layout work out of the cover, the header and the track list. The cover, the header
+   * and the list keep their transform-only collapse. Reflow is driven by the same progress (timeline or fallback variable).
+   */
+  .album-detail-summary {
+    display:flex; min-width:0; flex:1 1 0; flex-direction:column; gap:10px; overflow:hidden; contain:layout style;
+    margin-left:calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -1);
+    max-height:calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0));
+    transform:translateY(calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -0.5));
+  }
+  .album-detail-artists { flex:0 1 auto; min-height:0; overflow:hidden; -webkit-mask-image:linear-gradient(to bottom, #000 calc(100% - 6px), transparent 100%); mask-image:linear-gradient(to bottom, #000 calc(100% - 6px), transparent 100%); }
+  .album-detail-stats { flex:0 0 auto; }
   .album-detail-artists,
   .album-detail-stats,
   .album-detail-stats > span { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:8px; }

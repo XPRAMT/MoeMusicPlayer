@@ -31,7 +31,8 @@ function keyframeProperties(source, name) {
 
 test('album cover and heading collapse animate only transform (compositor), never layout properties', () => {
   assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-cover-collapse')], ['transform']);
-  assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-summary-collapse')], ['transform']);
+  // Exception (ADR 0012): the summary text box reflows into the room the cover frees; nothing else besides transform.
+  assert.deepEqual([...keyframeProperties(albumDetail, 'album-detail-summary-collapse')].sort(), ['margin-left', 'max-height', 'transform']);
   assert.deepEqual([...keyframeProperties(pagedList, 'album-detail-grid-header-collapse')], ['transform']);
   assert.doesNotMatch(albumDetail, /album-detail-cover-radius/);
   assert.doesNotMatch(albumDetail, /@keyframes album-detail-heading-collapse/);
@@ -73,4 +74,11 @@ test('sortable header moves with transform, not top, and is scripted only in the
   assert.doesNotMatch(pagedList, /top:\$\{Math\.max\(0, leadingOverlayHeight - collapseOffset\)\}px/);
   assert.match(pagedList, /top:\$\{leadingOverlayHeight\}px;right:\$\{headerGutter\}px;\$\{supportsScrollDrivenAlbumOverlay \? '' : `transform:translateY\(\$\{-collapseOffset\}px\);`\}/);
   assert.match(pagedList, /\.paged-virtual-frame\.leading-overlay\.scroll-driven-collapse \.paged-virtual-header \{\s*animation: album-detail-grid-header-collapse/);
+});
+
+test('the summary reflow is contained so it cannot touch the cover, the header or the track list', () => {
+  assert.match(albumDetail, /\.album-detail-heading \{[^}]*contain:layout style size/);
+  assert.match(albumDetail, /\.album-detail-summary \{[^}]*contain:layout style/);
+  assert.match(albumDetail, /\.album-detail-summary \{[^}]*overflow:hidden/);
+  assert.match(albumDetail, /\.album-detail-summary \{[^}]*max-height:calc\(var\(--album-detail-heading-base-height\) - var\(--album-detail-collapse-range, 0px\) \* var\(--album-detail-collapse-progress, 0\)\)/);
 });
