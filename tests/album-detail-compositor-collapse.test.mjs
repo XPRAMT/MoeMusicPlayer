@@ -132,5 +132,5 @@ test('the summary reflow is contained so it cannot touch the cover, the header o
   assert.match(albumDetail, /\.album-detail-heading \{[^}]*contain:layout style size/);
   assert.match(albumDetail, /\.album-detail-summary \{[^}]*contain:layout style/);
   assert.match(albumDetail, /\.album-detail-summary \{[^}]*overflow:hidden/);
-  assert.match(albumDetail, /\.album-detail-summary \{[^}]*max-height:calc\(var\(--album-detail-heading-base-height\) - var\(--album-detail-collapse-range, 0px\) \* var\(--album-detail-collapse-progress, 0\)\)/);
+  assert.match(albumDetail, /\.album-detail-summary \{[^}]*--album-detail-summary-height:calc\(var\(--album-detail-heading-base-height\) - var\(--album-detail-collapse-range, 0px\) \* var\(--album-detail-collapse-progress, 0\)\)[^}]*max-height:var\(--album-detail-summary-height\)/);
 });
