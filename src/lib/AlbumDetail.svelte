@@ -13,6 +13,7 @@
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
   import { albumReflowProbeEnabled, startAlbumReflowProbe } from './album-reflow-debug.js';
   import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange, getAlbumDetailCollapseProgress, createCollapseProgressWriter } from './album-detail-collapse.js';
+  import { createLinesHysteresis, cutToLines, rawLinesAvailable } from './album-artists-fit.js';
 
   interface Props {
     album: AlbumEntry;
@@ -79,7 +80,66 @@
   const collapseProgressWriter = createCollapseProgressWriter({
     requestFrame: (callback) => requestAnimationFrame(callback),
     cancelFrame: (handle) => cancelAnimationFrame(handle),
-    write: (progress) => shellElement?.style.setProperty('--album-detail-collapse-progress', String(progress)),
+    write: (progress) => {
+      shellElement?.style.setProperty('--album-detail-collapse-progress', String(progress));
+      fitArtists();
+    },
+  });
+  /**
+   * The artist list shows exactly the whole lines that fit beside the stats (line-clamp does not work in the Android WebView,
+   * so the text is cut in script, ending with an ellipsis). It runs in the same frame as the progress write (the summary's
+   * max height follows the progress), on mount, resize and when the artists or the font change. The text of the span is owned
+   * by this function only (the full list is `artistsFull`), so a re-render never fights the cut. Inputs are deterministic
+   * (never the summary's own size: that fed back into itself), the line height is measured from the rendered text.
+   */
+  let artistsElement = $state<HTMLElement | null>(null);
+  const artistsFull = $derived(artists.length ? artists.join('．') : tr('未知'));
+  const artistLines = createLinesHysteresis();
+  let measuredFontKey = '';
+  let lineHeightPx = 0;
+  function fitArtists(reset = false): void {
+    const span = artistsElement;
+    const box = span?.parentElement;
+    const stats = box?.nextElementSibling as HTMLElement | null | undefined;
+    if (!span || !box || !stats || !summaryElement) return;
+    if (reset) artistLines.reset();
+    const summaryStyle = getComputedStyle(summaryElement);
+    const fontKey = getComputedStyle(span).font;
+    if (!lineHeightPx || fontKey !== measuredFontKey) {
+      span.textContent = artistsFull;
+      const range = document.createRange();
+      range.setStart(span.firstChild as Text, 0);
+      range.setEnd(span.firstChild as Text, 1);
+      lineHeightPx = range.getBoundingClientRect().height;
+      measuredFontKey = fontKey;
+      if (!(lineHeightPx > 0)) { lineHeightPx = 0; return; }
+      artistLines.reset();
+    }
+    const gap = parseFloat(summaryStyle.rowGap) || 0;
+    const raw = rawLinesAvailable(parseFloat(summaryStyle.maxHeight), stats.getBoundingClientRect().height, gap, lineHeightPx);
+    if (!Number.isFinite(raw)) return;
+    const lines = artistLines.next(raw);
+    box.style.maxHeight = 'none';
+    const countLines = (text: string): number => { span.textContent = text; return Math.round(span.getBoundingClientRect().height / lineHeightPx); };
+    span.textContent = cutToLines(artistsFull, lines, countLines);
+    box.style.maxHeight = `${lines * lineHeightPx}px`;
+  }
+  $effect(() => {
+    artistsFull;
+    if (!artistsElement) return;
+    untrack(() => fitArtists(true));
+  });
+  $effect(() => {
+    if (!shellElement) return;
+    const observer = new ResizeObserver(() => fitArtists());
+    observer.observe(shellElement);
+    return () => observer.disconnect();
+  });
+  $effect(() => {
+    if (!document.fonts) return;
+    const refit = () => { lineHeightPx = 0; fitArtists(true); };
+    document.fonts.addEventListener('loadingdone', refit);
+    return () => document.fonts.removeEventListener('loadingdone', refit);
   });
   function reportCollapse(immediate: boolean): void {
     collapseProgressWriter.set(getAlbumDetailCollapseProgress(collapseOffsetNow, albumCollapseRange), immediate);
@@ -357,7 +417,7 @@
     </div>
     <div class="album-detail-summary" bind:this={summaryElement}>
       <div class="album-detail-artists">
-        <span class="album-detail-value">{artists.length ? artists.join('．') : tr('未知')}</span>
+        <span class="album-detail-value" bind:this={artistsElement}></span>
       </div>
       <div class="album-detail-stats">
         <span><span class="album-detail-label">{tr("累積播放")}</span><span class="album-detail-value">{formatDurationHours(album.playedMs)}</span></span>
@@ -398,17 +458,20 @@
    * and the list keep their transform-only collapse. Reflow is driven by the same progress variable.
    */
   .album-detail-summary {
-    display:flex; min-width:0; flex:1 1 0; flex-direction:column; gap:10px; overflow:hidden; contain:layout style;
+    display:flex; min-width:0; flex:1 1 0; flex-direction:column; gap:5px; overflow:hidden; contain:layout style;
     margin-left:calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -1);
-    max-height:calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0));
+    --album-detail-summary-height:calc(var(--album-detail-heading-base-height) - var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0));
+    /* A constant box (height = max height) so a change of the artists' line count never re-centres the block. */
+    height:var(--album-detail-summary-height); max-height:var(--album-detail-summary-height);
     transform:translateY(calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -0.5));
   }
-  .album-detail-artists { flex:0 1 auto; min-height:0; overflow:hidden; -webkit-mask-image:linear-gradient(to bottom, #000 calc(100% - 6px), transparent 100%); mask-image:linear-gradient(to bottom, #000 calc(100% - 6px), transparent 100%); }
+  .album-detail-artists { flex:0 1 auto; min-height:0; overflow:hidden; }
+  /* Names may break anywhere and the lines are justified; the whole-lines cut is done in script (fitArtists). */
+  .album-detail-artists .album-detail-value { display:block; min-width:0; word-break:break-all; overflow-wrap:anywhere; text-align:justify; text-justify:inter-character; }
   .album-detail-stats { flex:0 0 auto; }
-  .album-detail-artists,
   .album-detail-stats,
   .album-detail-stats > span { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:8px; }
-  .album-detail-stats { column-gap:15px; row-gap:10px; }
+  .album-detail-stats { column-gap:15px; row-gap:5px; }
   .album-detail-summary .album-detail-label { color:var(--muted); font-size:var(--font-caption); }
   .album-detail-summary .album-detail-value { color:var(--text-soft); font-size:var(--font-body); }
   .album-detail-summary .album-detail-error,
