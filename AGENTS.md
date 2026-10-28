@@ -103,7 +103,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 
 ### 格式與解碼
 
-格式能力表（`crates/player-formats`，零相依）：所有副檔名判斷都查這張表——掃描（`is_windows_library_audio`／`is_android_library_audio`、`windows_library_extensions`）、檔案關聯、開檔對話框（`open_dialog_extensions`）、標籤可寫（`tag_write_supported`，DSF 可寫、DFF 唯讀）、頻譜圖（`spectrogram_supported`）、MIME→副檔名（`extension_for_mime`）、解碼引擎（`DecodeEngine`：`Dsd`、`Opus`、`WavPack`，其餘 `Rodio`；Ogg 內容偵測在 `open_decoder`）、Android 轉換器（`android_converter`：`Dsd`、`WavPack`、`Flac`，其餘交給 Media3）。新增格式只改 `FORMATS`／`EXTENSIONS`；`plugins/tauri-plugin-media-index/tests/kotlin_extension_list.rs` 把關 Kotlin `AUDIO_EXTENSIONS`。Windows 掃描集合不含 dff／alac／wave。
+格式能力表（`crates/player-formats`，零相依）：所有副檔名判斷都查這張表——掃描、檔案關聯、開檔對話框（`open_dialog_extensions`）、標籤可寫（`tag_write_supported`，DSF 可寫、DFF 唯讀）、頻譜圖（`spectrogram_supported`）、MIME→副檔名（`extension_for_mime`）、解碼引擎（`DecodeEngine`）、Android 轉換器（`android_converter`：`Dsd`、`WavPack`、`Flac`，其餘交給 Media3）。新增格式只改 `FORMATS`／`EXTENSIONS`；`kotlin_extension_list.rs` 把關 Kotlin `AUDIO_EXTENSIONS`。掃描只含讀得到標籤且播得出的格式（ADR 0050）：不含 ape／spx／mpc／wma／mid／dff。`codec` 一律是編碼不是容器，標籤、排序與群組全查 `player_formats::codec::CODECS`（AIFF／PCM 併入 WAV 級）。
 
 DSD（ADR 0016、0049，Windows 與 Android）：`crates/player-dsd` 轉成 PCM（共用轉換 `reader::DsdPcmReader`）。設定 `settings.json` 的 `dsd`（`gainDb`、`outputRateHz`、`dop`；`settings_get_dsd`／`settings_set_dsd`）。不做自動增益、無濾波器選項。未實作：`dff`、多聲道、48 kHz 系列。Android：Media3 無 DSD 解碼器，經 Android 轉換橋（見「Android PCM」）播放，只輸出 176.4 kHz。原生直通（ADR 0049，僅 Android；`dsd.nativePassthrough` 預設關，勾選框在設定「DSD 播放」；隱藏 `dsd.nativeByteOrder`）：獨佔路由到有 RAW_DATA alt 的 USB 裝置、檔案是雙聲道 DSD64／128／256 的 DSF 或 WavPack-DSD（本機遠端皆可）時，Kotlin `DsdPassthrough` 載入時把 `moedsd://`／`moewv://`／`moeremote://` 換成 `moedsdraw://`／`moewvraw://`／`moeremoteraw://`（4 聲道 16-bit 假 WAV 載體）；檔頭由預檢執行緒以 `nativeRawPlan` 讀（遠端走快取讀取器）；否則轉 PCM 並在卡片說「DSD 直通無法使用：…」；原始資料絕不進 AudioTrack（USB 輸出失敗改以 PCM 重載），靜音一律 0x69，音量與 ducking 忽略。實機（Sony USB DAC）驗證過本機 DSF 的 DSD64／128 與遠端 DSF 的 DSD128，該裝置不解 DSD256；WavPack-DSD 與遠端 seek 未驗證。
 
@@ -139,7 +139,7 @@ Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 proce
 
 ### 曲庫同步與資料
 
-曲庫同步（ADR 0040，`crates/player-core/src/sync.rs`）：查資料庫分類 → 平行讀標籤 → 依原順序寫入；`cancel_library_sync` 取消時已讀進度以「不完整」寫入（不對帳、不移除），下次續掃。資料夾與播放清單共用進度流程（`src-tauri/src/playlist_scan_index.rs` 的 `PlaylistScanIndex`）；新增來源種類只需提供查詢、`.lrc` 查找與標籤讀取三個函式，不要另寫索引與進度。標籤讀取在 `player-track-metadata`（`scan_parse_options` 一律不讀封面）。
+曲庫同步（ADR 0040，`crates/player-core/src/sync.rs`）：查資料庫分類 → 平行讀標籤 → 依原順序寫入；`cancel_library_sync` 取消時已讀進度以「不完整」寫入（不對帳、不移除），下次續掃。資料夾與播放清單共用進度流程（`src-tauri/src/playlist_scan_index.rs` 的 `PlaylistScanIndex`）；新增來源種類只需提供查詢、`.lrc` 查找與標籤讀取三個函式，不要另寫索引與進度。所有平台與遠端共用 `player-track-metadata` 讀標籤（不讀封面；多值演出者以 ` | ` 連接）；內嵌歌詞只經 `player_tags::embedded::read_embedded_lyric_texts`（含 DSF、APE 家族）。
 
 歌詞不存內容（ADR 0040，schema 21）：同步不存任何歌詞文字，內嵌歌詞什麼都不記；旁檔（`.lrc`／`.qrc`／`.ass`／`.srt`，一首只記排序最前者）只記位置（`track_lyric_sidecars` 的檔名、`lyric_sidecar_sources` 標記已掃描，`Database::track_lyric_sidecar` → `LyricSidecarLookup`），只有 `Complete` 掃描才刪除沒看到的旁檔。播放時 `local_lyrics_for_track` 讀該曲標籤（遠端與封面查找共用一次標籤讀取，`remember_remote_tag_lyrics`），再讀記下的旁檔（`NotScanned` 才在旁邊找，`Absent` 不讀）；只讀這一首。遠端旁檔經 `RemoteContent::open_cached` 走音訊的磁碟快取，沒有其他歌詞儲存。
 

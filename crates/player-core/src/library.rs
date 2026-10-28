@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Increment when the metadata parser adds or changes persisted fields or extraction rules.
 /// Existing tracks below this version are eligible for bounded background backfill.
-pub const TRACK_METADATA_VERSION: u32 = 7;
+pub const TRACK_METADATA_VERSION: u32 = 8;
 use uuid::Uuid;
 
 /// Normalize a recording date to `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`.

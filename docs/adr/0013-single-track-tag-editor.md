@@ -184,3 +184,5 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 ### 內嵌封面只有一個讀取器
 
 所有封面查找（曲目封面、專輯封面選擇、底欄、正在播放、通知；本機與遠端、Windows 與 Android）的內嵌部分都經 `player_tags::embedded::read_embedded_tags`／`read_embedded_tags_of_path`：DSF 讀尾端 ID3v2、WavPack／Monkey's Audio 讀 APEv2、其他容器走 lofty，前面為正面封面。Android 實體路徑曲目先用它（`android_artwork::embedded_image_of_path`），Kotlin `MediaMetadataRetriever` 只剩 content:// 與備援；不得再為單一格式另寫特例。專輯封面快取在升級時一次清掉舊的「無封面」紀錄（`EMBEDDED_READER_RESET_KEY`），讓先前因讀不到而被記為沒有封面的檔案重新查找。
+
+Update (ADR 0050): the panel takes the bit depth and the date from the scan reader, shows Matroska read-only, and embedded lyrics (DSF included) are read at playback by one function.
