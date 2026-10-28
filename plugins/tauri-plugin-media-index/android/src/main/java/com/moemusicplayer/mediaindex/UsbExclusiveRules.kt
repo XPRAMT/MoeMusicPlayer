@@ -181,15 +181,60 @@ internal object UsbExclusiveRules {
         val inFlight: Boolean,
     )
 
+    /** Why [decideAsk] does not ask now. */
+    enum class SkipReason(val text: String) {
+        BACKGROUND("background"),
+        IN_FLIGHT("inFlight"),
+        NO_TARGET("noTarget"),
+        PERMITTED("permitted"),
+        REFUSED("refused"),
+    }
+
+    /** The outcome of [decideAsk]: ask the permission of the device [Ask.key], or [Skip] for a [Skip.reason]. */
+    sealed class AskDecision {
+        data class Ask(val key: String) : AskDecision()
+        data class Skip(val reason: SkipReason) : AskDecision()
+    }
+
     /**
-     * The USB device to ask Android's permission dialog for now, or null: only in the foreground, with no prompt open,
-     * for the device the routing table plays on ([target]) when it is not permitted and was not refused since it was
-     * attached. In the background the request waits for the foreground (the caller checks again then).
+     * Whether to ask Android's permission dialog now (ADR 0047): only in the foreground, with no prompt open, for the
+     * device the routing table plays on ([target]) when it is not permitted and was not refused since it was attached.
+     * In the background the request waits for the foreground (the caller checks again then).
      */
-    fun autoRequestTarget(facts: AskFacts): String? {
-        if (!facts.foreground || facts.inFlight) return null
-        val key = target(facts.wish, facts.devices) ?: return null
-        return key.takeUnless { it in facts.permitted || it in facts.refused }
+    fun decideAsk(facts: AskFacts): AskDecision {
+        if (!facts.foreground) return AskDecision.Skip(SkipReason.BACKGROUND)
+        if (facts.inFlight) return AskDecision.Skip(SkipReason.IN_FLIGHT)
+        val key = target(facts.wish, facts.devices) ?: return AskDecision.Skip(SkipReason.NO_TARGET)
+        if (key in facts.permitted) return AskDecision.Skip(SkipReason.PERMITTED)
+        if (key in facts.refused) return AskDecision.Skip(SkipReason.REFUSED)
+        return AskDecision.Ask(key)
+    }
+
+    /** The device to ask for now, or null: [decideAsk] as a plain key. */
+    fun autoRequestTarget(facts: AskFacts): String? = (decideAsk(facts) as? AskDecision.Ask)?.key
+
+    /** `RunningAppProcessInfo.IMPORTANCE_FOREGROUND`: the process has the activity the user is interacting with. */
+    const val IMPORTANCE_FOREGROUND = 100
+
+    /**
+     * Whether the app is in the foreground for a dialog: the system's process importance is foreground (an activity of
+     * ours on top). A process that only runs the playback service is `IMPORTANCE_FOREGROUND_SERVICE` (125) and a visible
+     * but not top one `IMPORTANCE_VISIBLE` (200): the user cannot answer a dialog we start then, so neither counts.
+     */
+    fun isForegroundImportance(importance: Int): Boolean = importance <= IMPORTANCE_FOREGROUND
+
+    /** The one decision log line (`USB exclusive: auto-ask check ...`), the facts and the outcome. */
+    fun decisionLine(trigger: String, facts: AskFacts, decision: AskDecision): String {
+        val mode = if (facts.wish.enabled) "exclusive" else "shared"
+        val key = target(facts.wish, facts.devices)
+        val chosen = facts.wish.chosen?.let { "${it.kind}/${it.productName}" } ?: "systemDefault"
+        val outcome = when (decision) {
+            is AskDecision.Ask -> "ask"
+            is AskDecision.Skip -> "skip (${decision.reason.text})"
+        }
+        return "USB exclusive: auto-ask check (trigger=$trigger) mode=$mode chosen=$chosen target=${key ?: "none"} " +
+            "permitted=${key != null && key in facts.permitted} refused=${key != null && key in facts.refused} " +
+            "foreground=${facts.foreground} inFlight=${facts.inFlight} -> $outcome"
     }
 
     /** A refusal is remembered only while its device stays attached: unplugged and plugged in again, it is asked again. */

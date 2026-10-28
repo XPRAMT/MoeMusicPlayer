@@ -323,6 +323,42 @@ class UsbExclusiveRulesTest {
     }
 
     @Test
+    fun theForegroundIsTheProcessImportance() {
+        assertTrue(UsbExclusiveRules.isForegroundImportance(100)) // IMPORTANCE_FOREGROUND
+        assertFalse(UsbExclusiveRules.isForegroundImportance(125)) // FOREGROUND_SERVICE: only the playback service
+        assertFalse(UsbExclusiveRules.isForegroundImportance(150)) // TOP_SLEEPING
+        assertFalse(UsbExclusiveRules.isForegroundImportance(200)) // VISIBLE
+        assertFalse(UsbExclusiveRules.isForegroundImportance(400)) // CACHED
+    }
+
+    @Test
+    fun everySkipReasonIsNamed() {
+        fun reason(facts: UsbExclusiveRules.AskFacts) = (UsbExclusiveRules.decideAsk(facts) as UsbExclusiveRules.AskDecision.Skip).reason
+        assertEquals(UsbExclusiveRules.SkipReason.BACKGROUND, reason(ask(foreground = false)))
+        assertEquals(UsbExclusiveRules.SkipReason.IN_FLIGHT, reason(ask(inFlight = true)))
+        assertEquals(UsbExclusiveRules.SkipReason.NO_TARGET, reason(ask(enabled = false)))
+        assertEquals(UsbExclusiveRules.SkipReason.NO_TARGET, reason(ask(devices = emptyList())))
+        assertEquals(UsbExclusiveRules.SkipReason.PERMITTED, reason(ask(permitted = setOf(sonyUsb.key))))
+        assertEquals(UsbExclusiveRules.SkipReason.REFUSED, reason(ask(refused = setOf(sonyUsb.key))))
+        // The background wins over every other reason.
+        assertEquals(UsbExclusiveRules.SkipReason.BACKGROUND, reason(ask(foreground = false, inFlight = true, permitted = setOf(sonyUsb.key))))
+        assertEquals(UsbExclusiveRules.AskDecision.Ask(sonyUsb.key), UsbExclusiveRules.decideAsk(ask()))
+    }
+
+    @Test
+    fun theDecisionLineStatesTheFactsAndTheOutcome() {
+        val facts = ask(foreground = false)
+        val line = UsbExclusiveRules.decisionLine("attach", facts, UsbExclusiveRules.decideAsk(facts))
+        assertEquals(
+            "USB exclusive: auto-ask check (trigger=attach) mode=exclusive chosen=systemDefault target=${sonyUsb.key} " +
+                "permitted=false refused=false foreground=false inFlight=false -> skip (background)",
+            line,
+        )
+        val asking = ask()
+        assertTrue(UsbExclusiveRules.decisionLine("mode", asking, UsbExclusiveRules.decideAsk(asking)).endsWith("-> ask"))
+    }
+
+    @Test
     fun theRequestWaitsForTheForeground() {
         assertNull(UsbExclusiveRules.autoRequestTarget(ask(foreground = false)))
         // Back in the foreground, the same facts ask.

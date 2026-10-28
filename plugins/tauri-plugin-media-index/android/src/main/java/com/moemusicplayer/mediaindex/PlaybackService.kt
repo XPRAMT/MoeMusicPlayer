@@ -247,7 +247,7 @@ class PlaybackService : MediaSessionService() {
         router.onDevicesChanged = ::onDevicesChanged
         router.start()
         // A USB audio device already attached and not permitted is asked for as soon as the service is up (foreground only).
-        autoAskUsbPermission()
+        autoAskUsbPermission("service-start")
         // Listen for the Bluetooth codec from the start, so a headset that connects while the app runs is known.
         BluetoothCodecWatch.ensure(this)
         val forwarding = QueueAwarePlayer(player)
@@ -1067,13 +1067,13 @@ class PlaybackService : MediaSessionService() {
         lastUsbDevices = after
         val wish = UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, outputRouter?.currentPreference())
         if (!UsbExclusiveRules.usbDevicesChanged(wish, before, after)) {
-            autoAskUsbPermission()
+            autoAskUsbPermission("attach")
             return
         }
         // Another device: the track gets a new chance on it.
         UsbExclusiveEngine.trackFallback = null
         applyRoute(wish, "USB audio devices changed (${before.map { it.key }} → ${after.map { it.key }})")
-        autoAskUsbPermission()
+        autoAskUsbPermission("attach")
     }
 
     /**
@@ -1081,8 +1081,8 @@ class PlaybackService : MediaSessionService() {
      * permission dialog is requested at once (ADR 0047, [UsbPermissionAsk]); a device the user refused is not asked again
      * until it is attached again, and nothing is asked while the app is in the background.
      */
-    private fun autoAskUsbPermission() {
-        UsbPermissionAsk.check(this, UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, outputRouter?.currentPreference()))
+    private fun autoAskUsbPermission(trigger: String) {
+        UsbPermissionAsk.check(this, UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, outputRouter?.currentPreference()), trigger)
     }
 
     /** Re-create the output and hand the held device back as the routing table says for [wish] now (ADR 0047). */
@@ -1152,12 +1152,12 @@ class PlaybackService : MediaSessionService() {
             service.changeOutput(UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, preference), "chosen output device") {
                 service.outputRouter?.setPreference(PreferenceReading.Known(preference))
             }
-            service.autoAskUsbPermission()
+            service.autoAskUsbPermission("preference")
         }
 
         /** Main thread. The app came to the foreground (or a trigger fired): ask for a pending USB permission now (ADR 0047). */
-        internal fun requestUsbPermissionIfNeeded() {
-            activeInstance?.autoAskUsbPermission()
+        internal fun requestUsbPermissionIfNeeded(trigger: String) {
+            activeInstance?.autoAskUsbPermission(trigger)
         }
 
         /**
@@ -1175,7 +1175,7 @@ class PlaybackService : MediaSessionService() {
             service.changeOutput(UsbExclusiveRules.Wish(enabled, chosen), "output mode") {
                 UsbExclusiveEngine.setEnabled(enabled)
             }
-            service.autoAskUsbPermission()
+            service.autoAskUsbPermission("mode")
         }
 
         /** Main thread. USB permission was just granted: the playing track tries the exclusive output again now. */
