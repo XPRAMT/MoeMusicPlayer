@@ -223,4 +223,13 @@ class BluetoothRateRulesTest {
         assertTrue(BluetoothRateRules.parseResult("RESULT STATE 4 2 15 1003") is HelperResult.Failed)
         assertTrue(BluetoothRateRules.parseResult("RESULT STATE 4 2 15 1 2 3 x") is HelperResult.Failed)
     }
+
+    @Test fun aRateRequestKeepsTheCurrentCodecAndPinsItWithTheHighestPriority() {
+        // The stack reselects its favourite codec when the priority is 0, so the request must not copy it.
+        val config = BluetoothRateRules.rateRequest(4, 0, BluetoothRateRules.RATE_96000)
+        assertEquals(4, config.codecType)
+        assertEquals(BluetoothCodecChoiceConfig.PRIORITY_HIGHEST, config.codecPriority)
+        assertEquals(BluetoothRateRules.RATE_96000, config.rateFlag)
+        assertEquals(1_000_000, BluetoothRateRules.rateRequest(7, 5, 2).codecPriority)
+    }
 }

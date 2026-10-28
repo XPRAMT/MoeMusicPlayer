@@ -82,3 +82,13 @@ LDAC mode: not verified on a device that the helper's `state` returns `codecSpec
 
 
 Not verified on any device: that `app_process` can load the app's APK from the root and Shizuku shells; that the service-manager hand-over and the adapter construction above work on Android 13 to 16 (the earlier system-context-only attempt returned no adapter) and that uid 0 and uid 2000 passes the Bluetooth service's `BLUETOOTH_PRIVILEGED` and package checks (any exception text comes back in the `ERR` line and the log); that `setCodecConfigPreference` with a changed sample rate takes effect on the WF-1000XM6 over LDAC on the NX809J and what the mute sounds like; the Shizuku path (`Shizuku.newProcess` with `sh -c`); the stack forgetting or keeping the rate across reconnects (decides how useful the disconnect restore is); LE Audio and codecs whose selectable list is empty.
+
+## Correction: a rate request pins the current codec (found on the NX809J)
+
+The first version copied the current config, including `codecPriority`, which is 0 in the stack's own config ("no user preference"). On the NX809J with a headset that supports LDAC, aptX Adaptive, LHDC, aptX HD, aptX, AAC and SBC, the request `setCodecConfigPreference({LDAC, priority 0, 48 kHz})` was followed about 1.5 s later by the stack choosing aptX Adaptive at 96 kHz: with no user preference the stack re-selects its own favourite (its log says it found a saved codec for the device), so the codec jumped and the requested rate was lost ("not confirmed within 3000 ms"). A request with priority `CODEC_PRIORITY_HIGHEST` (1000000) is a user preference and is kept, as the explicit codec switch of ADR 0052 showed.
+
+Fix: every rate-only request (follow, set and the restore) sends the **current codec** with `codecPriority = CODEC_PRIORITY_HIGHEST` and only the sample rate changed (`BluetoothRateRules.rateRequest`, unit-tested: codec type kept, priority highest). Consequence: the rate request also pins the current codec as the preferred one, so the stack keeps it afterwards.
+
+With the codec list of ADR 0052 off and the rate follow on, nothing but the rate follow sends a request, and it keeps the codec in use. The codec controller's "already in use" check compares the announced codec key with the target and ignores rate and priority, so the two do not fight; a switch by the codec list changes the preferred codec, and later rate requests pin whatever codec is then in use.
+
+Another app, the Qualcomm aptX service (`com.qualcomm.qtil.aptxals`), also calls `setCodecConfigPreference` with aptX Adaptive quality values at times. This app does not try to control it; a codec or rate change it makes shows up as an unconfirmed switch or as a different codec in use.

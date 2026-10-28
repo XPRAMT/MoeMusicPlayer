@@ -147,6 +147,18 @@ internal object BluetoothRateRules {
     /** What a switch left behind for an address: the rate before our first switch and the rate we set last. */
     data class SavedRate(val original: Int, val applied: Int)
 
+    /** The codec and priority a sample-rate request is sent with. */
+    data class RateRequestConfig(val codecType: Int, val codecPriority: Int, val rateFlag: Int)
+
+    /**
+     * The config of a rate-only request (a follow or a restore): the CURRENT codec with the highest priority. The stack
+     * treats priority 0 as "no user preference" and re-selects its favourite codec, so the codec would jump and the
+     * rate be lost; the highest priority keeps the codec (ADR 0051). [currentPriority] is deliberately not used.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun rateRequest(currentCodecType: Int, currentPriority: Int, rateFlag: Int): RateRequestConfig =
+        RateRequestConfig(currentCodecType, BluetoothCodecChoiceConfig.PRIORITY_HIGHEST, rateFlag)
+
     // ---- identity and diagnostics of the helper -------------------------------------------------------------------
 
     /**

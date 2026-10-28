@@ -264,10 +264,13 @@ object BluetoothRateHelper {
         if (target == current.sampleRate) {
             return BluetoothRateRules.HelperResult.Switched(current.codecType, current.sampleRate, target, false)
         }
+        // A rate request pins the current codec as the user's preference (priority highest): with priority 0 the stack
+        // sees no preference and re-selects its own favourite codec (ADR 0051).
+        val pinned = BluetoothRateRules.rateRequest(current.codecType, current.codecPriority, target)
         val builder = BluetoothCodecConfig.Builder()
-            .setCodecType(current.codecType)
-            .setCodecPriority(current.codecPriority)
-            .setSampleRate(target)
+            .setCodecType(pinned.codecType)
+            .setCodecPriority(pinned.codecPriority)
+            .setSampleRate(pinned.rateFlag)
             .setBitsPerSample(current.bitsPerSample)
             .setChannelMode(current.channelMode)
             .setCodecSpecific1(current.codecSpecific1)
