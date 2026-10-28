@@ -348,19 +348,19 @@
   {/each}
 </div>
 
-{#if mixerSource.status}
-  <p class="mixer-source-line">
-    {mixerRateSummary(mixerSource.status)}
-    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
-  </p>
-{/if}
-
 <div class="settings-panel-header">
   <div>
     <h3>{tr("裝置")}</h3>
     <p>{androidOutputHeader(usbExclusive.enabled)}</p>
   </div>
 </div>
+
+{#if mixerSource.status}
+  <p class="mixer-source-line">
+    {mixerRateSummary(mixerSource.status)}
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
+  </p>
+{/if}
 
 {#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
 {#if usbExclusive.failure}<p class="source-error-message" role="alert">{usbExclusive.failure}</p>{/if}
