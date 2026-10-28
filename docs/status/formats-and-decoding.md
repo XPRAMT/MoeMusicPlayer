@@ -1,0 +1,17 @@
+﻿# 現況：格式與解碼（DSD、Opus、WavPack、Android PCM）
+
+本文件是此領域「目前狀態」的快照，不是日誌；維護規則同根目錄 `AGENTS.md`「本文件維護規則」：就地改寫既有條目、不寫日期／量測數字／除錯經過，設計細節放 `docs/adr/`。
+
+### 格式與解碼
+
+格式能力表（`crates/player-formats`，零相依）：所有副檔名判斷都查這張表——掃描、檔案關聯、開檔對話框（`open_dialog_extensions`）、標籤可寫（`tag_write_supported`，DSF 可寫、DFF 唯讀）、頻譜圖（`spectrogram_supported`）、MIME→副檔名（`extension_for_mime`）、解碼引擎（`DecodeEngine`）、Android 轉換器（`android_converter`：`Dsd`、`WavPack`、`Flac`，其餘交給 Media3）。新增格式只改 `FORMATS`／`EXTENSIONS`；`kotlin_extension_list.rs` 把關 Kotlin `AUDIO_EXTENSIONS`。掃描只含讀得到標籤且播得出的格式（ADR 0050）：不含 ape／spx／mpc／wma／mid／dff。`codec` 一律是編碼不是容器，標籤、排序與群組全查 `player_formats::codec::CODECS`（AIFF／PCM 併入 WAV 級）。
+
+DSD（ADR 0016、0049，Windows 與 Android）：`crates/player-dsd` 轉成 PCM（共用轉換 `reader::DsdPcmReader`）。設定 `settings.json` 的 `dsd`（`gainDb`、`outputRateHz`、`dop`；`settings_get_dsd`／`settings_set_dsd`）。不做自動增益、無濾波器選項。未實作：`dff`、多聲道、48 kHz 系列。Android：Media3 無 DSD 解碼器，經 Android 轉換橋（見「Android PCM」）播放，只輸出 176.4 kHz。原生直通（ADR 0049，僅 Android；`dsd.nativePassthrough` 預設關，勾選框在設定「DSD」；隱藏 `dsd.nativeByteOrder`）：獨佔路由到有 RAW_DATA alt 的 USB 裝置、檔案是雙聲道 DSD64／128／256 的 DSF 或 WavPack-DSD（本機遠端皆可）時，Kotlin `DsdPassthrough` 載入時把 `moedsd://`／`moewv://`／`moeremote://` 換成 `moedsdraw://`／`moewvraw://`／`moeremoteraw://`（4 聲道 16-bit 假 WAV 載體）；檔頭由預檢執行緒以 `nativeRawPlan` 讀（遠端走快取讀取器）；否則轉 PCM 並在卡片說「DSD 直通無法使用：…」；原始資料絕不進 AudioTrack（USB 輸出失敗改以 PCM 重載），靜音一律 0x69，音量與 ducking 忽略。實機（Sony USB DAC）驗證過本機 DSF 的 DSD64／128 與遠端 DSF 的 DSD128，該裝置不解 DSD256；WavPack-DSD 與遠端 seek 未驗證。
+
+DoP（ADR 0020 P2，Windows 獨佔模式，**尚無 DAC 可實機驗證**）：`dsd.dop`（預設 false；Android 不顯示）；`crates/player-dsd/src/dop.rs`、`exclusive/dop.rs` 的 `DopSource`（DSF 與 WVDSD 共用，條件 `is_dsd_path`）；只有雙聲道 DSD64／128／256；裝置不接受時該曲改走 DSD→PCM 並在 `ExclusiveInfo.dop_fallback` 說明。待實機：DAC 是否鎖定、進出 DoP 爆音、各 DAC 接受的容器。
+
+Opus（ADR 0017，Windows；Android 由 Media3）：`crates/player-opus`（自己的 Ogg 頁面索引與封包讀取器＋libopus，`opusic-sys` 從原始碼靜態連結），48 kHz f32，套用標頭增益、去 pre-skip、依 granule 精確裁尾，seek 預滾 200 ms；只支援單／雙聲道；鏈接串流只播第一段。`player-audio-windows/src/opus.rs` 的 `OpusSource`；`.ogg`／`.oga` 以 `sniff_opus_file` 決定 Opus 或 Vorbis。標籤走 lofty（`crates/player-tags/tests/opus_edit.rs`）。`player-opus` 只在非 Android 目標編譯。Release 實機播放待確認。
+
+WavPack（ADR 0025）：`crates/player-wavpack`（libwavpack 5.6.0 解碼端，BSD-3-Clause，`vendor/`）。編解碼短名（使用者定案）`WVLL`＝無損、`WVL`＝有損 hybrid、`WVDSD`＝DSD-in-WavPack，由 `player_wavpack::summarize` 決定；品質排序（`audio_format_order_by`，由高到低）：DSD、WVDSD、WAV、WVLL、FLAC、WVL、Vorbis、Opus、MP4、MP3。WVDSD 走專案的 DSD 轉換器並支援 DoP。WavPack／Monkey's Audio 的標籤、封面與歌詞直接用檔案的 `ApeTag`（`player-tags/src/ape_cover.rs`、`write_ape_edit`）。位元深度一律以官方編碼器的檔案驗證。待確認：Android 手機上的 WavPack 歌詞、Release GUI 實機播放。
+
+Android PCM：Media3 1.11.1 官方 `ToFloatPcmAudioProcessor` 接在自訂 processor chain 的速度／靜音處理後，把 PCM16 等轉成 float32；`DefaultAudioSink` 的原生 float 路徑處理 float 與 24／32-bit PCM，不再二次轉換；`player.volume` 由 Media3 輸出端套用。Android 轉換橋（ADR 0016、0025、0043）：哪些格式不交給 MediaCodec 只由 `player_formats::android_converter` 決定（DSF、WavPack、FLAC）；本機曲目載入為 `moedsd:///`／`moewv:///`／`moeflac:///`（`android_dsd::to_converted_uri`），遠端 `moeremote://` 在 `open_remote` 依同一張表轉換，都經 `DsdDataSource` 與 JNI（`DsdBridge`）當 float WAV 讀（原取樣率；超過 192 kHz 的 PCM 拒播）；載入指令的 `converted`（`serves_converted_wav`）決定 `setMimeType("audio/wav")`，Kotlin 不看副檔名；新增轉換 scheme 必須同時加進 Kotlin `LOCAL_CONVERTED_SCHEMES`（遠端的 `moeremoteraw` 在 `isRustServedScheme`；資料來源路由、`PlaybackService` 載入檢查、通知封面路徑都用它，漏掉時靜默失敗）。FLAC（ADR 0043，理由見該 ADR）：`crates/player-flac`（Symphonia FLAC 解碼器，MPL-2.0）；Windows 仍走 rodio；`setEnableDecoderFallback` 只留給仍用 MediaCodec 的格式。待驗收：聽感、G8142 以外的裝置、遠端 FLAC 與 seek。

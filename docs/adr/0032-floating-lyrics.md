@@ -266,7 +266,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   in the lyric-time endpoint. When track duration is unknown, use the grapheme estimate without a duration cap.
 - Validation: JavaScript geometry tests cover line start, midpoint, estimated arrival, track-end cap and grapheme-centre
   position; Android `FloatingLyricsRulesTest` covers the per-grapheme estimate, cap, grapheme counting and effect selection.
-  Release WebView2 / device runtime check is tracked with the current build status in the project `AGENTS.md`.
+  Release WebView2 / device runtime check is tracked with the current build status in `docs/status/lyrics-windows.md`.
 
 ## 更新（2026-10-23，ADR 0034）
 

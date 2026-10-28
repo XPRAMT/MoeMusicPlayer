@@ -19,11 +19,11 @@
 
 ## 3. 發布前
 
-1. 依 AGENTS.md「本文件維護規則」整理 AGENTS.md，並通過 `node --test tests/agents-md-size.test.mjs`。
+1. 依 AGENTS.md「本文件維護規則」整理 AGENTS.md 與 `docs/status/` 各檔（現況快照：刪除被取代的內容、不留日期與量測、設計細節移到 ADR、同步「功能索引」），並通過 `node --test tests/agents-md-size.test.mjs`。
 2. 測試：`npm run check`、`node --test`、相關 Rust 測試（以及 workspace Clippy、rustfmt）。
 3. 提交所有來源後才建置（執行檔內嵌 commit）：
    - Windows：`npm run release:windows`（完整最佳化；替換 `release/moemusicplayer.exe` 並產生 `release/update-assets/moemusicplayer-windows-x86_64.zip`）。建置前後照 AGENTS.md「工作與驗收規則」備份 exe、清理 `.bak`，正常關閉舊程序後以 CDP 9222 啟動新版並核對 build identity。
-   - Android：`npm run android:build:arm64:release`（release 金鑰簽章，輸出 `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`）。把 release APK 安裝到所有連得上的裝置（見 AGENTS.md「Android 平台」），連不上的略過並在回報註明。
+   - Android：`npm run android:build:arm64:release`（release 金鑰簽章，輸出 `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`）。把 release APK 安裝到所有連得上的裝置（見 AGENTS.md「硬性規則」的 Android 裝置規則與 `docs/status/android-platform.md`），連不上的略過並在回報註明。
 
 ## 4. 發布
 

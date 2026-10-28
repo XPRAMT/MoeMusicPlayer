@@ -133,7 +133,7 @@
 
 ## 5A. WSL 真實伺服器測試環境（WebDAV 已安裝；FTP／FTPS／SFTP 仍是計畫，尚未安裝）
 
-比照既有 Samba 測試分享（AGENTS.md「區網測試分享（2026-10-21）」：WSL Ubuntu 24.04 mirrored 網路、`/etc/samba/moemusic-test.conf`、唯讀 `moemusic-test`、帳號 `moe_test`、TCP 1445、只允許 192.168.1.0/24、停用 guest）。以下指令需 sudo，由主工作階段與使用者處理密碼後執行；本次未執行。
+比照既有 Samba 測試分享（`docs/status/remote-sources.md`「測試伺服器」：WSL Ubuntu 24.04 mirrored 網路、`/etc/samba/moemusic-test.conf`、唯讀 `moemusic-test`、帳號 `moe_test`、TCP 1445、只允許 192.168.1.0/24、停用 guest）。以下指令需 sudo，由主工作階段與使用者處理密碼後執行；本次未執行。
 
 ### 共用
 
