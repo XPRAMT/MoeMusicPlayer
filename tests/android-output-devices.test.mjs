@@ -10,6 +10,7 @@ import {
   describeSupport,
   deviceLabel,
   exclusiveHint,
+  exclusiveSwitchNeedsPanel,
   exclusiveTargetDevice,
   sameChoice,
   usbExclusivePath,
@@ -316,10 +317,9 @@ test('USB exclusive is off by default on both sides, and turned on only through 
   // The mode buttons replace the per-card switch; the P0 development test is gone.
   assert.doesNotMatch(component, /USB 獨佔（App 直接驅動，不經過系統）|toggleUsbExclusive|type="checkbox"/);
   assert.doesNotMatch(component, /試播|android_usb_exclusive_start/);
-  // 獨佔 opens the panel (no save before it); 共享 saves at once.
+  // 獨佔 decides by exclusiveSwitchNeedsPanel (panel, or save at once); 共享 saves at once.
   const setMode = component.slice(component.indexOf('function setMode('), component.indexOf('function openUsbExclusivePanel('));
-  assert.match(setMode, /if \(!exclusive\) \{[\s\S]*saveUsbExclusive\(false\)[\s\S]*openUsbExclusivePanel\(\);/);
-  assert.doesNotMatch(setMode, /saveUsbExclusive\(true\)/);
+  assert.match(setMode, /if \(!exclusive\) \{[\s\S]*saveUsbExclusive\(false\)[\s\S]*exclusiveSwitchNeedsPanel\(s\.status\)\) openUsbExclusivePanel\(\);\s*else void saveUsbExclusive\(true\);/);
   const authorize = component.slice(component.indexOf('async function authorizeUsbExclusive('));
   assert.ok(authorize.indexOf('android_request_usb_exclusive_permission') < authorize.indexOf('saveUsbExclusive(true)'));
 });
@@ -426,4 +426,16 @@ test('the exclusive mode hints of the routing table', () => {
   );
   assert.equal(rows[0].hint?.text, '獨佔模式：沒有 USB 音訊裝置，以共享方式播放');
   assert.equal(rows[1].hint, null);
+});
+
+test('switching to 獨佔 opens the panel only for an attached USB device without permission', () => {
+  const withRoute = (route) => ({ exclusive: { route } });
+  assert.equal(exclusiveSwitchNeedsPanel(withRoute({ usbDevice: { productName: 'KA3', permitted: true }, noUsbDevice: false })), false);
+  assert.equal(exclusiveSwitchNeedsPanel(withRoute({ usbDevice: null, noUsbDevice: true })), false);
+  assert.equal(exclusiveSwitchNeedsPanel(withRoute({ usbDevice: { productName: 'KA3', permitted: false }, noUsbDevice: false })), true);
+  // Not known yet: the panel is the fallback.
+  assert.equal(exclusiveSwitchNeedsPanel(null), true);
+  assert.equal(exclusiveSwitchNeedsPanel({}), true);
+  assert.equal(exclusiveSwitchNeedsPanel({ exclusive: {} }), true);
+  assert.equal(exclusiveSwitchNeedsPanel(withRoute({})), true);
 });

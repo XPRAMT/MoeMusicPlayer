@@ -213,6 +213,22 @@ export function exclusiveTargetDevice(status, saved) {
 }
 
 /**
+ * Whether switching 共享 → 獨佔 opens the explanation panel (ADR 0047): only when the route's USB device is attached and
+ * its permission is not yet granted. A granted device or no USB audio device attached saves the mode at once; a status
+ * not loaded yet, or without a route, is not known to need nothing, so the panel is the fallback.
+ * @param {AndroidAudioOutputStatus | null | undefined} status
+ * @returns {boolean}
+ */
+export function exclusiveSwitchNeedsPanel(status) {
+  const route = status?.exclusive?.route;
+  if (!route) return true;
+  if (route.noUsbDevice) return false;
+  const target = route.usbDevice;
+  if (!target) return true;
+  return target.permitted !== true;
+}
+
+/**
  * The exclusive-mode hint of a chosen row (ADR 0047): no USB audio device for the system default or a USB device
  * (shared as chosen), a non-USB device (shared on it), the USB device of the system default when several are attached,
  * or the USB permission still to grant. Null in the shared mode or when there is nothing to say.

@@ -48,6 +48,7 @@
     androidOutputHeader,
     androidOutputModes,
     buildAndroidRows,
+    exclusiveSwitchNeedsPanel,
     sameChoice,
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
@@ -166,10 +167,10 @@
     usb.copied = raw;
   }
 
-  // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Switching to 獨佔 opens the explanation panel first;
-  // only its 「前往授權」 asks for USB permission (ADR 0039), and the mode is saved only after it (with no USB audio
-  // device attached there is nothing to ask yet: the mode is saved, and the card asks once a device is attached).
-  // Cancel leaves the mode 共享. Switching to 共享 hands the device back at once. ----
+  // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Switching to 獨佔 opens the explanation panel only when
+  // an attached USB device is not yet permitted (`exclusiveSwitchNeedsPanel`); only its 「前往授權」 asks for USB
+  // permission (ADR 0039), and the mode is saved after it. With the permission already granted, or no USB audio device
+  // attached (the card asks once one is attached), the mode is saved at once. Cancel leaves the mode 共享. Switching to 共享 hands the device back at once. ----
   let usbExclusiveDialog = $state<HTMLDialogElement>();
   let usbExclusivePanelOpen = $state(false);
   let usbExclusiveMessage = $state<string | null>(null);
@@ -196,7 +197,9 @@
       return;
     }
     if (usbExclusive.enabled) return;
-    openUsbExclusivePanel();
+    // The panel only when an attached USB device still lacks permission; otherwise the mode is saved at once.
+    if (exclusiveSwitchNeedsPanel(s.status)) openUsbExclusivePanel();
+    else void saveUsbExclusive(true);
   }
 
   /** The panel, from the 獨佔 button or from a card's 「前往授權」 (the permission of a USB device attached later). */
