@@ -30,6 +30,10 @@ internal object UsbExclusiveRules {
         val trackFallback: String?,
         /** What the device's descriptors say about the format: null when it can take it, else why not. */
         val unsupported: String?,
+        // Only for the decision log: the format and the source the choice was made for.
+        val rate: Int = 0,
+        val channels: Int = 0,
+        val source: Source = Source(0, false),
     )
 
     sealed class Choice {
@@ -49,6 +53,59 @@ internal object UsbExclusiveRules {
         !isPcm(facts.encoding) -> Choice.AudioTrack("不是 PCM 音訊")
         facts.unsupported != null -> Choice.AudioTrack(facts.unsupported)
         else -> Choice.Usb
+    }
+
+    /** Why [choose] decides as it does, in the same order, for the decision log. */
+    fun explain(facts: Facts): String = when {
+        !facts.enabled -> "switch off"
+        facts.chosenKind != "usb" -> "chosen output is not USB (${facts.chosenKind ?: "system default"})"
+        !facts.deviceAttached -> "no matching USB audio device attached"
+        !facts.permitted -> "no USB permission"
+        facts.trackFallback != null -> "this track already fell back"
+        !isPcm(facts.encoding) -> "encoding ${facts.encoding} is not linear PCM"
+        facts.unsupported != null -> "the device cannot take the format"
+        else -> "every check passed"
+    }
+
+    /**
+     * One decision for the log (tag `MoeMediaIndex`): where it was made ([where]: `getOutputConfig`, `getAudioOutput`,
+     * `openUsb`), the result with its reason, and every fact it was made from.
+     */
+    fun decisionLog(where: String, facts: Facts, choice: Choice): String {
+        val result = when (choice) {
+            Choice.Usb -> "USB"
+            is Choice.AudioTrack -> "AudioTrack" + (choice.reason?.let { " ($it)" } ?: "")
+        }
+        return "USB exclusive: $where → $result: ${explain(facts)}; enabled=${facts.enabled} " +
+            "chosenKind=${facts.chosenKind} deviceAttached=${facts.deviceAttached} permitted=${facts.permitted} " +
+            "encoding=${facts.encoding} rate=${facts.rate} channels=${facts.channels} " +
+            "sourceBits=${facts.source.bits} dsd=${facts.source.dsd} trackFallback=${facts.trackFallback} " +
+            "unsupported=${facts.unsupported}"
+    }
+
+    /** An output config Media3 asks for that the USB output can play: linear PCM without offload, tunneling or speed. */
+    fun takesConfig(encoding: Int, isOffload: Boolean, isTunneling: Boolean, usePlaybackParameters: Boolean): Boolean =
+        isPcm(encoding) && !isOffload && !isTunneling && !usePlaybackParameters
+
+    /** What the user asks of the output: the USB exclusive switch and the chosen output device (null: system default). */
+    data class Wish(val enabled: Boolean, val chosen: OutputDevicePreference?) {
+        /** The app's own USB output is wanted for the chosen device. */
+        val usb: Boolean get() = enabled && chosen?.kind == "usb"
+    }
+
+    /**
+     * What a change of the switch or of the chosen device does at once: [handBack] the device the app may hold (it is
+     * no longer the wanted one), [newOutput] retire the output Media3 plays through now, so Media3 asks the provider
+     * again and the new choice applies to the track that is playing (not only to the next one).
+     */
+    data class OutputChange(val handBack: Boolean, val newOutput: Boolean)
+
+    /** [hasOutput]: Media3 has an output open (a track is loaded). */
+    fun outputChange(before: Wish, after: Wish, hasOutput: Boolean): OutputChange {
+        if (before == after) return OutputChange(handBack = false, newOutput = false)
+        // Speaker, Bluetooth, another Android device: the router re-pins the AudioTrack; nothing to re-create.
+        val touchesUsb = before.usb || after.usb
+        return OutputChange(handBack = before.usb, newOutput = hasOutput && touchesUsb)
     }
 
     /** One attached USB device as `UsbManager` lists it. */

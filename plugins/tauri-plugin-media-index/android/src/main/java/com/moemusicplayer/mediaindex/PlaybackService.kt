@@ -65,6 +65,8 @@ class PlaybackService : MediaSessionService() {
     private var exoPlayer: ExoPlayer? = null
     /** The chosen output device and what the AudioTrack really uses (ADR 0044). */
     @Volatile private var outputRouter: AudioOutputRouter? = null
+    /** Media3's output provider with the USB exclusive output in front (ADR 0047). */
+    @Volatile private var usbOutputProvider: UsbAudioOutputProvider? = null
     private var session: MediaSession? = null
     private var sessionPlayer: Player? = null
     private val commandInFlight = AtomicBoolean(false)
@@ -170,7 +172,7 @@ class PlaybackService : MediaSessionService() {
                             RouteObservingOutputProvider(AudioTrackAudioOutputProvider.Builder(context).build()) { track ->
                                 outputRouter?.observeTrack(track)
                             },
-                        ) { outputRouter?.currentPreference() },
+                        ) { outputRouter?.currentPreference() }.also { usbOutputProvider = it },
                     )
                     .build()
         }.setEnableAudioFloatOutput(true)
@@ -1027,6 +1029,34 @@ class PlaybackService : MediaSessionService() {
         PreferenceReading.Unknown
     }
 
+    /**
+     * Main thread. The USB exclusive switch or the chosen output device changes to [after] ([apply] stores it); the
+     * change reaches the track that is playing at once (ADR 0047): the output Media3 plays through is retired, so
+     * Media3 re-creates it through the provider (position and play/pause state kept), and a device the app holds that
+     * is no longer wanted is handed back first.
+     */
+    private fun changeOutput(after: UsbExclusiveRules.Wish, what: String, apply: () -> Unit) {
+        val before = UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, outputRouter?.currentPreference())
+        val provider = usbOutputProvider
+        val change = UsbExclusiveRules.outputChange(before, after, provider?.hasLiveOutput == true)
+        // The choice is made again for this track: an earlier fallback reason no longer holds.
+        if (before != after) UsbExclusiveEngine.trackFallback = null
+        // Stored first, so the output Media3 opens next is already chosen by the new state.
+        apply()
+        if (change.newOutput) provider?.retireCurrent()
+        if (change.handBack) UsbExclusiveEngine.release("已變更播放裝置或 USB 獨佔")
+        if (before != after) {
+            android.util.Log.i(
+                "MoeMediaIndex",
+                "USB exclusive: $what changed (usb wanted ${before.usb} → ${after.usb}, " +
+                    "chosen ${before.chosen?.kind}:${before.chosen?.productName} → " +
+                    "${after.chosen?.kind}:${after.chosen?.productName}); " +
+                    (if (change.newOutput) "re-creating the output now" else "no output to re-create") +
+                    (if (change.handBack) ", device handed back" else ""),
+            )
+        }
+    }
+
     /** The USB exclusive switch (ADR 0047), or null while the settings have not been read yet. */
     private fun readUsbExclusive(): Boolean? = try {
         when (nativeUsbExclusiveEnabled()) {
@@ -1058,15 +1088,27 @@ class PlaybackService : MediaSessionService() {
 
         /** Main thread. The user chose another output device (ADR 0044); a service that is not running reads it when it starts. */
         internal fun applyOutputPreference(preference: OutputDevicePreference?) {
-            activeInstance?.outputRouter?.setPreference(PreferenceReading.Known(preference))
+            val service = activeInstance ?: return
+            service.changeOutput(UsbExclusiveRules.Wish(UsbExclusiveEngine.enabled, preference), "chosen output device") {
+                service.outputRouter?.setPreference(PreferenceReading.Known(preference))
+            }
         }
 
         /**
-         * The user turned the USB exclusive switch (ADR 0047). On: the next output to the chosen USB device is the app's
-         * own. Off: a device the app holds is handed back at once and the track goes on through Android.
+         * Main thread. The user turned the USB exclusive switch (ADR 0047); it applies to the track that is playing at
+         * once. On: the output is re-created on the chosen USB device. Off: a device the app holds is handed back at
+         * once and the track goes on through Android.
          */
         internal fun applyUsbExclusive(enabled: Boolean) {
-            UsbExclusiveEngine.setEnabled(enabled)
+            val service = activeInstance
+            if (service == null) {
+                UsbExclusiveEngine.setEnabled(enabled)
+                return
+            }
+            val chosen = service.outputRouter?.currentPreference()
+            service.changeOutput(UsbExclusiveRules.Wish(enabled, chosen), "switch") {
+                UsbExclusiveEngine.setEnabled(enabled)
+            }
         }
 
         /** Main thread. The output devices for the settings page; [saved] is the choice in settings.json. */
