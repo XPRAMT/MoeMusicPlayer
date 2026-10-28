@@ -9,7 +9,6 @@ use std::{
     path::Path,
 };
 
-use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
 use player_core::{
     parse_any_lyrics, LyricProvider, LyricSidecarLookup, LyricsContent, MediaLocator, ParsedLyrics,
     MAX_LYRIC_PAYLOAD_BYTES,
@@ -234,13 +233,7 @@ fn remote_embedded_lyric_texts(
         return Ok(texts);
     }
     let len = handle.len;
-    let texts = Probe::new(std::io::BufReader::new(handle.reader))
-        .options(ParseOptions::new().read_properties(false))
-        .guess_file_type()
-        .ok()
-        .and_then(|probe| probe.read().ok())
-        .map(|tagged_file| lyric_texts_in_tags(tagged_file.tags()))
-        .unwrap_or_default();
+    let texts = player_tags::embedded::read_embedded_lyric_texts(handle.reader, Path::new(path));
     player_core::remember_remote_tag_lyrics(source_id, path, len, texts.clone());
     Ok(texts)
 }
@@ -285,22 +278,9 @@ fn sidecar_file_lyrics(
 fn embedded_lyrics(path: &Path, oversized: &mut bool) -> Option<ParsedLyrics> {
     let native_path = to_extended_path(path).ok()?;
     let file = open_regular_file_without_following_reparse_points(&native_path)?;
-    let tagged_file = Probe::new(std::io::BufReader::new(file))
-        .options(ParseOptions::new().read_properties(false))
-        .guess_file_type()
-        .ok()?
-        .read()
-        .ok()?;
-    lyrics_in_texts(&lyric_texts_in_tags(tagged_file.tags()), oversized)
-}
-
-/// Every lyric text in the tags (`Lyrics`, then `UnsyncLyrics`), raw, in that order.
-pub(crate) fn lyric_texts_in_tags(tags: &[lofty::tag::Tag]) -> Vec<String> {
-    [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
-        .into_iter()
-        .flat_map(|key| tags.iter().filter_map(move |tag| tag.get_string(key)))
-        .map(str::to_owned)
-        .collect()
+    // The reader every platform and every remote source uses (DSF and APE-family tags included).
+    let texts = player_tags::embedded::read_embedded_lyric_texts(file, path);
+    lyrics_in_texts(&texts, oversized)
 }
 
 /// The first text that holds usable lyrics; a text over the lyric limit is skipped and reported.

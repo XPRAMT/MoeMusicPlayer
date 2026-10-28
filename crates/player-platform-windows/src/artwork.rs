@@ -145,8 +145,8 @@ fn embedded_artwork_from<R: Read + std::io::Seek + Send>(
 ) -> Option<ArtworkImage> {
     // One reader for every container and for local and remote files alike (DSF's ID3v2, APEv2 covers, lofty).
     let embedded = player_tags::embedded::read_embedded_tags(file, path)?;
-    if let (Some(lyrics), Some(tags)) = (lyrics, embedded.generic_tags.as_ref()) {
-        *lyrics = Some(crate::lyrics::lyric_texts_in_tags(tags));
+    if let Some(lyrics) = lyrics {
+        *lyrics = Some(embedded.lyric_texts());
     }
     embedded
         .pictures

@@ -1870,7 +1870,6 @@ fn android_find_all_lyrics(
     first_only: bool,
     sidecar: &LyricSidecarLookup,
 ) -> (Vec<FoundLocalLyrics>, bool) {
-    use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
     use player_core::MAX_LYRIC_PAYLOAD_BYTES;
     use tauri_plugin_media_index::MediaIndexExt;
 
@@ -1922,20 +1921,14 @@ fn android_find_all_lyrics(
         _ => None,
     };
     if let Some((path, _lease)) = tags_path {
-        let tagged = Probe::open(&path)
-            .ok()
-            .map(|probe| probe.options(ParseOptions::new().read_properties(false)))
-            .and_then(|probe| probe.guess_file_type().ok())
-            .and_then(|probe| probe.read().ok());
+        // The reader every platform and every remote source uses (DSF and APE-family tags included).
         let mut texts = Vec::new();
-        if let Some(tagged) = &tagged {
-            for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {
-                for raw in tagged.tags().iter().filter_map(|tag| tag.get_string(key)) {
-                    if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
-                        oversized = true;
-                    } else {
-                        texts.push(raw.to_owned());
-                    }
+        if let Ok(file) = std::fs::File::open(&path) {
+            for raw in player_tags::embedded::read_embedded_lyric_texts(file, &path) {
+                if raw.len() > MAX_LYRIC_PAYLOAD_BYTES {
+                    oversized = true;
+                } else {
+                    texts.push(raw);
                 }
             }
         }

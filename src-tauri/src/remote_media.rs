@@ -2,10 +2,8 @@
 //! has the same lookups in `player-platform-windows`; this is the platform-neutral version the Android code uses (the
 //! platform crate cannot be built for Android).
 
-use std::io::BufReader;
 use std::path::Path;
 
-use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
 use player_core::{
     is_remote_network_error, read_remote_file_capped_checked, read_remote_sidecar_checked,
     remember_remote_tag_lyrics, remembered_remote_tag_lyrics, remote_content, remote_sibling,
@@ -136,22 +134,11 @@ fn embedded_cover(
 ) -> Option<Vec<u8>> {
     // The same reader the local lookups use.
     let embedded = player_tags::embedded::read_embedded_tags(reader, Path::new(path))?;
-    if let Some(tags) = embedded.generic_tags.as_ref() {
-        *lyrics = Some(lyric_texts_in_tags(tags));
-    }
+    *lyrics = Some(embedded.lyric_texts());
     embedded
         .front_cover()
         .map(|picture| picture.data().to_vec())
         .filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_ARTWORK_BYTES)
-}
-
-/// Every lyric text in the tags (`Lyrics`, then `UnsyncLyrics`), raw, in that order.
-fn lyric_texts_in_tags(tags: &[lofty::tag::Tag]) -> Vec<String> {
-    [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
-        .into_iter()
-        .flat_map(|key| tags.iter().filter_map(move |tag| tag.get_string(key)))
-        .map(str::to_owned)
-        .collect()
 }
 
 /// The lyric texts of a remote track, read now (ADR 0040): the ones embedded in its tags (shared with a cover lookup of
@@ -171,13 +158,10 @@ pub(crate) fn remote_lyric_texts(
         Some(Ok(handle)) => {
             let len = handle.len;
             let texts = remembered_remote_tag_lyrics(source_id, path, len).unwrap_or_else(|| {
-                let texts = Probe::new(BufReader::new(handle.reader))
-                    .options(ParseOptions::new().read_properties(false))
-                    .guess_file_type()
-                    .ok()
-                    .and_then(|probe| probe.read().ok())
-                    .map(|tagged| lyric_texts_in_tags(tagged.tags()))
-                    .unwrap_or_default();
+                let texts = player_tags::embedded::read_embedded_lyric_texts(
+                    handle.reader,
+                    Path::new(path),
+                );
                 remember_remote_tag_lyrics(source_id, path, len, texts.clone());
                 texts
             });

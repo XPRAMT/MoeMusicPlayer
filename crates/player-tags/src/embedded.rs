@@ -12,7 +12,7 @@ use lofty::config::ParseOptions;
 use lofty::file::{FileType, TaggedFileExt};
 use lofty::picture::{Picture, PictureType};
 use lofty::probe::Probe;
-use lofty::tag::Tag;
+use lofty::tag::{ItemKey, Tag};
 
 use crate::ape_cover::{ape_pictures, is_ape_family, read_ape_tag};
 
@@ -20,9 +20,9 @@ use crate::ape_cover::{ape_pictures, is_ape_family, read_ape_tag};
 pub struct EmbeddedTags {
     /// Every embedded picture, front covers first.
     pub pictures: Vec<Picture>,
-    /// The generic tags when they were read through lofty (not for DSF or an APE-family file), so the caller can take
-    /// the lyrics of the same read.
-    pub generic_tags: Option<Vec<Tag>>,
+    /// The tags of the file as lofty's generic tags, whatever the container (DSF and APE-family tags converted), so
+    /// the caller can take the lyrics of the same read.
+    pub tags: Vec<Tag>,
 }
 
 impl EmbeddedTags {
@@ -30,6 +30,28 @@ impl EmbeddedTags {
     pub fn front_cover(&self) -> Option<&Picture> {
         self.pictures.first()
     }
+
+    /// Every lyric text in the tags (`Lyrics`, then `UnsyncLyrics`), raw, in that order. The one reading of embedded
+    /// lyrics for every container, platform and local or remote file.
+    pub fn lyric_texts(&self) -> Vec<String> {
+        lyric_texts_in_tags(&self.tags)
+    }
+}
+
+/// [`EmbeddedTags::lyric_texts`] for tags already in hand.
+pub fn lyric_texts_in_tags(tags: &[Tag]) -> Vec<String> {
+    [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
+        .into_iter()
+        .flat_map(|key| tags.iter().filter_map(move |tag| tag.get_string(key)))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The lyric texts in the tags of `reader` (see [`read_embedded_tags`]); none when the tags cannot be read.
+pub fn read_embedded_lyric_texts<R: Read + Seek + Send>(reader: R, name: &Path) -> Vec<String> {
+    read_embedded_tags(reader, name)
+        .map(|tags| tags.lyric_texts())
+        .unwrap_or_default()
 }
 
 /// Read the pictures of the tags of `reader`; `name` only names the file (its extension picks the container, and the
@@ -43,7 +65,7 @@ pub fn read_embedded_tags<R: Read + Seek + Send>(reader: R, name: &Path) -> Opti
                     .flat_map(|tag| tag.pictures().iter().cloned())
                     .collect(),
             ),
-            generic_tags: None,
+            tags: tag.into_iter().collect(),
         });
     }
     let mut reader = BufReader::new(reader);
@@ -59,7 +81,7 @@ pub fn read_embedded_tags<R: Read + Seek + Send>(reader: R, name: &Path) -> Opti
         let tag = read_ape_tag(&mut reader, file_type)?;
         return Some(EmbeddedTags {
             pictures: front_first(ape_pictures(&tag)),
-            generic_tags: None,
+            tags: vec![Tag::from(tag)],
         });
     }
     let tagged = Probe::with_file_type(reader, file_type)
@@ -73,7 +95,7 @@ pub fn read_embedded_tags<R: Read + Seek + Send>(reader: R, name: &Path) -> Opti
                 .flat_map(|tag| tag.pictures().iter().cloned())
                 .collect(),
         ),
-        generic_tags: Some(tags),
+        tags,
     })
 }
 
