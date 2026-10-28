@@ -65,3 +65,13 @@ export function cutToLines(full, lines, countLines) {
   }
   return ellipsize(full.slice(0, lo));
 }
+
+/**
+ * The summary content is vertically centred in its fixed-height box only while the artist list is shown whole (nothing cut);
+ * a cut list fills the box and is aligned to the top. Derived from the fit result itself. At the cut / not-cut boundary the
+ * content moves by at most half a line (the free space left under the last whole line, halved).
+ * @param {string} full @param {string} shown
+ */
+export function summaryCentered(full, shown) {
+  return shown === full;
+}

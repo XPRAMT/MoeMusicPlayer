@@ -13,7 +13,7 @@
   import { DEFAULT_ALBUM_DETAIL_SORT, normalizeAlbumDetailSort, toggleAlbumDetailSort } from './album-detail-sort.js';
   import { albumReflowProbeEnabled, startAlbumReflowProbe } from './album-reflow-debug.js';
   import { DESKTOP_ALBUM_DETAIL_COVER_SIZE_PX, MIN_ALBUM_DETAIL_COVER_SIZE_PX, NARROW_ALBUM_DETAIL_COVER_SIZE_PX, getAlbumDetailCollapseRange, getAlbumDetailCollapseProgress, createCollapseProgressWriter } from './album-detail-collapse.js';
-  import { createLinesHysteresis, cutToLines, rawLinesAvailable } from './album-artists-fit.js';
+  import { createLinesHysteresis, cutToLines, rawLinesAvailable, summaryCentered } from './album-artists-fit.js';
 
   interface Props {
     album: AlbumEntry;
@@ -121,7 +121,9 @@
     const lines = artistLines.next(raw);
     box.style.maxHeight = 'none';
     const countLines = (text: string): number => { span.textContent = text; return Math.round(span.getBoundingClientRect().height / lineHeightPx); };
-    span.textContent = cutToLines(artistsFull, lines, countLines);
+    const shown = cutToLines(artistsFull, lines, countLines);
+    span.textContent = shown;
+    summaryElement.toggleAttribute('data-centered', summaryCentered(artistsFull, shown));
     box.style.maxHeight = `${lines * lineHeightPx}px`;
   }
   $effect(() => {
@@ -465,6 +467,8 @@
     height:var(--album-detail-summary-height); max-height:var(--album-detail-summary-height);
     transform:translateY(calc(var(--album-detail-collapse-range, 0px) * var(--album-detail-collapse-progress, 0) * -0.5));
   }
+  /* Whole list shown (set by fitArtists from the fit result): content centred in the fixed box; a cut list fills it, top aligned. */
+  .album-detail-summary:global([data-centered]) { justify-content:center; }
   .album-detail-artists { flex:0 1 auto; min-height:0; overflow:hidden; }
   /* Names may break anywhere and the lines are justified; the whole-lines cut is done in script (fitArtists). */
   .album-detail-artists .album-detail-value { display:block; min-width:0; word-break:break-all; overflow-wrap:anywhere; text-align:justify; text-justify:inter-character; }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { cutToLines, createLinesHysteresis, linesAvailable, rawLinesAvailable } from '../src/lib/album-artists-fit.js';
+import { cutToLines, createLinesHysteresis, linesAvailable, rawLinesAvailable, summaryCentered } from '../src/lib/album-artists-fit.js';
 
 const source = readFileSync(new URL('../src/lib/AlbumDetail.svelte', import.meta.url), 'latin1');
 const css = source.slice(source.indexOf('<style>'));
@@ -66,4 +66,15 @@ test('album detail artists: static source rules', () => {
   const script = source.slice(0, source.indexOf('<style>'));
   assert.equal((script.match(/requestAnimationFrame/g) ?? []).length, 1);
   assert.match(script, /write: \(progress\) => \{[^}]*fitArtists\(\)/);
+});
+
+test('summary is centred only while the artist list is shown whole, tied to the fit result', () => {
+  const full = 'あいうえおかきくけこさしすせそ';
+  assert.equal(summaryCentered(full, cutToLines(full, 3, measure)), true);
+  assert.equal(summaryCentered(full, cutToLines(full, 1, measure)), false);
+  assert.match(css, /\.album-detail-summary:global\(\[data-centered\]\) \{ justify-content:center; \}/);
+  const script = source.slice(0, source.indexOf('<style>'));
+  assert.match(script, /const shown = cutToLines\([^)]*\);[\s\S]*toggleAttribute\('data-centered', summaryCentered\(artistsFull, shown\)\)/);
+  assert.equal((script.match(/requestAnimationFrame/g) ?? []).length, 1);
+  assert.ok(!/addEventListener\('scroll'/.test(script));
 });
