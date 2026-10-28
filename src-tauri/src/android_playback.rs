@@ -211,6 +211,9 @@ struct NativeTrackMetadata {
     /// although Media3 hands it float PCM (ADR 0047).
     #[serde(skip_serializing_if = "Option::is_none")]
     bits_per_sample: Option<u8>,
+    /// The file's sample rate in Hz, for the Bluetooth sample-rate follow (ADR 0051); absent when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sample_rate: Option<u32>,
     /// A DSD file (played through the DSD-to-PCM converter): never bit-perfect on the USB exclusive output.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     dsd: bool,
@@ -1723,6 +1726,7 @@ impl AndroidActor {
             artwork_uri,
             artwork_data_base64,
             bits_per_sample: track.bit_depth,
+            sample_rate: track.sample_rate_hz,
             dsd: is_dsd_codec(track.codec.as_deref()),
         }
     }
@@ -2139,6 +2143,7 @@ mod tests {
                 artwork_uri: Some("content://media/external/audio/albumart/123".into()),
                 artwork_data_base64: None,
                 bits_per_sample: Some(24),
+                sample_rate: Some(96_000),
                 dsd: false,
             }),
             position_ms: Some(400),
@@ -2161,6 +2166,7 @@ mod tests {
             "content://media/external/audio/albumart/123"
         );
         assert_eq!(json["metadata"]["bitsPerSample"], 24);
+        assert_eq!(json["metadata"]["sampleRate"], 96_000);
         assert!(json["metadata"].get("dsd").is_none());
     }
 

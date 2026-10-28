@@ -74,6 +74,21 @@ pub(crate) fn real_mixer_rate_state() -> i8 {
     REAL_MIXER_RATE.load(Ordering::Relaxed)
 }
 
+/// The Bluetooth sample-rate follow switch for the service (`androidBluetoothRateFollow`, ADR 0051): -1 until the
+/// settings were read.
+static BLUETOOTH_RATE_FOLLOW: AtomicI8 = AtomicI8::new(-1);
+
+/// Remember the switch for the service (at startup and whenever the user changes it). The service reads it before
+/// every load.
+pub(crate) fn set_bluetooth_rate_follow(enabled: bool) {
+    BLUETOOTH_RATE_FOLLOW.store(i8::from(enabled), Ordering::Relaxed);
+}
+
+/// The switch as the service reads it: -1 not known yet (treated as off), 0 off, 1 on.
+pub(crate) fn bluetooth_rate_follow_state() -> i8 {
+    BLUETOOTH_RATE_FOLLOW.load(Ordering::Relaxed)
+}
+
 #[cfg(target_os = "android")]
 mod jni_exports {
     use jni::{objects::JObject, sys::jstring, JNIEnv};
@@ -107,6 +122,15 @@ mod jni_exports {
         _service: JObject,
     ) -> jni::sys::jint {
         jni::sys::jint::from(super::real_mixer_rate_state())
+    }
+
+    /// `PlaybackService.nativeBluetoothRateFollowEnabled()`: -1 while the settings have not been read, else 0 or 1.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_PlaybackService_nativeBluetoothRateFollowEnabled(
+        _env: JNIEnv,
+        _service: JObject,
+    ) -> jni::sys::jint {
+        jni::sys::jint::from(super::bluetooth_rate_follow_state())
     }
 
     /// `PlaybackService.nativeDsdPassthroughEnabled()`: -1 while the settings have not been read, else 0 or 1.

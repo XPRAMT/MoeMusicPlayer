@@ -7720,6 +7720,53 @@ async fn settings_set_android_usb_exclusive(
     Ok(saved)
 }
 
+#[tauri::command]
+fn settings_get_android_bluetooth_rate_follow(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_bluetooth_rate_follow)
+        .map_err(|error| error.to_string())
+}
+
+/// Persist the Android Bluetooth sample-rate follow switch (ADR 0051) and hand it to the playback service: on, every
+/// track change moves the A2DP codec to the track's rate through root or Shizuku; off, the original rates are put
+/// back. Kept (and harmless) on other platforms.
+#[tauri::command]
+async fn settings_set_android_bluetooth_rate_follow(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    let saved = state
+        .settings
+        .update(|stored| {
+            stored.android_bluetooth_rate_follow = enabled;
+            Ok(())
+        })
+        .map(|stored| stored.android_bluetooth_rate_follow)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        android_output::set_bluetooth_rate_follow(saved);
+        let payload = serde_json::json!({ "enabled": saved });
+        // A service that is not running reads the switch when it starts; a failed push is picked up at the next load.
+        let pushed = tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output("setBluetoothRateFollow", payload)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        if let Err(error) = pushed {
+            eprintln!("無法把藍牙取樣率跟隨設定交給 Android 播放服務：{error}");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+    Ok(saved)
+}
+
 /// The state of the privileged sources of the real mixer rate (ADR 0048) for the explanation panel: root, Shizuku and
 /// the hidden switch. Reads only (an earlier opt-in re-probes `su` silently); null on other platforms.
 #[tauri::command]
@@ -13109,6 +13156,8 @@ pub fn run() {
             android_usb_audio_descriptors,
             settings_get_android_usb_exclusive,
             settings_set_android_usb_exclusive,
+            settings_get_android_bluetooth_rate_follow,
+            settings_set_android_bluetooth_rate_follow,
             android_request_usb_exclusive_permission,
             android_mixer_rate_source_status,
             android_mixer_rate_source_action,
@@ -13350,6 +13399,7 @@ pub fn run() {
             android_output::set_usb_exclusive(initial_settings.android_usb_exclusive);
             #[cfg(target_os = "android")]
             android_output::set_real_mixer_rate(initial_settings.android_real_mixer_rate);
+            android_output::set_bluetooth_rate_follow(initial_settings.android_bluetooth_rate_follow);
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
                 // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).

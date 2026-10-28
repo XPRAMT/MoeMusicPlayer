@@ -2291,6 +2291,10 @@ pub struct AppSettings {
     /// On by default; nothing runs unless the user granted a privileged source. Off skips to the platform value.
     #[serde(default = "default_android_real_mixer_rate")]
     pub android_real_mixer_rate: bool,
+    /// Android Bluetooth sample-rate follow (Settings -> playback; ADR 0051): at every track change the A2DP codec's
+    /// sample rate is moved to the track's (nearest offered) rate through root or Shizuku. Off by default.
+    #[serde(default)]
+    pub android_bluetooth_rate_follow: bool,
 }
 
 fn default_android_real_mixer_rate() -> bool {
@@ -2400,6 +2404,7 @@ impl Default for AppSettings {
             android_output_device: None,
             android_usb_exclusive: false,
             android_real_mixer_rate: true,
+            android_bluetooth_rate_follow: false,
         }
     }
 }
@@ -2898,6 +2903,7 @@ struct RawSettings {
     android_output_device: Option<serde_json::Value>,
     android_usb_exclusive: Option<bool>,
     android_real_mixer_rate: Option<bool>,
+    android_bluetooth_rate_follow: Option<bool>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2980,6 +2986,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         android_output_device: lenient_android_output_device(raw.android_output_device),
         android_usb_exclusive: raw.android_usb_exclusive.unwrap_or(false),
         android_real_mixer_rate: raw.android_real_mixer_rate.unwrap_or(true),
+        android_bluetooth_rate_follow: raw.android_bluetooth_rate_follow.unwrap_or(false),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -5079,6 +5086,37 @@ mod tests {
             .remove("androidUsbExclusive");
         let typed: AppSettings = serde_json::from_value(persisted).unwrap();
         assert!(!typed.android_usb_exclusive);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_android_bluetooth_rate_follow_switch_defaults_off_and_survives_a_restart() {
+        assert!(!AppSettings::default().android_bluetooth_rate_follow);
+        let directory = test_directory("android-bluetooth-rate-follow");
+        let path = directory.join("settings.json");
+        {
+            let store =
+                SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+            assert!(!store.snapshot().unwrap().android_bluetooth_rate_follow);
+            store
+                .update(|settings| {
+                    settings.android_bluetooth_rate_follow = true;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen");
+        assert!(reopened.snapshot().unwrap().android_bluetooth_rate_follow);
+        drop(reopened);
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["androidBluetoothRateFollow"], true);
+        persisted
+            .as_object_mut()
+            .unwrap()
+            .remove("androidBluetoothRateFollow");
+        let typed: AppSettings = serde_json::from_value(persisted).unwrap();
+        assert!(!typed.android_bluetooth_rate_follow);
         let _ = std::fs::remove_dir_all(&directory);
     }
 
