@@ -2,13 +2,10 @@
 //! has the same lookups in `player-platform-windows`; this is the platform-neutral version the Android code uses (the
 //! platform crate cannot be built for Android).
 
-use std::io::{BufReader, Seek};
+use std::io::BufReader;
 use std::path::Path;
 
-use lofty::{
-    config::ParseOptions, file::FileType, picture::PictureType, prelude::TaggedFileExt,
-    probe::Probe, tag::ItemKey,
-};
+use lofty::{config::ParseOptions, prelude::TaggedFileExt, probe::Probe, tag::ItemKey};
 use player_core::{
     is_remote_network_error, read_remote_file_capped_checked, read_remote_sidecar_checked,
     remember_remote_tag_lyrics, remembered_remote_tag_lyrics, remote_content, remote_sibling,
@@ -53,9 +50,13 @@ impl CoverLookupTurn {
             (&COVER_LOOKUPS, MAX_CONCURRENT_COVER_LOOKUPS)
         };
         let (count, turn) = line;
-        let mut running = count.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut running = count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *running >= limit {
-            running = turn.wait(running).unwrap_or_else(std::sync::PoisonError::into_inner);
+            running = turn
+                .wait(running)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         *running += 1;
         Self(line)
@@ -65,7 +66,9 @@ impl CoverLookupTurn {
 impl Drop for CoverLookupTurn {
     fn drop(&mut self) {
         let (count, turn) = self.0;
-        *count.lock().unwrap_or_else(std::sync::PoisonError::into_inner) -= 1;
+        *count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) -= 1;
         turn.notify_one();
     }
 }
@@ -131,45 +134,13 @@ fn embedded_cover(
     path: &str,
     lyrics: &mut Option<Vec<String>>,
 ) -> Option<Vec<u8>> {
-    let name = Path::new(path);
-    // DSF keeps its cover in the ID3v2 tag at the end of the file, which lofty cannot read as a DSF.
-    let dsd_tags;
-    let tagged;
-    let tags: &[lofty::tag::Tag] =
-        if player_formats::decode_engine(name) == player_formats::DecodeEngine::Dsd {
-            let (_, tag) = player_dsd::id3::read_dsf_from(reader).ok()?;
-            dsd_tags = tag.into_iter().collect::<Vec<_>>();
-            &dsd_tags
-        } else {
-            let mut reader = BufReader::new(reader);
-            let file_type = match FileType::from_path(name) {
-                Some(file_type) => file_type,
-                None => Probe::new(&mut reader)
-                    .guess_file_type()
-                    .ok()?
-                    .file_type()?,
-            };
-            // WavPack and Monkey's Audio keep their covers as APEv2 items that lofty's generic tag does not carry.
-            if player_tags::ape_cover::is_ape_family(file_type) {
-                reader.rewind().ok()?;
-                let picture = player_tags::ape_cover::ape_front_cover(&mut reader, file_type)?;
-                return Some(picture.data().to_vec());
-            }
-            reader.rewind().ok()?;
-            tagged = Probe::with_file_type(reader, file_type)
-                .options(ParseOptions::new().read_properties(false))
-                .read()
-                .ok()?;
-            *lyrics = Some(lyric_texts_in_tags(tagged.tags()));
-            tagged.tags()
-        };
-    let front = tags
-        .iter()
-        .flat_map(|tag| tag.pictures())
-        .find(|picture| picture.pic_type() == PictureType::CoverFront);
-    let any = tags.iter().flat_map(|tag| tag.pictures()).next();
-    front
-        .or(any)
+    // The same reader the local lookups use.
+    let embedded = player_tags::embedded::read_embedded_tags(reader, Path::new(path))?;
+    if let Some(tags) = embedded.generic_tags.as_ref() {
+        *lyrics = Some(lyric_texts_in_tags(tags));
+    }
+    embedded
+        .front_cover()
         .map(|picture| picture.data().to_vec())
         .filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_ARTWORK_BYTES)
 }
@@ -350,9 +321,9 @@ mod tests {
     impl RemoteContent for Down {
         fn open(&self, _: SourceId, _: &str) -> std::io::Result<RemoteFileHandle> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err(std::io::Error::from(player_remote::fs::RemoteError::Network(
-                "No route to host".to_owned(),
-            )))
+            Err(std::io::Error::from(
+                player_remote::fs::RemoteError::Network("No route to host".to_owned()),
+            ))
         }
     }
 }

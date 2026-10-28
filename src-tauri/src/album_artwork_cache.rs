@@ -21,6 +21,8 @@ static LIMIT_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 const PRUNE_EVERY_WRITES: usize = 32;
 const CACHE_DATABASE_NAME: &str = "cache.sqlite3";
 const LEGACY_MIGRATION_KEY: &str = "legacy_index_files_migrated";
+/// Set once the "no cover" records made before the cover reader understood DSF's trailing ID3v2 tag were dropped.
+const EMBEDDED_READER_RESET_KEY: &str = "missing_refs_reset_shared_embedded_reader";
 static CACHE_WRITES: AtomicUsize = AtomicUsize::new(0);
 static DATABASES: OnceLock<Mutex<HashMap<PathBuf, Connection>>> = OnceLock::new();
 
@@ -75,6 +77,9 @@ fn initialize_database(connection: &mut Connection, directory: &Path) -> Result<
         )
         .map_err(|error| format!("建立專輯封面快取資料庫失敗：{error}"))?;
 
+    // Before the legacy import: only records of a database that already exists are from the old lookup.
+    reset_missing_references(connection)?;
+
     let migrated = connection
         .query_row(
             "SELECT value FROM cache_metadata WHERE key = ?1",
@@ -99,6 +104,41 @@ fn initialize_database(connection: &mut Connection, directory: &Path) -> Result<
     // interrupted cleanup cannot leave the old per-item files behind forever.
     remove_legacy_indices(directory);
     Ok(())
+}
+
+/// Forget the tracks recorded as having no cover, once: files whose embedded cover the old lookup could not read (a local
+/// DSF on Android) were recorded that way and would stay hidden after the lookup is fixed. They are looked up again.
+fn reset_missing_references(connection: &mut Connection) -> Result<(), String> {
+    let done = connection
+        .query_row(
+            "SELECT value FROM cache_metadata WHERE key = ?1",
+            [EMBEDDED_READER_RESET_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("讀取專輯封面快取狀態失敗：{error}"))?
+        .is_some();
+    if done {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("開始重設無封面紀錄失敗：{error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM track_artwork_refs WHERE artwork_sha256 IS NULL",
+            [],
+        )
+        .map_err(|error| format!("重設無封面紀錄失敗：{error}"))?;
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO cache_metadata(key, value) VALUES (?1, '1')",
+            [EMBEDDED_READER_RESET_KEY],
+        )
+        .map_err(|error| format!("保存重設無封面紀錄狀態失敗：{error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交重設無封面紀錄失敗：{error}"))
 }
 
 fn migrate_legacy_indices(connection: &mut Connection, directory: &Path) -> Result<(), String> {
@@ -599,6 +639,40 @@ mod tests {
     }
 
     #[test]
+    fn no_cover_records_made_before_the_shared_reader_are_dropped_once() {
+        let directory = temp_dir();
+        let count = |directory: &Path| -> i64 {
+            with_database(directory, |connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM track_artwork_refs", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(|error| error.to_string())
+            })
+            .unwrap()
+        };
+        put_track_reference(&directory, "local dsf", None).unwrap();
+        assert_eq!(count(&directory), 1, "a missing record made now is kept");
+        // The state an older version left: the record exists and the reset has not run.
+        with_database(&directory, |connection| {
+            connection
+                .execute(
+                    "DELETE FROM cache_metadata WHERE key = ?1",
+                    [EMBEDDED_READER_RESET_KEY],
+                )
+                .map_err(|error| error.to_string())
+                .map(|_| ())
+        })
+        .unwrap();
+        close_for_test(&directory);
+        assert_eq!(count(&directory), 0, "the old missing record is forgotten");
+        put_track_reference(&directory, "local dsf", None).unwrap();
+        close_for_test(&directory);
+        assert_eq!(count(&directory), 1, "the reset runs only once");
+        cleanup(&directory);
+    }
+
+    #[test]
     fn cache_is_content_addressed_bounded_and_round_trips_jpeg() {
         let directory = temp_dir();
         let hash = "a".repeat(64);
@@ -709,15 +783,24 @@ mod tests {
         forget_album_selections(&directory, "album:edited", 3).expect("forget one album");
         assert_eq!(get_selection(&directory, &edited).expect("read"), None);
         assert_eq!(get_selection(&directory, &neighbour).expect("read"), None);
-        assert_eq!(get_selection(&directory, &other).expect("read"), Some(selection));
+        assert_eq!(
+            get_selection(&directory, &other).expect("read"),
+            Some(selection)
+        );
         cleanup(&directory);
     }
 
     #[test]
     fn selection_key_matches_the_frontend_hash() {
         // sha256("album:x\03") as computed by album-card-cover.ts persistentSelectionKey.
-        assert_eq!(album_selection_key("album:x", 3), "7c2cc5c296d283b8a6a4f58dab82f51fc30d8b1f06459f8f0f8b290123aa4ac7");
-        assert_ne!(album_selection_key("album:x", 3), album_selection_key("album:x", 4));
+        assert_eq!(
+            album_selection_key("album:x", 3),
+            "7c2cc5c296d283b8a6a4f58dab82f51fc30d8b1f06459f8f0f8b290123aa4ac7"
+        );
+        assert_ne!(
+            album_selection_key("album:x", 3),
+            album_selection_key("album:x", 4)
+        );
     }
 
     #[test]

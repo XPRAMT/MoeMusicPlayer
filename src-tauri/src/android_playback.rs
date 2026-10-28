@@ -176,12 +176,14 @@ struct NativeCommand {
 /// Covers larger than this are not sent to the service (the notification shows a small picture anyway).
 const MAX_NOTIFICATION_COVER_BYTES: usize = 2 * 1024 * 1024;
 
-/// The APEv2 cover of a WavPack / Monkey's Audio file (base64), which Android's media retriever cannot read.
+/// The embedded cover of a local file (base64), read by the same reader as every other cover lookup: Android's media
+/// retriever cannot read DSF's trailing ID3v2 tag or the APEv2 covers of WavPack and Monkey's Audio.
 fn ape_cover_base64(locators: &[MediaLocator]) -> Option<String> {
     use base64::Engine as _;
     locators.iter().find_map(|locator| match locator {
         MediaLocator::FileSystem(path) => {
-            let picture = player_tags::ape_cover::ape_front_cover_of_path(path)?;
+            let embedded = player_tags::embedded::read_embedded_tags_of_path(path)?;
+            let picture = embedded.front_cover()?;
             (picture.data().len() <= MAX_NOTIFICATION_COVER_BYTES)
                 .then(|| base64::engine::general_purpose::STANDARD.encode(picture.data()))
         }

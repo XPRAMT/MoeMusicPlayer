@@ -6,10 +6,6 @@ use std::{
     path::Path,
 };
 
-use lofty::{
-    config::ParseOptions, file::FileType, picture::PictureType, prelude::TaggedFileExt,
-    probe::Probe,
-};
 use player_core::{ArtworkImage, MediaLocator, MAX_ARTWORK_BYTES};
 
 use crate::windows::to_extended_path;
@@ -147,62 +143,15 @@ fn embedded_artwork_from<R: Read + std::io::Seek + Send>(
     oversized: &mut bool,
     lyrics: Option<&mut Option<Vec<String>>>,
 ) -> Option<ArtworkImage> {
-    use std::io::Seek;
-    // DSF is not a lofty format: its cover lives in the ID3v2 tag at the end of the file.
-    let dsd_tags;
-    let tagged_file;
-    let tags: &[lofty::tag::Tag] =
-        if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
-            let (_, tag) = player_dsd::id3::read_dsf_from(file).ok()?;
-            dsd_tags = tag.into_iter().collect::<Vec<_>>();
-            &dsd_tags
-        } else {
-            let options = ParseOptions::new().read_properties(false);
-            let mut reader = std::io::BufReader::new(file);
-            let file_type = match FileType::from_path(path) {
-                Some(file_type) => file_type,
-                None => Probe::new(&mut reader)
-                    .guess_file_type()
-                    .ok()?
-                    .file_type()?,
-            };
-            // WavPack and Monkey's Audio keep their covers as APEv2 items that lofty's generic tag does not carry.
-            if player_tags::ape_cover::is_ape_family(file_type) {
-                reader.rewind().ok()?;
-                let picture = player_tags::ape_cover::ape_front_cover(&mut reader, file_type)?;
-                return image_from_raw_bytes(picture.data(), oversized);
-            }
-            reader.rewind().ok()?;
-            tagged_file = Probe::with_file_type(reader, file_type)
-                .options(options)
-                .read()
-                .ok()?;
-            if let Some(lyrics) = lyrics {
-                *lyrics = Some(crate::lyrics::lyric_texts_in_tags(tagged_file.tags()));
-            }
-            tagged_file.tags()
-        };
-
-    for picture in tags
-        .iter()
-        .flat_map(|tag| tag.pictures())
-        .filter(|picture| picture.pic_type() == PictureType::CoverFront)
-    {
-        if let Some(image) = image_from_raw_bytes(picture.data(), oversized) {
-            return Some(image);
-        }
+    // One reader for every container and for local and remote files alike (DSF's ID3v2, APEv2 covers, lofty).
+    let embedded = player_tags::embedded::read_embedded_tags(file, path)?;
+    if let (Some(lyrics), Some(tags)) = (lyrics, embedded.generic_tags.as_ref()) {
+        *lyrics = Some(crate::lyrics::lyric_texts_in_tags(tags));
     }
-    for picture in tags
+    embedded
+        .pictures
         .iter()
-        .flat_map(|tag| tag.pictures())
-        .filter(|picture| picture.pic_type() != PictureType::CoverFront)
-    {
-        if let Some(image) = image_from_raw_bytes(picture.data(), oversized) {
-            return Some(image);
-        }
-    }
-
-    None
+        .find_map(|picture| image_from_raw_bytes(picture.data(), oversized))
 }
 
 fn sidecar_artwork(audio_path: &Path, name: &str, oversized: &mut bool) -> Option<ArtworkImage> {

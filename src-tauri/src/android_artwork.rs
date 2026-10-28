@@ -39,6 +39,25 @@ pub(crate) fn image_from_bytes(
     ArtworkImage::try_new(mime_type, bytes.to_vec(), width, height).ok_or(ArtworkError::Oversized)
 }
 
+/// The cover embedded in a real-path file's tags, read by the reader every cover lookup shares (DSF's trailing ID3v2 tag,
+/// APEv2 covers, lofty's tags). `Missing` when the file has none.
+pub(crate) fn embedded_image_of_path(path: &std::path::Path) -> Result<ArtworkImage, ArtworkError> {
+    let embedded =
+        player_tags::embedded::read_embedded_tags_of_path(path).ok_or(ArtworkError::Missing)?;
+    let mut failure = ArtworkError::Missing;
+    for picture in &embedded.pictures {
+        match image_from_bytes(
+            picture.data(),
+            picture.mime_type().map(|mime| mime.as_str()),
+        ) {
+            Ok(image) => return Ok(image),
+            Err(ArtworkError::Oversized) => failure = ArtworkError::Oversized,
+            Err(_) => {}
+        }
+    }
+    Err(failure)
+}
+
 fn sniff_mime_type(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
         Some("image/jpeg")
@@ -153,5 +172,48 @@ mod tests {
                 .dimensions(),
             (1, 1)
         );
+    }
+
+    /// A local DSF keeps its cover in the ID3v2 tag at the end of the file: the Android local lookup must find it the way
+    /// the remote one does (it used to ask only the platform's media retriever, which cannot read that tag).
+    #[test]
+    fn a_local_dsf_cover_is_found_and_matches_the_remote_reader() {
+        use lofty::config::WriteOptions;
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::tag::{Tag, TagExt, TagType};
+
+        let png = tiny_png();
+        let mut file =
+            player_dsd::testing::build_dsf(2_822_400, 8_000, 4096, true, &[vec![0x69; 1000]]);
+        let offset = file.len() as u64;
+        file[20..28].copy_from_slice(&offset.to_le_bytes());
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.push_picture(
+            Picture::unchecked(png.clone())
+                .pic_type(PictureType::CoverFront)
+                .mime_type(MimeType::Png)
+                .build(),
+        );
+        tag.dump_to(&mut file, WriteOptions::default()).unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("moe-android-art-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("track.dsf");
+        std::fs::write(&path, &file).unwrap();
+
+        let local = embedded_image_of_path(&path).expect("the embedded cover of a local DSF");
+        assert_eq!(local.bytes(), png);
+        assert_eq!(local.mime_type(), "image/png");
+        let remote = player_tags::embedded::read_embedded_tags(std::io::Cursor::new(file), &path)
+            .and_then(|tags| tags.front_cover().map(|picture| picture.data().to_vec()));
+        assert_eq!(remote.as_deref(), Some(png.as_slice()));
+
+        std::fs::write(
+            &path,
+            player_dsd::testing::build_dsf(2_822_400, 8_000, 4096, true, &[vec![0; 8]]),
+        )
+        .unwrap();
+        assert_eq!(embedded_image_of_path(&path), Err(ArtworkError::Missing));
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

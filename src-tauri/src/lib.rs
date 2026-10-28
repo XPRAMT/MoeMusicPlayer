@@ -9906,22 +9906,13 @@ fn find_android_artwork(
             Err(_) => {}
         }
     }
-    // WavPack keeps its cover in an APEv2 item that Android's MediaMetadataRetriever cannot read (ADR 0025).
+    // A real-path track's embedded cover is read by the same reader as a remote track's (DSF's trailing ID3v2 tag and the
+    // APEv2 covers of WavPack are formats Android's MediaMetadataRetriever cannot read; ADR 0025).
     for locator in locators {
         let MediaLocator::FileSystem(path) = locator else {
             continue;
         };
-        let Some(picture) = player_tags::ape_cover::ape_front_cover_of_path(path) else {
-            continue;
-        };
-        if picture.data().len() > player_core::MAX_ARTWORK_BYTES {
-            oversized = true;
-            continue;
-        }
-        match android_artwork::image_from_bytes(
-            picture.data(),
-            picture.mime_type().map(|mime| mime.as_str()),
-        ) {
+        match android_artwork::embedded_image_of_path(path) {
             Ok(image) => return Ok(image),
             Err(android_artwork::ArtworkError::Oversized) => oversized = true,
             Err(_) => {}
