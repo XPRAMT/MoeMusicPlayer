@@ -1160,12 +1160,18 @@ class PlaybackService : MediaSessionService() {
      * the exclusive mode a USB audio device that was attached or unplugged changes where the playing track goes at
      * once (attached → exclusive on it now; unplugged → shared on the system default).
      */
+    /** The loaded track's rate and DSD flag, kept so that switching the follow on while it plays applies at once (ADR 0051). */
+    private var lastTrackHz = 0
+    private var lastTrackDsd = false
+
     /**
      * A track is loaded (main thread): ask the Bluetooth sample-rate follow to move the A2DP codec to the track's rate
      * (ADR 0051). Only memory is read here; the privileged call runs on the follow's own thread and never holds up the load.
      */
     private fun requestBluetoothRate(trackHz: Int, dsd: Boolean) {
         val follow = bluetoothRate ?: return
+        lastTrackHz = trackHz
+        lastTrackDsd = dsd
         follow.setEnabled(readBluetoothRateFollow())
         val router = outputRouter ?: return
         val address = router.a2dpTargetAddress()
@@ -1332,6 +1338,7 @@ class PlaybackService : MediaSessionService() {
             val service = activeInstance
             if (service != null) {
                 service.bluetoothRate?.setEnabled(enabled)
+                if (enabled) service.requestBluetoothRate(service.lastTrackHz, service.lastTrackDsd)
             } else if (!enabled) {
                 BluetoothRateFollow.restoreWithoutService(context)
             }

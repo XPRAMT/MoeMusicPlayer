@@ -9,7 +9,7 @@ internal object BluetoothRateConfig {
     const val ENABLED = true
 
     /** Two switches start at least this far apart; requests in between are coalesced into the newest one. */
-    const val MIN_INTERVAL_MS = 5_000L
+    const val MIN_INTERVAL_MS = 1_000L
 
     /** After a switch, wait this long for the Bluetooth stack's codec broadcast that shows the new rate. */
     const val WAIT_CHANGE_MS = 3_000L
@@ -511,6 +511,7 @@ internal class BluetoothRateController(
             val result = call(backend, BluetoothRateRules.HelperRequest.Set(address, rates.original))
             if (result is BluetoothRateRules.HelperResult.Switched) {
                 store.remove(address)
+                if (result.changed) env.awaitRate(address, rates.original, BluetoothRateConfig.WAIT_CHANGE_MS)
                 env.log("bluetooth rate: $why, $address back to ${BluetoothRateRules.hzOfFlag(rates.original)} Hz")
             } else {
                 env.log("bluetooth rate: $why, could not restore $address")

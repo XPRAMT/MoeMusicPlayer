@@ -163,22 +163,22 @@ class BluetoothRateControllerTest {
         assertEquals(listOf<HelperRequest>(HelperRequest.Set(address, 1)), f.backend.calls)
     }
 
-    @Test fun twoSwitchesStartAtLeastFiveSecondsApart() {
+    @Test fun twoSwitchesStartAtLeastOneSecondApart() {
         val f = Fixture(FakeBackend { request -> ok(2, (request as HelperRequest.Set).rateFlag) })
         f.state = BluetoothCodecState(4, 2, ldac)
         f.controller.request(request(44_100))
         f.scheduler.runAll()
         assertEquals(1, f.backend.calls.size)
-        // The next track comes 1 s later: scheduled 4 s from now, not at once.
-        f.now += 1_000
+        // The next track comes 0.4 s later: scheduled 0.6 s from now, not at once.
+        f.now += 400
         f.controller.request(request(96_000))
-        assertEquals(4_000L, f.scheduler.tasks.single().first)
+        assertEquals(600L, f.scheduler.tasks.single().first)
         // If the task fires early it waits for the rest instead of switching.
-        f.now += 2_000
+        f.now += 200
         f.scheduler.tasks.removeAt(0).second()
         assertEquals(1, f.backend.calls.size)
-        assertEquals(2_000L, f.scheduler.tasks.single().first)
-        f.now += 2_000
+        assertEquals(400L, f.scheduler.tasks.single().first)
+        f.now += 400
         f.scheduler.runAll()
         assertEquals(2, f.backend.calls.size)
     }
@@ -205,6 +205,58 @@ class BluetoothRateControllerTest {
         assertEquals(1, f.backend.calls.size)
         // The next track plans from the new state.
         assertEquals(Plan.Switch(1), f.controller.process(request(44_100)))
+    }
+
+    // ---- off, then on again ----------------------------------------------------------------------------------------
+
+    @Test fun offThenOnThenANewTrackFollowsAgainAndTakesTheThenCurrentRateAsTheOriginal() {
+        val f = Fixture(FakeBackend { request -> ok(2, (request as HelperRequest.Set).rateFlag) })
+        f.state = BluetoothCodecState(4, 2, ldac)
+        f.controller.request(request(96_000))
+        f.scheduler.runAll()
+        assertEquals(BluetoothRateRules.SavedRate(2, 8), f.store.saved[address])
+        // Off: the original comes back and the record is gone.
+        f.state = BluetoothCodecState(4, 8, ldac)
+        f.backend.answer = { request -> ok(8, (request as HelperRequest.Set).rateFlag) }
+        f.controller.restoreAll("follow turned off")
+        f.scheduler.runAll()
+        assertTrue(f.store.saved.isEmpty())
+        assertEquals(HelperRequest.Set(address, 2), f.backend.calls.last())
+        // On again; the codec is now at 48 kHz (the original). The next track (44.1 kHz) is followed.
+        f.state = BluetoothCodecState(4, 2, ldac)
+        f.backend.answer = { request -> ok(2, (request as HelperRequest.Set).rateFlag) }
+        f.now += 2_000
+        f.controller.request(request(44_100))
+        f.scheduler.runAll()
+        assertEquals(HelperRequest.Set(address, 1), f.backend.calls.last())
+        assertEquals(BluetoothRateRules.SavedRate(2, 1), f.store.saved[address])
+    }
+
+    @Test fun switchingOnWhileATrackPlaysAppliesTheCurrentTracksRateAtOnceAndFollowingContinues() {
+        val f = Fixture(FakeBackend { request -> ok(2, (request as HelperRequest.Set).rateFlag) })
+        f.enabled = false
+        f.state = BluetoothCodecState(4, 2, ldac)
+        // The service asks again with the loaded track as soon as the switch turns on.
+        f.enabled = true
+        f.controller.request(request(96_000))
+        f.scheduler.runAll()
+        assertEquals(listOf<HelperRequest>(HelperRequest.Set(address, 8)), f.backend.calls)
+        assertEquals(BluetoothRateRules.SavedRate(2, 8), f.store.saved[address])
+        // The next track one second later is followed too.
+        f.state = BluetoothCodecState(4, 8, ldac)
+        f.now += 1_000
+        f.controller.request(request(44_100))
+        f.scheduler.runAll()
+        assertEquals(HelperRequest.Set(address, 1), f.backend.calls.last())
+        assertEquals(BluetoothRateRules.SavedRate(2, 1), f.store.saved[address])
+    }
+
+    @Test fun aRestoreWaitsForTheCodecBroadcastOfTheOriginalRate() {
+        val f = Fixture(FakeBackend { request -> ok(1, (request as HelperRequest.Set).rateFlag) })
+        f.store.put(address, BluetoothRateRules.SavedRate(2, 1))
+        f.state = BluetoothCodecState(4, 1, ldac)
+        f.controller.restoreNow("off", null)
+        assertEquals(listOf(2), f.awaited)
     }
 
     // ---- restoring -------------------------------------------------------------------------------------------------
