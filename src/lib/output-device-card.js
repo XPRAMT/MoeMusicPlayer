@@ -1,9 +1,8 @@
 ﻿// The playback-device card is the control (ADR 0020, ADR 0044): a click anywhere on it chooses it, like its native
 // checkbox (Windows) or radio (Android), which stays in the card, out of sight, for the keyboard and screen readers.
 
-/** Clicks on these act on their own control, never on the card (`[data-own-click]`: an area such as the USB descriptor
- *  reader of ADR 0045, whose text can be selected and whose `<summary>` opens the raw bytes). */
-const OWN_CONTROLS = 'input, button, select, textarea, a, label, summary, [role="slider"], [contenteditable], [data-own-click]';
+/** Clicks on these act on their own control, never on the card. */
+const OWN_CONTROLS = 'input, button, select, textarea, a, label, [role="slider"], [contenteditable]';
 
 /**
  * Card `onclick`: hand a click on the card's free space to its input (which keeps its own rules: a disabled input does

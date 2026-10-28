@@ -326,14 +326,6 @@ export interface AndroidAudioTrackOutput {
   mixerSampleRate?: number | null;
 }
 
-/** Answer of `android_usb_audio_descriptors` (ADR 0045): the attached USB audio devices, parsed read only. */
-export interface AndroidUsbAudioDescriptors {
-  supported: boolean;
-  devices: import('./usb-audio-descriptors.js').UsbAudioDevice[];
-  /** The system mixer formats of the card's output device (Android 14+), only queried, never set. */
-  mixerAttributes?: import('./usb-audio-descriptors.js').MixerAttributesResult;
-}
-
 /** The USB exclusive output engine (ADR 0047), as `player-usb-audio` reports it. */
 export interface AndroidUsbExclusiveEngine {
   state: 'unclaimed' | 'claimed' | 'streaming' | 'paused' | 'handedBack';
@@ -1265,10 +1257,6 @@ interface IpcContract {
   android_request_bluetooth_connect: {
     args: Record<string, never>;
     result: { granted: boolean; openedSettings: boolean } | null;
-  };
-  android_usb_audio_descriptors: {
-    args: { request: boolean; deviceId: number | null };
-    result: AndroidUsbAudioDescriptors | null;
   };
   settings_get_android_usb_exclusive: {
     args: Record<string, never>;

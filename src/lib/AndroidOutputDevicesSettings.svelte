@@ -5,7 +5,6 @@
   import type {
     AndroidAudioOutputStatus,
     AndroidOutputDevice,
-    AndroidUsbAudioDescriptors,
   } from './ipc';
   import { DEFAULT_ANDROID_USB_EXCLUSIVE } from './android-output-devices.js';
 
@@ -16,14 +15,6 @@
     loading: true,
     loaded: false,
     failure: null as string | null,
-  });
-  /** The USB descriptor reader (ADR 0045): which USB card asked, and the answer (shared like the list). */
-  const usb = $state({
-    rowKey: null as string | null,
-    busy: false,
-    result: null as AndroidUsbAudioDescriptors | null,
-    failure: null as string | null,
-    copied: null as string | null,
   });
   /** The output mode (ADR 0047, `androidUsbExclusive`: true for 獨佔), shared like the list. */
   const usbExclusive = $state({
@@ -52,7 +43,6 @@
     sameChoice,
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
-  import { describeMixerAttributes, describeUsbDevice, spacedHex } from './usb-audio-descriptors.js';
 
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
@@ -63,8 +53,6 @@
 
   let rows = $derived(buildAndroidRows(s.status, s.saved, usbExclusive.enabled));
   const modes = androidOutputModes();
-  let usbViews = $derived((usb.result?.devices ?? []).map(describeUsbDevice));
-  let mixerView = $derived(describeMixerAttributes(usb.result?.mixerAttributes));
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
 
@@ -128,43 +116,6 @@
       await refreshStatus();
       setTimeout(() => void refreshStatus(), AFTER_CHOICE_MS);
     });
-  }
-
-  // ---- USB DAC descriptors (ADR 0045): read only; the system asks for USB permission when the button is pressed. The
-  // card's own output device (its row key is `device-<id>`) is also asked for its system mixer formats. ----
-  async function readUsbDescriptors(rowKey: string): Promise<void> {
-    if (usb.busy || !isTauri()) return;
-    usb.rowKey = rowKey;
-    usb.busy = true;
-    usb.failure = null;
-    usb.copied = null;
-    try {
-      const deviceId = rowKey.startsWith('device-') ? Number(rowKey.slice('device-'.length)) : null;
-      usb.result = await invokeCommand('android_usb_audio_descriptors', {
-        request: true,
-        deviceId: Number.isFinite(deviceId) ? deviceId : null,
-      });
-    } catch (error) {
-      usb.result = null;
-      usb.failure = tr('無法讀取 USB 規格：{0}', [getErrorText(error)]);
-    } finally {
-      usb.busy = false;
-    }
-  }
-
-  async function copyRaw(raw: string): Promise<void> {
-    const text = spacedHex(raw);
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const area = document.createElement('textarea');
-      area.value = text;
-      document.body.append(area);
-      area.select();
-      document.execCommand('copy');
-      area.remove();
-    }
-    usb.copied = raw;
   }
 
   // ---- The output mode (ADR 0047): 共享 or 獨佔, as on Windows. Switching to 獨佔 opens the explanation panel only when
@@ -395,51 +346,6 @@
           {/if}
         </p>
       {/if}
-      {#if row.connected && row.identity?.kind === 'usb'}
-        <!-- This area acts on its own controls and never chooses the card (the descriptor reader is read only, ADR 0045). -->
-        <div class="output-device-usb" data-own-click>
-          <button type="button" class="soft-button" disabled={usb.busy} onclick={() => void readUsbDescriptors(row.key)}>
-            {usb.busy && usb.rowKey === row.key ? tr('讀取中…') : tr('讀取 USB 規格')}
-          </button>
-          {#if usb.rowKey === row.key && !usb.busy}
-            {#if usb.failure}
-              <p class="output-device-path is-error" role="alert">{usb.failure}</p>
-            {:else if usb.result && !usbViews.length}
-              <p class="output-device-path is-idle">{tr('沒有找到 USB 音訊裝置')}</p>
-            {/if}
-            {#each usbViews as view (view.title)}
-              <div class="output-device-usb-device">
-                {#if usbViews.length > 1}<strong>{view.title}</strong>{/if}
-                <ul class="output-device-usb-list">
-                  {#each view.lines as line}<li>{line}</li>{/each}
-                  {#each view.streams as line}<li>{line}</li>{/each}
-                </ul>
-                {#if view.raw}
-                  <details class="output-device-usb-raw">
-                    <summary>{tr('原始描述元')}</summary>
-                    <code>{spacedHex(view.raw)}</code>
-                    <button type="button" class="soft-button" onclick={() => void copyRaw(view.raw)}>
-                      {usb.copied === view.raw ? tr('已複製') : tr('複製')}
-                    </button>
-                  </details>
-                {/if}
-              </div>
-            {/each}
-            {#if usb.result?.mixerAttributes}
-              <div class="output-device-usb-device">
-                <strong>{tr('系統混音器格式')}</strong>
-                {#if mixerView.notice}<p class="output-device-path is-idle">{mixerView.notice}</p>{/if}
-                {#each mixerView.devices as device, index (index)}
-                  {#if mixerView.devices.length > 1}<span>{device.title}</span>{/if}
-                  <ul class="output-device-usb-list">
-                    {#each device.lines as line}<li>{line}</li>{/each}
-                  </ul>
-                {/each}
-              </div>
-            {/if}
-          {/if}
-        </div>
-      {/if}
     </div>
   {/each}
 </div>
@@ -494,44 +400,5 @@
 
   .output-device-permission {
     margin-left: 8px;
-  }
-
-  .output-device-usb {
-    display: grid;
-    gap: 6px;
-    justify-items: start;
-    margin-top: 6px;
-    padding-left: 28px;
-    cursor: auto;
-  }
-
-  .output-device-usb-device {
-    display: grid;
-    gap: 4px;
-    width: 100%;
-    color: var(--text-soft);
-    font-size: var(--font-caption);
-  }
-
-  .output-device-usb-list {
-    margin: 0;
-    padding-left: 1.2em;
-  }
-
-  .output-device-usb-raw summary {
-    cursor: pointer;
-  }
-
-  .output-device-usb-raw code {
-    display: block;
-    margin: 4px 0;
-    overflow-wrap: anywhere;
-    user-select: text;
-  }
-
-  @media (max-width: 520px) {
-    .output-device-usb {
-      padding-left: 0;
-    }
   }
 </style>
