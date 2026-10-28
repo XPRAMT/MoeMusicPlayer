@@ -7720,6 +7720,73 @@ async fn settings_set_android_usb_exclusive(
     Ok(saved)
 }
 
+/// The state of the privileged sources of the real mixer rate (ADR 0048) for the explanation panel: root, Shizuku and
+/// the hidden switch. Reads only (an earlier opt-in re-probes `su` silently); null on other platforms.
+#[tauri::command]
+async fn android_mixer_rate_source_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let enabled = state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_real_mixer_rate)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output("mixerRateSourceStatus", serde_json::json!({ "enabled": enabled }))
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, enabled);
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// A button of that panel (ADR 0048): `checkRoot`, `requestShizuku`, `openShizuku` or `recheck`; answers the new state.
+#[tauri::command]
+async fn android_mixer_rate_source_action(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    action: String,
+) -> Result<serde_json::Value, String> {
+    if !matches!(
+        action.as_str(),
+        "checkRoot" | "requestShizuku" | "openShizuku" | "recheck"
+    ) {
+        return Err(format!("未知的動作：{action}"));
+    }
+    let enabled = state
+        .settings
+        .snapshot()
+        .map(|settings| settings.android_real_mixer_rate)
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.media_index()
+                .audio_output(
+                    "mixerRateSourceAction",
+                    serde_json::json!({ "action": action, "enabled": enabled }),
+                )
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, enabled, action);
+        Ok(serde_json::Value::Null)
+    }
+}
+
 /// Ask for USB permission for the chosen USB audio device (ADR 0047), only from the USB exclusive explanation panel's
 /// 「前往授權」. Answers `{ granted, device }`; null on other platforms.
 #[tauri::command]
@@ -13043,6 +13110,8 @@ pub fn run() {
             settings_get_android_usb_exclusive,
             settings_set_android_usb_exclusive,
             android_request_usb_exclusive_permission,
+            android_mixer_rate_source_status,
+            android_mixer_rate_source_action,
             settings_set_output_exclusive,
             settings_get_output_presets,
             settings_save_output_preset,
@@ -13279,6 +13348,8 @@ pub fn run() {
             android_output::set_preference(initial_settings.android_output_device.as_ref());
             #[cfg(target_os = "android")]
             android_output::set_usb_exclusive(initial_settings.android_usb_exclusive);
+            #[cfg(target_os = "android")]
+            android_output::set_real_mixer_rate(initial_settings.android_real_mixer_rate);
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
                 // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).

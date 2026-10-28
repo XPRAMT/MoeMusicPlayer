@@ -328,6 +328,8 @@ export interface AndroidAudioTrackOutput {
   offload: boolean;
   /** The Android mixer's rate for the stream's route (`AudioTrack.getNativeOutputSampleRate`); null when unknown. */
   mixerSampleRate?: number | null;
+  /** Where that rate came from (ADR 0048): root or shizuku (the track's real mixer thread), platform (stream-level). */
+  mixerRateSource?: 'root' | 'shizuku' | 'platform' | null;
 }
 
 /** The USB exclusive output engine (ADR 0047), as `player-usb-audio` reports it. */
@@ -385,6 +387,25 @@ export interface AndroidUsbExclusiveRoute {
 }
 
 /** Answer of `android_audio_output_status` (ADR 0044). */
+/** The explanation panel's state for the real mixer rate (ADR 0048), from Kotlin `MixerRateRules.panelState`. */
+export interface AndroidMixerRateSourceStatus {
+  state:
+    | 'tripped'
+    | 'rootActive'
+    | 'shizukuActive'
+    | 'shizukuNeedsPermission'
+    | 'shizukuDenied'
+    | 'shizukuNotRunning'
+    | 'none'
+    | 'disabled';
+  root: 'unknown' | 'available' | 'unavailable';
+  shizuku: 'not_installed' | 'not_running' | 'too_old' | 'needs_permission' | 'denied' | 'granted';
+  shizukuInstalled: boolean;
+  /** The source in use now: root, shizuku or platform. */
+  source: 'root' | 'shizuku' | 'platform';
+  rootOptIn?: boolean;
+}
+
 export interface AndroidAudioOutputStatus {
   devices: AndroidOutputDeviceInfo[];
   /** The attached device the saved choice is (null: the system default is chosen, or the chosen one is not attached). */
@@ -1267,6 +1288,14 @@ interface IpcContract {
   android_request_bluetooth_connect: {
     args: Record<string, never>;
     result: { granted: boolean; openedSettings: boolean } | null;
+  };
+  android_mixer_rate_source_status: {
+    args: Record<string, never>;
+    result: AndroidMixerRateSourceStatus | null;
+  };
+  android_mixer_rate_source_action: {
+    args: { action: 'checkRoot' | 'requestShizuku' | 'openShizuku' | 'recheck' };
+    result: AndroidMixerRateSourceStatus | null;
   };
   settings_get_android_usb_exclusive: {
     args: Record<string, never>;

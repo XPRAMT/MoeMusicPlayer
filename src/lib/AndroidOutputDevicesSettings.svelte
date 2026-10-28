@@ -4,6 +4,7 @@
   // again is done by the copy that was mounted first (ADR 0044).
   import type {
     AndroidAudioOutputStatus,
+    AndroidMixerRateSourceStatus,
     AndroidOutputDevice,
   } from './ipc';
   import { DEFAULT_ANDROID_USB_EXCLUSIVE } from './android-output-devices.js';
@@ -22,6 +23,8 @@
     busy: false,
     failure: null as string | null,
   });
+  /** The sources of the real mixer rate (ADR 0048), shared like the list; null until read. */
+  const mixerSource = $state({ status: null as AndroidMixerRateSourceStatus | null });
   const liveInstances = new Set<symbol>();
   // Saving is one queue for both copies, so an older answer never overwrites a newer choice.
   let saveRevision = 0;
@@ -42,6 +45,7 @@
     sameChoice,
   } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
+  import { mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
 
   interface Props {
     /** Told when the output mode is read or changed (the DSD passthrough text under 「DSD 播放」 depends on it). */
@@ -217,8 +221,63 @@
     else if (!permissionPanelOpen && dialog.open) dialog.close();
   });
 
+  // ---- 讀取實際的系統取樣率 (ADR 0048): the explanation first; root or Shizuku is requested only by a panel button ----
+  let mixerDialog = $state<HTMLDialogElement>();
+  let mixerPanelOpen = $state(false);
+  let mixerBusy = $state(false);
+  let mixerFailure = $state<string | null>(null);
+  let mixerPanel = $derived(mixerSource.status ? mixerRatePanel(mixerSource.status) : null);
+
+  async function readMixerSource(): Promise<void> {
+    if (!isTauri()) return;
+    try {
+      const next = await invokeCommand('android_mixer_rate_source_status', {});
+      if (!disposed && next) mixerSource.status = next;
+    } catch {
+      // The line is only a hint; a failed read leaves it out.
+    }
+  }
+
+  function openMixerPanel(): void {
+    mixerFailure = null;
+    mixerPanelOpen = true;
+    void readMixerSource();
+  }
+
+  function closeMixerPanel(): void {
+    mixerPanelOpen = false;
+    mixerFailure = null;
+  }
+
+  async function runMixerAction(action: 'checkRoot' | 'requestShizuku' | 'openShizuku' | 'recheck'): Promise<void> {
+    if (mixerBusy) return;
+    mixerBusy = true;
+    mixerFailure = null;
+    try {
+      const next = await invokeCommand('android_mixer_rate_source_action', { action });
+      if (next) mixerSource.status = next;
+    } catch (error) {
+      mixerFailure = getErrorText(error);
+    } finally {
+      mixerBusy = false;
+      void refreshStatus();
+      setTimeout(() => void refreshStatus(), 2500);
+    }
+  }
+
+  $effect(() => {
+    const dialog = mixerDialog;
+    if (!dialog) return;
+    if (mixerPanelOpen && !dialog.open) dialog.showModal();
+    else if (!mixerPanelOpen && dialog.open) dialog.close();
+  });
+
   function onVisibility(): void {
-    if (document.visibilityState === 'visible' && isPrimary()) void refreshStatus();
+    if (document.visibilityState === 'visible' && isPrimary()) {
+      void refreshStatus();
+      // Coming back from the Shizuku app or the root manager: read the sources again.
+      if (mixerPanelOpen || mixerSource.status) void readMixerSource();
+    }
   }
 
   onMount(() => {
@@ -226,6 +285,7 @@
     liveInstances.add(instance);
     // Another copy already read everything and keeps it current; a copy that is alone reads it afresh.
     if (alone || !s.loaded) void load();
+    if (alone || !mixerSource.status) void readMixerSource();
     pollTimer = setInterval(() => {
       if (isPrimary() && document.visibilityState === 'visible') void refreshStatus();
     }, STATUS_POLL_MS);
@@ -262,6 +322,13 @@
     </button>
   {/each}
 </div>
+
+{#if mixerSource.status}
+  <p class="mixer-source-line">
+    {mixerRateSummary(mixerSource.status)}
+    <button type="button" class="soft-button output-device-permission" onclick={openMixerPanel}>{tr('設定')}</button>
+  </p>
+{/if}
 
 {#if s.failure}<p class="source-error-message" role="alert">{s.failure}</p>{/if}
 {#if usbExclusive.failure}<p class="source-error-message" role="alert">{usbExclusive.failure}</p>{/if}
@@ -347,7 +414,34 @@
   </div>
 </dialog>
 
+<dialog
+  bind:this={mixerDialog}
+  class="update-dialog floating-surface"
+  aria-labelledby="mixer-source-title"
+  oncancel={(event) => { event.preventDefault(); closeMixerPanel(); }}
+>
+  {#if mixerPanel}
+    <div class="update-dialog-content">
+      <h2 id="mixer-source-title">{mixerPanel.title}</h2>
+      {#each mixerPanel.paragraphs as paragraph}<p>{paragraph}</p>{/each}
+      {#if mixerFailure}<p class="error-text" role="alert">{mixerFailure}</p>{/if}
+      <div class="update-dialog-actions">
+        <button class="soft-button" type="button" disabled={mixerBusy} onclick={closeMixerPanel}>{tr('關閉')}</button>
+        {#each mixerPanel.buttons as item (item.action)}
+          <button class="soft-button" type="button" disabled={mixerBusy} onclick={() => void runMixerAction(item.action)}>{mixerBusy ? tr('授權中') : item.label}</button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+</dialog>
+
 <style>
+  .mixer-source-line {
+    margin: 0 0 10px;
+    font-size: 0.9em;
+    opacity: 0.8;
+  }
+
   /* The same mode group as the Windows list (OutputDevicesSettings.svelte). */
   .output-mode {
     display: grid;

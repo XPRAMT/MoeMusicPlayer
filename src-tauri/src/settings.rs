@@ -2287,6 +2287,14 @@ pub struct AppSettings {
     /// USB audio device itself, bypassing the Android audio system. Off by default.
     #[serde(default)]
     pub android_usb_exclusive: bool,
+    /// Hidden switch (no page): read the real mixer rate of the AudioTrack's thread through root or Shizuku (ADR 0048).
+    /// On by default; nothing runs unless the user granted a privileged source. Off skips to the platform value.
+    #[serde(default = "default_android_real_mixer_rate")]
+    pub android_real_mixer_rate: bool,
+}
+
+fn default_android_real_mixer_rate() -> bool {
+    true
 }
 
 /// An Android output device as the user chose it (ADR 0044). `AudioDeviceInfo` ids change every time a device is
@@ -2391,6 +2399,7 @@ impl Default for AppSettings {
             interface_font_family: None,
             android_output_device: None,
             android_usb_exclusive: false,
+            android_real_mixer_rate: true,
         }
     }
 }
@@ -2888,6 +2897,7 @@ struct RawSettings {
     interface_font_family: Option<serde_json::Value>,
     android_output_device: Option<serde_json::Value>,
     android_usb_exclusive: Option<bool>,
+    android_real_mixer_rate: Option<bool>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -2969,6 +2979,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         interface_font_family: lenient_font_family(raw.interface_font_family.as_ref()),
         android_output_device: lenient_android_output_device(raw.android_output_device),
         android_usb_exclusive: raw.android_usb_exclusive.unwrap_or(false),
+        android_real_mixer_rate: raw.android_real_mixer_rate.unwrap_or(true),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -5069,6 +5080,18 @@ mod tests {
         let typed: AppSettings = serde_json::from_value(persisted).unwrap();
         assert!(!typed.android_usb_exclusive);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_hidden_real_mixer_rate_switch_defaults_on_and_a_hand_edit_turns_it_off() {
+        assert!(AppSettings::default().android_real_mixer_rate);
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("androidRealMixerRate");
+        let missing: AppSettings = serde_json::from_value(value.clone()).unwrap();
+        assert!(missing.android_real_mixer_rate);
+        value["androidRealMixerRate"] = serde_json::json!(false);
+        let off: AppSettings = serde_json::from_value(value).unwrap();
+        assert!(!off.android_real_mixer_rate);
     }
 
     #[test]

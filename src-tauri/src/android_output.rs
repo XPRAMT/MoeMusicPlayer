@@ -61,6 +61,19 @@ pub(crate) fn dsd_passthrough_state() -> i8 {
     DSD_PASSTHROUGH.load(Ordering::Relaxed)
 }
 
+/// The hidden real-mixer-rate switch for the service (`androidRealMixerRate`, ADR 0048): -1 until the settings were read.
+static REAL_MIXER_RATE: AtomicI8 = AtomicI8::new(-1);
+
+/// Remember the switch for the service (at startup; the file is edited by hand, so a change applies after a restart).
+pub(crate) fn set_real_mixer_rate(enabled: bool) {
+    REAL_MIXER_RATE.store(i8::from(enabled), Ordering::Relaxed);
+}
+
+/// The switch as the service reads it: -1 not known yet, 0 off, 1 on.
+pub(crate) fn real_mixer_rate_state() -> i8 {
+    REAL_MIXER_RATE.load(Ordering::Relaxed)
+}
+
 #[cfg(target_os = "android")]
 mod jni_exports {
     use jni::{objects::JObject, sys::jstring, JNIEnv};
@@ -85,6 +98,15 @@ mod jni_exports {
         _service: JObject,
     ) -> jni::sys::jint {
         jni::sys::jint::from(super::usb_exclusive_state())
+    }
+
+    /// `PlaybackService.nativeRealMixerRateEnabled()`: -1 while the settings have not been read, else 0 or 1.
+    #[no_mangle]
+    pub extern "system" fn Java_com_moemusicplayer_mediaindex_PlaybackService_nativeRealMixerRateEnabled(
+        _env: JNIEnv,
+        _service: JObject,
+    ) -> jni::sys::jint {
+        jni::sys::jint::from(super::real_mixer_rate_state())
     }
 
     /// `PlaybackService.nativeDsdPassthroughEnabled()`: -1 while the settings have not been read, else 0 or 1.
@@ -135,6 +157,15 @@ mod tests {
         assert_eq!(usb_exclusive_state(), 1);
         set_usb_exclusive(false);
         assert_eq!(usb_exclusive_state(), 0);
+    }
+
+    #[test]
+    fn the_real_mixer_rate_switch_is_unknown_until_read() {
+        assert_eq!(real_mixer_rate_state(), -1);
+        set_real_mixer_rate(false);
+        assert_eq!(real_mixer_rate_state(), 0);
+        set_real_mixer_rate(true);
+        assert_eq!(real_mixer_rate_state(), 1);
     }
 
     #[test]
