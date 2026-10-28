@@ -6331,11 +6331,9 @@ dependencies = [
 name = "tauri-plugin-media-index"
 version = "0.1.0"
 dependencies = [
- "lofty",
  "player-core",
- "player-dsd",
  "player-formats",
- "player-wavpack",
+ "player-track-metadata",
  "serde",
  "serde_json",
  "symphonia",

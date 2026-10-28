@@ -1,13 +1,4 @@
-use std::{io::Seek, path::PathBuf, sync::Arc};
-
-use lofty::{
-    config::ParseOptions,
-    file::{FileType, TaggedFile},
-    mpeg::{Layer, MpegFile},
-    prelude::{Accessor, AudioFile, TaggedFileExt},
-    probe::Probe,
-    tag::ItemKey,
-};
+use std::{path::PathBuf, sync::Arc};
 
 use player_core::{
     LibraryRoot, MediaLocator, MediaSourceError, MediaSourceKind, MediaTrackRecord, SourceScan,
@@ -88,9 +79,17 @@ impl<R: Runtime> PlatformMediaIndex<R> {
             .map_err(|error| TrackMetadataError {
                 message: format!("could not read authorized Android audio content: {error}"),
             })?;
-        match parse_lofty_metadata(lease.path(), lease.mime_type()) {
+        // The lease is a private copy named after nothing; the document's MIME type names the format.
+        let name = match lease.mime_type().and_then(player_formats::extension_for_mime) {
+            Some(extension) => format!("content.{extension}"),
+            None => "content".to_owned(),
+        };
+        match player_track_metadata::read_track_metadata(&player_track_metadata::NamedPathSource {
+            path: lease.path(),
+            name,
+        }) {
             Ok(metadata) => Ok(metadata),
-            Err(lofty_error) => {
+            Err(shared_error) => {
                 match crate::android_metadata::read(lease.path()) {
                     Ok(metadata) if has_useful_metadata(&metadata) => return Ok(metadata),
                     _ => {}
@@ -100,13 +99,13 @@ impl<R: Runtime> PlatformMediaIndex<R> {
                     Ok(_) => Err(TrackMetadataError {
                         message: format!(
                             "{}; Symphonia and Android returned no usable audio properties",
-                            lofty_error.message
+                            shared_error.message
                         ),
                     }),
                     Err(android_error) => Err(TrackMetadataError {
                         message: format!(
                             "{}; Android metadata fallback failed: {}",
-                            lofty_error.message, android_error.message
+                            shared_error.message, android_error.message
                         ),
                     }),
                 }
@@ -114,40 +113,27 @@ impl<R: Runtime> PlatformMediaIndex<R> {
         }
     }
 
-    /// Tags of a real file (All files access): lofty, then Symphonia, then Android's retriever.
+    /// Tags of a real file (All files access): the reader every platform and every remote source uses, then Symphonia,
+    /// then Android's retriever for a file it cannot read.
     fn read_path_metadata(
         &self,
         path: &std::path::Path,
     ) -> std::result::Result<TrackMetadata, TrackMetadataError> {
-        // DSF is not a lofty format: header properties plus the ID3v2 tag at the end of the file.
-        if player_formats::decode_engine(path) == player_formats::DecodeEngine::Dsd {
-            return read_dsf_metadata(path);
-        }
-        match parse_lofty_metadata(path, None) {
-            Ok(mut metadata) => {
-                // lofty gives no bit depth or lossless/DSD for WavPack; the decoder knows (ADR 0025).
-                if player_formats::decode_engine(path) == player_formats::DecodeEngine::WavPack {
-                    if let Some(summary) = player_wavpack::summarize(path) {
-                        metadata.codec = Some(summary.codec.to_owned());
-                        metadata.sample_rate_hz = Some(summary.sample_rate_hz);
-                        metadata.bit_depth = summary.bit_depth;
-                    }
-                }
-                Ok(metadata)
-            }
-            Err(lofty_error) => {
+        match player_track_metadata::read_track_metadata(&player_track_metadata::PathSource(path)) {
+            Ok(metadata) => Ok(metadata),
+            Err(shared_error) => {
                 if let Ok(metadata) = crate::android_metadata::read(path) {
                     if has_useful_metadata(&metadata) {
                         return Ok(metadata);
                     }
                 }
                 let uri = player_core::file_uri_for_path(path).ok_or_else(|| TrackMetadataError {
-                    message: format!("{}; path is not absolute", lofty_error.message),
+                    message: format!("{}; path is not absolute", shared_error.message),
                 })?;
                 self.read_metadata_with_android(&uri)
                     .ok()
                     .filter(has_useful_metadata)
-                    .ok_or(lofty_error)
+                    .ok_or(shared_error)
             }
         }
     }
@@ -534,109 +520,6 @@ impl<R: Runtime> PlatformMediaIndex<R> {
     }
 }
 
-fn parse_lofty_metadata(
-    path: &std::path::Path,
-    mime_type: Option<&str>,
-) -> std::result::Result<TrackMetadata, TrackMetadataError> {
-    let probe = Probe::open(path).map_err(|error| TrackMetadataError {
-        message: format!("could not open Android audio metadata: {error}"),
-    })?;
-    let probe = probe
-        .guess_file_type()
-        .map_err(|error| TrackMetadataError {
-            message: format!("could not identify Android audio format: {error}"),
-        })?;
-    let file_type = probe
-        .file_type()
-        .or_else(|| mime_file_type(mime_type))
-        .ok_or_else(|| TrackMetadataError {
-            message: "could not identify Android audio format".to_owned(),
-        })?;
-    let probe = if probe.file_type().is_some() {
-        probe
-    } else {
-        probe.set_file_type(file_type)
-    };
-    let (tagged_file, codec) = if file_type == FileType::Mpeg {
-        let mut reader = probe.into_inner();
-        reader
-            .seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| TrackMetadataError {
-                message: format!("could not rewind Android MPEG audio: {error}"),
-            })?;
-        let mpeg_file = MpegFile::read_from(&mut reader, ParseOptions::new()).map_err(|error| {
-            TrackMetadataError {
-                message: format!("could not parse Android MPEG audio properties: {error}"),
-            }
-        })?;
-        let codec = match *mpeg_file.properties().layer() {
-            Layer::Layer1 => "MP1",
-            Layer::Layer2 => "MP2",
-            Layer::Layer3 => "MP3",
-        };
-        (TaggedFile::from(mpeg_file), codec.to_owned())
-    } else {
-        let tagged_file = probe.read().map_err(|error| TrackMetadataError {
-            message: format!("could not parse Android audio metadata: {error}"),
-        })?;
-        (tagged_file, format!("{file_type:?}"))
-    };
-    let tag = tagged_file
-        .primary_tag()
-        .or_else(|| tagged_file.first_tag());
-    let properties = tagged_file.properties();
-    let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
-    let release_date = tag
-        .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-        .and_then(player_core::parse_recording_date);
-    let year = release_date
-        .as_deref()
-        .and_then(player_core::recording_date_year);
-    Ok(TrackMetadata {
-        title: tag.and_then(|tag| text(tag.title())),
-        artist: tag.and_then(|tag| text(tag.artist())),
-        album: tag.and_then(|tag| text(tag.album())),
-        album_artist: tag.and_then(|tag| tag.get_string(ItemKey::AlbumArtist).map(str::to_owned)),
-        track_number: tag.and_then(|tag| tag.track()),
-        disc_number: tag.and_then(|tag| tag.disk()),
-        duration_ms: Some(properties.duration().as_millis().min(u64::MAX as u128) as u64),
-        codec: Some(codec),
-        bitrate_bps: properties
-            .audio_bitrate()
-            .map(|kbps| kbps.saturating_mul(1000)),
-        sample_rate_hz: properties.sample_rate(),
-        release_date,
-        year,
-        bit_depth: if matches!(file_type, FileType::Flac | FileType::Ape) {
-            properties
-                .bit_depth()
-                .filter(|depth| (8..=32).contains(depth))
-        } else {
-            None
-        },
-    })
-}
-
-fn mime_file_type(mime_type: Option<&str>) -> Option<FileType> {
-    match mime_type?
-        .split(';')
-        .next()?
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "audio/mpeg" | "audio/mp3" => Some(FileType::Mpeg),
-        "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "video/mp4" => Some(FileType::Mp4),
-        "audio/aac" | "audio/aacp" => Some(FileType::Aac),
-        "audio/flac" | "audio/x-flac" => Some(FileType::Flac),
-        "audio/ogg" | "application/ogg" => Some(FileType::Vorbis),
-        "audio/opus" => Some(FileType::Opus),
-        "audio/wav" | "audio/x-wav" | "audio/wave" => Some(FileType::Wav),
-        "audio/aiff" | "audio/x-aiff" => Some(FileType::Aiff),
-        _ => None,
-    }
-}
-
 fn normalize_android_codec(value: &str) -> Option<String> {
     let mime = value.split(';').next()?.trim().to_ascii_lowercase();
     let codec = match mime.as_str() {
@@ -686,36 +569,4 @@ fn unavailable_scan(root: &LibraryRoot, reason: &str) -> SourceScan {
             message: reason.to_owned(),
         }],
     }
-}
-
-/// Metadata of a DSF file (properties from the header, tags from the trailing ID3v2 tag), like the Windows scanner.
-fn read_dsf_metadata(path: &std::path::Path) -> std::result::Result<TrackMetadata, TrackMetadataError> {
-    use lofty::prelude::{Accessor, ItemKey};
-
-    let (info, tag) = player_dsd::id3::read_dsf(path).map_err(|error| TrackMetadataError {
-        message: error.to_string(),
-    })?;
-    let tag = tag.as_ref();
-    let text = |value: Option<std::borrow::Cow<'_, str>>| value.map(|value| value.into_owned());
-    let release_date = tag
-        .and_then(|tag| tag.get_string(ItemKey::RecordingDate))
-        .and_then(player_core::parse_recording_date);
-    let year = release_date.as_deref().and_then(player_core::recording_date_year);
-    Ok(TrackMetadata {
-        title: tag
-            .and_then(|tag| text(tag.title()))
-            .filter(|value| !value.trim().is_empty()),
-        artist: tag.and_then(|tag| text(tag.artist())),
-        album: tag.and_then(|tag| text(tag.album())),
-        album_artist: tag.and_then(|tag| tag.get_string(ItemKey::AlbumArtist).map(str::to_owned)),
-        track_number: tag.and_then(|tag| tag.track()),
-        disc_number: tag.and_then(|tag| tag.disk()),
-        duration_ms: Some(info.duration().as_millis().min(u64::MAX as u128) as u64),
-        codec: Some(info.rate_name()),
-        bitrate_bps: Some(info.sample_rate.saturating_mul(u32::from(info.channels))),
-        sample_rate_hz: Some(info.sample_rate),
-        release_date,
-        year,
-        bit_depth: Some(1),
-    })
 }
