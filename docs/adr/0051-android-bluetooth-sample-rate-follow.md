@@ -1,6 +1,6 @@
 ﻿# Android: the Bluetooth codec's sample rate follows the track
 
-Status: Accepted and implemented (design approved by the owner; the Kotlin rules and the controller are unit-tested; nothing is built into an APK or run on a device yet, and the privileged helper has never run)
+Status: Accepted and implemented (design approved by the owner; the Kotlin rules and the controller are unit-tested; the first device run failed at the adapter step, which the helper now works around; the fixed helper has not run yet)
 
 ## Context
 
@@ -29,7 +29,19 @@ Skipped, without any privileged call: the setting or the code switch (`Bluetooth
 
 A class of the app's own APK with a static `main`, started by root (`su -c`) or Shizuku (`sh -c`, shell user) as `CLASSPATH='<base.apk>' app_process /system/bin com.moemusicplayer.mediaindex.BluetoothRateHelper <command>`. Commands: `follow <address> <trackHz>` (read the codec, pick, switch if different), `set <address> <rateFlag>` (a restore, or a switch whose target the app already knows), `state <address> 0`. Every argument is validated before a command line is built (`parseRequest`, `shellCommand`: a MAC address, numbers only, the APK path single-quoted and refused if it contains a quote). It prints one `RESULT …` line (`OK <codec> <from> <to> <changed>`, `STATE …`, `ERR <text>`), a watchdog ends it after 6 s, and the app side times the process out after 8 s.
 
-Inside, it gets a `BluetoothA2dp` proxy through `BluetoothAdapter.getProfileProxy` with a context made from `ActivityThread.systemMain().getSystemContext()` wrapped to speak as the `com.android.shell` package (the same idea as scrcpy's fake context), reads `getCodecStatus(device)` and calls `setCodecConfigPreference(device, config)` by reflection (both system APIs), with a config built by `BluetoothCodecConfig.Builder` from the current one: only `sampleRate` differs (codec type, priority, bits per sample, channel mode, the four codec-specific values and, on Android 15+, the extended codec type are copied). The class is kept by `consumer-rules.pro` (a renamed class would not be found by `app_process`).
+Inside, it gets a `BluetoothA2dp` proxy through `BluetoothAdapter.getProfileProxy`. A bare `app_process` never ran `ActivityThread.main`, so the Bluetooth module's service manager was never given to `BluetoothFrameworkInitializer` and `BluetoothAdapter.getDefaultAdapter()` returns null (the "no Bluetooth adapter" failure seen on the NX809J). The helper therefore, in this order and each step named in its error text: prepares the main looper (`Looper.prepareMainLooper`, the profile proxy calls back on it); builds the system context from `ActivityThread.systemMain().getSystemContext()` wrapped to speak as the package of its uid (`BluetoothRateRules.packageForUid`: `root` for uid 0, `com.android.shell` for the shell, so the service's package-versus-uid check passes); sets `BluetoothFrameworkInitializer.setBluetoothServiceManager(BluetoothServiceManager())` when none is set (module system APIs, by reflection; `app_process` does not enforce the hidden-API list); builds the adapter with the private `BluetoothAdapter.createAdapter(AttributionSource)`, else `BluetoothManager.getAdapter()`, else `getDefaultAdapter()`; the error lists what each way returned. Not used: calling the `bluetooth_manager` Binder by hand (the interface changes between releases). It then reads `getCodecStatus(device)` and calls `setCodecConfigPreference(device, config)` by reflection (both system APIs), with a config built by `BluetoothCodecConfig.Builder` from the current one: only `sampleRate` differs (codec type, priority, bits per sample, channel mode, the four codec-specific values and, on Android 15+, the extended codec type are copied). The class is kept by `consumer-rules.pro` (a renamed class would not be found by `app_process`).
+
+#### Diagnostic by hand (adb, root)
+
+`state` prints a readable `INFO codec=LDAC(4) sampleRate=48000 selectable=44100,48000,96000` line and then the `RESULT STATE <codec> <rateFlag> <selectableMask>` line; failures print `RESULT ERR <step>: <text>` (steps: looper, system-context, adapter, profile-proxy, remote-device, codec-status, set-codec-preference; a hang ends as `timeout at step <step>`). With the debug APK installed and the headset connected (address from `adb shell dumpsys bluetooth_manager`, or the log line of the app):
+
+```
+adb shell "pm path com.moemusicplayer.app"      # package:<base.apk>
+adb shell "su -c \"CLASSPATH=<base.apk> app_process /system/bin com.moemusicplayer.mediaindex.BluetoothRateHelper state AA:BB:CC:DD:EE:FF 0\""
+adb shell "su -c \"CLASSPATH=<base.apk> app_process /system/bin com.moemusicplayer.mediaindex.BluetoothRateHelper set AA:BB:CC:DD:EE:FF 8\""   # 8 = 96 kHz flag
+```
+
+`set` takes the `SAMPLE_RATE_*` flag (1 = 44.1, 2 = 48, 4 = 88.2, 8 = 96, 16 = 176.4, 32 = 192 kHz); `follow <address> <Hz>` picks the rate itself.
 
 ### The controller (`BluetoothRateController`, thread `moe-bt-rate`)
 
@@ -57,4 +69,4 @@ Inside, it gets a `BluetoothA2dp` proxy through `BluetoothAdapter.getProfileProx
 
 ## Not done
 
-Not verified on any device: that `app_process` can load the app's APK from the root and Shizuku shells; that the system-context trick works for `BluetoothAdapter.getProfileProxy` on Android 13 to 16 and that uid 2000 passes the Bluetooth service's `BLUETOOTH_PRIVILEGED` and package checks (any exception text comes back in the `ERR` line and the log); that `setCodecConfigPreference` with a changed sample rate takes effect on the WF-1000XM6 over LDAC on the NX809J and what the mute sounds like; the Shizuku path (`Shizuku.newProcess` with `sh -c`); the stack forgetting or keeping the rate across reconnects (decides how useful the disconnect restore is); LE Audio and codecs whose selectable list is empty.
+Not verified on any device: that `app_process` can load the app's APK from the root and Shizuku shells; that the service-manager hand-over and the adapter construction above work on Android 13 to 16 (the earlier system-context-only attempt returned no adapter) and that uid 0 and uid 2000 passes the Bluetooth service's `BLUETOOTH_PRIVILEGED` and package checks (any exception text comes back in the `ERR` line and the log); that `setCodecConfigPreference` with a changed sample rate takes effect on the WF-1000XM6 over LDAC on the NX809J and what the mute sounds like; the Shizuku path (`Shizuku.newProcess` with `sh -c`); the stack forgetting or keeping the rate across reconnects (decides how useful the disconnect restore is); LE Audio and codecs whose selectable list is empty.

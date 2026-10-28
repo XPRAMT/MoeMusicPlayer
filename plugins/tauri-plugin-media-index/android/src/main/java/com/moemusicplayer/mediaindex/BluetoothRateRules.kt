@@ -147,6 +147,40 @@ internal object BluetoothRateRules {
     /** What a switch left behind for an address: the rate before our first switch and the rate we set last. */
     data class SavedRate(val original: Int, val applied: Int)
 
+    // ---- identity and diagnostics of the helper -------------------------------------------------------------------
+
+    /**
+     * The package name the Bluetooth service's package-vs-uid check accepts for the helper's uid: root is `root`, the
+     * system uid is `android`, everything else (the shell, 2000) is `com.android.shell`.
+     */
+    fun packageForUid(uid: Int): String = when (uid) {
+        0 -> "root"
+        1000 -> "android"
+        else -> "com.android.shell"
+    }
+
+    /** A failure text that names the step of the helper that failed, so the log shows where it stopped. */
+    fun stepError(step: String, detail: String): String = "$step: $detail"
+
+    /** A name for a `BluetoothCodecConfig.CODEC_TYPE_*` value (SBC 0, AAC 1, aptX 2, aptX HD 3, LDAC 4, Opus 6). */
+    fun codecName(codecType: Int): String = when (codecType) {
+        0 -> "SBC"
+        1 -> "AAC"
+        2 -> "aptX"
+        3 -> "aptX HD"
+        4 -> "LDAC"
+        5 -> "aptX Adaptive"
+        6 -> "Opus"
+        else -> "codec $codecType"
+    }
+
+    /** The human-readable line the helper prints before the `RESULT STATE` line of the `state` command. */
+    fun describeState(codecType: Int, rateFlag: Int, selectableMask: Int): String {
+        val current = hzOfFlag(rateFlag)?.toString() ?: "flag $rateFlag"
+        val offered = ratesIn(selectableMask).joinToString(",") { it.second.toString() }.ifEmpty { "none" }
+        return "INFO codec=${codecName(codecType)}($codecType) sampleRate=$current selectable=$offered"
+    }
+
     // ---- the helper process (app_process, shell or root) ---------------------------------------------------------
 
     private val ADDRESS = Regex("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")

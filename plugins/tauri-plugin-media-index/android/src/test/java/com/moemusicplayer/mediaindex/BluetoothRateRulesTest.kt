@@ -183,4 +183,30 @@ class BluetoothRateRulesTest {
         assertTrue(breaker.symptom(5_000, "audio sink error"))
         assertTrue(breaker.tripped)
     }
+
+    @Test
+    fun helperIdentityMatchesTheUid() {
+        assertEquals("root", BluetoothRateRules.packageForUid(0))
+        assertEquals("android", BluetoothRateRules.packageForUid(1000))
+        assertEquals("com.android.shell", BluetoothRateRules.packageForUid(2000))
+    }
+
+    @Test
+    fun stepErrorsNameTheStep() {
+        assertEquals("adapter: no Bluetooth adapter", BluetoothRateRules.stepError("adapter", "no Bluetooth adapter"))
+        val parsed = BluetoothRateRules.parseResult(
+            BluetoothRateRules.formatResult(BluetoothRateRules.HelperResult.Failed("codec-status: boom")),
+        )
+        assertEquals(BluetoothRateRules.HelperResult.Failed("codec-status: boom"), parsed)
+    }
+
+    @Test
+    fun stateCommandPrintsReadableInfoAndStillParses() {
+        val mask = BluetoothRateRules.RATE_44100 or BluetoothRateRules.RATE_48000 or BluetoothRateRules.RATE_96000
+        val info = BluetoothRateRules.describeState(4, BluetoothRateRules.RATE_48000, mask)
+        assertEquals("INFO codec=LDAC(4) sampleRate=48000 selectable=44100,48000,96000", info)
+        val output = info + "\n" + BluetoothRateRules.formatResult(BluetoothRateRules.HelperResult.State(4, 2, mask))
+        assertEquals(BluetoothRateRules.HelperResult.State(4, 2, mask), BluetoothRateRules.parseResult(output))
+        assertEquals("INFO codec=SBC(0) sampleRate=flag 0 selectable=none", BluetoothRateRules.describeState(0, 0, 0))
+    }
 }
