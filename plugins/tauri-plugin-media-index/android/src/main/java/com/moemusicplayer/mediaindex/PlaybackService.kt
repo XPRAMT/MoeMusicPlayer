@@ -263,6 +263,7 @@ class PlaybackService : MediaSessionService() {
         bluetoothRate = BluetoothRateFollow.create(this).also { follow ->
             follow.setEnabled(readBluetoothRateFollow())
             follow.restorePendingIfOff()
+            follow.serviceStarted(router.attachedA2dpAddresses())
         }
         // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
         router.setPreference(readOutputPreference())
@@ -1405,7 +1406,11 @@ class PlaybackService : MediaSessionService() {
             // The codec priority list (ADR 0052): the phone's codecs and, per headset, what it supports; a headset
             // without known codecs is read through the helper while the page shows the list.
             val service = activeInstance
-            service?.outputRouter?.let { service.bluetoothCodec?.ensureChoices(it.attachedA2dpAddresses()) }
+            service?.outputRouter?.let {
+                val attached = it.attachedA2dpAddresses()
+                service.bluetoothCodec?.ensureChoices(attached)
+                service.bluetoothRate?.ensureStatus(attached)
+            }
             status.put(
                 "bluetoothCodecChoices",
                 BluetoothCodecWatch.choicesJson(android.os.SystemClock.elapsedRealtime(), BluetoothCodecChoiceConfig.ERROR_VISIBLE_MS),

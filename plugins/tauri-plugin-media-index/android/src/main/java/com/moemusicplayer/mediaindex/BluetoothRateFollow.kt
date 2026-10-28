@@ -85,6 +85,22 @@ internal class BluetoothRateFollow private constructor(context: Context) {
     private val controller = BluetoothRateController(Environment(), store, scheduler)
     private val ldacScheduler = ExecutorScheduler()
     private val ldacReader = BluetoothLdacModeReader(LdacEnvironment(), ldacScheduler)
+    private val statusScheduler = ExecutorScheduler()
+    private val statusReader = BluetoothCodecStatusReader(StatusEnvironment(), statusScheduler)
+    private var attachedBefore: Set<String> = emptySet()
+
+    private inner class StatusEnvironment : BluetoothCodecStatusEnvironment {
+        override fun nowMs() = SystemClock.elapsedRealtime()
+        override fun supported() = BluetoothCodecWatch.supported()
+        override fun source() = privilegedSource(appContext)
+        override fun backend(source: MixerRateRules.Source) = privilegedBackend(appContext, source)
+        override fun known(address: String) = BluetoothCodecWatch.known(address)
+        override fun store(address: String, state: BluetoothRateRules.HelperResult.State) =
+            BluetoothCodecWatch.setReadState(address, state)
+        override fun log(message: String) {
+            Log.i(TAG, message)
+        }
+    }
 
     private inner class LdacEnvironment : BluetoothLdacModeEnvironment {
         override fun nowMs() = SystemClock.elapsedRealtime()
@@ -133,6 +149,7 @@ internal class BluetoothRateFollow private constructor(context: Context) {
 
     /** Listens for codec announcements so an LDAC codec gets its bitrate mode read (the service owns one follow). */
     private fun attach() {
+        BluetoothCodecWatch.onNeedRefresh = { address -> statusReader.request(address, force = true) }
         BluetoothCodecWatch.onAnnounced = { address, codecType ->
             if (codecType == BluetoothCodecRules.CODEC_LDAC) ldacReader.request(address)
         }
@@ -140,11 +157,31 @@ internal class BluetoothRateFollow private constructor(context: Context) {
 
     /** A track is loaded on the A2DP device [address] (main thread; only memory is read). */
     fun onTrackLoaded(address: String?) {
-        if (address != null) ldacReader.request(address)
+        if (address == null) return
+        ldacReader.request(address)
+        // A track load is a chance to learn an unknown codec (the broadcast is not sticky).
+        statusReader.request(address, rearm = true)
+    }
+
+    /** The service started: an A2DP device that is already connected has its codec read (main thread). */
+    fun serviceStarted(attachedA2dp: Set<String>) {
+        attachedBefore = attachedA2dp
+        for (address in attachedA2dp) statusReader.request(address, rearm = true)
+    }
+
+    /** The output page is showing: an unknown codec is read, without starting the backoff over (any thread). */
+    fun ensureStatus(attachedA2dp: Set<String>) {
+        for (address in attachedA2dp) statusReader.request(address)
     }
 
     /** The attached A2DP devices' addresses changed (main thread). */
-    fun devicesChanged(attachedA2dp: Set<String>) = controller.devicesChanged(attachedA2dp)
+    fun devicesChanged(attachedA2dp: Set<String>) {
+        controller.devicesChanged(attachedA2dp)
+        // A device that appeared (a connection or a route change) is read afresh, with a new backoff.
+        val appeared = attachedA2dp - attachedBefore
+        attachedBefore = attachedA2dp
+        for (address in appeared) statusReader.request(address, rearm = true)
+    }
 
     /** An audio-server symptom (any thread). */
     fun symptom(what: String) = controller.symptom(what)
@@ -152,7 +189,9 @@ internal class BluetoothRateFollow private constructor(context: Context) {
     /** The service ends: the original rates are put back on the worker thread, which then stops. */
     fun shutdown() {
         BluetoothCodecWatch.onAnnounced = null
+        BluetoothCodecWatch.onNeedRefresh = null
         ldacScheduler.finish()
+        statusScheduler.finish()
         controller.restoreAll("service ended")
         scheduler.finish()
     }

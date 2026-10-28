@@ -52,6 +52,23 @@ internal object BluetoothCodecWatch {
     /** Whether the receiver is registered (an announcement can be heard at all). */
     fun listening(): Boolean = registered
 
+    /** Called when a codec change was not announced in time, so the codec should be read again. */
+    @Volatile var onNeedRefresh: ((address: String) -> Unit)? = null
+
+    /** Whether the codec of the address is known (announced by the stack or read through the helper). */
+    fun known(address: String): Boolean = BluetoothCodecRules.addressKey(address)?.let { codecs.containsKey(it) } ?: false
+
+    /** Keeps a codec the helper read (`state`); a codec the stack announced meanwhile is not overwritten. */
+    fun setReadState(address: String, state: BluetoothRateRules.HelperResult.State) {
+        val key = BluetoothCodecRules.addressKey(address) ?: return
+        val facts = BluetoothCodecFacts(state.codecType, state.rateFlag, 0, 0, null)
+        if (BluetoothCodecRules.codecJson(facts) == null) return
+        codecs[key] = facts
+        states[key] = BluetoothCodecState(state.codecType, state.rateFlag, state.selectableMask)
+        if (state.codecType == BluetoothCodecRules.CODEC_LDAC) state.specifics.firstOrNull()?.let { ldacModes[key] = it }
+        synchronized(changed) { changed.notifyAll() }
+    }
+
     /** Restores the phone's codec list kept from an earlier run. */
     fun restoreLocal(offers: List<CodecOffer>) {
         if (knownLocal.isEmpty()) knownLocal = offers
@@ -82,7 +99,11 @@ internal object BluetoothCodecWatch {
             while (true) {
                 if (choices[key]?.activeKey == codecKey) return true
                 val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
-                if (remainingMs <= 0L) return false
+                if (remainingMs <= 0L) {
+                    // Nobody confirmed the change: the codec is read again (ADR 0051).
+                    onNeedRefresh?.invoke(address)
+                    return false
+                }
                 try {
                     changed.wait(remainingMs)
                 } catch (_: InterruptedException) {
@@ -129,7 +150,11 @@ internal object BluetoothCodecWatch {
             while (true) {
                 if (states[key]?.rateFlag == rateFlag) return true
                 val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
-                if (remainingMs <= 0L) return false
+                if (remainingMs <= 0L) {
+                    // Nobody confirmed the change: the codec is read again (ADR 0051).
+                    onNeedRefresh?.invoke(address)
+                    return false
+                }
                 try {
                     changed.wait(remainingMs)
                 } catch (_: InterruptedException) {
