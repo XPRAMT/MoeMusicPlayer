@@ -99,3 +99,19 @@ Not verified on a device: the dump formats on other ROMs or Android versions (th
 ## Scheduling (why the value used to arrive seconds late)
 
 The first version waited a fixed `SETTLE_MS` (1 s) before the first run and kept runs `MIN_INTERVAL_MS` (5 s) apart. On the NX809J (root) both dumps take about 20 ms each, yet `AudioTrack initialized` was logged about 3.4 s before `mixer rate of port ... via root`, because of the settle wait plus the follow-up interval. The delays protected nothing the dump itself needs, so they were replaced by the immediate first run, the short retry chain and the run cap above (the breaker, the kill switches, the USB/DSD exclusion and the single in-flight run are unchanged). Expected: the value is read about 20 to 50 ms after the AudioTrack exists when the track is already in the dump, otherwise within the retry delays (at most about 2.3 s in total before giving up); the settings page reads the status every 500 ms, so it shows the value at most 500 ms later. Not verified on a device: the real time to first value, whether the track is in the flinger dump right after creation (retries cover it otherwise), and whether the denser dumps change the audioserver incident risk (the breaker still stops everything on a symptom).
+
+## Measured comparison of the two dumps (real device)
+
+On the NX809J over root: 4 minutes, one poll every 0.3 s, 4 track changes at 96000, 44100, 96000 and 48000 Hz. Both dumps were measured on the device with the grep filter.
+
+| | `media.audio_flinger` | `media.metrics` |
+| --- | --- | --- |
+| Time per dump | about 86 ms on average, 708 ms at most | about 264 ms on average, 453 ms at most |
+| Output size | about 190 KB | about 770 KB |
+| Steps to the thread rate | one (the flinger row gives the rate of the thread) | two (`audio.track.<port>` gives the thread id, then `audio.thread.<id>` `readParameters` gives `sampleRate`) |
+
+- Both showed the new track in the same poll after the track started; the 0.3 s poll interval was too coarse to tell them apart.
+- App lookups through the flinger dump finished about 60 ms after `AudioTrack initialized`.
+- No audioserver crash was seen in hundreds of dumps.
+
+Decision: keep `FLINGER_FIRST` (faster, smaller, one step); `media.metrics` stays the fallback. Revisit only if an audioserver crash recurs; the circuit breaker stays either way.
