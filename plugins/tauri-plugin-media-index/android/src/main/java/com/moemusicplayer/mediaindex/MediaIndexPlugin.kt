@@ -18,10 +18,13 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
+import android.hardware.usb.UsbManager
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -804,18 +807,39 @@ class MediaIndexPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * USB exclusive test (ADR 0046, P0, development only): USB permission, `openDevice`, then the Rust run on its own
-     * thread, which detaches the kernel driver, plays `path` straight over usbfs and gives the DAC back. Answers
-     * `{ started, reason }` as soon as the run started (or could not).
+     * The USB exclusive switch changed (ADR 0047): the playback service takes the chosen USB device for the next output
+     * (on) or hands a device it holds back at once (off). A service that is not running reads it when it starts.
      */
     @Command
-    fun usbExclusiveStart(invoke: Invoke) {
-        val path = JSONObject(invoke.getArgs().toString()).optString("path", "")
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+    fun setUsbExclusive(invoke: Invoke) {
+        val enabled = JSONObject(invoke.getArgs().toString()).optBoolean("enabled", false)
         activity.runOnUiThread {
-            try {
-                UsbExclusiveTest.start(activity, path) { result -> invoke.resolve(JSObject(result.toString())) }
-            } catch (error: Exception) {
-                invoke.reject("Could not start the USB exclusive test: ${error.message}")
+            PlaybackService.applyUsbExclusive(enabled)
+            invoke.resolve(JSObject())
+        }
+    }
+
+    /**
+     * USB permission for the USB audio device named `productName` (the chosen output; the only USB audio device when
+     * the name matches none), only after the USB exclusive explanation panel (ADR 0039, ADR 0047). Answers
+     * `{ granted, found }`.
+     */
+    @Command
+    fun requestUsbExclusivePermission(invoke: Invoke) {
+        val name = JSONObject(invoke.getArgs().toString()).optString("productName", "")
+        activity.runOnUiThread {
+            val usb = activity.getSystemService(Context.USB_SERVICE) as? UsbManager
+            val device = usb?.let { manager ->
+                UsbExclusiveEngine.findDevice(manager, OutputDevicePreference("usb", name, null))
+            }
+            if (usb == null || device == null) {
+                invoke.resolve(JSObject().put("granted", false).put("found", false))
+                return@runOnUiThread
+            }
+            val pending = if (usb.hasPermission(device)) emptyList() else listOf(device)
+            UsbAudioReader.askInTurn(activity.applicationContext, usb, Handler(Looper.getMainLooper()), pending) {
+                invoke.resolve(JSObject().put("granted", usb.hasPermission(device)).put("found", true))
             }
         }
     }

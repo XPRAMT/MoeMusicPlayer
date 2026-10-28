@@ -162,11 +162,15 @@ class PlaybackService : MediaSessionService() {
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .setAudioProcessorChain(FloatAwareAudioProcessorChain())
                     // The default AudioTrack provider, watched so the settings page can show where the track is
-                    // really routed (ADR 0044).
+                    // really routed (ADR 0044), behind the USB exclusive output, which takes a track only when the
+                    // switch is on and the chosen USB device can play it (ADR 0047).
                     .setAudioOutputProvider(
-                        RouteObservingOutputProvider(AudioTrackAudioOutputProvider.Builder(context).build()) { track ->
-                            outputRouter?.observeTrack(track)
-                        },
+                        UsbAudioOutputProvider(
+                            context,
+                            RouteObservingOutputProvider(AudioTrackAudioOutputProvider.Builder(context).build()) { track ->
+                                outputRouter?.observeTrack(track)
+                            },
+                        ) { outputRouter?.currentPreference() },
                     )
                     .build()
         }.setEnableAudioFloatOutput(true)
@@ -236,6 +240,7 @@ class PlaybackService : MediaSessionService() {
         })
         // The choice lives in settings.json (read by Rust); it applies with no Activity or WebView around.
         router.setPreference(readOutputPreference())
+        readUsbExclusive()?.let(UsbExclusiveEngine::setEnabled)
         router.start()
         // Listen for the Bluetooth codec from the start, so a headset that connects while the app runs is known.
         BluetoothCodecWatch.ensure(this)
@@ -381,6 +386,7 @@ class PlaybackService : MediaSessionService() {
         }
         outputRouter?.stop()
         outputRouter = null
+        UsbExclusiveEngine.release("播放服務結束")
         pollHandler.removeCallbacksAndMessages(null)
         pollThread.quitSafely()
         session?.let { removeSession(it) }
@@ -493,6 +499,14 @@ class PlaybackService : MediaSessionService() {
                     val mediaItem = mediaItemBuilder.build()
                     // A service that started before the settings were read picks the choice up here, before any sound.
                     outputRouter?.setPreference(readOutputPreference())
+                    readUsbExclusive()?.let(UsbExclusiveEngine::setEnabled)
+                    // Each track gets its own chance on the USB exclusive output, with its own bit depth (ADR 0047).
+                    UsbExclusiveEngine.newTrack(
+                        UsbExclusiveRules.sourceOf(
+                            metadata.optInt("bitsPerSample", 0),
+                            metadata.optBoolean("dsd", false),
+                        ),
+                    )
                     endedEventLoadInstance = null
                     stopped = false
                     loadInstance = loadFence.begin(commandId, trackId)
@@ -541,6 +555,7 @@ class PlaybackService : MediaSessionService() {
                 "stop" -> {
                     player.stop()
                     player.clearMediaItems()
+                    UsbExclusiveEngine.release("已停止播放")
                     stopped = true
                     ack.put("snapshot", snapshot(player))
                     sendAck(ack)
@@ -1012,8 +1027,20 @@ class PlaybackService : MediaSessionService() {
         PreferenceReading.Unknown
     }
 
+    /** The USB exclusive switch (ADR 0047), or null while the settings have not been read yet. */
+    private fun readUsbExclusive(): Boolean? = try {
+        when (nativeUsbExclusiveEnabled()) {
+            1 -> true
+            0 -> false
+            else -> null
+        }
+    } catch (_: UnsatisfiedLinkError) {
+        null
+    }
+
     private external fun nativePollPlaybackCommand(): String?
     private external fun nativeOutputDevicePreference(): String?
+    private external fun nativeUsbExclusiveEnabled(): Int
     private external fun nativeOnPlaybackEvent(json: String)
 
     private fun JSONObject.optStringOrNull(key: String): String? =
@@ -1032,6 +1059,14 @@ class PlaybackService : MediaSessionService() {
         /** Main thread. The user chose another output device (ADR 0044); a service that is not running reads it when it starts. */
         internal fun applyOutputPreference(preference: OutputDevicePreference?) {
             activeInstance?.outputRouter?.setPreference(PreferenceReading.Known(preference))
+        }
+
+        /**
+         * The user turned the USB exclusive switch (ADR 0047). On: the next output to the chosen USB device is the app's
+         * own. Off: a device the app holds is handed back at once and the track goes on through Android.
+         */
+        internal fun applyUsbExclusive(enabled: Boolean) {
+            UsbExclusiveEngine.setEnabled(enabled)
         }
 
         /** Main thread. The output devices for the settings page; [saved] is the choice in settings.json. */

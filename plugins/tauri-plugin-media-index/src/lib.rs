@@ -208,8 +208,8 @@ impl<R: Runtime> MediaIndex<R> {
 
     /// Android output devices (ADR 0044): `audioOutputStatus` (the attached devices, the device the player is routed to
     /// and the format its AudioTrack opened), `setAudioOutputPreference` (the chosen device, applied by the playback
-    /// service) or `usbAudioDescriptors` (the parsed USB audio descriptors, read only, ADR 0045), answered by the
-    /// Kotlin plugin.
+    /// service), `usbAudioDescriptors` (the parsed USB audio descriptors, read only, ADR 0045), `setUsbExclusive` or
+    /// `requestUsbExclusivePermission` (the USB exclusive output, ADR 0047), answered by the Kotlin plugin.
     #[cfg(target_os = "android")]
     pub fn audio_output(
         &self,

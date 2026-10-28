@@ -978,6 +978,10 @@ impl Runtime<'_> {
             Request::Release { reason, reply } => {
                 self.device.step(format!("release: {reason}"));
                 let answer = self.handle(Event::Release);
+                // The output that played stalls: Media3 replaces it with one through Android.
+                if let Some(attached) = &self.attached {
+                    attached.ring.fail();
+                }
                 let _ = reply.send(answer);
             }
         }

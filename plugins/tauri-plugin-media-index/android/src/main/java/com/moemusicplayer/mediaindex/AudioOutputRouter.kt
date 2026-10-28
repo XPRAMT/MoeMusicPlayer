@@ -54,15 +54,23 @@ internal class AudioOutputRouter(
         mixerRate = readMixerRate()
     }
 
+    /** The user's choice as applied now (null: the system default). */
+    fun currentPreference(): OutputDevicePreference? = preference
+
+    private val heldChanged: () -> Unit = { handler.post { reconcile() } }
+
     fun start() {
         if (registered) return
         registered = true
+        // The USB exclusive output took or gave back the chosen device (ADR 0047): apply the choice again.
+        UsbExclusiveEngine.onHeldChanged = heldChanged
         // The callback is also called at once with every attached device, which applies the choice.
         audioManager?.registerAudioDeviceCallback(deviceCallback, handler)
         reconcile()
     }
 
     fun stop() {
+        if (UsbExclusiveEngine.onHeldChanged === heldChanged) UsbExclusiveEngine.onHeldChanged = null
         if (registered) audioManager?.unregisterAudioDeviceCallback(deviceCallback)
         registered = false
         forgetTrack()
@@ -78,6 +86,9 @@ internal class AudioOutputRouter(
 
     /** Pin the player to the chosen device if it is attached, else let the system choose; only when that changes. */
     fun reconcile() {
+        // While the app drives the chosen USB device itself, Android lists it as gone: that is not an unplug, the pin
+        // stays until the device is handed back (ADR 0047).
+        if (UsbExclusiveRules.keepsPin(preference, UsbExclusiveEngine.held)) return
         val attached = outputDevices()
         val target = AudioOutputRules.find(preference, attached.map(::factsOf))
             ?.let { facts -> attached.firstOrNull { it.id == facts.id } }
@@ -140,6 +151,7 @@ internal class AudioOutputRouter(
     /** The status the settings page shows; [saved] is the choice in `settings.json`. */
     fun status(saved: OutputDevicePreference?): JSONObject {
         val attached = outputDevices()
+        val listed = UsbExclusiveRules.withHeld(attached.map(::factsOf), UsbExclusiveEngine.held)
         val trackRoute = routedDevice?.takeIf { trackOutput != null }
         // AudioTrack.playState is what the track itself does now (Media3 pauses the track on pause and stop), so it
         // is the most direct answer to "is this route live"; a paused track's route can be stale.
@@ -153,7 +165,7 @@ internal class AudioOutputRouter(
             AudioOutputRules.RouteSource.TRACK -> trackRoute?.let(::factsOf)
             AudioOutputRules.RouteSource.SYSTEM -> systemMediaRoute(audioManager, attached)
         }
-        return statusJson(attached.map(::factsOf), saved, pinnedId, routed, trackOutput, mixerRate, source)
+        return statusJson(listed, saved, pinnedId, routed, trackOutput, mixerRate, source)
     }
 
     /**
@@ -190,7 +202,7 @@ internal class AudioOutputRouter(
             val audioManager = context.getSystemService(AudioManager::class.java)
             val attached = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.toList() ?: emptyList()
             return statusJson(
-                attached.map(::factsOf),
+                UsbExclusiveRules.withHeld(attached.map(::factsOf), UsbExclusiveEngine.held),
                 saved,
                 null,
                 systemMediaRoute(audioManager, attached),
@@ -248,6 +260,8 @@ internal class AudioOutputRouter(
                         }
                     } ?: JSONObject.NULL,
                 )
+                // The USB exclusive output (ADR 0047): whether it plays the track, its format and why not.
+                put("exclusive", UsbExclusiveEngine.statusJson())
             }
         }
     }
