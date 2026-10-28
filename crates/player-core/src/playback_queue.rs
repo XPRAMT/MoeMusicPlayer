@@ -1003,4 +1003,48 @@ mod tests {
         let restored = PlaybackQueue::restore(snapshot.clone()).unwrap();
         assert_eq!(restored.snapshot(), snapshot);
     }
+
+    fn playlist_queue(positions: &[u64]) -> PlaybackQueue {
+        let entries = positions
+            .iter()
+            .map(|position| PlaybackQueueEntry {
+                track_id: TrackId::new(),
+                source_position: Some(*position),
+            })
+            .collect();
+        PlaybackQueue::with_entries(
+            entries,
+            PlaybackQueueContext::Playlist {
+                playlist_id: "playlist-id".into(),
+            },
+            0,
+        )
+        .unwrap()
+    }
+
+    /// A playlist page sorted by a column lists the entries in that order, so their playlist positions are not
+    /// ascending; saving the session used to fail with "playlist queue positions are not strictly increasing".
+    #[test]
+    fn restore_accepts_a_sorted_playlist_queue_whose_positions_are_not_ascending() {
+        let queue = playlist_queue(&[2, 0, 3, 1]);
+        let snapshot = queue.snapshot();
+        let restored = PlaybackQueue::restore(snapshot.clone()).unwrap();
+        assert_eq!(restored.snapshot(), snapshot);
+    }
+
+    /// The clicked entry is put first when the list no longer shows it, whatever its position is.
+    #[test]
+    fn restore_accepts_a_clicked_entry_placed_first_with_a_larger_position() {
+        let queue = playlist_queue(&[9, 0, 1, 2]);
+        assert!(PlaybackQueue::restore(queue.snapshot()).is_ok());
+    }
+
+    #[test]
+    fn restore_rejects_duplicate_playlist_positions() {
+        let queue = playlist_queue(&[0, 1, 1, 2]);
+        assert_eq!(
+            PlaybackQueue::restore(queue.snapshot()).err(),
+            Some("playlist queue positions are duplicated")
+        );
+    }
 }
