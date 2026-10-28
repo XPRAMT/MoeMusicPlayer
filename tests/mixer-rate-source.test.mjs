@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mixerRatePanel, mixerRateSummary } from '../src/lib/mixer-rate-source.js';
+import { mixerPanelShouldClose, mixerRatePanel, mixerRateSummary } from '../src/lib/mixer-rate-source.js';
 
 const status = (state, extra = {}) => ({
   state,
@@ -86,4 +86,14 @@ test('the one panel names all three features that need root or Shizuku and no bu
     assert.equal(panel.buttons[0].label, '授權', state);
     assert.ok(panel.buttons.every((b) => b.label !== '設定' && b.label !== '前往授權'), state);
   }
+});
+
+test('the panel closes by itself once root or Shizuku is available, and only then', () => {
+  assert.equal(mixerPanelShouldClose(status('rootActive')), true);
+  assert.equal(mixerPanelShouldClose(status('shizukuActive')), true);
+  for (const state of ['none', 'shizukuNotRunning', 'shizukuDenied', 'shizukuNeedsPermission', 'tripped', 'disabled']) {
+    assert.equal(mixerPanelShouldClose(status(state)), false, state);
+  }
+  assert.equal(mixerPanelShouldClose(null), false);
+  // The 「關閉」 button stays for the states that are not granted yet: the component draws it for every panel.
 });

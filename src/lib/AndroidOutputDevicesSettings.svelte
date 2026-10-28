@@ -70,7 +70,7 @@
   import { exceedsLongPressSlop, longPressDragGuard } from './long-press-reorder.js';
   import { QUEUE_REORDER_LONG_PRESS_MS, QUEUE_REORDER_MOVE_CANCEL_PX } from './queue-reorder.js';
   import { trackColumnDropIndexFromPointer } from './track-columns.js';
-  import { mixerRateEntryVisible, mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
+  import { mixerPanelShouldClose, mixerRateEntryVisible, mixerRatePanel, mixerRateSummary } from './mixer-rate-source.js';
 
   interface Props {
     /** Told when the output mode is read or changed (the DSD passthrough text under 「DSD」 depends on it). */
@@ -434,6 +434,12 @@
       setTimeout(() => void refreshStatus(), 2500);
     }
   }
+
+  // Once root or Shizuku is available (the authorization result, coming back to the app, 「重新檢查」) the panel closes by
+  // itself; the entries are already hidden by the same status.
+  $effect(() => {
+    if (mixerPanelOpen && mixerPanelShouldClose(mixerSource.status)) closeMixerPanel();
+  });
 
   $effect(() => {
     const dialog = mixerDialog;

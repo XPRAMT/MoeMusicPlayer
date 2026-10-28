@@ -120,3 +120,13 @@ export function mixerRateEntryVisible(status) {
   if (!status) return false;
   return ['none', 'shizukuNotRunning', 'shizukuDenied', 'shizukuNeedsPermission'].includes(status.state);
 }
+
+/**
+ * Whether the explanation panel closes by itself: root or Shizuku became available, so there is nothing left to grant
+ * (the global rule: permission UI only while a permission is missing). Not for 「tripped」 and 「disabled」, which
+ * can only be opened by hand and keep their 「關閉」 button.
+ * @param {MixerRateSourceStatus | null} status
+ */
+export function mixerPanelShouldClose(status) {
+  return status?.state === 'rootActive' || status?.state === 'shizukuActive';
+}
