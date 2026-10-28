@@ -95,5 +95,5 @@ test('the USB reader area and its 原始描述元 summary never choose the card'
   assert.match(component, /class="output-device-usb" data-own-click/);
   // Permission is asked only from the button (request: true), never on load or by the poll.
   assert.equal(component.match(/android_usb_audio_descriptors/g)?.length, 1);
-  assert.match(component, /invokeCommand\('android_usb_audio_descriptors', \{ request: true \}\)/);
+  assert.match(component, /invokeCommand\('android_usb_audio_descriptors', \{\s*request: true,/);
 });

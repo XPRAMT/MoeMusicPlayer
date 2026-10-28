@@ -1009,5 +1009,17 @@
   "錄音": "Recording",
   "讀取 USB 規格": "Read USB specs",
   "Type II 壓縮格式": "Type II compressed format",
-  "Type III（IEC 61937）": "Type III (IEC 61937)"
+  "Type III（IEC 61937）": "Type III (IEC 61937)",
+  "一般": "Normal",
+  "未知模式（{0}）": "Unknown mode ({0})",
+  "目前偏好：{0}": "Current preference: {0}",
+  "此系統未提供位元完美模式": "This system offers no bit-perfect mode",
+  "沒有找到 USB 播放裝置": "No USB playback device found",
+  "系統混音器格式": "System mixer formats",
+  "浮點 {0}bit": "Float {0}-bit",
+  "無法查詢系統混音器格式": "Could not query the system mixer formats",
+  "無法查詢系統混音器格式：{0}": "Could not query the system mixer formats: {0}",
+  "需要 Android 14 以上才能查詢": "Requires Android 14 or later",
+  "編碼 {0}": "Encoding {0}",
+  "USB 裝置 {0}": "USB device {0}"
 }

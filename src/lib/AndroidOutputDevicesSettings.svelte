@@ -35,7 +35,7 @@
   import { appTooltip } from './app-tooltip.js';
   import { buildAndroidRows, sameChoice } from './android-output-devices.js';
   import { chooseCardOnClick, chooseCardOnEnter } from './output-device-card.js';
-  import { describeUsbDevice, spacedHex } from './usb-audio-descriptors.js';
+  import { describeMixerAttributes, describeUsbDevice, spacedHex } from './usb-audio-descriptors.js';
 
   const instance = Symbol('android-output-devices');
   /** Android tells the playback service about devices at once (AudioDeviceCallback); the list reads the service's view
@@ -46,6 +46,7 @@
 
   let rows = $derived(buildAndroidRows(s.status, s.saved));
   let usbViews = $derived((usb.result?.devices ?? []).map(describeUsbDevice));
+  let mixerView = $derived(describeMixerAttributes(usb.result?.mixerAttributes));
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
 
@@ -109,7 +110,8 @@
     });
   }
 
-  // ---- USB DAC descriptors (ADR 0045): read only; the system asks for USB permission when the button is pressed ----
+  // ---- USB DAC descriptors (ADR 0045): read only; the system asks for USB permission when the button is pressed. The
+  // card's own output device (its row key is `device-<id>`) is also asked for its system mixer formats. ----
   async function readUsbDescriptors(rowKey: string): Promise<void> {
     if (usb.busy || !isTauri()) return;
     usb.rowKey = rowKey;
@@ -117,7 +119,11 @@
     usb.failure = null;
     usb.copied = null;
     try {
-      usb.result = await invokeCommand('android_usb_audio_descriptors', { request: true });
+      const deviceId = rowKey.startsWith('device-') ? Number(rowKey.slice('device-'.length)) : null;
+      usb.result = await invokeCommand('android_usb_audio_descriptors', {
+        request: true,
+        deviceId: Number.isFinite(deviceId) ? deviceId : null,
+      });
     } catch (error) {
       usb.result = null;
       usb.failure = tr('無法讀取 USB 規格：{0}', [getErrorText(error)]);
@@ -297,6 +303,18 @@
                 {/if}
               </div>
             {/each}
+            {#if usb.result?.mixerAttributes}
+              <div class="output-device-usb-device">
+                <strong>{tr('系統混音器格式')}</strong>
+                {#if mixerView.notice}<p class="output-device-path is-idle">{mixerView.notice}</p>{/if}
+                {#each mixerView.devices as device, index (index)}
+                  {#if mixerView.devices.length > 1}<span>{device.title}</span>{/if}
+                  <ul class="output-device-usb-list">
+                    {#each device.lines as line}<li>{line}</li>{/each}
+                  </ul>
+                {/each}
+              </div>
+            {/if}
           {/if}
         </div>
       {/if}

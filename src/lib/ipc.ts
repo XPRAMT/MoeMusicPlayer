@@ -330,6 +330,8 @@ export interface AndroidAudioTrackOutput {
 export interface AndroidUsbAudioDescriptors {
   supported: boolean;
   devices: import('./usb-audio-descriptors.js').UsbAudioDevice[];
+  /** The system mixer formats of the card's output device (Android 14+), only queried, never set. */
+  mixerAttributes?: import('./usb-audio-descriptors.js').MixerAttributesResult;
 }
 
 /** Answer of `android_audio_output_status` (ADR 0044). */
@@ -1215,7 +1217,7 @@ interface IpcContract {
     result: { granted: boolean; openedSettings: boolean } | null;
   };
   android_usb_audio_descriptors: {
-    args: { request: boolean };
+    args: { request: boolean; deviceId: number | null };
     result: AndroidUsbAudioDescriptors | null;
   };
   settings_get_output_volume_sync: {

@@ -179,3 +179,78 @@ export function describeUsbDevice(device) {
 export function spacedHex(raw) {
   return (raw.match(/.{1,2}/g) ?? []).join(' ');
 }
+
+// ---- The system mixer formats (Android 14+, `getSupportedMixerAttributes`): what the audio policy is willing to open
+// for the device, grouped by the Kotlin `MixerAttributesRules`; read only, nothing is ever set (ADR 0045). ----
+
+/**
+ * @typedef {{ behavior: 'default' | 'bitPerfect' | 'unknown', behaviorValue: number, encoding: string,
+ *   encodingValue: number, bits: number | null, channelMask: number, channels: number | null }} MixerFormat
+ * @typedef {MixerFormat & { sampleRates: number[] }} MixerGroup
+ * @typedef {MixerFormat & { sampleRate: number | null }} MixerEntry
+ * @typedef {{ id: number, type: number, productName: string, groups: MixerGroup[], bitPerfect: boolean,
+ *   preferred: MixerEntry | null, error?: string }} MixerDevice
+ * @typedef {{ supported: boolean, reason?: string, devices: MixerDevice[] }} MixerAttributesResult
+ * @typedef {{ title: string, lines: string[] }} MixerDeviceView
+ */
+
+/** @param {MixerFormat} format */
+function mixerBehaviorName(format) {
+  switch (format.behavior) {
+    case 'bitPerfect': return tr('位元完美');
+    case 'default': return tr('一般');
+    default: return tr('未知模式（{0}）', [format.behaviorValue]);
+  }
+}
+
+/** @param {MixerFormat} format */
+function mixerEncodingName(format) {
+  if (format.encoding === 'pcmFloat') return tr('浮點 {0}bit', [format.bits ?? 32]);
+  if (format.bits && format.encoding.startsWith('pcm')) return `PCM ${format.bits}bit`;
+  return tr('編碼 {0}', [format.encodingValue]);
+}
+
+/**
+ * One format: 「位元完美：PCM 32bit．48, 96, 192 kHz．2 聲道」 (rates and channels as `output-format.js` writes them).
+ * @param {MixerFormat} format
+ * @param {number[]} rates
+ */
+export function describeMixerFormat(format, rates) {
+  const sorted = [...new Set(rates.filter((rate) => rate > 0))].sort((a, b) => a - b);
+  const parts = [
+    mixerEncodingName(format),
+    sorted.length ? `${sorted.map((rate) => formatSampleRate(rate).replace(' kHz', '')).join(', ')} kHz` : null,
+    format.channels ? tr('{0} 聲道', [format.channels]) : null,
+  ];
+  return `${mixerBehaviorName(format)}：${parts.filter(Boolean).join('．')}`;
+}
+
+/**
+ * The 「系統混音器格式」 lines of each queried output: below Android 14 one notice; a device without any bit-perfect
+ * entry says so (its default entries still listed); the preferred format, when one is set, last.
+ * @param {MixerAttributesResult | null | undefined} result
+ * @returns {{ notice: string | null, devices: MixerDeviceView[] }}
+ */
+export function describeMixerAttributes(result) {
+  if (!result) return { notice: null, devices: [] };
+  if (!result.supported) {
+    return { notice: result.reason === 'requiresAndroid14' ? tr('需要 Android 14 以上才能查詢') : tr('無法查詢系統混音器格式'), devices: [] };
+  }
+  if (!result.devices.length) return { notice: tr('沒有找到 USB 播放裝置'), devices: [] };
+  const devices = result.devices.map((device) => {
+    /** @type {string[]} */
+    const lines = [];
+    if (device.error) {
+      lines.push(tr('無法查詢系統混音器格式：{0}', [device.error]));
+    } else {
+      if (!device.groups.some((group) => group.behavior === 'bitPerfect')) lines.push(tr('此系統未提供位元完美模式'));
+      for (const group of device.groups) lines.push(describeMixerFormat(group, group.sampleRates));
+      if (device.preferred) {
+        const rate = device.preferred.sampleRate;
+        lines.push(tr('目前偏好：{0}', [describeMixerFormat(device.preferred, rate ? [rate] : [])]));
+      }
+    }
+    return { title: device.productName || tr('USB 裝置 {0}', [device.id]), lines };
+  });
+  return { notice: null, devices };
+}
