@@ -8,7 +8,8 @@ import { join, relative, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const CATEGORIES = new Set(['debug-flag', 'cache', 'device-specific', 'pending-migration', 'framework']);
+// legacy-cleanup: an old key that is only read once to move its values to the right store and then removed (never written).
+const CATEGORIES = new Set(['debug-flag', 'cache', 'device-specific', 'pending-migration', 'legacy-cleanup', 'framework']);
 const SKIP_DIRS = new Set(['build', '.tauri', 'tauri-api', 'node_modules', '.gradle', '.git', 'target']);
 
 const HOW_TO_FIX =
@@ -152,4 +153,12 @@ test('allowlist has no stale entries', () => {
     `Allowlist entries whose storage use no longer exists in the code (delete them from tests/fixtures/storage-locations.json; ` +
       `a finished migration should remove its entry):\n  ${stale.join('\n  ')}`,
   );
+});
+
+test('legacy-cleanup entries only read and remove their old key, never write it', () => {
+  for (const e of allow.filter((entry) => entry.category === 'legacy-cleanup')) {
+    const code = jsFiles.find((f) => f.file === e.where)?.code;
+    assert.ok(code, `${e.where} not found`);
+    assert.doesNotMatch(code, /\.setItem\(/, `${e.where} is legacy-cleanup for ${e.key} but writes browser storage`);
+  }
 });

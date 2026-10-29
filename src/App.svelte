@@ -248,7 +248,7 @@
     normalizeFloatingLyricsSettings,
     normalizeLyricsSettingsTab,
   } from './lib/floating-lyrics-settings.js';
-  import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs } from './lib/lyrics-timing-offset.js';
+  import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs, migrateLegacyLyricsTimingOffsets } from './lib/lyrics-timing-offset.js';
   import OutputDevicesSettings from './lib/OutputDevicesSettings.svelte';
   import AndroidOutputDevicesSettings from './lib/AndroidOutputDevicesSettings.svelte';
   import OpacityCalculation from './lib/OpacityCalculation.svelte';
@@ -2097,12 +2097,12 @@
     if (!isTauri() || !data || !isWindowsPlatform || !taskbarLyricsEnabled) return;
     void emit('taskbar-lyrics-data', data).catch(() => {});
   });
-  // Windows native lyrics (ADR 0034): the per-track delay lives in this window's localStorage, so it is sent with the
+  // Windows native lyrics (ADR 0034): the per-track delay (library database) is read here and sent with the
   // track (and again when it changes), together with the padlock tooltips in the interface language.
   function sendNativeLyricsExtras(): void {
     if (!isTauri() || !isWindowsPlatform) return;
     const trackId = taskbarLyricsData?.trackId ?? null;
-    if (trackId) void emit('lyrics-native-delay', { trackId, delaySec: loadLyricsTimingOffsetSec(trackId) }).catch(() => {});
+    if (trackId) void loadLyricsTimingOffsetSec(trackId).then((delaySec) => emit('lyrics-native-delay', { trackId, delaySec })).catch(() => {});
     void emit('lyrics-accent-color', themePreferences.accentHex).catch(() => {});
     void emit('floating-lyrics-tips', { lock: tr('鎖定位置（滑鼠穿透）'), unlock: tr('解除鎖定（可移動）') }).catch(() => {});
   }
@@ -2136,15 +2136,27 @@
   });
   let visibleLyricsSettingsTab = $derived(normalizeLyricsSettingsTab(lyricsSettingsTab, isWindowsPlatform));
   let floatingLyricsEnabled = $derived(floatingLyricsSettings.enabled);
+  let androidFloatingDelayRequest = 0;
   $effect(() => {
     const data = taskbarLyricsData;
     lyricsDelayRevision;
     if (!isTauri() || !isAndroidPlatform || !floatingLyricsEnabled) return;
     const trackId = data?.trackId ?? null;
-    const offset = lyricsDisplayOffsetMs(data?.offsetMs, untrack(() => loadLyricsTimingOffsetSec(trackId)));
     const durationMs = untrack(() => playback?.currentTrack?.id === trackId ? playback?.currentTrack?.durationMs ?? null : null);
-    const payload = { data: buildFloatingLyricsNativeData(data, offset, durationMs) };
-    void invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload }).catch(() => {});
+    // The delay is read from the database; only the newest request is sent.
+    const request = ++androidFloatingDelayRequest;
+    void loadLyricsTimingOffsetSec(trackId)
+      .then((delaySec) => {
+        if (request !== androidFloatingDelayRequest) return;
+        const offset = lyricsDisplayOffsetMs(data?.offsetMs, delaySec);
+        const payload = { data: buildFloatingLyricsNativeData(data, offset, durationMs) };
+        return invokeCommand('floating_lyrics_android', { command: 'floatingLyricsUpdate', payload });
+      })
+      .catch(() => {});
+  });
+  // The old browser-storage delays move into the library database once (any window may do it; it is idempotent).
+  $effect(() => {
+    if (isTauri()) void migrateLegacyLyricsTimingOffsets();
   });
   $effect(() => {
     if (!isTauri()) return;

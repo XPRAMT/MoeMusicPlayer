@@ -40,7 +40,7 @@ use crate::locator;
 mod font_cache;
 pub use font_cache::{CachedFontFace, FontFileStamp, FontSubsetRecord};
 
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 const MUSIC_COLLATION_NAME: &str = "MUSIC_LOCALE_NATURAL";
 const MUSIC_QUICK_INDEX_FUNCTION: &str = "music_quick_index_label";
 const MUSIC_YEAR_FUNCTION: &str = "music_year_label";
@@ -716,6 +716,16 @@ CREATE TABLE IF NOT EXISTS font_subsets (
     name_hash TEXT NOT NULL,
     subset_version INTEGER NOT NULL,
     subset_file TEXT
+);
+"#;
+
+/// The user's per-track lyric delay (歌詞同步), in tenths of a second: +N shows every line N/10 s later. Keyed by
+/// Track ID like the play statistics, with no foreign key, so it outlives a track's removal and comes back with it.
+/// No row means 0.
+const SCHEMA_V25: &str = r#"
+CREATE TABLE IF NOT EXISTS track_lyrics_timing_offsets (
+    track_id TEXT PRIMARY KEY NOT NULL,
+    delay_tenths INTEGER NOT NULL CHECK (delay_tenths BETWEEN -100 AND 100 AND delay_tenths <> 0)
 );
 "#;
 
@@ -2213,6 +2223,13 @@ impl Database {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(SCHEMA_V24)?;
             tx.pragma_update(None, "user_version", 24)?;
+            tx.commit()?;
+            version = 24;
+        }
+        if version == 24 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(SCHEMA_V25)?;
+            tx.pragma_update(None, "user_version", 25)?;
             tx.commit()?;
         }
         connection.execute_batch(
@@ -6096,6 +6113,65 @@ impl Database {
             }
         }
         Ok(statistics)
+    }
+
+    /// The per-track lyric delay in tenths of a second (0 when none is stored).
+    pub fn lyrics_timing_offset_tenths(&self, track_id: TrackId) -> Result<i64, DatabaseError> {
+        let connection = self.lock()?;
+        let value = connection
+            .query_row(
+                "SELECT delay_tenths FROM track_lyrics_timing_offsets WHERE track_id=?1",
+                params![track_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(value.unwrap_or(0))
+    }
+
+    /// Store the per-track lyric delay, clamped to ±100 tenths; 0 removes the row. Returns the stored value.
+    pub fn set_lyrics_timing_offset_tenths(
+        &self,
+        track_id: TrackId,
+        delay_tenths: i64,
+    ) -> Result<i64, DatabaseError> {
+        let clamped = delay_tenths.clamp(-100, 100);
+        let connection = self.lock()?;
+        if clamped == 0 {
+            connection.execute(
+                "DELETE FROM track_lyrics_timing_offsets WHERE track_id=?1",
+                params![track_id.to_string()],
+            )?;
+        } else {
+            connection.execute(
+                "INSERT INTO track_lyrics_timing_offsets (track_id, delay_tenths) VALUES (?1, ?2)
+                 ON CONFLICT(track_id) DO UPDATE SET delay_tenths=excluded.delay_tenths",
+                params![track_id.to_string(), clamped],
+            )?;
+        }
+        Ok(clamped)
+    }
+
+    /// One-time import of delays kept elsewhere before (the old browser storage), in one transaction. A track that
+    /// already has a delay here keeps it; zeros are skipped. Returns how many rows were added.
+    pub fn import_lyrics_timing_offsets(
+        &self,
+        entries: &[(TrackId, i64)],
+    ) -> Result<usize, DatabaseError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut added = 0;
+        for (track_id, delay_tenths) in entries {
+            let clamped = (*delay_tenths).clamp(-100, 100);
+            if clamped == 0 {
+                continue;
+            }
+            added += tx.execute(
+                "INSERT OR IGNORE INTO track_lyrics_timing_offsets (track_id, delay_tenths) VALUES (?1, ?2)",
+                params![track_id.to_string(), clamped],
+            )?;
+        }
+        tx.commit()?;
+        Ok(added)
     }
 
     /// The one connection. Every use is timed: a caller that waits for the connection or keeps it longer than
@@ -17132,5 +17208,80 @@ mod bulk_build_tests {
             snapshot(&database)
         };
         assert_eq!(after.1, connection_check.1, "bulk and row-by-row builds store the same rows in the same order");
+    }
+}
+
+#[cfg(test)]
+mod lyrics_timing_offset_tests {
+    use super::Database;
+    use player_core::TrackId;
+
+    #[test]
+    fn delay_is_stored_per_track_clamped_and_zero_removes_it() {
+        let db = Database::open_in_memory().expect("database");
+        let a = TrackId::new();
+        let b = TrackId::new();
+        assert_eq!(db.lyrics_timing_offset_tenths(a).unwrap(), 0);
+        assert_eq!(db.set_lyrics_timing_offset_tenths(a, 13).unwrap(), 13);
+        assert_eq!(db.set_lyrics_timing_offset_tenths(b, -250).unwrap(), -100);
+        assert_eq!(db.lyrics_timing_offset_tenths(a).unwrap(), 13);
+        assert_eq!(db.lyrics_timing_offset_tenths(b).unwrap(), -100);
+        assert_eq!(db.set_lyrics_timing_offset_tenths(a, -5).unwrap(), -5);
+        assert_eq!(db.lyrics_timing_offset_tenths(a).unwrap(), -5);
+        assert_eq!(db.set_lyrics_timing_offset_tenths(a, 0).unwrap(), 0);
+        assert_eq!(db.lyrics_timing_offset_tenths(a).unwrap(), 0);
+        let rows: i64 = db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM track_lyrics_timing_offsets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "a zero delay leaves no row");
+    }
+
+    #[test]
+    fn import_keeps_existing_values_skips_zeros_and_is_repeatable() {
+        let db = Database::open_in_memory().expect("database");
+        let kept = TrackId::new();
+        let added = TrackId::new();
+        let zero = TrackId::new();
+        db.set_lyrics_timing_offset_tenths(kept, 7).unwrap();
+        let entries = [(kept, 20), (added, 300), (zero, 0)];
+        assert_eq!(db.import_lyrics_timing_offsets(&entries).unwrap(), 1);
+        assert_eq!(db.import_lyrics_timing_offsets(&entries).unwrap(), 0);
+        assert_eq!(db.lyrics_timing_offset_tenths(kept).unwrap(), 7);
+        assert_eq!(db.lyrics_timing_offset_tenths(added).unwrap(), 100);
+        assert_eq!(db.lyrics_timing_offset_tenths(zero).unwrap(), 0);
+    }
+
+    #[test]
+    fn migrating_to_v25_adds_the_delay_table_and_is_reentrant() {
+        let db = Database::open_in_memory().expect("database");
+        {
+            let connection = db.lock().unwrap();
+            connection
+                .execute_batch("DROP TABLE track_lyrics_timing_offsets;")
+                .unwrap();
+            connection.pragma_update(None, "user_version", 24).unwrap();
+        }
+        db.migrate().expect("migrate v24 to v25");
+        db.migrate().expect("again: nothing to do");
+        let version: i64 = db
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, super::SCHEMA_VERSION);
+        db.lock()
+            .unwrap()
+            .execute_batch(super::SCHEMA_V25)
+            .expect("re-entrant script");
+        let track = TrackId::new();
+        db.set_lyrics_timing_offset_tenths(track, 4).unwrap();
+        assert_eq!(db.lyrics_timing_offset_tenths(track).unwrap(), 4);
+        let rejected = db.lock().unwrap().execute(
+            "INSERT INTO track_lyrics_timing_offsets (track_id, delay_tenths) VALUES ('x', 101)",
+            [],
+        );
+        assert!(rejected.is_err(), "out-of-range delay is rejected by the schema");
     }
 }

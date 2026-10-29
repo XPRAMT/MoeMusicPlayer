@@ -1,3 +1,4 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { tr } from './i18n.js';
 /** Per-track lyrics shift (歌詞同步, seconds). +N s is added to every lyric timestamp (lines show N s later);
  * −N s shows them earlier. */
@@ -6,7 +7,8 @@ export const LYRICS_TIMING_OFFSET_MIN_SEC = -10;
 export const LYRICS_TIMING_OFFSET_MAX_SEC = 10;
 export const LYRICS_TIMING_OFFSET_STEP_SEC = 0.1;
 
-const STORAGE_PREFIX = 'moemusicplayer.lyricsTimingOffsetSec:';
+/** Key prefix of the old browser-storage copy, kept only to move it into the library database once. */
+const LEGACY_STORAGE_PREFIX = 'moemusicplayer.lyricsTimingOffsetSec:';
 
 /** @param {unknown} value @returns {number} */
 export function clampLyricsTimingOffsetSec(value) {
@@ -45,30 +47,93 @@ export function lyricsDisplayOffsetMs(lyricsOffsetMs, delaySec) {
   return Object.is(total, -0) ? 0 : total;
 }
 
-/** @param {string | null | undefined} trackId @returns {number} */
-export function loadLyricsTimingOffsetSec(trackId) {
-  if (!trackId || typeof localStorage === 'undefined') return 0;
+/** Where the delay is kept: the library database, through the Tauri commands (one Rust implementation for Windows
+ * and Android). Replaceable for tests. Outside Tauri nothing is kept. */
+let backend = {
+  available: () => isTauri(),
+  /** @param {string} command @param {Record<string, unknown>} args */
+  invoke: (command, args) => invoke(command, args),
+};
+
+/** @param {{ available: () => boolean, invoke: (command: string, args: Record<string, unknown>) => Promise<any> }} next */
+export function setLyricsTimingOffsetBackendForTests(next) {
+  backend = next;
+  legacyMigration = null;
+}
+
+/** @type {Promise<void> | null} */
+let legacyMigration = null;
+
+/** Old browser-storage delays (`${LEGACY_STORAGE_PREFIX}<trackId>`), read once and handed to the database; the keys
+ * are removed only after the database accepted them (a failure leaves them for the next start).
+ * @returns {Promise<void>} */
+export function migrateLegacyLyricsTimingOffsets() {
+  if (!legacyMigration) legacyMigration = runLegacyMigration();
+  return legacyMigration;
+}
+
+async function runLegacyMigration() {
+  if (!backend.available() || typeof localStorage === 'undefined') return;
+  /** @type {string[]} */
+  const keys = [];
+  /** @type {{ trackId: string, delaySec: number }[]} */
+  const entries = [];
   try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + trackId);
-    if (raw === null) return 0;
-    return clampLyricsTimingOffsetSec(Number(raw));
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(LEGACY_STORAGE_PREFIX)) continue;
+      keys.push(key);
+      const trackId = key.slice(LEGACY_STORAGE_PREFIX.length);
+      const delaySec = clampLyricsTimingOffsetSec(Number(localStorage.getItem(key)));
+      if (trackId && delaySec !== 0) entries.push({ trackId, delaySec });
+    }
+  } catch {
+    return;
+  }
+  if (keys.length === 0) return;
+  try {
+    if (entries.length > 0) await backend.invoke('lyrics_timing_offsets_import', { entries });
+  } catch {
+    legacyMigration = null;
+    return;
+  }
+  for (const key of keys) {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  }
+}
+
+/** The stored delay for a track (0 when none or unavailable).
+ * @param {string | null | undefined} trackId @returns {Promise<number>} */
+export async function loadLyricsTimingOffsetSec(trackId) {
+  if (!trackId || !backend.available()) return 0;
+  await migrateLegacyLyricsTimingOffsets();
+  try {
+    return clampLyricsTimingOffsetSec(await backend.invoke('lyrics_timing_offset_get', { trackId }));
   } catch {
     return 0;
   }
 }
 
-/** @param {string | null | undefined} trackId @param {number} delaySec @returns {number} */
+/** Store the delay (0 removes it); resolves with the value now in effect.
+ * @param {string | null | undefined} trackId @param {number} delaySec @returns {Promise<number>} */
 export function saveLyricsTimingOffsetSec(trackId, delaySec) {
   const clamped = clampLyricsTimingOffsetSec(delaySec);
-  if (!trackId || typeof localStorage === 'undefined') return clamped;
-  try {
-    if (clamped === 0) localStorage.removeItem(STORAGE_PREFIX + trackId);
-    else localStorage.setItem(STORAGE_PREFIX + trackId, String(clamped));
-  } catch {
-    // Quota / private mode: keep in-memory only.
-  }
-  return clamped;
+  if (!trackId || !backend.available()) return Promise.resolve(clamped);
+  // One write at a time, in the order asked (a dragged slider sends many): the last value is the one kept.
+  const write = saveChain.then(async () => {
+    await migrateLegacyLyricsTimingOffsets();
+    try {
+      return clampLyricsTimingOffsetSec(await backend.invoke('lyrics_timing_offset_set', { trackId, delaySec: clamped }));
+    } catch {
+      return clamped;
+    }
+  });
+  saveChain = write.then(() => {}, () => {});
+  return write;
 }
+
+/** @type {Promise<void>} */
+let saveChain = Promise.resolve();
 
 /** @param {number} delaySec @returns {string} */
 export function formatLyricsTimingOffsetSec(delaySec) {

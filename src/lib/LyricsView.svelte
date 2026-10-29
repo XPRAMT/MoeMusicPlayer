@@ -663,7 +663,8 @@
     timingPanelOpen = false;
     candidateQuery = '';
     submittedQuery = '';
-    timingOffsetSec = loadLyricsTimingOffsetSec(nextTrackId);
+    timingOffsetSec = 0;
+    void loadLyricsTimingOffsetSec(nextTrackId).then((value) => { if (trackId === nextTrackId) timingOffsetSec = value; });
     if (!sharedController) void controller.setTrack(nextTrackId);
   });
 
@@ -829,7 +830,9 @@
     let disposed = false;
     void listen<{ trackId: string; delaySec: number }>(LYRICS_TIMING_OFFSET_EVENT, (event) => {
       const shown = untrack(() => trackId);
-      if (shown && event.payload?.trackId === shown) timingOffsetSec = loadLyricsTimingOffsetSec(shown);
+      if (shown && event.payload?.trackId === shown) {
+        void loadLyricsTimingOffsetSec(shown).then((value) => { if (untrack(() => trackId) === shown) timingOffsetSec = value; });
+      }
     })
       .then((stop) => {
         if (disposed) stop();
@@ -930,9 +933,16 @@
   }
 
   function setTimingOffsetSec(next: number): void {
-    timingOffsetSec = saveLyricsTimingOffsetSec(trackId, next);
-    // Other lyric windows (taskbar lyrics) follow the change at once; outside Tauri there is nobody to tell.
-    if (trackId) void Promise.resolve().then(() => emit(LYRICS_TIMING_OFFSET_EVENT, { trackId, delaySec: timingOffsetSec })).catch(() => {});
+    const id = trackId;
+    timingOffsetSec = clampLyricsTimingOffsetSec(next);
+    // Stored in the library database; other lyric windows (taskbar lyrics) follow once it is written. Outside Tauri
+    // there is nobody to tell.
+    void saveLyricsTimingOffsetSec(id, next)
+      .then((stored) => {
+        if (untrack(() => trackId) === id) timingOffsetSec = stored;
+        if (id) return emit(LYRICS_TIMING_OFFSET_EVENT, { trackId: id, delaySec: stored });
+      })
+      .catch(() => {});
   }
 
   function onTimingOffsetInput(event: Event): void {

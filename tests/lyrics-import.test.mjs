@@ -44,12 +44,12 @@ test('the details page resets the delay after saving imported lyrics and the pla
   const { readFile } = await import('node:fs/promises');
   const dialog = await readFile(new URL('../src/lib/TrackDetailsDialog.svelte', import.meta.url), 'utf8');
   assert.match(dialog, /lyricsToText\(lyricsInUse, importTimestampShiftMs\(lyricsInUse\.offsetMs, timingDelaySec\)\)/);
-  assert.match(dialog, /saveLyricsTimingOffsetSec\(trackId, 0\)[^]*?emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId, delaySec: 0 \}\)/);
+  assert.match(dialog, /saveLyricsTimingOffsetSec\(id, 0\)\.then\(\(\) => emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId: id, delaySec: 0 \}\)\)/);
   assert.match(dialog, /resetDelayBakedIntoSavedLyrics\(isDirty\('lyrics'\)\)/);
   assert.match(dialog, /function clearLyrics\(\) \{[^}]*nextBakedDelayState\(bakedDelayPending, \{ type: 'clear' \}\)/);
   assert.match(dialog, /nextBakedDelayState\(bakedDelayPending, \{ type: 'import', delaySec: timingDelaySec \}\)/);
   const view = await readFile(new URL('../src/lib/LyricsView.svelte', import.meta.url), 'utf8');
-  assert.match(view, /listen<[^>]*>\(LYRICS_TIMING_OFFSET_EVENT[^]*?timingOffsetSec = loadLyricsTimingOffsetSec\(shown\)/);
+  assert.match(view, /listen<[^>]*>\(LYRICS_TIMING_OFFSET_EVENT[^]*?loadLyricsTimingOffsetSec\(shown\)\.then\(\(value\) => \{ if \(untrack\(\(\) => trackId\) === shown\) timingOffsetSec = value; \}\)/);
 });
 
 test('a delay baked in by an import is reset by the next Save that writes the lyrics, edited or not', async () => {

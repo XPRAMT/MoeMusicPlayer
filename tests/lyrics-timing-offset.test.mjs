@@ -9,7 +9,9 @@ import {
   lyricsTimingDelaySecToOffsetMs,
   lyricsDisplayOffsetMs,
   LYRICS_TIMING_OFFSET_EVENT,
+  migrateLegacyLyricsTimingOffsets,
   saveLyricsTimingOffsetSec,
+  setLyricsTimingOffsetBackendForTests,
 } from '../src/lib/lyrics-timing-offset.js';
 
 test('clampLyricsTimingOffsetSec clamps, steps, and rejects non-finite', () => {
@@ -49,21 +51,106 @@ test('timing panel overlays lyrics without extra header guidance', async () => {
   assert.doesNotMatch(source, /範圍 ±5 秒/);
 });
 
-test('save/load persists per track in localStorage', () => {
-  const store = new Map();
+/** A stand-in for the library database behind the Tauri commands (tenths, like the Rust table). */
+function fakeDatabase() {
+  const rows = new Map();
+  const calls = [];
+  return {
+    rows,
+    calls,
+    available: () => true,
+    async invoke(command, args) {
+      calls.push(command);
+      if (command === 'lyrics_timing_offset_get') return (rows.get(args.trackId) ?? 0) / 10;
+      if (command === 'lyrics_timing_offset_set') {
+        const tenths = Math.max(-100, Math.min(100, Math.round(args.delaySec * 10)));
+        if (tenths === 0) rows.delete(args.trackId); else rows.set(args.trackId, tenths);
+        return tenths / 10;
+      }
+      if (command === 'lyrics_timing_offsets_import') {
+        let added = 0;
+        for (const entry of args.entries) {
+          if (!rows.has(entry.trackId)) { rows.set(entry.trackId, Math.round(entry.delaySec * 10)); added += 1; }
+        }
+        return added;
+      }
+      throw new Error(command);
+    },
+  };
+}
+
+function fakeLocalStorage(initial = {}) {
+  const store = new Map(Object.entries(initial));
   globalThis.localStorage = {
+    get length() { return store.size; },
+    key: (index) => [...store.keys()][index] ?? null,
     getItem: (key) => (store.has(key) ? store.get(key) : null),
     setItem: (key, value) => { store.set(key, String(value)); },
     removeItem: (key) => { store.delete(key); },
   };
-  assert.equal(loadLyricsTimingOffsetSec('track-a'), 0);
-  assert.equal(saveLyricsTimingOffsetSec('track-a', 1.25), 1.3);
-  assert.equal(loadLyricsTimingOffsetSec('track-a'), 1.3);
-  assert.equal(saveLyricsTimingOffsetSec('track-a', 0), 0);
-  assert.equal(loadLyricsTimingOffsetSec('track-a'), 0);
-  assert.equal(saveLyricsTimingOffsetSec('track-b', -2), -2);
-  assert.equal(loadLyricsTimingOffsetSec('track-b'), -2);
-  assert.equal(loadLyricsTimingOffsetSec('track-a'), 0);
+  return store;
+}
+
+test('save/load go to the library database per track, not browser storage', async () => {
+  const store = fakeLocalStorage();
+  const db = fakeDatabase();
+  setLyricsTimingOffsetBackendForTests(db);
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 0);
+  assert.equal(await saveLyricsTimingOffsetSec('track-a', 1.25), 1.3);
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 1.3);
+  assert.equal(await saveLyricsTimingOffsetSec('track-a', 0), 0);
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 0);
+  assert.equal(await saveLyricsTimingOffsetSec('track-b', -2), -2);
+  assert.equal(await loadLyricsTimingOffsetSec('track-b'), -2);
+  assert.equal(store.size, 0, 'nothing is written to localStorage');
+  assert.equal(await loadLyricsTimingOffsetSec(null), 0);
+});
+
+test('saves are written in order: the last value wins', async () => {
+  fakeLocalStorage();
+  const db = fakeDatabase();
+  setLyricsTimingOffsetBackendForTests(db);
+  await Promise.all([0.1, 0.2, 0.3, 0.4].map((value) => saveLyricsTimingOffsetSec('track-a', value)));
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 0.4);
+});
+
+test('old localStorage delays move into the database once and their keys are removed', async () => {
+  const prefix = 'moemusicplayer.lyricsTimingOffsetSec:';
+  const store = fakeLocalStorage({ [prefix + 'track-a']: '1.5', [prefix + 'track-b']: '0', other: 'kept' });
+  const db = fakeDatabase();
+  db.rows.set('track-c', 7);
+  setLyricsTimingOffsetBackendForTests(db);
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 1.5, 'the first read already sees the moved value');
+  assert.deepEqual([...store.keys()], ['other']);
+  assert.equal(await loadLyricsTimingOffsetSec('track-c'), 0.7);
+  await migrateLegacyLyricsTimingOffsets();
+  assert.equal(db.calls.filter((call) => call === 'lyrics_timing_offsets_import').length, 1);
+});
+
+test('a failed import keeps the old keys for the next try', async () => {
+  const prefix = 'moemusicplayer.lyricsTimingOffsetSec:';
+  const store = fakeLocalStorage({ [prefix + 'track-a']: '2' });
+  const db = fakeDatabase();
+  const ok = db.invoke.bind(db);
+  let fail = true;
+  db.invoke = async (command, args) => {
+    if (command === 'lyrics_timing_offsets_import' && fail) throw new Error('database closed');
+    return ok(command, args);
+  };
+  setLyricsTimingOffsetBackendForTests(db);
+  await migrateLegacyLyricsTimingOffsets();
+  assert.equal(store.size, 1);
+  fail = false;
+  await migrateLegacyLyricsTimingOffsets();
+  assert.equal(store.size, 0);
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 2);
+});
+
+test('outside Tauri nothing is stored', async () => {
+  fakeLocalStorage();
+  setLyricsTimingOffsetBackendForTests({ available: () => false, invoke: async () => { throw new Error('no'); } });
+  assert.equal(await saveLyricsTimingOffsetSec('track-a', 1.25), 1.3);
+  assert.equal(await loadLyricsTimingOffsetSec('track-a'), 0);
 });
 
 test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track delay)', async () => {
@@ -82,8 +169,9 @@ test('every lyric surface uses lyricsDisplayOffsetMs (LRC offset + per-track del
   assert.match(native, /rules::display_offset_ms\(lyrics\.offset_ms, delay\)/);
   assert.doesNotMatch(page, /\+ lyricsTimingDelaySecToOffsetMs\(/, 'no second hand-made sum');
   assert.equal(LYRICS_TIMING_OFFSET_EVENT, 'lyrics-timing-offset-changed');
-  assert.match(page, /emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId, delaySec: timingOffsetSec \}\)/);
-  assert.match(app, /emit\('lyrics-native-delay', \{ trackId, delaySec: loadLyricsTimingOffsetSec\(trackId\) \}\)/);
+  assert.match(page, /emit\(LYRICS_TIMING_OFFSET_EVENT, \{ trackId: id, delaySec: stored \}\)/);
+  assert.match(app, /loadLyricsTimingOffsetSec\(trackId\)\.then\(\(delaySec\) => emit\('lyrics-native-delay', \{ trackId, delaySec \}\)\)/);
+  assert.doesNotMatch(page + app, /localStorage[^\n]*lyricsTimingOffset/);
   // The cue lead is the page's animation lead only.
   assert.doesNotMatch(native, /LYRIC_CUE_LEAD/);
   assert.match(page, /displayCuePositions\(timedStartTimes, timedOffsetMs, cueLeading\)/);

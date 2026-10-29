@@ -167,13 +167,13 @@
     } catch {
       lyricsInUse = null;
     }
-    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
+    timingDelaySec = await loadLyricsTimingOffsetSec(trackId);
   }
 
-  function importOnlineLyrics() {
+  async function importOnlineLyrics() {
     // Always enabled (user decision 2026-10-22): pressing it again re-applies the current delay even when the
     // field already holds the lyrics in use; with no lyrics in use it does nothing.
-    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
+    timingDelaySec = await loadLyricsTimingOffsetSec(trackId);
     if (draft && onlineLyricsText !== null) {
       draft.lyrics = onlineLyricsText;
       bakedDelayPending = nextBakedDelayState(bakedDelayPending, { type: 'import', delaySec: timingDelaySec }).pending;
@@ -187,8 +187,9 @@
     const next = nextBakedDelayState(bakedDelayPending, { type: 'save', lyricsDirty });
     bakedDelayPending = next.pending;
     if (!next.resetDelay) return;
-    timingDelaySec = saveLyricsTimingOffsetSec(trackId, 0);
-    void Promise.resolve().then(() => emit(LYRICS_TIMING_OFFSET_EVENT, { trackId, delaySec: 0 })).catch(() => {});
+    timingDelaySec = 0;
+    const id = trackId;
+    void saveLyricsTimingOffsetSec(id, 0).then(() => emit(LYRICS_TIMING_OFFSET_EVENT, { trackId: id, delaySec: 0 })).catch(() => {});
   }
 
   /** Empties the lyrics field; like every other field it reaches the file only when 儲存 is pressed. */
@@ -227,7 +228,7 @@
   }
 
   async function refreshClipboard() {
-    timingDelaySec = loadLyricsTimingOffsetSec(trackId);
+    timingDelaySec = await loadLyricsTimingOffsetSec(trackId);
     if (isAndroid) {
       // Only the clip description is checked here (a hint: Android hides the clip while the app is
       // unfocused); 貼上 stays enabled on Android and reads the clipboard when pressed.

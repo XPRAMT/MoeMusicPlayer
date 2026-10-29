@@ -102,6 +102,7 @@ mod favorites;
 mod lyrics_provider;
 mod lyrics_service;
 mod main_background;
+mod lyrics_timing_offset;
 #[cfg(any(target_os = "windows", target_os = "android", test))]
 mod playlist_scan_index;
 mod playlist_source_sync;
@@ -13513,6 +13514,9 @@ pub fn run() {
             appearance_get_main_background,
             appearance_next_slideshow_background,
             appearance_set_android_wallpaper_backdrop,
+            lyrics_timing_offset::lyrics_timing_offset_get,
+            lyrics_timing_offset::lyrics_timing_offset_set,
+            lyrics_timing_offset::lyrics_timing_offsets_import,
             android_all_files_access_status,
             android_request_all_files_access,
             android_system_wallpaper_reason,
