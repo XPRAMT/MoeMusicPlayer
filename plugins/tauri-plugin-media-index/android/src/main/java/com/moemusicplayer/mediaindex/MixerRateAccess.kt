@@ -91,15 +91,88 @@ internal object BoundedProcess {
     }
 }
 
-/** The small amount of state the lookup keeps across runs of the app. */
+/**
+ * Whether the user asked to use root (ADR 0048). settings.json keeps it (`androidRootOptIn`) and Rust is the only
+ * writer (`android_root.rs`): this reads Rust's copy over JNI and reports the answer over JNI, which never waits for the
+ * disk. An answer given before Rust has read the settings is kept here and sent once it has. An older build kept the
+ * value in SharedPreferences (`moe_mixer_rate`, key `rootOptIn`): it is used until settings.json has one, carried over
+ * once on a thread of its own (only when settings.json has none) and then removed.
+ */
 internal object MixerRatePrefs {
+    /** Only the old value is read from here (once), then removed. */
     private const val FILE = "moe_mixer_rate"
+    private const val KEY = "rootOptIn"
+    private const val TAG = "MoeMediaIndex"
 
-    fun rootOptIn(context: Context): Boolean =
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean("rootOptIn", false)
+    /** Rust's copy: [RootOptInRules.NOT_READ], UNSET, OFF or ON. */
+    private external fun nativeRootOptIn(): Int
+
+    /** The user's answer; false while Rust has not read the settings (kept and sent again). */
+    private external fun nativeSetRootOptIn(value: Boolean): Boolean
+
+    /** The one-time carry-over of the old value; writes the file before it returns (not on the main thread). */
+    private external fun nativeImportLegacyRootOptIn(value: Boolean): Boolean
+
+    @Volatile private var pending: Boolean? = null
+    @Volatile private var migrating = false
+
+    fun rootOptIn(context: Context): Boolean {
+        flush()
+        val stored = stored()
+        val legacy = legacy(context)
+        carryOver(context, stored, legacy)
+        return RootOptInRules.effective(stored, legacy, pending)
+    }
 
     fun setRootOptIn(context: Context, value: Boolean) {
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean("rootOptIn", value).apply()
+        pending = value
+        flush()
+        carryOver(context, stored(), legacy(context))
+    }
+
+    private fun flush() {
+        val value = pending ?: return
+        val sent = try {
+            nativeSetRootOptIn(value)
+        } catch (error: Throwable) {
+            false
+        }
+        if (sent && pending == value) pending = null
+    }
+
+    private fun stored(): Int = try {
+        nativeRootOptIn()
+    } catch (error: Throwable) {
+        RootOptInRules.NOT_READ
+    }
+
+    private fun legacy(context: Context): Boolean? {
+        val prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        return if (prefs.contains(KEY)) prefs.getBoolean(KEY, false) else null
+    }
+
+    private fun carryOver(context: Context, stored: Int, legacy: Boolean?) {
+        when (RootOptInRules.legacyStep(stored, legacy)) {
+            RootOptInRules.LegacyStep.NONE, RootOptInRules.LegacyStep.WAIT -> return
+            RootOptInRules.LegacyStep.DROP ->
+                context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().remove(KEY).apply()
+            RootOptInRules.LegacyStep.IMPORT -> {
+                if (migrating || legacy == null) return
+                migrating = true
+                val app = context.applicationContext
+                Thread({
+                    try {
+                        if (nativeImportLegacyRootOptIn(legacy)) {
+                            app.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().remove(KEY).commit()
+                        }
+                    } catch (error: Throwable) {
+                        Log.w(TAG, "root opt-in: the old value could not be carried over", error)
+                    } finally {
+                        migrating = false
+                    }
+                }, "root-opt-in-migrate").start()
+            }
+        }
     }
 }
 

@@ -11,11 +11,8 @@
   import { hasLyricsInUse, importTimestampShiftMs, lyricsToText, nextBakedDelayState } from './lyrics-import.js';
   import { emit } from '@tauri-apps/api/event';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, saveLyricsTimingOffsetSec } from './lyrics-timing-offset.js';
-  import {
-    loadCoverEditOptions,
-    saveCoverEditOptions,
-    type CoverEditOptions,
-  } from './cover-edit-options.js';
+  import { normalizeCoverEditOptions, type CoverEditOptions } from './cover-edit-options.js';
+  import { loadUiPreferences, saveUiPreferences } from './ui-preferences-store';
 
   type TagFields = {
     title: string; artist: string; album: string; albumArtist: string; composer: string; genre: string;
@@ -109,7 +106,12 @@
   let onlineLyricsText = $derived(lyricsInUse ? lyricsToText(lyricsInUse, importTimestampShiftMs(lyricsInUse.offsetMs, timingDelaySec)) : null);
   // A non-zero delay was baked into the lyrics field by 導入使用中歌詞 (see nextBakedDelayState).
   let bakedDelayPending = false;
-  let coverOptions = $state<CoverEditOptions>(loadCoverEditOptions());
+  // Kept in settings.json (`uiPreferences.coverEdit`).
+  let coverOptions = $state<CoverEditOptions>(normalizeCoverEditOptions(null));
+  let coverOptionsChanged = false;
+  void loadUiPreferences()
+    .then((stored) => { if (!coverOptionsChanged) coverOptions = normalizeCoverEditOptions(stored.coverEdit); })
+    .catch(() => {});
 
   const isDirty = (key: keyof TagFields) => !!draft && !!original && draft[key] !== original[key];
   // Cover facts shown next to the preview follow the staged state, not the loaded file.
@@ -418,8 +420,9 @@
   }
 
   function updateCoverOptions(patch: Partial<CoverEditOptions>) {
+    coverOptionsChanged = true;
     coverOptions = { ...coverOptions, ...patch };
-    saveCoverEditOptions(coverOptions);
+    saveUiPreferences({ coverEdit: normalizeCoverEditOptions(coverOptions) });
   }
 
   function onKeydown(event: KeyboardEvent) {

@@ -481,6 +481,16 @@ export interface CoverZoomSettings {
   scale: number;
 }
 
+/** Panel and dialog choices in settings.json (`uiPreferences`); `null`: never chosen (the page uses its defaults). */
+export interface UiPreferences {
+  spectrogram: { fftSize: number; window: string; colormap: string; channel: { mode: 'mix' | 'separate' | 'channel'; index?: number }; dbFloor: number } | null;
+  spectrogramCompare: { mode: string; opacityB: number; difference: boolean; wipe: number } | null;
+  coverEdit: { jpegQuality: number; autoResize: boolean; shortEdgePx: number } | null;
+  /** 120 to 1200. */
+  artistIndexTitleWidthPx: number | null;
+  lyricsSettingsTab: 'general' | 'taskbar' | 'floating' | null;
+}
+
 /** The page the app was on when it closed, restored at the next start (ADR 0053). */
 export interface LastPageSettings {
   view: string;
@@ -1431,6 +1441,15 @@ interface IpcContract {
   settings_set_cover_zoom: {
     args: { scale: number };
     result: CoverZoomSettings;
+  };
+  settings_get_ui_preferences: {
+    args: Record<string, never>;
+    result: UiPreferences;
+  };
+  /** Only the keys of `patch` change (`null` forgets one); values are normalized by the backend. */
+  settings_set_ui_preferences: {
+    args: { patch: Partial<UiPreferences> };
+    result: UiPreferences;
   };
   settings_get_last_page: {
     args: Record<string, never>;

@@ -85,6 +85,7 @@ mod android_dsd;
 #[cfg(any(target_os = "android", test))]
 #[cfg_attr(test, allow(dead_code))]
 mod android_floating;
+mod android_root;
 mod android_folder_browser;
 #[cfg(any(target_os = "android", test))]
 mod android_legacy_backup_cleanup;
@@ -7347,6 +7348,37 @@ fn settings_set_cover_zoom(
         .map_err(|error| error.to_string())
 }
 
+/// Panel and dialog choices kept in `settings.json` (`uiPreferences`): spectrogram, A/B compare, cover edit options,
+/// artist column width, last lyrics settings tab. `None` keys were never chosen.
+#[tauri::command]
+fn settings_get_ui_preferences(
+    state: State<'_, AppState>,
+) -> Result<settings::UiPreferences, String> {
+    state
+        .settings
+        .snapshot()
+        .map(|settings| settings.ui_preferences)
+        .map_err(|error| error.to_string())
+}
+
+/// Change some of the panel and dialog choices: only the keys of `patch` change (`null` forgets one); each value is
+/// normalized (ranges clamped, unknown choices replaced by the default).
+#[tauri::command]
+fn settings_set_ui_preferences(
+    state: State<'_, AppState>,
+    patch: serde_json::Value,
+) -> Result<settings::UiPreferences, String> {
+    state
+        .settings
+        .update(|settings| {
+            settings.ui_preferences =
+                settings::apply_ui_preferences_patch(&settings.ui_preferences, &patch);
+            Ok(())
+        })
+        .map(|settings| settings.ui_preferences)
+        .map_err(|error| error.to_string())
+}
+
 /// How this run was started; the page remembered from last time is not restored over an explicit launch intent.
 struct LaunchIntent {
     external_file: bool,
@@ -13593,6 +13625,8 @@ pub fn run() {
             settings_set_dsd,
             settings_get_cover_zoom,
             settings_set_cover_zoom,
+            settings_get_ui_preferences,
+            settings_set_ui_preferences,
             settings_get_last_page,
             settings_set_last_page,
             settings_get_shortcuts,
@@ -13831,6 +13865,22 @@ pub fn run() {
                         .map_err(|error| error.to_string())?;
                     let _ = handle.emit("floating-lyrics-settings", &saved.floating_lyrics);
                     Ok(())
+                })
+            });
+            // Whether the user asked to use root (ADR 0048): Kotlin reads it from here and reports the answer back.
+            #[cfg(target_os = "android")]
+            android_root::seed(initial_settings.android_root_opt_in);
+            #[cfg(target_os = "android")]
+            android_root::install({
+                let settings = Arc::clone(&settings);
+                Arc::new(move |value: Option<bool>| {
+                    settings
+                        .update(|stored| {
+                            stored.android_root_opt_in = value;
+                            Ok(())
+                        })
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
                 })
             });
             #[cfg(target_os = "windows")]

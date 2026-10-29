@@ -978,6 +978,215 @@ fn lenient_cover_zoom(value: Option<serde_json::Value>) -> CoverZoomSettings {
     CoverZoomSettings { scale }.normalized()
 }
 
+/// Choices made inside panels and dialogs that the user sees again next time (moved here from the page's
+/// localStorage): the spectrogram options and A/B compare view (ADR 0013), the cover edit options of the song details
+/// panel, the dragged width of the artist column and the last tab of Settings -> lyrics. `None` means never chosen
+/// (the page then uses its defaults, and an old localStorage value is carried over once). Every value is normalized
+/// with the same rules as the page (`spectrogram-settings.js`, `spectrogram-compare.js`, `cover-edit-options.js`,
+/// `ArtistIndex.svelte`, `normalizeLyricsSettingsTab`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPreferences {
+    pub spectrogram: Option<SpectrogramPreferences>,
+    pub spectrogram_compare: Option<SpectrogramComparePreferences>,
+    pub cover_edit: Option<CoverEditPreferences>,
+    pub artist_index_title_width_px: Option<u16>,
+    pub lyrics_settings_tab: Option<String>,
+}
+
+/// Which channel the spectrogram shows: `mix`, `separate`, or `channel` with its index.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectrogramChannel {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectrogramPreferences {
+    pub fft_size: u32,
+    pub window: String,
+    pub colormap: String,
+    pub channel: SpectrogramChannel,
+    /// -200 to -1 dB; the ceiling is always 0 dB.
+    pub db_floor: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectrogramComparePreferences {
+    pub mode: String,
+    /// 0 to 1.
+    pub opacity_b: f64,
+    pub difference: bool,
+    /// 0 to 1.
+    pub wipe: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverEditPreferences {
+    /// 1 to 100.
+    pub jpeg_quality: u8,
+    pub auto_resize: bool,
+    /// 64 to 10000.
+    pub short_edge_px: u16,
+}
+
+pub const SPECTROGRAM_FFT_SIZES: [u32; 5] = [1024, 2048, 4096, 8192, 16384];
+pub const SPECTROGRAM_WINDOWS: [&str; 5] = [
+    "hann",
+    "hamming",
+    "blackman",
+    "blackmanHarris",
+    "rectangular",
+];
+pub const SPECTROGRAM_COLORMAPS: [&str; 6] =
+    ["spek", "fire", "magma", "inferno", "viridis", "grayscale"];
+pub const SPECTROGRAM_COMPARE_MODES: [&str; 5] = ["single", "sideH", "sideV", "overlay", "wipe"];
+pub const LYRICS_SETTINGS_TABS: [&str; 3] = ["general", "taskbar", "floating"];
+pub const ARTIST_INDEX_TITLE_WIDTH_RANGE: (u16, u16) = (120, 1200);
+
+fn finite_number(value: Option<&serde_json::Value>) -> Option<f64> {
+    value
+        .and_then(serde_json::Value::as_f64)
+        .filter(|number| number.is_finite())
+}
+
+fn listed(value: Option<&serde_json::Value>, choices: &[&str], fallback: &str) -> String {
+    value
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| choices.contains(text))
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
+fn normalize_spectrogram(value: &serde_json::Value) -> Option<SpectrogramPreferences> {
+    let object = value.as_object()?;
+    let fft_size = object
+        .get("fftSize")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|size| u32::try_from(size).ok())
+        .filter(|size| SPECTROGRAM_FFT_SIZES.contains(size))
+        .unwrap_or(4096);
+    let channel_object = object.get("channel").and_then(serde_json::Value::as_object);
+    let channel_mode = channel_object
+        .and_then(|channel| channel.get("mode"))
+        .and_then(serde_json::Value::as_str);
+    let channel_index = channel_object
+        .and_then(|channel| channel.get("index"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|index| u32::try_from(index).ok());
+    let channel = match (channel_mode, channel_index) {
+        (Some("separate"), _) => SpectrogramChannel {
+            mode: "separate".to_owned(),
+            index: None,
+        },
+        (Some("channel"), Some(index)) => SpectrogramChannel {
+            mode: "channel".to_owned(),
+            index: Some(index),
+        },
+        (Some("mix"), _) => SpectrogramChannel {
+            mode: "mix".to_owned(),
+            index: None,
+        },
+        _ => SpectrogramChannel {
+            mode: "channel".to_owned(),
+            index: Some(0),
+        },
+    };
+    Some(SpectrogramPreferences {
+        fft_size,
+        window: listed(object.get("window"), &SPECTROGRAM_WINDOWS, "hann"),
+        colormap: listed(object.get("colormap"), &SPECTROGRAM_COLORMAPS, "spek"),
+        channel,
+        db_floor: finite_number(object.get("dbFloor")).map_or(-120.0, |db| db.clamp(-200.0, -1.0)),
+    })
+}
+
+fn normalize_spectrogram_compare(
+    value: &serde_json::Value,
+) -> Option<SpectrogramComparePreferences> {
+    let object = value.as_object()?;
+    let unit =
+        |key: &str| finite_number(object.get(key)).map_or(0.5, |number| number.clamp(0.0, 1.0));
+    Some(SpectrogramComparePreferences {
+        mode: listed(object.get("mode"), &SPECTROGRAM_COMPARE_MODES, "single"),
+        opacity_b: unit("opacityB"),
+        difference: object
+            .get("difference")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true),
+        wipe: unit("wipe"),
+    })
+}
+
+fn normalize_cover_edit(value: &serde_json::Value) -> Option<CoverEditPreferences> {
+    let object = value.as_object()?;
+    Some(CoverEditPreferences {
+        jpeg_quality: finite_number(object.get("jpegQuality"))
+            .map_or(100, |quality| quality.round().clamp(1.0, 100.0) as u8),
+        auto_resize: object
+            .get("autoResize")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true),
+        short_edge_px: finite_number(object.get("shortEdgePx"))
+            .map_or(2160, |edge| edge.round().clamp(64.0, 10000.0) as u16),
+    })
+}
+
+fn normalize_artist_title_width(value: &serde_json::Value) -> Option<u16> {
+    let (min, max) = ARTIST_INDEX_TITLE_WIDTH_RANGE;
+    finite_number(Some(value))
+        .filter(|width| *width > 0.0)
+        .map(|width| width.round().clamp(f64::from(min), f64::from(max)) as u16)
+}
+
+fn normalize_lyrics_settings_tab(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|tab| LYRICS_SETTINGS_TABS.contains(tab))
+        .map(str::to_owned)
+}
+
+/// Reads the stored object leniently: a missing or malformed key is `None` (never chosen).
+pub fn lenient_ui_preferences(value: Option<serde_json::Value>) -> UiPreferences {
+    let Some(serde_json::Value::Object(object)) = value else {
+        return UiPreferences::default();
+    };
+    UiPreferences {
+        spectrogram: object.get("spectrogram").and_then(normalize_spectrogram),
+        spectrogram_compare: object
+            .get("spectrogramCompare")
+            .and_then(normalize_spectrogram_compare),
+        cover_edit: object.get("coverEdit").and_then(normalize_cover_edit),
+        artist_index_title_width_px: object
+            .get("artistIndexTitleWidthPx")
+            .and_then(normalize_artist_title_width),
+        lyrics_settings_tab: object
+            .get("lyricsSettingsTab")
+            .and_then(normalize_lyrics_settings_tab),
+    }
+}
+
+/// A change from the page: only the keys it carries change (`null` forgets the value); each is normalized.
+pub fn apply_ui_preferences_patch(
+    current: &UiPreferences,
+    patch: &serde_json::Value,
+) -> UiPreferences {
+    let mut merged = match serde_json::to_value(current) {
+        Ok(serde_json::Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(changes) = patch.as_object() {
+        for (key, value) in changes {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    lenient_ui_preferences(Some(serde_json::Value::Object(merged)))
+}
 /// The main pages the app can restore at the next start (ADR 0053). The same list lives in
 /// `src/lib/start-page.js` (`START_PAGE_VIEWS`); `tests/start-page.test.mjs` checks they match.
 pub const LAST_PAGE_VIEWS: [&str; 8] = [
@@ -2546,6 +2755,13 @@ pub struct AppSettings {
     /// The one codec order for every headset (codec keys `t<type>` / `x<id>`, best first); empty: never set.
     #[serde(default, deserialize_with = "deserialize_bluetooth_codec_order")]
     pub android_bluetooth_codec_order: Vec<String>,
+    /// Android: the user asked to use root (the root check of the explanation panel; ADR 0048). `None`: never asked, so
+    /// `su` is never run; the value an older build kept in SharedPreferences (`moe_mixer_rate`) is carried over once.
+    #[serde(default)]
+    pub android_root_opt_in: Option<bool>,
+    /// Panel and dialog choices (see `UiPreferences`).
+    #[serde(default)]
+    pub ui_preferences: UiPreferences,
 }
 
 const BLUETOOTH_CODEC_ORDER_MAX_KEYS: usize = 32;
@@ -2704,6 +2920,8 @@ impl Default for AppSettings {
             android_bluetooth_rate_follow: false,
             android_bluetooth_codec_custom: false,
             android_bluetooth_codec_order: Vec::new(),
+            android_root_opt_in: None,
+            ui_preferences: UiPreferences::default(),
         }
     }
 }
@@ -3206,6 +3424,8 @@ struct RawSettings {
     android_bluetooth_rate_follow: Option<bool>,
     android_bluetooth_codec_custom: Option<bool>,
     android_bluetooth_codec_order: Option<serde_json::Value>,
+    android_root_opt_in: Option<serde_json::Value>,
+    ui_preferences: Option<serde_json::Value>,
 }
 
 /// Whether a settings file can be read as it is (the backup import checks a file before it is ever used).
@@ -3296,6 +3516,8 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         android_bluetooth_codec_order: normalize_bluetooth_codec_order(
             raw.android_bluetooth_codec_order,
         ),
+        android_root_opt_in: raw.android_root_opt_in.as_ref().and_then(serde_json::Value::as_bool),
+        ui_preferences: lenient_ui_preferences(raw.ui_preferences),
     };
     // Former max was 64; clamp so older saved values still load.
     if settings.lyrics_preferences.line_gap_px > 50 {
@@ -3946,6 +4168,86 @@ mod tests {
         assert_eq!(lenient_cover_zoom(None), CoverZoomSettings::default());
     }
 
+    #[test]
+    fn panel_preferences_are_normalized_patched_and_persisted() {
+        let empty = lenient_ui_preferences(None);
+        assert_eq!(empty, UiPreferences::default());
+        let read = lenient_ui_preferences(Some(serde_json::json!({
+            "spectrogram": {"fftSize": 3000, "window": "blackman", "colormap": "nope",
+                "channel": {"mode": "channel", "index": 1}, "dbFloor": -999},
+            "spectrogramCompare": {"mode": "wipe", "opacityB": 7, "difference": true, "wipe": "x"},
+            "coverEdit": {"jpegQuality": 0.2, "autoResize": true, "shortEdgePx": 99999},
+            "artistIndexTitleWidthPx": 50.4,
+            "lyricsSettingsTab": "taskbar"
+        })));
+        let spectrogram = read.spectrogram.clone().unwrap();
+        assert_eq!(spectrogram.fft_size, 4096);
+        assert_eq!(spectrogram.window, "blackman");
+        assert_eq!(spectrogram.colormap, "spek");
+        assert_eq!(
+            spectrogram.channel,
+            SpectrogramChannel {
+                mode: "channel".into(),
+                index: Some(1)
+            }
+        );
+        assert_eq!(spectrogram.db_floor, -200.0);
+        let compare = read.spectrogram_compare.clone().unwrap();
+        assert_eq!(
+            (
+                compare.mode.as_str(),
+                compare.opacity_b,
+                compare.difference,
+                compare.wipe
+            ),
+            ("wipe", 1.0, true, 0.5)
+        );
+        assert_eq!(
+            read.cover_edit,
+            Some(CoverEditPreferences {
+                jpeg_quality: 1,
+                auto_resize: true,
+                short_edge_px: 10000
+            })
+        );
+        assert_eq!(read.artist_index_title_width_px, Some(120));
+        assert_eq!(read.lyrics_settings_tab.as_deref(), Some("taskbar"));
+        // Malformed values are "never chosen".
+        let bad = lenient_ui_preferences(Some(serde_json::json!({
+            "spectrogram": 3, "coverEdit": "x", "artistIndexTitleWidthPx": -1, "lyricsSettingsTab": "other"
+        })));
+        assert_eq!(bad, UiPreferences::default());
+        // A patch changes only its keys; null forgets one.
+        let patched = apply_ui_preferences_patch(
+            &read,
+            &serde_json::json!({"artistIndexTitleWidthPx": 400, "lyricsSettingsTab": null}),
+        );
+        assert_eq!(patched.artist_index_title_width_px, Some(400));
+        assert_eq!(patched.lyrics_settings_tab, None);
+        assert_eq!(patched.spectrogram, read.spectrogram);
+        assert_eq!(patched.cover_edit, read.cover_edit);
+
+        let directory = test_directory("ui-preferences");
+        let path = directory.join("settings.json");
+        let store = SettingsStore::open(&path, AppSettings::default()).expect("create settings");
+        assert_eq!(
+            store.snapshot().unwrap().ui_preferences,
+            UiPreferences::default()
+        );
+        assert_eq!(store.snapshot().unwrap().android_root_opt_in, None);
+        store
+            .update(|settings| {
+                settings.ui_preferences = patched.clone();
+                settings.android_root_opt_in = Some(true);
+                Ok(())
+            })
+            .expect("persist preferences");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"uiPreferences\"") && text.contains("\"androidRootOptIn\": true"));
+        let reopened = SettingsStore::open(&path, AppSettings::default()).expect("reopen settings");
+        assert_eq!(reopened.snapshot().unwrap().ui_preferences, patched);
+        assert_eq!(reopened.snapshot().unwrap().android_root_opt_in, Some(true));
+    }
     #[test]
     fn the_last_page_is_remembered_and_read_leniently() {
         let default = LastPageSettings::default();

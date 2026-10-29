@@ -238,7 +238,6 @@ export function floatingLyricsOverlayNoticeVisible(platform, status) {
 
 /** The settings tabs of the lyrics section; the taskbar tab exists on Windows only. */
 export const LYRICS_SETTINGS_TABS = Object.freeze(['general', 'taskbar', 'floating']);
-export const LYRICS_SETTINGS_TAB_STORAGE_KEY = 'moe.settings.lyricsTab';
 
 /**
  * @param {unknown} value the remembered tab

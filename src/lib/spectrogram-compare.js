@@ -2,7 +2,7 @@ import { tr } from './i18n.js';
 // A/B spectrogram comparison helpers (ADR 0013): shared view (zoom/pan), layer geometry
 // on shared axes, level sampling for hover readout, difference image, drop targeting.
 
-const PREFS_KEY = 'moe.spectrogramCompare';
+
 export const COMPARE_MODES = [
   { value: 'single', label: tr('單張') },
   { value: 'sideH', label: tr('並排（左右）') },
@@ -29,13 +29,7 @@ export function normalizeComparePrefs(value) {
     wipe: clamp01(raw.wipe, 0.5),
   };
 }
-export function loadComparePrefs() {
-  try { return normalizeComparePrefs(JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null')); } catch { return normalizeComparePrefs(null); }
-}
-/** @param {ComparePrefs} prefs */
-export function saveComparePrefs(prefs) {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify(normalizeComparePrefs(prefs))); } catch { /* ignore */ }
-}
+
 
 /**
  * Zoom one axis around an anchor (0..1 in view space). factor < 1 zooms in.

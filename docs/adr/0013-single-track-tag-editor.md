@@ -85,7 +85,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - **不在視窗內換曲**（使用者更正：「切換音軌」指聲道）：沒有曲庫搜尋、佇列上／下一首或跟隨播放；視窗顯示從面板開啟的曲目，從面板再按「頻譜圖」會以 `spectrogram-track` 事件換成該曲。聲道選單依解碼串流的實際聲道數動態列出（支援 5.1、7.1 等任意聲道數），標籤取自 symphonia 聲道配置（L、R、C、LFE、SL、SR、RL、RR…，未知時為 `Ch n`），另有「混合（全部聲道）」與「各聲道上下分開」。
 - **配色**：Spek（預設）、Magma、Inferno、Viridis、灰階；Rust 端 256 階 LUT，前端圖例以相同色標的 CSS 漸層顯示。
 - **分析設定**：FFT 大小 1024–16384、窗函數（Hann／Hamming／Blackman／Blackman-Harris／矩形，以窗的相干增益正規化，滿幅正弦約 0 dBFS）、頻率軸線性／對數（對數下限 20 Hz）、dB 下限／上限、聲道（混合／單一聲道／各聲道上下分開）、最高頻率（空白＝Nyquist）。輸出解析度依繪圖區實際大小（×DPR，最多 2 倍）決定，視窗縮放後自動重繪；另有「重新繪製」。
-- 設定存於 localStorage `moe.spectrogramSettings`（每裝置），經 `toRenderOptions` 轉成 Rust `SpectrogramOptions`（serde camelCase；聲道為 `{ mode, index }`）。
+- 設定存於 `settings.json` 的 `uiPreferences.spectrogram`（Windows 與 Android 各一份，隨設定備份；舊 localStorage 值只在該欄位沒有值時搬入一次後刪除，`src/lib/ui-preferences.js`），經 `toRenderOptions` 轉成 Rust `SpectrogramOptions`（serde camelCase；聲道為 `{ mode, index }`）。
 - 截止頻率提示改為「中位數高於 −100 dB 的最高頻率」，低於 Nyquist 93% 才顯示。
 
 ### 頻譜圖：開啟任意檔案與 A／B 比較（使用者確認）
@@ -128,7 +128,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 - Rust：`crates/player-tags`（`read_details`／`write_edit`／`prepare_cover`／`render_spectrogram`），`src-tauri/src/track_details.rs` 提供 IPC 與頻譜圖視窗（label `spectrogram`，載入 `index.html?view=spectrogram&track=<id>`，已加入 capability `default.json`）。
 - 前端：`src/lib/TrackDetailsDialog.svelte`、`src/lib/SpectrogramView.svelte`（`main.ts` 依 `view=spectrogram` 掛載）、`lyrics-import.js`（導入判斷與 LRC 序列化）、`cover-edit-options.js`。
 - lofty 驗證（樣本複本）：MP3（含 v2.3→v2.4 升級）、FLAC、M4A、Opus、WAV（寫 ID3v2 chunk）皆可往返；ID3v2 不接受 `ItemKey::Lyrics`，改寫 USLT（`UnsyncLyrics`）。該 Ogg Vorbis 樣本 lofty 讀取失敗（與既有掃描一致），未處理。
-- 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）暫存於前端 localStorage（每裝置），尚未進 `settings.json`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；封面寫入格式（2026-10-22 修訂）：一律 JPG，來源至少有一個像素 alpha < 255 時改寫 PNG 並保留透明（有 alpha 通道但全不透明者仍轉 JPG）；不需縮放的 JPG 與有透明像素的 PNG 原樣寫入；重新編碼時方向套到像素並保留 ICC 與 EXIF（方向設為 1）。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
+- 偏離／暫定：封面設定（JPG 品質、自動縮放短邊）存於 `settings.json` 的 `uiPreferences.coverEdit`；儲存後以既有增量 `library_sync` 更新曲庫投影（會走訪來源目錄，尚非單曲投影更新）；封面寫入格式（2026-10-22 修訂）：一律 JPG，來源至少有一個像素 alpha < 255 時改寫 PNG 並保留透明（有 alpha 通道但全不透明者仍轉 JPG）；不需縮放的 JPG 與有透明像素的 PNG 原樣寫入；重新編碼時方向套到像素並保留 ICC 與 EXIF（方向設為 1）。Android 標籤讀寫與頻譜圖尚未接上（`track_path` 只支援 Windows 檔案路徑），Android 全螢幕頻譜頁的 UI 已就緒。
 
 ## 「導入使用中歌詞」（2026-10-17 使用者修訂）
 
@@ -175,7 +175,7 @@ Picard／foobar2000 參考：foobar 的 Properties 分「Metadata／Details」�
 | WebDAV 遠端 | GMT 日期 | 無時區 |
 | 未知或偵測失敗 | — | 加時區 |
 
-封面：`player_tags::cover` 的 `plan_cover`／`prepare_cover`（各容器相同）：一律 JPG，來源至少一個像素 alpha < 255 時改寫 PNG 保留透明（`has_transparency`）；不需縮放的 JPG 與有透明的 PNG 寫原始位元組，其餘重新編碼（先套 EXIF 方向並把方向改為 1，保留 ICC 與其餘 EXIF）。「儲存時：…」由 `track_details_cover_plan` 顯示同一份計畫。JPG 品質（預設 100）與縮放短邊（預設 2160）存 localStorage `moe.coverEditOptions.v2`。複製→貼上保留原檔（`src/lib/cover-clipboard.js`：記住原檔與解碼像素指紋，指紋相同就改用原檔）。剪貼簿：Windows 用 navigator.clipboard；Android 讀寫都走原生 ClipboardManager——`track_details_clipboard_has_image` 只讀 clip description（Android 的貼上按鈕一律可按）、`track_details_read_clipboard_image` 讀 content:// 或 file:// URI 並以檔頭判斷格式、`track_details_copy_cover` 經 FileProvider（`${applicationId}.moe.updates`）放 content URI。測試：`player-tags` 的 `cover` 單元測試與 `tests/cover_write.rs`。
+封面：`player_tags::cover` 的 `plan_cover`／`prepare_cover`（各容器相同）：一律 JPG，來源至少一個像素 alpha < 255 時改寫 PNG 保留透明（`has_transparency`）；不需縮放的 JPG 與有透明的 PNG 寫原始位元組，其餘重新編碼（先套 EXIF 方向並把方向改為 1，保留 ICC 與其餘 EXIF）。「儲存時：…」由 `track_details_cover_plan` 顯示同一份計畫。JPG 品質（預設 100）與縮放短邊（預設 2160）存 `settings.json` 的 `uiPreferences.coverEdit`（`jpegQuality` 1–100、`autoResize`、`shortEdgePx` 64–10000）。複製→貼上保留原檔（`src/lib/cover-clipboard.js`：記住原檔與解碼像素指紋，指紋相同就改用原檔）。剪貼簿：Windows 用 navigator.clipboard；Android 讀寫都走原生 ClipboardManager——`track_details_clipboard_has_image` 只讀 clip description（Android 的貼上按鈕一律可按）、`track_details_read_clipboard_image` 讀 content:// 或 file:// URI 並以檔頭判斷格式、`track_details_copy_cover` 經 FileProvider（`${applicationId}.moe.updates`）放 content URI。測試：`player-tags` 的 `cover` 單元測試與 `tests/cover_write.rs`。
 
 儲存後：`onSaved` 呼叫 `reloadAfterTrackDetailsSaved(trackId)`：後端只重讀這個檔案的標籤（Windows `MetadataReader::read`、Android `media_index().read_metadata`）並以 `Database::refresh_track_metadata` 寫入曲目列（歌詞不存資料庫，播放時讀檔，ADR 0040）；頁面遞增 `libraryListRevision`（專輯卡快取以 `albumArtworkEpoch` 為鍵）；儲存前後以 `Database::album_index_key_for_track` 取專輯鍵，後端 `album_artwork_cache::forget_album_selections` 並送 `album-artwork-invalidated`，頁面 `forgetAlbumCardArtwork`；再 `playback_refresh_current_track`、廣播 `current-track-refreshed`、`artworkController.reload()`，歌詞以 `lyricsController.reload()` 重讀。Android 通知欄不跟著更新（下次切歌才更新）。
 

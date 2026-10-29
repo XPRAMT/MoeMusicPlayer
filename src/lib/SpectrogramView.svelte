@@ -16,13 +16,14 @@
   import { followLanguageChange } from './language-sync.js';
   import {
     COLORMAPS, FFT_SIZES, WINDOW_FUNCTIONS, fractionToFrequency, frequencyTicks, frequencyToFraction,
-    loadSpectrogramSettings, saveSpectrogramSettings, toRenderOptions, type SpectrogramSettings,
+    normalizeSpectrogramSettings, toRenderOptions, type SpectrogramSettings,
   } from './spectrogram-settings.js';
   import {
     COMPARE_MODES, FULL_VIEW, differenceImage, dropAssignment, layerHeightFraction, levelToDb,
-    loadComparePrefs, panView, pinchView, sampleLevel, saveComparePrefs, timeTickStep, timeTickValues, worldStyle, zoomView,
+    normalizeComparePrefs, panView, pinchView, sampleLevel, timeTickStep, timeTickValues, worldStyle, zoomView,
     type ComparePrefs, type View,
   } from './spectrogram-compare.js';
+  import { loadUiPreferences, saveUiPreferences } from './ui-preferences-store';
 
   type Side = 'A' | 'B';
   type Spectrogram = {
@@ -39,8 +40,9 @@
   let loaded = $state<Record<Side, Loaded | null>>({ A: null, B: null });
   let loading = $state<Record<Side, boolean>>({ A: false, B: false });
   let errors = $state<Record<Side, string | null>>({ A: null, B: null });
-  let settings = $state<SpectrogramSettings>(loadSpectrogramSettings());
-  let prefs = $state<ComparePrefs>(loadComparePrefs());
+  // Kept in settings.json (`uiPreferences.spectrogram` / `spectrogramCompare`); read before the first render.
+  let settings = $state<SpectrogramSettings>(normalizeSpectrogramSettings(null));
+  let prefs = $state<ComparePrefs>(normalizeComparePrefs(null));
   let showB = $state(true);
   let view = $state<View>({ ...FULL_VIEW });
   let hover = $state<{ x: number; y: number; wx: number; wy: number; host: HTMLElement } | null>(null);
@@ -174,12 +176,12 @@
 
   function updateSettings(patch: Partial<SpectrogramSettings>) {
     settings = { ...settings, ...patch };
-    saveSpectrogramSettings(settings);
+    saveUiPreferences({ spectrogram: normalizeSpectrogramSettings(settings) });
     scheduleRender();
   }
   function updatePrefs(patch: Partial<ComparePrefs>) {
     prefs = { ...prefs, ...patch };
-    saveComparePrefs(prefs);
+    saveUiPreferences({ spectrogramCompare: normalizeComparePrefs(prefs) });
   }
 
   // Shared axes
@@ -389,6 +391,13 @@
 
   let resizeObserver: ResizeObserver | null = null;
   onMount(async () => {
+    try {
+      const stored = await loadUiPreferences();
+      settings = normalizeSpectrogramSettings(stored.spectrogram);
+      prefs = normalizeComparePrefs(stored.spectrogramCompare);
+    } catch {
+      // settings unavailable: the defaults
+    }
     if (initialTrackId) setSource('A', { kind: 'track', id: initialTrackId });
     window.addEventListener('keydown', onKeydown);
     if (sizer) {

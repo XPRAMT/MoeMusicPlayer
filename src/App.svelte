@@ -243,12 +243,13 @@
     floatingLyricsWidthMax,
     floatingLyricsOverlayNoticeVisible,
     pressFloatingLyricsNudge,
-    LYRICS_SETTINGS_TAB_STORAGE_KEY,
+
     buildFloatingLyricsNativeData,
     normalizeFloatingLyricsSettings,
     normalizeLyricsSettingsTab,
   } from './lib/floating-lyrics-settings.js';
   import { LYRICS_TIMING_OFFSET_EVENT, loadLyricsTimingOffsetSec, lyricsDisplayOffsetMs, migrateLegacyLyricsTimingOffsets } from './lib/lyrics-timing-offset.js';
+  import { loadUiPreferences, saveUiPreferences } from './lib/ui-preferences-store';
   import OutputDevicesSettings from './lib/OutputDevicesSettings.svelte';
   import AndroidOutputDevicesSettings from './lib/AndroidOutputDevicesSettings.svelte';
   import OpacityCalculation from './lib/OpacityCalculation.svelte';
@@ -668,12 +669,18 @@
   let floatingLyricsWidthMaxPx = $derived(floatingLyricsWidthMax(floatingLyricsScreenWidth ?? undefined, floatingLyricsSettings.fontSizePx));
   /** Bumped when the per-track lyrics delay changes, so the Android overlay gets the new offset. */
   let lyricsDelayRevision = $state(0);
-  let lyricsSettingsTab = $state<'general' | 'taskbar' | 'floating'>(
-    normalizeLyricsSettingsTab(typeof localStorage === 'undefined' ? null : localStorage.getItem(LYRICS_SETTINGS_TAB_STORAGE_KEY), true),
-  );
+  // The last lyrics settings tab is kept in settings.json (`uiPreferences.lyricsSettingsTab`).
+  let lyricsSettingsTab = $state<'general' | 'taskbar' | 'floating'>('general');
+  let lyricsSettingsTabChosen = false;
+  if (isTauri()) {
+    void loadUiPreferences()
+      .then((stored) => { if (!lyricsSettingsTabChosen) lyricsSettingsTab = normalizeLyricsSettingsTab(stored.lyricsSettingsTab, true); })
+      .catch(() => {});
+  }
   function chooseLyricsSettingsTab(tab: 'general' | 'taskbar' | 'floating'): void {
+    lyricsSettingsTabChosen = true;
     lyricsSettingsTab = tab;
-    try { localStorage.setItem(LYRICS_SETTINGS_TAB_STORAGE_KEY, tab); } catch { /* storage unavailable */ }
+    if (isTauri()) saveUiPreferences({ lyricsSettingsTab: tab });
   }
   let dseeHxError = $state<string | null>(null);
   let nowPlayingAppearancePreferences = $state<NowPlayingAppearancePreferences>(

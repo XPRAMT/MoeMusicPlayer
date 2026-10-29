@@ -1,10 +1,6 @@
 import { tr } from './i18n.js';
-// Spectrogram window settings (ADR 0013): persisted per device in localStorage and sent
-// to the Rust renderer as `SpectrogramOptions`.
-
-const KEY = 'moe.spectrogramSettings.v2';
-/** The first version of the stored settings: its colour map, window and dB range carry over; FFT size, channel and axis are reset to the new defaults. */
-const LEGACY_KEY = 'moe.spectrogramSettings';
+// Spectrogram window settings (ADR 0013): kept in settings.json (`uiPreferences.spectrogram`, through
+// ui-preferences-store.ts) and sent to the Rust renderer as `SpectrogramOptions`.
 
 export const FFT_SIZES = [1024, 2048, 4096, 8192, 16384];
 export const WINDOW_FUNCTIONS = [
@@ -64,30 +60,6 @@ export function normalizeSpectrogramSettings(value) {
   };
 }
 
-/** @returns {SpectrogramSettings} */
-export function loadSpectrogramSettings() {
-  try {
-    const current = localStorage.getItem(KEY);
-    if (current !== null) return normalizeSpectrogramSettings(JSON.parse(current));
-    const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) ?? 'null');
-    if (legacy && typeof legacy === 'object') {
-      const { fftSize: _fft, channel: _channel, logFrequency: _log, ...kept } = legacy;
-      return normalizeSpectrogramSettings(kept);
-    }
-    return normalizeSpectrogramSettings(null);
-  } catch {
-    return { ...DEFAULT_SPECTROGRAM_SETTINGS };
-  }
-}
-
-/** @param {SpectrogramSettings} settings */
-export function saveSpectrogramSettings(settings) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(normalizeSpectrogramSettings(settings)));
-  } catch {
-    // ignore
-  }
-}
 
 /**
  * Renderer options for the Rust side.

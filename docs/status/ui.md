@@ -30,4 +30,4 @@
 
 同步結果顯示（設定 → 音樂來源頂部橫幅）：每個來源一行「來源名　同步完成；新增 n 個項目，移除 n 個項目。」，有項目錯誤才加「，n 個項目錯誤」（`sync-result-line.js` 的 `formatSyncResultLine`，n 取自 `library-sync-finished` 的 `addedOrUpdated`／`removedMappings`）；進度條只在有已知總數的階段出現；只有失敗或沒有可同步來源時才顯示說明。
 
-頻譜圖（ADR 0038）：獨立 Tauri 視窗（label `spectrogram`，`SpectrogramView`；Android 為全螢幕頁），可 A／B 比較（`src/lib/spectrogram-compare.js`），設定存 `moe.spectrogramSettings.v2`（`src/lib/spectrogram-settings.js`）。「Spek」配色是依其色階重新實作（`spek_color`），不得複製 Spek 的 GPL 程式碼；色階上限固定 0 dB。DSF／WVDSD 經 `player-tags` 的 `dsd_input` 轉 352.8 kHz 分析；DFF 與 Android 的 Opus 不支援。Release GUI 驗收待做。
+頻譜圖（ADR 0038）：獨立 Tauri 視窗（label `spectrogram`，`SpectrogramView`；Android 為全螢幕頁），可 A／B 比較（`src/lib/spectrogram-compare.js`），設定與比較偏好存 `settings.json` 的 `uiPreferences.spectrogram`／`spectrogramCompare`（`src/lib/spectrogram-settings.js`、`src/lib/ui-preferences-store.ts`）。「Spek」配色是依其色階重新實作（`spek_color`），不得複製 Spek 的 GPL 程式碼；色階上限固定 0 dB。DSF／WVDSD 經 `player-tags` 的 `dsd_input` 轉 352.8 kHz 分析；DFF 與 Android 的 Opus 不支援。Release GUI 驗收待做。

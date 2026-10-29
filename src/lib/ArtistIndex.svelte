@@ -10,6 +10,8 @@
   import type { VirtualListRow } from './PagedVirtualList.svelte';
   import TrackColumnCells from './TrackColumnCells.svelte';
   import { PagedListController } from './track-list-data.js';
+  import { normalizeArtistTitleWidth } from './ui-preferences.js';
+  import { loadUiPreferences, saveUiPreferences } from './ui-preferences-store';
 
   type ArtistRow = ArtistIndexEntry;
   type SortField = 'title' | 'trackCount' | 'albumCount' | 'duration' | 'trackDuration';
@@ -22,24 +24,22 @@
     { id: 'trackDuration', label: tr('播放時長') },
   ];
   // All columns share the same font-size as their cells so em widths match between header and rows.
-  // 演出者 column width: dragged at its header border (shared resize handle); persisted.
-  const TITLE_WIDTH_KEY = 'moe.artistIndex.titleWidthPx';
-  const TITLE_WIDTH_MIN = 120;
-  const TITLE_WIDTH_MAX = 1200;
-  const clampTitleWidth = (value: number) => Math.round(Math.min(TITLE_WIDTH_MAX, Math.max(TITLE_WIDTH_MIN, value)));
-  function readTitleWidth(): number | null {
-    try {
-      const value = Number(localStorage.getItem(TITLE_WIDTH_KEY));
-      return Number.isFinite(value) && value > 0 ? clampTitleWidth(value) : null;
-    } catch { return null; }
-  }
-  let titleWidth = $state<number | null>(readTitleWidth());
+  // 演出者 column width: dragged at its header border (shared resize handle); kept in settings.json
+  // (`uiPreferences.artistIndexTitleWidthPx`, 120 to 1200 px; never dragged: the column fills the free space).
+  let titleWidth = $state<number | null>(null);
+  let titleWidthDragged = false;
+  void loadUiPreferences()
+    .then((stored) => { if (!titleWidthDragged) titleWidth = normalizeArtistTitleWidth(stored.artistIndexTitleWidthPx); })
+    .catch(() => {});
   const ARTIST_GRID = $derived(`36px ${titleWidth === null ? 'minmax(150px,1fr)' : `${titleWidth}px`} 6em 6em 6em 6em`);
 
   // Same column-resize handle as the track lists (TrackColumnCells), at the column border.
   function setTitleWidth(widthPx: number): void {
-    titleWidth = clampTitleWidth(widthPx);
-    try { localStorage.setItem(TITLE_WIDTH_KEY, String(titleWidth)); } catch { /* storage unavailable */ }
+    const width = normalizeArtistTitleWidth(widthPx);
+    if (width === null) return;
+    titleWidthDragged = true;
+    titleWidth = width;
+    saveUiPreferences({ artistIndexTitleWidthPx: width });
   }
 
 

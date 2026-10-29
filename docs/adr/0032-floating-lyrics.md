@@ -26,7 +26,7 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   area's top-left as a ratio of the screen on both platforms; see “Position as a screen ratio in settings.json”).
   Repaired field by field like the taskbar settings. Both features can be on at once.
 - Settings UI: the lyrics panel has tabs 播放頁 (formerly 一般) / 工作列歌詞 / 浮動歌詞 (the taskbar tab only on Windows); the last tab is
-  kept in `localStorage` (`moe.settings.lyricsTab`). The look controls are one component (`LyricsLookSettings.svelte`)
+  kept in `settings.json` (`uiPreferences.lyricsSettingsTab`). The look controls are one component (`LyricsLookSettings.svelte`)
   used by both tabs.
 - Windows: one transparent always-on-top window `floating-lyrics` (`?view=floating-lyrics`, 800 CSS px wide, tool
   window, no activation) rendering through `TaskbarLyricsView` with `variant="floating"`, so the line selection,
