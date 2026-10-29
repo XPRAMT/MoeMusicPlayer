@@ -53,7 +53,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 - 播放頁同步歌詞與瀏覽跳轉（`lyrics-window.js`、`LYRIC_CUE_LEAD_MS`、`lyrics-browse.js`；ADR 0029）。
 - 播放進度時鐘 `playback-clock.ts`、進度條 `progress-run.js`、緩衝提示（ADR 0028）。
 - 跳轉與焦點 `seekPlayback`、播放鍵與 seek 期間、換曲先備妥再切換 `track_start.rs`（ADR 0036）。
-- 切歌封面 `active-track-artwork.ts`、封面縮放 `cover-zoom.js`／`cover-overlay.js`、手勢 `swipe-dismiss.js`（ADR 0036）。
+- 切歌封面 `active-track-artwork.ts`、封面縮放 `cover-zoom.js`／`cover-swipe-feedback.js`、手勢 `swipe-dismiss.js`（ADR 0036）。
 - 歌詞來源：線上自動套用 `auto_lyric_candidate` 與 AMLL QRC（ADR 0041 D6）、本機歌詞 `parse_any_lyrics`／`lyric_roles.rs`（ADR 0040、0041）、簡繁轉換 `crates/player-zh`（ADR 0030）。
 
 **介面** → `ui.md`

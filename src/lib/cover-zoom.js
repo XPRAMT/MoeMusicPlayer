@@ -3,7 +3,7 @@
 // area is squeezed by the cover instead of scaling with it (see --np-cover-reserve in app.css). Pure math is exported
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
-import { coverDrawPlan, overlayMatchesSource, parseSwipeFeedback, snapRectToDevicePixels, withoutSwipeFeedback } from './cover-overlay.js';
+import { parseSwipeFeedback, withoutSwipeFeedback } from './cover-swipe-feedback.js';
 import { COVER_RERASTER_RESTORE_MS, COVER_RERASTER_TRANSITION, COVER_RERASTER_TRANSLATE, createRerasterState, invalidateReraster, isRerasterTranslate, markRerastered, observeRerasterScale, planReraster } from './cover-reraster.js';
 
 export const COVER_ZOOM_MIN = 0.5;
@@ -17,15 +17,14 @@ export const COVER_PAN_SLOP_PX = 6;
 export const COVER_ZOOM_SETTLE_MS = 50;
 /** The scale stable for this long (and no gesture) = the zoom is over: the stage gets one re-raster nudge (ADR 0036). */
 export const COVER_LAYER_IDLE_MS = 50;
-/** The double-click / double-tap reset glide. */
+/** The double-click / double-tap reset glide (a Web Animation on the stage itself). */
 export const COVER_RESET_MS = 200;
+export const COVER_RESET_EASING = 'ease';
 const COVER_WHEEL_ANCHOR_SLOP_PX = 2;
 /** A timer may fire a hair early: the stability check allows this much (ms) under the idle time. */
 const COVER_TIMER_SLACK_MS = 2;
 /** A nudge waits for a swipe's feedback to end at most this many timer periods (the swipe's own transition re-rasters). */
 const COVER_FEEDBACK_WAIT_LIMIT = 40;
-/** The cover image bleeds this far past the stage edges (app.css `.cover-stage.has-artwork .cover-stage-image`). */
-const COVER_IMAGE_BLEED_PX = 1;
 
 /** @typedef {{ scale: number, x: number, y: number }} CoverZoomState */
 /** @type {CoverZoomState} */
@@ -169,6 +168,32 @@ export function flipTransform(from, to) {
 }
 
 /**
+ * The restore glide's Web Animation: from the inverse (FLIP) transform, which paints the stage where it was before the
+ * restore, to the identity of the final layout. Matching function lists, so the interpolation is translate + scale.
+ * `fill: 'none'`: when it ends or is cancelled nothing of it stays on the stage.
+ * @param {CoverZoomState} start the inverse transform (`flipTransform(from, to)`)
+ */
+export function restoreGlide(start) {
+  return {
+    keyframes: [
+      { transform: `translate(${start.x.toFixed(2)}px, ${start.y.toFixed(2)}px) scale(${start.scale.toFixed(4)})` },
+      { transform: 'translate(0px, 0px) scale(1)' },
+    ],
+    options: { duration: COVER_RESET_MS, easing: COVER_RESET_EASING, fill: /** @type {FillMode} */ ('none') },
+  };
+}
+
+/**
+ * The zoom state that paints exactly `visual` (a glide interrupted half-way) on a stage whose un-transformed box is
+ * `layout` (both client rects). Scale 1 or below cannot carry an offset (the model recentres it).
+ * @param {{ left: number, top: number, width: number, height: number }} visual @param {{ left: number, top: number, width: number, height: number }} layout
+ * @returns {CoverZoomState}
+ */
+export function stateFromVisual(visual, layout) {
+  return clampCoverZoom(flipTransform(visual, layout), layout.width, layout.height);
+}
+
+/**
  * An activity flag that turns on at the first `poke()` and off `idleMs` after the last one (or `end()` at once);
  * `hold()` keeps it on until `release()`. `onChange(active)` fires only on a real change.
  * @param {number} idleMs @param {(active: boolean) => void} onChange
@@ -217,12 +242,9 @@ export function createIdleGate(idleMs, onChange, timers = { set: (fn, ms) => set
  * nudge (cover-reraster.js): once the scale above 1 has been stable for COVER_LAYER_IDLE_MS and no gesture or swipe
  * feedback is active, the stage is moved by 0.01 px and back with a 180 ms translate transition (inline `translate` and
  * `transition` only, restored afterwards). A gesture that starts cancels a pending nudge and wins over one in flight:
- * the nudge only clears what it set itself. The persistent overlay <canvas> next to the stage (in the artwork pane) is
- * used only by the reset glide: a copy drawn at the screen-resolution thumbnail size slides back by Web Animation
- * instead of animating the stage (a running transform animation makes Chromium pick the raster scale from the
- * animation's largest scale, which on a phone is a ~3000 px tiled layer that is not ready in time; a canvas is a
- * texture, never tiled). The overlay is only shown/hidden (opacity) and the stage's image only hidden (visibility)
- * under the reset copy: paint-only changes.
+ * the nudge only clears what it set itself. The double-tap restore (reset) is a FLIP on the stage itself: the final
+ * layout is committed at once and a Web Animation (inverse transform to identity, `fill: 'none'`) glides the stage; a
+ * gesture during it cancels the animation and carries on from the visual it had reached. No second element is involved.
  * @param {HTMLElement} node
  * @param {{ enabled?: boolean, onZoom?: (state: CoverZoomState, size: { width: number, height: number }) => void, onZoomingChange?: (zooming: boolean) => void, settleLayout?: () => unknown, initial?: CoverZoomState | ((node: HTMLElement) => CoverZoomState), syncScale?: number }} params
  */
@@ -245,6 +267,8 @@ export function coverZoom(node, params) {
   let destroyed = false;
   /** The running reset glide (Web Animation) and the observer that re-aims it if the layout moves again before paint. @type {Animation | null} */
   let glide = null;
+  /** The cover image source the glide started with. */
+  let glideSource = '';
   /** @type {ResizeObserver | null} */
   let glideObserver = null;
   /** @type {{ x: number, y: number, t: number } | null} */
@@ -263,8 +287,6 @@ export function coverZoom(node, params) {
   const hasRaf = () => typeof requestAnimationFrame === 'function';
   const raf = (/** @type {() => void} */ fn) => (hasRaf() ? requestAnimationFrame(fn) : (fn(), 0));
   const clock = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
-
-  const overlay = createOverlayCanvas(node);
 
   // Re-raster nudge state (cover-reraster.js): the stability clock, the single timer and the nudge in flight.
   let reraster = createRerasterState(1, clock());
@@ -381,38 +403,6 @@ export function coverZoom(node, params) {
     if ((style.transition || '') === mine.transition) style.transition = mine.prev;
   }
 
-  /** The decoded cover image, or null (no artwork: the fallback art is not drawn into the overlay). */
-  function coverImage() {
-    const image = /** @type {HTMLImageElement | null} */ (node.querySelector?.('img') ?? null);
-    return image && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null;
-  }
-
-  function hideOverlay() {
-    if (!overlay) return;
-    if (overlay.shown) overlay.hide();
-    delete node.dataset.coverOverlay;
-  }
-
-  /**
-   * Draw the cover into the overlay and show it (same task: it is never shown before it has been drawn) for the reset
-   * glide. `visual` is the stage's painted rect at `scale`, `visible` the client rect to cover. The stage's own image is
-   * hidden in the same commit (`data-cover-overlay`): the copy slides, the stage is already at its final size.
-   * @param {Rect} visual @param {number} scale @param {Rect} visible
-   */
-  function drawOverlay(visual, scale, visible) {
-    const image = coverImage();
-    if (!overlay || !image) return false;
-    const dpr = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1;
-    const snapped = snapRectToDevicePixels(visible, dpr);
-    if (!snapped) return false;
-    const plan = coverDrawPlan({ visual, scale, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight, bleed: COVER_IMAGE_BLEED_PX, visible: snapped, dpr });
-    if (!plan) return false;
-    const radius = parseFloat(getComputedStyle(node).borderTopLeftRadius) || 0;
-    if (!overlay.draw(image, plan, snapped, radius * scale * dpr)) return false;
-    node.dataset.coverOverlay = '';
-    return true;
-  }
-
   /** A feedback (translate / scale / opacity) CSS transition of the stage is still running. */
   function feedbackTransitionRunning() {
     if (typeof node.getAnimations !== 'function') return false;
@@ -455,19 +445,18 @@ export function coverZoom(node, params) {
   }
 
   /** Something outside the gesture changed the cover (another style write, class, a new image, a window resize): the
-   *  restore glide's copy is stale (end it), otherwise the new content needs a nudge once the scale is stable. */
+   *  restore glide ends if the image changed, otherwise the new content needs a nudge once the scale is stable. */
   function foreignChange() {
     if (destroyed) return;
     if (resetting) {
-      if (!glide || overlayMatchesSource(overlay?.drawnSource, currentSource())) return;
-      glide.cancel();
-      endGlide();
+      // The glide re-aims itself on a layout change (ResizeObserver); a different cover image ends it.
+      if (glide && glideSource !== currentSource()) { glide.cancel(); endGlide(); }
       return;
     }
     reraster = invalidateReraster(reraster, clock());
     scheduleReraster();
   }
-  const overlayObservers = observeCoverChanges(node, foreignChange, styleChanged, (record) => record.target === node && record.attributeName === 'style' && nonFeedbackStyle(node.style) === ownStyle);
+  const coverObservers = observeCoverChanges(node, foreignChange, styleChanged, (record) => record.target === node && record.attributeName === 'style' && nonFeedbackStyle(node.style) === ownStyle);
 
   function schedule() {
     if (frameId) return;
@@ -532,7 +521,6 @@ export function coverZoom(node, params) {
     if (state.scale === COVER_ZOOM_REST || resetting) return;
     wheelPending = null; wheelAnchor = null; repinToken += 1;
     if (reduced() || !hasRaf() || typeof node.animate !== 'function') {
-      hideOverlay();
       apply({ ...COVER_ZOOM_IDENTITY }, false);
       return;
     }
@@ -549,14 +537,8 @@ export function coverZoom(node, params) {
     glide?.cancel();
     glide = null;
     const to = node.getBoundingClientRect(); // animation cancelled: the un-transformed layout box
-    const start = flipTransform(from, to);
-    // The copy at the screen-resolution thumbnail size glides, not the stage (see the action's doc comment). Without a
-    // decoded image (fallback art) the stage itself glides.
-    const target = overlay && drawOverlay(to, 1, to) ? overlay.element : node;
-    const animation = target.animate(
-      [{ transform: `translate(${start.x.toFixed(2)}px, ${start.y.toFixed(2)}px) scale(${start.scale.toFixed(4)})` }, { transform: 'translate(0px, 0px) scale(1)' }],
-      { duration: COVER_RESET_MS, easing: 'ease' },
-    );
+    const plan = restoreGlide(flipTransform(from, to));
+    const animation = node.animate(plan.keyframes, plan.options);
     animation.currentTime = elapsedMs;
     animation.onfinish = endGlide;
     glide = animation;
@@ -565,7 +547,7 @@ export function coverZoom(node, params) {
   /** @param {{ left: number, top: number, width: number, height: number }} from */
   function beginGlide(from) {
     if (destroyed || !resetting) return;
-    hideOverlay(); // a copy from an earlier glide is replaced in this same task
+    glideSource = currentSource();
     startGlide(from);
     if (typeof ResizeObserver === 'function') {
       const started = performance.now();
@@ -581,22 +563,44 @@ export function coverZoom(node, params) {
     }
   }
 
+  /** The glide finished or was cancelled: the stage's transform is the real final state again (the animation has
+   *  `fill: none`, so nothing of it stays; the inline value is the state's own). */
   function endGlide() {
     glideObserver?.disconnect();
     glideObserver = null;
     glide = null;
-    // Same task: the copy goes and the stage's image (already at its final scale) comes back in one commit.
-    hideOverlay();
+    if (node.style.transform !== coverZoomTransform(state)) node.style.transform = coverZoomTransform(state);
     delete node.dataset.coverResetting;
     resetting = false;
     zoomGate.release();
+  }
+
+  /** A new gesture during the glide wins: the animation is cancelled and the stage carries on from the visual it had
+   *  reached (a state that paints exactly that, re-pinned in the same frame once the owner has laid out the new scale). */
+  function interruptGlide() {
+    if (!resetting) return;
+    const visual = stageRect(); // includes the running animation
+    glide?.cancel();
+    endGlide();
+    const layout = stageRect(); // animation gone, identity state: the layout box
+    const next = stateFromVisual(visual, layout);
+    if (Math.abs(next.scale - 1) < 0.0005 && Math.abs(next.x) < 0.01 && Math.abs(next.y) < 0.01) return;
+    apply(next, false);
+    const token = ++repinToken;
+    Promise.resolve(options.settleLayout?.()).then(() => {
+      if (destroyed || token !== repinToken || resetting || !active()) return;
+      const settled = coverGeometry(stageRect(), state);
+      size = { width: settled.width, height: settled.height };
+      const pinned = clampCoverZoom({ scale: state.scale, x: visual.left + visual.width / 2 - settled.layoutX, y: visual.top + visual.height / 2 - settled.layoutY }, settled.width, settled.height);
+      if (Math.abs(pinned.x - state.x) >= 0.01 || Math.abs(pinned.y - state.y) >= 0.01) apply(pinned, false);
+    }, () => {});
   }
 
   /** @param {WheelEvent} event */
   function wheel(event) {
     if (!active()) return;
     event.preventDefault();
-    if (resetting) return;
+    interruptGlide();
     cancelNudge(true);
     const factor = getWheelZoomFactor(event.deltaY, event.deltaMode);
     wheelPending = { factor: (wheelPending?.factor ?? 1) * factor, x: event.clientX, y: event.clientY };
@@ -606,7 +610,8 @@ export function coverZoom(node, params) {
 
   /** @param {PointerEvent} event */
   function down(event) {
-    if (!active() || resetting) return;
+    if (!active()) return;
+    interruptGlide();
     cancelNudge(true);
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size === 2) {
@@ -714,12 +719,10 @@ export function coverZoom(node, params) {
       // the scale is back at 1 while this element is still zoomed, follow it.
       if (next.syncScale === COVER_ZOOM_REST && state.scale !== COVER_ZOOM_REST && !resetting) {
         pointers.clear(); pinch = null; pan = null; lastTap = null; wheelPending = null; wheelAnchor = null; repinToken += 1;
-        hideOverlay();
         apply({ ...COVER_ZOOM_IDENTITY }, false, false);
       }
       // The page (re)opened: its layers are created now, at the current scale.
       if (active() && !wasActive) {
-        hideOverlay();
         reraster = invalidateReraster(reraster, clock());
         scheduleReraster();
       }
@@ -734,10 +737,8 @@ export function coverZoom(node, params) {
       if (rerasterTimer !== null) clearTimeout(rerasterTimer);
       glide?.cancel();
       glideObserver?.disconnect();
-      overlayObservers.disconnect();
-      overlay?.remove();
+      coverObservers.disconnect();
       delete node.dataset.coverResetting;
-      delete node.dataset.coverOverlay;
       zoomGate.end();
       node.removeEventListener('wheel', wheel);
       node.removeEventListener('pointerdown', down);
@@ -821,74 +822,4 @@ function unchangedInBatch(record, records) {
   if (!name || typeof target?.getAttribute !== 'function') return false;
   const first = records.find((other) => other.target === target && other.attributeName === name) ?? record;
   return first.oldValue !== undefined && first.oldValue === target.getAttribute(name);
-}
-
-/**
- * The persistent overlay canvas, appended to the stage's parent (the artwork pane, `position: relative` in app.css).
- * It exists only for the reset glide (a thumbnail-size copy of the cover that slides back); it keeps its compositor
- * layer for the stage's life (app.css `.cover-stage-overlay`), showing and hiding only change its opacity, and its
- * backing store shrinks to 1x1 while hidden.
- * @param {HTMLElement} node
- */
-function createOverlayCanvas(node) {
-  const parent = node.parentElement;
-  if (!parent || typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
-  const canvas = /** @type {HTMLCanvasElement} */ (document.createElement('canvas'));
-  if (typeof canvas.getContext !== 'function') return null;
-  // One overlay per stage: a leftover canvas of an earlier instance in this pane would be a second, stale copy.
-  for (const stale of Array.from(parent.querySelectorAll?.(':scope > .cover-stage-overlay') ?? [])) stale.remove();
-  canvas.className = 'cover-stage-overlay';
-  canvas.setAttribute('aria-hidden', 'true');
-  canvas.width = 1;
-  canvas.height = 1;
-  parent.appendChild(canvas);
-  let shown = false;
-  /** The source of the image the shown drawing was made from. */
-  let drawnSource = '';
-  return {
-    element: canvas,
-    get shown() { return shown; },
-    get drawnSource() { return shown ? drawnSource : ''; },
-    /**
-     * @param {HTMLImageElement} image @param {NonNullable<ReturnType<typeof coverDrawPlan>>} plan @param {Rect} visible
-     * @param {number} radius the rounded clip radius in canvas px
-     */
-    draw(image, plan, visible, radius) {
-      const context = canvas.getContext('2d');
-      if (!context) return false;
-      const paneBox = parent.getBoundingClientRect();
-      canvas.width = plan.canvas.width;
-      canvas.height = plan.canvas.height;
-      canvas.style.left = `${visible.left - paneBox.left - parent.clientLeft + parent.scrollLeft}px`;
-      canvas.style.top = `${visible.top - paneBox.top - parent.clientTop + parent.scrollTop}px`;
-      canvas.style.width = `${visible.width}px`;
-      canvas.style.height = `${visible.height}px`;
-      canvas.style.transform = '';
-      drawnSource = image.currentSrc || image.src || '';
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = 'high';
-      context.save();
-      if (radius > 0) {
-        context.beginPath();
-        if (typeof context.roundRect === 'function') context.roundRect(plan.clip.x, plan.clip.y, plan.clip.width, plan.clip.height, radius);
-        else context.rect(plan.clip.x, plan.clip.y, plan.clip.width, plan.clip.height);
-        context.clip();
-      }
-      context.drawImage(image, plan.source.x, plan.source.y, plan.source.width, plan.source.height, plan.dest.x, plan.dest.y, plan.dest.width, plan.dest.height);
-      context.restore();
-      // Last write: left / top / size are pinned before the canvas becomes visible.
-      canvas.style.opacity = '1';
-      shown = true;
-      return true;
-    },
-    hide() {
-      canvas.style.opacity = '0';
-      canvas.style.transform = '';
-      drawnSource = '';
-      canvas.width = 1;
-      canvas.height = 1;
-      shown = false;
-    },
-    remove() { canvas.remove(); },
-  };
 }
