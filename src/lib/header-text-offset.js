@@ -1,6 +1,6 @@
 /**
  * Optical vertical centring of the list header labels (--track-header-text-optical-offset).
- * The header font falls back per language (Consolas has no CJK glyphs, and the fallback font depends on lang), so the
+ * The header font falls back per language (the interface font may lack CJK glyphs, and the fallback font depends on lang), so the
  * line box and the glyphs' place in it differ by language. The offset is therefore measured from the text actually
  * shown: the current language's header labels, drawn with the header's font, letter spacing and lang. All list headers
  * share the `.track-table-head` font, so one value serves every list (and Android, same frontend).

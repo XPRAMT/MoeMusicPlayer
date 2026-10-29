@@ -40,7 +40,7 @@ export function computeNumericColumnWidths(measure) {
 export const numericColumnWidths = writable(/** @type {Record<string, number>} */ ({}));
 
 export function remeasureNumericColumns() {
-  const measure = createColumnTextMeasurer();
+  const measure = createColumnTextMeasurer({ tabularNums: true });
   if (!measure) return;
   const next = computeNumericColumnWidths(measure);
   numericColumnWidths.update((current) => (Object.keys(next).every((key) => current[key] === next[key]) ? current : next));

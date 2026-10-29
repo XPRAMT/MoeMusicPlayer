@@ -169,7 +169,7 @@
   .sync-error-group code,
   .sync-saved-error code {
     color: var(--text);
-    font-family: var(--font-mono, ui-monospace, monospace);
+    font-family: inherit;
     overflow-wrap: anywhere;
     font-size: var(--font-body);
   }

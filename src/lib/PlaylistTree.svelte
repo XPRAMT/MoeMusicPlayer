@@ -127,7 +127,8 @@
   .playlist-tree-count {
     margin-left: auto;
     color: var(--text-soft);
-    font-family: 'DM Mono', monospace;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
     font-size: var(--font-caption);
     font-weight: 500;
   }

@@ -24,7 +24,7 @@ let observing = false;
 
 /** Measure what is pending (or, with `all`, everything) and publish the width when it changed. */
 function measureEntries(all = false) {
-  const measure = createColumnTextMeasurer();
+  const measure = createColumnTextMeasurer({ tabularNums: true });
   if (!measure) return;
   const batch = all ? [...entries.values()] : pending;
   pending = [];

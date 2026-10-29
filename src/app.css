@@ -822,7 +822,7 @@ input:focus-visible {
 .section-kicker,
 .eyebrow,
 .state-label {
-  font-family: Consolas, monospace;
+  font-family: inherit;
   letter-spacing: 0.13em;
 }
 
@@ -1136,7 +1136,7 @@ input:focus-visible {
   border: 1px solid rgba(136, 201, 180, 0.14);
   border-radius: 6px;
   color: var(--status-success);
-  font-family: Consolas, monospace;
+  font-family: inherit;
   font-size: var(--font-caption);
   letter-spacing: 0.1em;
 }
@@ -1314,7 +1314,7 @@ input:focus-visible {
   align-items: center;
   gap: 10px;
   color: var(--text-soft);
-  font-family: Consolas, monospace;
+  font-family: inherit;
   font-size: var(--font-caption);
   letter-spacing: 0.12em;
 }
@@ -1885,7 +1885,7 @@ input:focus-visible {
 .track-table-head {
   min-height: 37px;
   color: var(--text-soft);
-  font-family: Consolas, monospace;
+  font-family: inherit;
   font-size: var(--font-body);
   letter-spacing: 0.07em;
 }
@@ -1941,7 +1941,8 @@ input:focus-visible {
 .column-index,
 .track-index {
   color: var(--text-soft);
-  font-family: 'DM Mono', monospace;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
   font-size: var(--font-body);
   text-align: center;
 }
@@ -1975,7 +1976,8 @@ input:focus-visible {
 }
 
 .track-duration {
-  font-family: 'DM Mono', monospace;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -1990,6 +1992,7 @@ input:focus-visible {
 
 .list-column.is-numeric {
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .track-table-head .list-column,
@@ -2013,12 +2016,10 @@ input:focus-visible {
 }
 
 .list-column-duration {
-  font-family: 'DM Mono', monospace;
   font-variant-numeric: tabular-nums;
 }
 
 .list-column-playCount {
-  font-family: 'DM Mono', monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2512,7 +2513,8 @@ input:focus-visible {
   position: absolute;
   bottom: 15px;
   color: #ffffff;
-  font-family: 'DM Mono', monospace;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
   font-size: var(--font-caption);
   letter-spacing: 0.16em;
 }
@@ -3154,7 +3156,7 @@ input:focus-visible {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-family: 'DM Mono', monospace;
+  font-family: inherit;
   font-size: var(--font-caption);
 }
 
@@ -4711,7 +4713,7 @@ input:focus-visible {
   border-bottom: var(--divider-width) solid var(--divider-color);
   color: var(--text-soft);
   background: rgba(var(--text-rgb), 0.017);
-  font-family: Consolas, monospace;
+  font-family: inherit;
   font-size: var(--font-caption);
 }
 
@@ -4727,7 +4729,8 @@ input:focus-visible {
 .playlist-entry-index,
 .playlist-entry-duration {
   color: var(--text-soft);
-  font-family: 'DM Mono', monospace;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
   font-size: var(--font-caption);
 }
 
@@ -5213,7 +5216,7 @@ input:focus-visible {
   padding: 4px 12px;
   border-radius: 10px;
   color: var(--text-soft);
-  font-family: 'DM Mono', Consolas, monospace;
+  font-family: inherit;
   font-size: calc(var(--font-display, 28px) * 1.15);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
