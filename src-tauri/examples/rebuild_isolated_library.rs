@@ -158,8 +158,8 @@ mod windows_only {
             .iter()
             .map(|entry| match &entry.locator {
                 MediaLocator::FileSystem(path) => Ok(path.clone()),
-                MediaLocator::ContentUri(_) => {
-                    Err("Windows playlist unexpectedly contains a content URI")
+                MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => {
+                    Err("Windows playlist unexpectedly contains a non-file locator")
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -204,7 +204,7 @@ mod windows_only {
             entry.track_id = match &entry.locator {
                 MediaLocator::FileSystem(path) => database
                     .resolve_track_id_for_locator(&MediaLocator::FileSystem(path.clone()))?,
-                MediaLocator::ContentUri(_) => None,
+                MediaLocator::ContentUri(_) | MediaLocator::Remote { .. } => None,
             };
         }
         let unmatched = playlist
@@ -224,6 +224,10 @@ mod windows_only {
         let fingerprint = FileFingerprint {
             size_bytes: playlist_file_metadata.len(),
             modified_at_utc_ms: playlist_modified_at_utc_ms,
+            created_at_utc_ms: playlist_file_metadata
+                .created()
+                .ok()
+                .and_then(system_time_to_utc_ms),
         };
         let digest: [u8; 32] = Sha256::digest(&playlist_bytes).into();
         database.record_playlist_file_sync_state(

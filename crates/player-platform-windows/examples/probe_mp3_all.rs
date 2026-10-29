@@ -9,8 +9,4 @@ fn main() {
     for item in tag.items() {
         println!("{:?} = {:?}", item.key(), item.value());
     }
-    println!("unknowns={}", tag.unknowns().count());
-    for u in tag.unknowns() {
-        println!("unknown {:?}", u);
-    }
 }
