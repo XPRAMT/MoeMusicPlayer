@@ -33,8 +33,10 @@ import org.json.JSONObject
  * nothing (logged with the tag MoeMediaIndex) until it is switched off and on again. The page pushes the look
  * settings and the current track's timed lines; the playback clock comes from the playback service, so it keeps going
  * while the WebView is in the background. Move mode: dragged by touch, with a lock button. Fixed mode:
- * FLAG_NOT_TOUCHABLE (touches pass through, so the window is drawn at most 80% opaque as Android 12+ requires) and unlocked from the player's settings only. The position and the lock state live on the phone
- * (SharedPreferences). The user grants "display over other apps" in the system settings page.
+ * FLAG_NOT_TOUCHABLE (touches pass through, so the window is drawn at most 80% opaque as Android 12+ requires) and unlocked from the player's settings only. The position (per orientation, a
+ * ratio of the screen) and the lock state are kept in settings.json through Rust ([FloatingLyricsStore]); a restored
+ * position is always clamped so the lyric area stays on screen. The user grants "display over other apps" in the system
+ * settings page.
  * Main thread only.
  */
 object FloatingLyricsOverlay {
@@ -67,7 +69,6 @@ object FloatingLyricsOverlay {
     /** The theme accent (karaoke in the none mode, ADR 0041), pushed by the page as `accentColor`. */
     private var accentColor = 0xffa9c3fe.toInt()
 
-    private const val PREFS = "moe_floating_lyrics"
     private const val TAG = "MoeMediaIndex"
 
     /** The GL renderer's panel while the window exists. */
@@ -120,25 +121,31 @@ object FloatingLyricsOverlay {
     fun canDrawOverlays(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
 
-    // The lock state is read from SharedPreferences once (a synchronized read) and then kept here; every write goes
-    // through setLockedState. Nothing else writes the "locked" key.
-    @Volatile
-    private var lockedCache = false
-    @Volatile
-    private var lockedLoaded = false
+    // The lock state and the positions come from settings.json through Rust ([FloatingLyricsStore], read once and
+    // then kept in memory); every write goes through setLockedState / storePosition.
+    @Suppress("UNUSED_PARAMETER")
+    fun isLocked(context: Context): Boolean = FloatingLyricsStore.current().locked
 
-    fun isLocked(context: Context): Boolean {
-        if (!lockedLoaded) {
-            lockedCache = prefs(context).getBoolean("locked", false)
-            lockedLoaded = true
-        }
-        return lockedCache
+    @Suppress("UNUSED_PARAMETER")
+    private fun setLockedState(context: Context, locked: Boolean) {
+        FloatingLyricsStore.setLocked(locked)
     }
 
-    private fun setLockedState(context: Context, locked: Boolean) {
-        lockedCache = locked
-        lockedLoaded = true
-        prefs(context).edit().putBoolean("locked", locked).apply()
+    /** The saved position of the orientation shown now (a ratio of the screen), or null: centred. */
+    private fun savedPosition(context: Context): FloatingLyricsRules.Ratio? =
+        FloatingLyricsStore.current().position(isLandscape(context))
+
+    /**
+     * Where a window `width` px wide with a lyric area `areaPx` tall goes for a saved position: the ratio put back on
+     * this screen, the lyric area (and the lock column) kept on it, less the margin and the top room the window is
+     * converted with. The same path for a new window, a rotation and the carry-over of the old values.
+     */
+    private fun restoredWindowOrigin(context: Context, saved: FloatingLyricsRules.Ratio, width: Int, areaPx: Int): Pair<Int, Int> {
+        val (screenWidth, screenHeight) = screenSize(context)
+        val (areaX, areaY) = FloatingLyricsRules.restoreAreaOrigin(
+            saved.x, saved.y, screenWidth, screenHeight, width - 2 * panelMargin, areaPx,
+        )
+        return FloatingLyricsRules.windowOrigin(areaX, areaY, panelMargin, panelTopRoom)
     }
 
     fun status(context: Context): JSONObject = JSONObject()
@@ -195,6 +202,8 @@ object FloatingLyricsOverlay {
     /** `{ settings?, data?, setLocked?, resetPosition? }` from the page; `parsed` is `data` already parsed by [parseData]. */
     internal fun update(context: Context, args: JSONObject, parsed: ParsedData? = null) {
         appContext = context.applicationContext
+        // Once: the values the overlay used to keep in SharedPreferences go to settings.json (ADR 0032).
+        FloatingLyricsLegacyPrefs.migrateOnce(context) { placeSaved() }
         args.optJSONObject("settings")?.let(::applySettings)
         (parsed ?: args.optJSONObject("data")?.let(::parseData))?.let(::applyParsed)
         if (args.has("accentColor") && !args.isNull("accentColor")) {
@@ -216,8 +225,7 @@ object FloatingLyricsOverlay {
         if (args.optBoolean("savePosition", false)) params?.let { savePosition(context, it) }
         if (args.optBoolean("resetPosition", false)) {
             // Only the current orientation's position; the other one keeps its own.
-            val (keyX, keyY) = positionKeys(context)
-            prefs(context).edit().remove(keyX).remove(keyY).apply()
+            FloatingLyricsStore.setPosition(isLandscape(context), null)
             centre()
         }
         refresh()
@@ -253,8 +261,6 @@ object FloatingLyricsOverlay {
         applyMode()
         pushGl(context)
     }
-
-    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private fun applySettings(settings: JSONObject) {
         enabled = settings.optBoolean("enabled", false)
@@ -422,22 +428,38 @@ object FloatingLyricsOverlay {
         }
     }
 
-    /** Saves the lyric area's top-left (not the window's) for this orientation. */
+    /** Saves the lyric area's top-left (not the window's) for this orientation, as a ratio of this screen. */
     private fun savePosition(context: Context, layout: WindowManager.LayoutParams) {
-        val (keyX, keyY) = positionKeys(context)
         val (areaX, areaY) = FloatingLyricsRules.areaOrigin(layout.x, layout.y, panelMargin, panelTopRoom)
-        prefs(context).edit().putInt(keyX, areaX).putInt(keyY, areaY).apply()
+        val (screenWidth, screenHeight) = screenSize(context)
+        val ratio = FloatingLyricsRules.ratioOf(areaX, areaY, screenWidth, screenHeight) ?: return
+        FloatingLyricsStore.setPosition(screenWidth > screenHeight, ratio)
+    }
+
+    /** The saved values changed under the window (the carry-over of the old ones): place it again. */
+    private fun placeSaved() {
+        val view = root ?: return
+        val layout = params ?: return
+        val context = appContext ?: return
+        val saved = savedPosition(context)
+        if (saved == null) {
+            centre()
+        } else {
+            val (x, y) = restoredWindowOrigin(context, saved, layout.width, areaHeightPx(context))
+            layout.x = x
+            layout.y = y
+            try {
+                (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(view, layout)
+            } catch (_: Exception) {
+            }
+        }
+        applyMode()
+        pushGl(context)
     }
 
     private fun isLandscape(context: Context): Boolean {
         val (width, height) = screenSize(context)
         return width > height
-    }
-
-    /** Portrait and landscape each keep their own position (ADR 0032). */
-    private fun positionKeys(context: Context): Pair<String, String> {
-        val suffix = FloatingLyricsRules.orientationKey(isLandscape(context))
-        return Pair("x_$suffix", "y_$suffix")
     }
 
     /** The lyric area (narrowed to the screen) plus the lock gutter. */
@@ -482,12 +504,9 @@ object FloatingLyricsOverlay {
             rotating = false
         }
         layout.width = overlayWidth(context)
-        val prefs = prefs(context)
-        val (keyX, keyY) = positionKeys(context)
-        if (prefs.contains(keyX) && prefs.contains(keyY)) {
-            val (screenWidth, screenHeight) = screenSize(context)
-            val (windowX, windowY) = FloatingLyricsRules.windowOrigin(prefs.getInt(keyX, 0), prefs.getInt(keyY, 0), panelMargin, panelTopRoom)
-            val (x, y) = clampToText(windowX, windowY, layout.width, screenWidth, screenHeight)
+        val saved = savedPosition(context)
+        if (saved != null) {
+            val (x, y) = restoredWindowOrigin(context, saved, layout.width, areaHeightPx(context))
             layout.x = x
             layout.y = y
             try {
@@ -553,7 +572,9 @@ object FloatingLyricsOverlay {
             topMargin = FloatingLyricsRules.lockTop(panelTopRoom, glLayout(context, width).areaH, button)
         })
         val width = overlayWidth(context)
-        val prefs = prefs(context)
+        val saved = savedPosition(context)
+        // Placed like a rotation places it (the ratio put back on this screen, then clamped), or centred.
+        val origin = saved?.let { restoredWindowOrigin(context, it, width, glLayout(context, width).areaH) }
         val layout = WindowManager.LayoutParams(
             width,
             glLayout(context, width).surfaceH,
@@ -569,9 +590,9 @@ object FloatingLyricsOverlay {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
             // The saved position is the lyric area's top-left; the window is that less the margin and the top room.
-            x = if (prefs.contains(positionKeys(context).first)) prefs.getInt(positionKeys(context).first, 0) - panelMargin
-            else FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context))
-            y = prefs.getInt(positionKeys(context).second, (screenHeight * 0.15f).toInt()) - panelTopRoom
+            x = origin?.first
+                ?: FloatingLyricsRules.lyricCentredStart(screenWidth, width, button + 2 * marginPx(context), marginPx(context))
+            y = origin?.second ?: ((screenHeight * 0.15f).toInt() - panelTopRoom)
         }
         frame.setOnTouchListener(DragListener(context))
         windowManager.addView(frame, layout)
@@ -579,9 +600,8 @@ object FloatingLyricsOverlay {
         params = layout
         lockButton = lock
         shownLandscape = isLandscape(context)
-        val (_, keyY) = positionKeys(context)
         // No saved position for this orientation yet: the centre of the screen.
-        if (!prefs.contains(keyY)) frame.post { if (root === frame && !prefs.contains(keyY)) centre() }
+        if (saved == null) frame.post { if (root === frame && savedPosition(context) == null) centre() }
         val watch = object : android.content.ComponentCallbacks {
             override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
                 // Post so the new display size is in place first.

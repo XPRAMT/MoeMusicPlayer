@@ -82,6 +82,9 @@ mod album_detail_scan;
 mod android_artwork;
 #[cfg(any(target_os = "android", test))]
 mod android_dsd;
+#[cfg(any(target_os = "android", test))]
+#[cfg_attr(test, allow(dead_code))]
+mod android_floating;
 mod android_folder_browser;
 #[cfg(any(target_os = "android", test))]
 mod android_legacy_backup_cleanup;
@@ -13808,6 +13811,24 @@ pub fn run() {
                 initial_settings.android_bluetooth_codec_custom,
                 &initial_settings.android_bluetooth_codec_order,
             );
+            // The floating lyrics overlay reads its lock state and positions from here and saves them back (ADR 0032).
+            #[cfg(target_os = "android")]
+            android_floating::seed(&initial_settings.floating_lyrics);
+            #[cfg(target_os = "android")]
+            android_floating::install({
+                let settings = Arc::clone(&settings);
+                let handle = app.handle().clone();
+                Arc::new(move |state: android_floating::OverlayState| {
+                    let saved = settings
+                        .update(|stored| {
+                            state.store_into(&mut stored.floating_lyrics);
+                            Ok(())
+                        })
+                        .map_err(|error| error.to_string())?;
+                    let _ = handle.emit("floating-lyrics-settings", &saved.floating_lyrics);
+                    Ok(())
+                })
+            });
             #[cfg(target_os = "windows")]
             let (playback, playback_error) = match PlayerHandle::with_output_options(
                 // Sample-rate conversion is always the rubato FFT resampler (the setting was removed).

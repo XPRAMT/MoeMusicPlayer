@@ -396,9 +396,86 @@ object FloatingLyricsRules {
     fun clampWindowToArea(
         x: Int, y: Int, width: Int, areaPx: Int, topRoomPx: Int, marginPx: Int, screenWidth: Int, screenHeight: Int,
     ): Pair<Int, Int> {
-        val bottomRoom = panelRoomPx(areaPx)
-        return clampPosition(
-            x, y, width, topRoomPx + areaPx + bottomRoom, screenWidth, screenHeight, marginPx, topRoomPx, marginPx, bottomRoom,
+        // The kept box (the lyric area and the lock column) through the shared rule, back to window coordinates.
+        val (keptX, keptY) = clampKeptBox(
+            x + marginPx, y + topRoomPx, width - 2 * marginPx, areaPx, 0, 0, screenWidth, screenHeight,
+        )
+        return Pair(keptX - marginPx, keptY - topRoomPx)
+    }
+
+    // ---- Placement (ADR 0032; player-lyrics-rules `placement`, shared vectors placementRatio / Px / Clamp / Restore).
+    // The saved position is the lyric area's top-left as a ratio of the screen in that orientation:
+    // x = (areaX - screenLeft) / screenWidth, y likewise. It is always clamped after being put back in pixels.
+
+    /** The ratio saved for `px` on an axis starting at `origin`, `extent` px long; null for an empty axis. */
+    fun positionRatio(px: Int, origin: Int, extent: Int): Double? =
+        if (extent > 0) (px.toDouble() - origin.toDouble()) / extent.toDouble() else null
+
+    /** The pixel a saved `ratio` stands for: origin + floor(ratio * extent + 0.5); origin for a bad ratio or axis. */
+    fun positionPx(ratio: Double, origin: Int, extent: Int): Int {
+        if (!ratio.isFinite() || extent <= 0) return origin
+        val offset = kotlin.math.floor(ratio * extent.toDouble() + 0.5)
+        return (origin.toDouble() + offset).coerceIn(Int.MIN_VALUE.toDouble(), Int.MAX_VALUE.toDouble()).toInt()
+    }
+
+    /**
+     * Keeps the box that must stay visible (the lyric area plus the lock column, `width` x `height` at `x`, `y`)
+     * inside left..right, top..bottom; a box larger than the bounds sits at the start (`clamp_kept_box`).
+     */
+    fun clampKeptBox(x: Int, y: Int, width: Int, height: Int, left: Int, top: Int, right: Int, bottom: Int): Pair<Int, Int> {
+        fun axis(value: Int, low: Int, high: Int, size: Int): Int {
+            val max = maxOf(low.toLong(), high.toLong() - maxOf(0, size).toLong()).toInt()
+            return value.coerceIn(low, max)
+        }
+        return Pair(axis(x, left, right, width), axis(y, top, bottom, height))
+    }
+
+    /** A saved ratio put back on a `screenWidth` x `screenHeight` screen and kept on it (`restore_area_origin`). */
+    fun restoreAreaOrigin(ratioX: Double, ratioY: Double, screenWidth: Int, screenHeight: Int, keptWidth: Int, keptHeight: Int): Pair<Int, Int> =
+        clampKeptBox(
+            positionPx(ratioX, 0, screenWidth), positionPx(ratioY, 0, screenHeight), keptWidth, keptHeight,
+            0, 0, screenWidth, screenHeight,
+        )
+
+    /** A saved position (screen ratio) of one orientation. */
+    data class Ratio(val x: Double, val y: Double) {
+        /** Same range as settings.rs `FloatingLyricsPosition::RATIO_RANGE`. */
+        fun isValid(): Boolean = listOf(x, y).all { it.isFinite() && it >= -1.0 && it <= 2.0 }
+    }
+
+    /** What settings.json keeps for the overlay: `locked`, `position` (portrait) and `landscapePosition`. */
+    data class SavedPlacement(val locked: Boolean = false, val portrait: Ratio? = null, val landscape: Ratio? = null) {
+        /** The position of the orientation shown. */
+        fun position(landscape: Boolean): Ratio? = if (landscape) this.landscape else portrait
+
+        fun withPosition(landscape: Boolean, ratio: Ratio?): SavedPlacement =
+            if (landscape) copy(landscape = ratio) else copy(portrait = ratio)
+    }
+
+    /** The settings key of an orientation's position. */
+    fun positionKey(landscape: Boolean): String = if (landscape) "landscapePosition" else "position"
+
+    /** The ratio of a lyric area at (`areaX`, `areaY`) on a `screenWidth` x `screenHeight` screen; null on an empty screen. */
+    fun ratioOf(areaX: Int, areaY: Int, screenWidth: Int, screenHeight: Int): Ratio? {
+        val x = positionRatio(areaX, 0, screenWidth) ?: return null
+        val y = positionRatio(areaY, 0, screenHeight) ?: return null
+        return Ratio(x, y)
+    }
+
+    /**
+     * The old SharedPreferences values (`locked`, `x_/y_portrait`, `x_/y_landscape`: px of the lyric area's top-left)
+     * as ratios, each orientation with the screen of that orientation now (`screenWidth` x `screenHeight` is the
+     * current one; portrait is the narrow side across, landscape the wide one). A missing or half pair is no position.
+     */
+    fun legacyPlacement(
+        locked: Boolean?, portrait: Pair<Int, Int>?, landscape: Pair<Int, Int>?, screenWidth: Int, screenHeight: Int,
+    ): Triple<Boolean?, Ratio?, Ratio?> {
+        val narrow = minOf(screenWidth, screenHeight)
+        val wide = maxOf(screenWidth, screenHeight)
+        return Triple(
+            locked,
+            portrait?.let { ratioOf(it.first, it.second, narrow, wide) },
+            landscape?.let { ratioOf(it.first, it.second, wide, narrow) },
         )
     }
 
