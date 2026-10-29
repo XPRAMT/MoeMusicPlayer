@@ -57,6 +57,27 @@
     lastFont = font;
     if (ellipsisStats) ellipsisStats.layoutRuns++;
     shown = sharedFitter.fit(text, mode, font, width);
+    scheduleDomCheck();
+  }
+
+  // Sanity guard: canvas and DOM can still disagree (font fallback per glyph, a face still loading). After the text
+  // is drawn, trust the DOM: a content-sized host takes the real width; any other host fits again in the real room.
+  let domCheckScheduled = false;
+  function scheduleDomCheck(): void {
+    if (domCheckScheduled || typeof requestAnimationFrame === 'undefined') return;
+    domCheckScheduled = true;
+    requestAnimationFrame(() => {
+      domCheckScheduled = false;
+      if (!host) return;
+      const overflow = host.scrollWidth - host.clientWidth;
+      if (overflow <= 1) return;
+      if (contentSized && shown === text) {
+        if (fullWidth === null || host.scrollWidth > fullWidth) fullWidth = host.scrollWidth;
+        return;
+      }
+      const room = host.clientWidth - overflow;
+      if (room > 0 && lastFont !== null) shown = sharedFitter.fit(text, mode, lastFont, room);
+    });
   }
 
   $effect(() => {

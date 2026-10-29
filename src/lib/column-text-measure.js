@@ -1,12 +1,8 @@
 /** Text measurement with the track lists' real fonts, shared by the self-sizing columns (source, audio format). */
+import { canvasFontFromStyle, letterSpacingPx, onEllipsisFontsInvalidated } from './ellipsis-fit.js';
 
 /** @type {HTMLElement | null} */
 let probe = null;
-
-/** @param {CSSStyleDeclaration} style */
-function fontOf(style) {
-  return `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-}
 
 function buildProbe() {
   if (probe || typeof document === 'undefined') return probe;
@@ -30,12 +26,10 @@ export function createColumnTextMeasurer() {
   const headStyle = getComputedStyle(/** @type {Element} */ (host.querySelector('.track-table-head .list-column')));
   const context = document.createElement('canvas').getContext('2d');
   if (!context) return null;
-  const spacing = Number.parseFloat(headStyle.letterSpacing);
   return (text, kind) => {
     const style = kind === 'header' ? headStyle : cellStyle;
-    context.font = fontOf(style);
-    const letters = kind === 'header' && Number.isFinite(spacing) ? spacing * [...text].length : 0;
-    return context.measureText(text).width + letters;
+    context.font = canvasFontFromStyle(style);
+    return context.measureText(text).width + letterSpacingPx(style) * [...text].length;
   };
 }
 
@@ -65,4 +59,6 @@ export function onColumnFontsChange(listener) {
   document.fonts?.addEventListener?.('loadingdone', notifyFontChange);
   new MutationObserver(notifyFontChange).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'lang'] });
   window.addEventListener('resize', notifyFontChange);
+  // Interface font / size setting changes (App invalidates the ellipsis fonts then).
+  onEllipsisFontsInvalidated(notifyFontChange);
 }

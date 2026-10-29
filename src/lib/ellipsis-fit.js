@@ -4,6 +4,37 @@ import { fitEndEllipsis, fitMiddleEllipsis } from './middle-ellipsis.js';
 // return; this module only avoids repeating the work: one shared canvas context, a width cache and a result cache.
 
 const SEPARATOR = '\u0000';
+/** Joins a canvas font and its letter spacing in one font key (`canvasFontKey`). */
+const SPACING_SEPARATOR = '\u0001';
+
+/**
+ * The canvas font of a computed style. Chromium returns an EMPTY `font` shorthand when the longhands come from
+ * custom properties (the interface font is `var(--app-font-family)`), and assigning '' to `context.font` is ignored,
+ * so measuring with the shorthand silently used the canvas default font. Build it from the longhands instead.
+ * @param {{ font?: string, fontStyle?: string, fontVariant?: string, fontWeight?: string, fontStretch?: string, fontSize?: string, fontFamily?: string }} style
+ */
+export function canvasFontFromStyle(style) {
+  const size = style.fontSize || '';
+  const family = style.fontFamily || '';
+  if (size && family) {
+    const variant = style.fontVariant === 'small-caps' ? 'small-caps' : 'normal';
+    const stretch = style.fontStretch && /^(normal|(ultra-|extra-|semi-)?(condensed|expanded))$/.test(style.fontStretch) ? style.fontStretch : 'normal';
+    return [style.fontStyle || 'normal', variant, style.fontWeight || 'normal', stretch, size, family].join(' ');
+  }
+  return style.font || '';
+}
+
+/** Letter spacing in px of a computed style (`normal` is 0). @param {{ letterSpacing?: string }} style */
+export function letterSpacingPx(style) {
+  const value = Number.parseFloat(style.letterSpacing ?? '');
+  return Number.isFinite(value) ? value : 0;
+}
+
+/** The fitter's font key: canvas font plus letter spacing. @param {CSSStyleDeclaration | Record<string, string>} style */
+export function canvasFontKey(style) {
+  const spacing = letterSpacingPx(style);
+  return spacing ? canvasFontFromStyle(style) + SPACING_SEPARATOR + spacing : canvasFontFromStyle(style);
+}
 export const WIDTH_CACHE_SIZE = 4096;
 export const FIT_CACHE_SIZE = 4096;
 
@@ -79,11 +110,14 @@ export function createEllipsisFitter(options = {}) {
     if (!context) {
       width = value.length;
     } else {
-      if (font !== lastFont) {
-        context.font = font;
-        lastFont = font;
+      const split = font.indexOf(SPACING_SEPARATOR);
+      const canvasFont = split < 0 ? font : font.slice(0, split);
+      const spacing = split < 0 ? 0 : Number(font.slice(split + 1)) || 0;
+      if (canvasFont !== lastFont) {
+        context.font = canvasFont;
+        lastFont = canvasFont;
       }
-      width = context.measureText(value).width;
+      width = context.measureText(value).width + spacing * [...value].length;
       if (stats) stats.measureText++;
     }
     widths.set(key, width);
@@ -143,7 +177,7 @@ export function resolveHostFont(host, fontContext) {
   const key = fontContext ?? `${parent?.tagName}.${parent?.className}|${parent?.parentElement?.className}`;
   let font = fontCache.get(key);
   if (font === undefined) {
-    font = getComputedStyle(host).font;
+    font = canvasFontKey(getComputedStyle(host));
     if (ellipsisStats) ellipsisStats.fontReads++;
     fontCache.set(key, font);
   }
@@ -208,4 +242,17 @@ export const sharedFitter = createEllipsisFitter({ getContext: sharedContext, st
 
 if (typeof document !== 'undefined' && document.fonts?.addEventListener) {
   document.fonts.addEventListener('loadingdone', () => invalidateEllipsisFonts());
+}
+
+// The interface font and size settings are custom properties / classes on <html>: re-resolve fonts when they change.
+let rootChangeScheduled = false;
+if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
+  new MutationObserver(() => {
+    if (rootChangeScheduled || typeof requestAnimationFrame === 'undefined') return;
+    rootChangeScheduled = true;
+    requestAnimationFrame(() => {
+      rootChangeScheduled = false;
+      invalidateEllipsisFonts();
+    });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'lang'] });
 }

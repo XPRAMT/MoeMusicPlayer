@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tr } from './i18n.js';
+  import { canvasFontKey } from './ellipsis-fit.js';
   import { onDestroy, onMount, untrack } from 'svelte';
   import { getAlbumThumbnailBytes, getAlbumThumbnailBytesForTrack, getErrorText, getTrackArtworkBytes, invokeCommand, putAlbumThumbnailBytesForTrack, type QuickIndexSnapshot, type TrackPage, type TrackPageRequest, type TrackSummary } from './ipc';
   import type { AlbumIndexEntry as AlbumEntry, AlbumTrackOrder } from './ipc';
@@ -104,7 +105,7 @@
     if (!span || !box || !stats || !summaryElement) return;
     if (reset) artistLines.reset();
     const summaryStyle = getComputedStyle(summaryElement);
-    const fontKey = getComputedStyle(span).font;
+    const fontKey = canvasFontKey(getComputedStyle(span));
     if (!lineHeightPx || fontKey !== measuredFontKey) {
       span.textContent = artistsFull;
       const range = document.createRange();
