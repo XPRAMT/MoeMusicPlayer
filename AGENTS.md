@@ -46,7 +46,7 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 **歌詞視窗** → `lyrics-windows.md`
 - Windows 原生歌詞繪製：`crates/player-lyrics-native`（單一 `moe-lyrics-native` 執行緒）、規則與共用向量 `crates/player-lyrics-rules`、`tests/fixtures/lyrics-rules-vectors.json`；資料流 `taskbar-lyrics-data` 等事件經 `src-tauri/src/native_lyrics.rs`（ADR 0034、0041 D10）。
 - 工作列歌詞（僅 Windows）：`taskbar_lyrics.rs`、設定 `taskbarLyrics`、`displayMode`、`hideWhenPaused`（ADR 0018、0031）。
-- 浮動歌詞：Windows `floating_lyrics.rs`、Android `FloatingLyricsOverlay.kt`＋GL 渲染；`widthPx` 為歌詞區寬、位置存歌詞區左上角（ADR 0032、0034）。
+- 浮動歌詞：Windows `floating_lyrics.rs`、Android `FloatingLyricsOverlay.kt`＋GL 渲染；`widthPx` 為歌詞區寬、位置存歌詞區左上角占螢幕的比例（兩平台都在 `settings.json`，Android 直向／橫向分存；ADR 0032、0034）。
 - 連續動畫與透明度：`animation`＝`none`／`continuous`、`word_strip_knots`／`knot_cubic`、靜態遮罩 `centre_mask_stops`（ADR 0041 D10）；動畫設計規則見上。
 
 **播放頁與歌詞** → `now-playing-and-lyrics.md`

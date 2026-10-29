@@ -22,8 +22,9 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 
 - Settings: `settings.floatingLyrics` (`FloatingLyricsSettings`): `enabled` (off by default, also for older settings
   files), the same look fields as `taskbarLyrics` (align, font size, translation scale, custom colour, translation,
-  text effect) with the same clamps, plus `locked` and `position` (physical px, Windows only). Repaired field by field
-  like the taskbar settings. Both features can be on at once.
+  text effect) with the same clamps, plus `locked`, `position` and the Android-only `landscapePosition` (the lyric
+  area's top-left as a ratio of the screen on both platforms; see “Position as a screen ratio in settings.json”).
+  Repaired field by field like the taskbar settings. Both features can be on at once.
 - Settings UI: the lyrics panel has tabs 播放頁 (formerly 一般) / 工作列歌詞 / 浮動歌詞 (the taskbar tab only on Windows); the last tab is
   kept in `localStorage` (`moe.settings.lyricsTab`). The look controls are one component (`LyricsLookSettings.svelte`)
   used by both tabs.
@@ -39,8 +40,8 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   service's own player position, so it keeps going while the app is in the background. The permission is granted by
   the user on the system page (`openOverlayPermissionSettings`), never by adb or the app. Move mode: finger drag, a
   lock button. Fixed mode: `FLAG_NOT_TOUCHABLE`; Android 12+ only lets touches through windows at most 80% opaque, so
-  the overlay is drawn at that opacity; it is unlocked from the player's settings only. Lock state and position are
-  kept in the plugin's SharedPreferences (the source of truth on the phone).
+  the overlay is drawn at that opacity; it is unlocked from the player's settings only. Lock state and positions are
+  kept in `settings.json` like on Windows, written by Rust only (see “Position as a screen ratio in settings.json”).
 
 ## Consequences
 
@@ -80,8 +81,8 @@ configured separately, and a way to make it ignore the mouse or finger once it i
 - `opacityPercent` for taskbar and floating lyrics is 1–100 (Rust `OPACITY_RANGE_PERCENT`, JS `LYRICS_OPACITY_PERCENT`,
   Kotlin `FloatingLyricsRules.opacityPercent`). Android fixed mode is still capped at the system limit (~0.8).
 - Android keeps portrait and landscape apart: `widthPx` is the portrait width and `landscapeWidthPx` the landscape
-  one (the slider, labelled 「寬度（直向）／（橫向）」, edits the current orientation); the position is saved under
-  `x_portrait`/`y_portrait` and `x_landscape`/`y_landscape` in `moe_floating_lyrics`. A rotation
+  one (the slider, labelled 「寬度（直向）／（橫向）」, edits the current orientation); the position is saved per
+  orientation (`floatingLyrics.position` portrait, `landscapePosition` landscape; see the screen-ratio section). A rotation
   (`ComponentCallbacks.onConfigurationChanged`) applies that orientation's width and saved position; with none it is
   centred. Reset clears only the current orientation. Windows has one width (`widthPx`); with no saved position the
   window is centred on the primary monitor, as an Android orientation without one is centred on the screen.
@@ -155,16 +156,15 @@ configured separately, and a way to make it ignore the mouse or finger once it i
   `floating_top_room_px`) is 2/15 of the main row's slot (text height × 1.1) and never changes with the translation; the
   translation row hangs below the main row and only the room *below* follows the whole area (Android keeps the fixed
   window height with the row reserved for the track; Windows still fits the height to the rows drawn). The saved
-  position (`floatingLyrics.position` physical px on Windows; `x_/y_<orientation>` on Android) is the lyric area's
-  top-left, and the window is that less (side margin, room above): Android `FloatingLyricsRules.windowOrigin` /
+  position (`floatingLyrics.position` / `landscapePosition`, a ratio of the screen since the screen-ratio section) is
+  the lyric area's top-left, and the window is that less (side margin, room above): Android `FloatingLyricsRules.windowOrigin` /
   `areaOrigin`, `clampWindowToArea`, `lockTop`; Windows `Gutters::window_from_area` / `area_from_window` (`Gutters`
   now also carries `top` and `bottom`; `text_insets(gutter)`). Placement at start, drag, nudge, centre, reset, status-bar
   mode, clamps, the width slider and font changes all go through them; a font change moves the window by the change of
   margin and room so the area stays put (Android `syncPanelOrigin`, Windows `apply_target` with the gutters the window
   was placed with). The first row sits in a slot derived from the chosen font only (`floating_main_slot_css`), so even
   sub-pixel rounding cannot move it. The lock stays centred on the lyric area (`floating_lock_top_px`). Positions saved
-  before this amendment are not migrated: they were the window's top-left, so the lyrics appear a few pixels (the old
-  margin and room) away from where they were until the user nudges or resets them; settings files still load.
+  before this amendment were the window's top-left and were not converted (a few pixels off until nudged or reset).
 - 「動畫」 setting (taskbar and floating lyrics, saved apart as `animation`: `none` default / `continuous`; older
   files and unknown values read as `none`). `none` is the one-line-at-a-time look above. `continuous` joins every
   timed line with some text into one strip, lines separated by U+3000 (one em of the main line), and the translations
@@ -332,7 +332,7 @@ stops. Android's drag already clamps with the text insets on every move.
 
 以下是目前仍有效的實作細節；AGENTS.md 只保留摘要與指向本節的連結。
 
-浮動歌詞（ADR 0032，Windows 置頂透明視窗與 Android 系統懸浮窗）：`settings.floatingLyrics`（`FloatingLyricsSettings`，外觀欄位與夾值同 `taskbarLyrics`，另有 `enabled` 預設關、`locked`、`position`）；可與工作列歌詞同時開啟。Windows：`src-tauri/src/floating_lyrics.rs`；移動模式由我們自己捕捉滑鼠並以 `SetWindowPos` 移動（可越過螢幕邊），放開時套用擺位規則，移動停止 700 ms 後存位置；擺位規則：只有歌詞區必須留在工作區內，透明邊與陰影空間可超出、鎖頭仍可點；固定模式整窗穿透（`WS_EX_TRANSPARENT`），100 ms 監看游標，只有游標在解鎖按鈕上時才接收滑鼠。指令 `settings_get/set_floating_lyrics`、`floating_lyrics_set_locked`、`floating_lyrics_reset_position`（主螢幕正中央）、`floating_lyrics_fit`、`floating_lyrics_nudge { dx, dy }`、`floating_lyrics_centre_axis`（以面板中心所在螢幕為準）。版面：`widthPx`（儲存範圍 100–8192，Windows CSS px、Android dp，預設 800；畫面上歌詞區會縮到目前螢幕寬內，滑桿上限＝該螢幕寬；Android 另有 `landscapeWidthPx`）是**歌詞區**寬；面板＝左右各 0.25 em 透明邊＋歌詞區＋右側透明鎖頭欄（邊長＝主行行高）；歌詞區高＝文字高×1.1（背景與對齊處）；上方透明空間只由主行決定（顯示譯文不會讓第一行移動），下方空間隨整個歌詞區；儲存的位置是歌詞區左上角（不是視窗的），舊版存的視窗左上角不遷移；無內距、無最小高度；移動模式背景只在歌詞區；寬度改變保持歌詞區中心並如拖曳般存檔；水平置中、重設、首次使用都以歌詞區置中。鎖頭圖示表示目前狀態（可移動＝開鎖、鎖定＝閉鎖）。設定頁「面板」：Android 獨有一列「移動到狀態列」（只把面板移到歌詞區垂直中心對齊狀態列、水平避開鏡頭，`centredOnBar`，不改字級與規則，依方向儲存），下一列左為十字鍵（中心為鎖頭；單擊 1 px，按住 300 ms 後每 1/30 秒（約 33.3 ms，`FLOATING_LYRICS_NUDGE_REPEAT`）1 px，放開才存檔）、右為直排「水平置中／垂直置中／重設位置」，其後寬度滑桿；「對齊」在浮動頁叫「文字排版」。Android：`FloatingLyricsOverlay.kt`（`TYPE_APPLICATION_OVERLAY`，`FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS`，可拖到狀態列上），頁面以 `floating_lyrics_android` 送 `floatingLyricsUpdate`（settings／data／setLocked／resetPosition／nudge／centreAxis 等頂層鍵）、`floatingLyricsStatus`、`openOverlayPermissionSettings`；行由 OpenGL ES 渲染執行緒繪製（`GlLyricsRenderer`，時鐘取自 `PlaybackService` 發布的 `ClockSnapshot`，陰影連同行點陣化成紋理，1/8 px 次像素位移；翻譯列整首固定預留，視窗高度固定；沒有備援，GL 失敗就什麼都不顯示，關閉再開啟才重試）；直向／橫向各存寬度（`widthPx`／`landscapeWidthPx`）與位置；鎖定與位置以外掛 SharedPreferences `moe_floating_lyrics` 為準；權限只能由使用者在系統設定頁開啟（禁止 adb 授權）；固定模式 `FLAG_NOT_TOUCHABLE`，Android 12+ 穿透視窗 alpha 取設定值與系統上限（通常 0.8）較小者。限制：只顯示有時間軸的歌詞；WebView 暫停時換歌，新歌詞要等頁面恢復才送到。待使用者實機驗收。
+浮動歌詞（ADR 0032，Windows 置頂透明視窗與 Android 系統懸浮窗）：`settings.floatingLyrics`（`FloatingLyricsSettings`，外觀欄位與夾值同 `taskbarLyrics`，另有 `enabled` 預設關、`locked`、`position`）；可與工作列歌詞同時開啟。Windows：`src-tauri/src/floating_lyrics.rs`；移動模式由我們自己捕捉滑鼠並以 `SetWindowPos` 移動（可越過螢幕邊），放開時套用擺位規則，移動停止 700 ms 後存位置；擺位規則：只有歌詞區必須留在工作區內，透明邊與陰影空間可超出、鎖頭仍可點；固定模式整窗穿透（`WS_EX_TRANSPARENT`），100 ms 監看游標，只有游標在解鎖按鈕上時才接收滑鼠。指令 `settings_get/set_floating_lyrics`、`floating_lyrics_set_locked`、`floating_lyrics_reset_position`（主螢幕正中央）、`floating_lyrics_fit`、`floating_lyrics_nudge { dx, dy }`、`floating_lyrics_centre_axis`（以面板中心所在螢幕為準）。版面：`widthPx`（儲存範圍 100–8192，Windows CSS px、Android dp，預設 800；畫面上歌詞區會縮到目前螢幕寬內，滑桿上限＝該螢幕寬；Android 另有 `landscapeWidthPx`）是**歌詞區**寬；面板＝左右各 0.25 em 透明邊＋歌詞區＋右側透明鎖頭欄（邊長＝主行行高）；歌詞區高＝文字高×1.1（背景與對齊處）；上方透明空間只由主行決定（顯示譯文不會讓第一行移動），下方空間隨整個歌詞區；儲存的位置是歌詞區左上角（不是視窗的）占螢幕的比例；無內距、無最小高度；移動模式背景只在歌詞區；寬度改變保持歌詞區中心並如拖曳般存檔；水平置中、重設、首次使用都以歌詞區置中。鎖頭圖示表示目前狀態（可移動＝開鎖、鎖定＝閉鎖）。設定頁「面板」：Android 獨有一列「移動到狀態列」（只把面板移到歌詞區垂直中心對齊狀態列、水平避開鏡頭，`centredOnBar`，不改字級與規則，依方向儲存），下一列左為十字鍵（中心為鎖頭；單擊 1 px，按住 300 ms 後每 1/30 秒（約 33.3 ms，`FLOATING_LYRICS_NUDGE_REPEAT`）1 px，放開才存檔）、右為直排「水平置中／垂直置中／重設位置」，其後寬度滑桿；「對齊」在浮動頁叫「文字排版」。Android：`FloatingLyricsOverlay.kt`（`TYPE_APPLICATION_OVERLAY`，`FLAG_LAYOUT_IN_SCREEN | FLAG_LAYOUT_NO_LIMITS`，可拖到狀態列上），頁面以 `floating_lyrics_android` 送 `floatingLyricsUpdate`（settings／data／setLocked／resetPosition／nudge／centreAxis 等頂層鍵）、`floatingLyricsStatus`、`openOverlayPermissionSettings`；行由 OpenGL ES 渲染執行緒繪製（`GlLyricsRenderer`，時鐘取自 `PlaybackService` 發布的 `ClockSnapshot`，陰影連同行點陣化成紋理，1/8 px 次像素位移；翻譯列整首固定預留，視窗高度固定；沒有備援，GL 失敗就什麼都不顯示，關閉再開啟才重試）；直向／橫向各存寬度（`widthPx`／`landscapeWidthPx`）與位置；鎖定與位置兩平台都存在 `settings.json`（Rust 唯一寫入者，比例單位，見下方 “Position as a screen ratio in settings.json”）；權限只能由使用者在系統設定頁開啟（禁止 adb 授權）；固定模式 `FLAG_NOT_TOUCHABLE`，Android 12+ 穿透視窗 alpha 取設定值與系統上限（通常 0.8）較小者。限制：只顯示有時間軸的歌詞；WebView 暫停時換歌，新歌詞要等頁面恢復才送到。待使用者實機驗收。
 
 連續動畫與透明度（兩種歌詞視窗共用，`animation`：`none` 預設／`continuous`，工作列與浮動分開儲存）：連續＝所有歌詞以 U+3000 接成一條、譯文同寬格並排成第二條；目前行左緣在該行開始時對齊歌詞區水平中心（`LYRICS_STRIP_ALIGN`＝left、`LYRICS_STRIP_TARGET`＝center，只看歌詞區寬），滑動曲線是穿過各節點的單調 C1 三次 Hermite（`lyricsStripCubic`／Rust `strip_cubic`／Kotlin `stripOffset`；首末切線 0，中間為 Fritsch–Butland 加權調和平均），末句依字元叢集數估算滑動時間（全形字元 500 ms、其他 250 ms，見 ADR 0041 D10；曲目結束更早時提前收住），抵達時最後一個字形中心對準歌詞區中心。只繪製會出現的行加左右各一個歌詞區寬（`lyricsStripWindow`／`FloatingLyricsRules.stripWindow`），不可把整首歌放進捲動條。透明度（現況）：每個分頁各自存「主要透明度」`mainOpacityPercent`（1–100、預設 100）與「次要透明度」`secondaryOpacityPercent`（1–100、預設 50，可大於主要）；動畫「無」時整條歌詞以主要透明度繪製；連續模式（行級與逐字）以固定在歌詞區的靜態置中遮罩承載兩個值（中心 1 em 為主要、向兩端線性降到次要、最外 1 em 降到 0；`player-lyrics-rules` 的 `centre_mask_stops`，Kotlin `WordLyricsRules.centreMaskStops`），沒有逐行淡化與邊緣淡出，原生視窗每個格子的透明度係數恆為 1，Android 的 `lineViewAlpha` 在連續模式為 1。舊的 `inactiveOpacityPercent`、200 ms 行淡化與 `lyrics-inactive-opacity` 廣播已不存在。連續模式選陰影時 Windows 與 Android 都照畫陰影（Android 待平板實機驗收）。邊緣淡出（動畫「無」；連續模式改用上述遮罩）：歌詞區左右各一個正方形淡出區（寬＝歌詞區高，歌詞區寬不足兩倍高時各取一半），由內緣 1 線性降到外緣 0，文字與陰影／描邊都套用，鎖頭欄與移動模式背景不淡出；規則 `edge_fade_width`／`edge_fade_opacity`（JS `lyricsEdgeFadeWidth`／`lyricsEdgeFadeOpacity`，Kotlin 同名）；Windows 以 `CompositionVisualSurface`＋`CompositionMaskBrush`＋靜態水平漸層（`sampling::edge_fade_stops`）遮罩，只在尺寸／DPI／歌詞區改變時重建；Android `EdgeFadeLayout` 以 saveLayer＋`DST_IN` 遮罩。工作列與浮動歌詞同時開連續動畫有性能負擔，建議一次只開一種。
 
@@ -369,6 +369,60 @@ overlay's check on the main thread after every wake publication and `clear()`. H
 (`LyricsRenderThread.setSuspended`); showing resumes frames with a full redraw before the alpha rises. A new overlay
 starts hidden until the player is seen playing. A stop clears the clock (no snapshot), so on Android it hides after the
 3 s delay rather than at once.
+
+## Amendment: position as a screen ratio in settings.json
+
+Context: Android kept the overlay's lock state and positions in the plugin's SharedPreferences (`moe_floating_lyrics`:
+`locked`, `x_/y_<orientation>` in px) while Windows kept `floatingLyrics.locked` / `position` in `settings.json`, so a
+backup could not carry the Android values and a feature both platforms have was stored per platform. Decisions (the
+maintainer's):
+
+- **One store, one writer.** `settings.json` keeps `floatingLyrics.locked`, `position` and `landscapePosition` on both
+  platforms; Rust is the only writer. The page's command protocol is unchanged (Windows: `floating_lyrics_set_locked`,
+  `floating_lyrics_reset_position`, the window's own moves; Android: `floatingLyricsUpdate { setLocked, resetPosition,
+  savePosition, nudgeX/Y, centreAxis, moveToStatusBar }`); only the storage behind it changed. `settings_set_floating_lyrics`
+  keeps the stored `locked`, `position` and `landscapePosition` whatever the page sends (a stale page copy can never
+  overwrite them), on every platform (`settings::page_floating_lyrics`).
+- **Android path.** `android_floating.rs` holds a copy of the three values, seeded at startup. The overlay
+  (`FloatingLyricsStore.kt`) reads it over JNI (`nativeState`; null until the settings were read in this process: the
+  overlay keeps its in-memory values, initially unlocked and centred, and asks again on the next read) and reports every
+  change over JNI (`nativeSave`, only the keys that changed, `null` clears a position). The copy changes at once and a
+  worker thread writes `settings.json` and emits `floating-lyrics-settings`, so the Android main thread never waits for
+  the disk; changes made before Rust answered are sent once it does.
+- **Unit: a ratio of the screen.** Stored value = lyric area origin / screen size: `x = (areaX - screenLeft) /
+  screenWidth`, `y` likewise (not divided by the screen less the area). Screen = the whole virtual desktop on Windows
+  (bounding box of every monitor; chosen over the monitor holding the panel) and the display in the current
+  orientation on Android. Reasons: a pixel position means nothing on another screen size or monitor layout, and one
+  unit lets both platforms share the rule and the vectors. Since a ratio does not promise the area stays visible, a
+  restored position is always clamped: only the lyric area (and the lock column right of it) must stay inside the
+  work area / screen, the transparent margins and rooms may hang past it (the earlier placement semantics). Android's
+  new window, rotation and carry-over all use the same restore path (ratio -> px -> clamp -> window origin).
+- **Shared rules and vectors.** `player-lyrics-rules` `placement` is the reference: `position_ratio`, `position_px`
+  (`origin + floor(ratio * extent + 0.5)`, so a save after a restore gives back the same pixel), `clamp_kept_box` and
+  `restore_area_origin`; the generator writes `placementRatio`, `placementPx`, `placementClamp`, `placementRestore`
+  (example accepted by the maintainer: a 1080 x 2400 screen and ratio (0.5, 0.1) put the area at (540, 240)). Kotlin
+  (`FloatingLyricsRules`, `FloatingLyricsPlacementTest`) and the Windows placement (`place_on_monitors_with` through
+  `clamp_kept_box`, test against `placementClamp`) are checked against them.
+- **Field names.** `position` and `locked` are kept; `landscapePosition` is added for Android (like `landscapeWidthPx`);
+  on Android `position` is the portrait position; Windows ignores `landscapePosition`. Missing = centred.
+- **Old Windows pixels.** Files written before this change hold `position` as integer desktop pixels. Every file now
+  carries `floatingLyrics.positionUnit: "screenRatio"`; the unit is told by that marker, never guessed from the values
+  (a ratio of exactly 0 or 1 is not taken for pixels). A file without it is read as pixels, converted once with the
+  virtual desktop at that moment and written back with the marker; on Android such a value (only ever a Windows
+  desktop position) is dropped. An older build reading a new file fails to read the ratio as pixels and centres the
+  panel; what it writes back has no marker and is read as pixels again.
+- **Old Android values.** `FloatingLyricsLegacyPrefs` carries `locked` and `x_/y_<orientation>` over once, each
+  orientation converted with that orientation's screen at that moment, through `nativeImportLegacy`, which writes the
+  file before it returns (it runs on a thread of its own). A position already in `settings.json` is kept; the lock
+  state is taken from the old store when it had one (the `settings.json` value was never used on Android before). Only
+  after Rust has written them are all keys but the debug flag `trace` cleared and the `migrated` marker set; when Rust
+  cannot take them yet nothing is cleared and the next overlay update tries again.
+- **Backups.** `manifest.json` records the platform and a zip from the other platform is refused, so a desktop position
+  never becomes a phone position (or the reverse) through a zip. A `settings.json` imported on its own carries no
+  platform; its positions are kept (and clamped when restored). `locked` is a plain bool.
+
+Consequences: 「移動到狀態列」 may put the area above the screen top; after a restart or rotation the clamp brings it back
+to y = 0. Not verified on the devices yet (phone, tablet, Windows multi-monitor).
 
 ## Android overlay rendering notes (frame cost)
 

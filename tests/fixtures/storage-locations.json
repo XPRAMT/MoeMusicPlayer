@@ -1,7 +1,6 @@
 {
   "_doc": "Allowlist for tests/storage-locations.test.mjs. Every entry: where (file, repo-relative), key (storage key or SharedPreferences name), category (debug-flag | cache | device-specific | pending-migration | framework), reason (one line). User-visible settings must NOT be added here as permanent exceptions: they belong in settings.json (pending-migration entries are temporary and name the target store).",
   "entries": [
-    { "where": "plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsOverlay.kt", "key": "moe_floating_lyrics", "category": "pending-migration", "reason": "Floating lyrics position and locked state are user settings -> settings.json (shared SettingsStore)." },
     { "where": "plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/MixerRateAccess.kt", "key": "moe_mixer_rate", "category": "pending-migration", "reason": "rootOptIn is a user choice -> settings.json." },
     { "where": "src/lib/lyrics-timing-offset.js", "key": "moemusicplayer.lyricsTimingOffsetSec:", "category": "pending-migration", "reason": "Per-track lyric delay is song data -> library database." },
     { "where": "src/lib/spectrogram-settings.js", "key": "moe.spectrogramSettings.v2", "category": "pending-migration", "reason": "Spectrogram window settings are user settings -> settings.json." },
@@ -15,6 +14,7 @@
     { "where": "plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/BluetoothRateFollow.kt", "key": "moe_bt_rate", "category": "device-specific", "reason": "Original sample rate per Bluetooth device address; only meaningful on this phone." },
     { "where": "plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/BluetoothCodecChoiceFollow.kt", "key": "moe_bt_codec", "category": "device-specific", "reason": "Codec state per Bluetooth device address; only meaningful on this phone." },
     { "where": "plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/LyricsTrace.kt", "key": "moe_floating_lyrics", "category": "debug-flag", "reason": "Reads the boolean `trace` debug flag of the floating lyrics file." },
+    { "where": "plugins/tauri-plugin-media-index/android/src/main/java/com/moemusicplayer/mediaindex/FloatingLyricsLegacyPrefs.kt", "key": "moe_floating_lyrics", "category": "cache", "reason": "Legacy keys (locked, x_/y_<orientation>) read once, moved into settings.json through Rust and removed; only the `trace` debug flag and the `migrated` marker stay." },
     { "where": "src/lib/i18n.js", "key": "moe.languageChoice", "category": "cache", "reason": "Copy of settings.json `language` so the first paint uses the right language (ADR 0019)." },
     { "where": "src/lib/language-sync.js", "key": "moe.languageReloadFor", "category": "cache", "reason": "sessionStorage reload guard for language switching; not a setting." },
     { "where": "src/lib/OutputDevicesSettings.svelte", "key": "moe.outputVolumeSync", "category": "cache", "reason": "Legacy key read once and removed to carry the old choice into settings.json (already stored there)." },
