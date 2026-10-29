@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -20,6 +22,8 @@ class MainActivity : TauriActivity() {
   private val androidInsetsBridge = AndroidInsetsBridge()
   private var appWebView: WebView? = null
   private var localNetworkPermissionRequestId: String? = null
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val focusRepeat = Runnable { kickWebViewCompositor() }
 
   override fun onStart() {
     super.onStart()
@@ -32,15 +36,22 @@ class MainActivity : TauriActivity() {
    * frame is still current, submits nothing and never asks Android to draw it (traced 2026-10-21: no `PostInvalidate`, no
    * draw call, no frame completed until the WebView's visibility changed). Pausing and resuming the WebView changes that
    * visibility, which makes the compositor submit a frame, so it is done the moment the window has the focus. Changing
-   * the page's style, or hiding and showing the view, does not do it.
+   * the page's style, or hiding and showing the view, does not do it. It is done again [FOCUS_REPEAT_DELAY_MS] later,
+   * without checking whether the screen has recovered; losing the focus or destroying the activity cancels the repeat.
    */
   override fun onWindowFocusChanged(hasFocus: Boolean) {
     super.onWindowFocusChanged(hasFocus)
+    mainHandler.removeCallbacks(focusRepeat)
     if (hasFocus) {
-      appWebView?.let {
-        it.onPause()
-        it.onResume()
-      }
+      kickWebViewCompositor()
+      mainHandler.postDelayed(focusRepeat, FOCUS_REPEAT_DELAY_MS)
+    }
+  }
+
+  private fun kickWebViewCompositor() {
+    appWebView?.let {
+      it.onPause()
+      it.onResume()
     }
   }
 
@@ -126,6 +137,7 @@ class MainActivity : TauriActivity() {
 
   override fun onDestroy() {
     LifecycleLog.write(this, "onDestroy changingConfigurations=$isChangingConfigurations finishing=$isFinishing")
+    mainHandler.removeCallbacks(focusRepeat)
     super.onDestroy()
   }
 
@@ -155,6 +167,7 @@ class MainActivity : TauriActivity() {
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
 
   private companion object {
+    const val FOCUS_REPEAT_DELAY_MS = 500L
     const val NOTIFICATION_PERMISSION_REQUEST = 4107
     const val LOCAL_NETWORK_PERMISSION_REQUEST = 4108
     @Volatile var notificationPermissionAsked = false
