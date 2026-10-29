@@ -4,6 +4,7 @@ import { fitEndEllipsis, fitMiddleEllipsis } from '../src/lib/middle-ellipsis.js
 import {
   createEllipsisFitter,
   hostWidthFromResizeEntry,
+  resolveHostFont,
   invalidateEllipsisFonts,
   onEllipsisFontsInvalidated,
 } from '../src/lib/ellipsis-fit.js';
@@ -147,4 +148,21 @@ test('font invalidation reaches every listener until it is removed', () => {
   stop();
   invalidateEllipsisFonts();
   assert.equal(calls, 1);
+});
+
+test('font is resolved once per font context, not per host', () => {
+  let reads = 0;
+  globalThis.getComputedStyle = () => ({ get font() { reads++; return '400 14px x'; } });
+  const cell = (cls) => ({ parentElement: { tagName: 'SPAN', className: cls, parentElement: { className: 'row' } } });
+  invalidateEllipsisFonts();
+  for (let i = 0; i < 50; i++) resolveHostFont(cell('list-column-title'));
+  for (let i = 0; i < 50; i++) resolveHostFont(cell('list-column-artist'));
+  assert.equal(reads, 2);
+  assert.equal(resolveHostFont(cell('x'), 'ctx'), '400 14px x');
+  assert.equal(resolveHostFont(cell('y'), 'ctx'), '400 14px x');
+  assert.equal(reads, 3);
+  invalidateEllipsisFonts();
+  resolveHostFont(cell('list-column-title'));
+  assert.equal(reads, 4);
+  delete globalThis.getComputedStyle;
 });

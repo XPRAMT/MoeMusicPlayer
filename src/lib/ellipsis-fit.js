@@ -14,7 +14,7 @@ function createStats() {
   } catch {
     return null;
   }
-  const stats = { measureText: 0, widthHits: 0, fitHits: 0, fitMisses: 0, fontReads: 0, layoutReads: 0 };
+  const stats = { measureText: 0, widthHits: 0, fitHits: 0, fitMisses: 0, fontReads: 0, layoutReads: 0, mounts: 0, destroys: 0, layoutRuns: 0, observerCallbacks: 0 };
   if (typeof window !== 'undefined') /** @type {any} */ (window).__moeEllipsisStats = stats;
   return stats;
 }
@@ -129,9 +129,61 @@ export function hostWidthFromResizeEntry(entry) {
 }
 
 const fontListeners = new Set();
+/** @type {Map<string, string>} */
+const fontCache = new Map();
+
+/**
+ * The computed `font` of a host, resolved once per font context instead of once per cell. The context is the caller's
+ * `fontContext`, else the class names of the host's parent and grandparent (cells of one column share them).
+ * @param {HTMLElement} host
+ * @param {string | undefined} fontContext
+ */
+export function resolveHostFont(host, fontContext) {
+  const parent = host.parentElement;
+  const key = fontContext ?? `${parent?.tagName}.${parent?.className}|${parent?.parentElement?.className}`;
+  let font = fontCache.get(key);
+  if (font === undefined) {
+    font = getComputedStyle(host).font;
+    if (ellipsisStats) ellipsisStats.fontReads++;
+    fontCache.set(key, font);
+  }
+  return font;
+}
+
+/** @type {WeakMap<Element, { width: number, callback: (width: number) => void }>} */
+const observed = new WeakMap();
+/** @type {ResizeObserver | null} */
+let sharedObserver = null;
+
+/**
+ * One ResizeObserver for every cell. `callback` runs with the rounded width, only when that width changed.
+ * @param {HTMLElement} host
+ * @param {(width: number) => void} callback
+ * @returns {() => void}
+ */
+export function observeHostWidth(host, callback) {
+  sharedObserver ??= new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      if (ellipsisStats) ellipsisStats.observerCallbacks++;
+      const record = observed.get(entry.target);
+      if (!record) continue;
+      const width = hostWidthFromResizeEntry(entry);
+      if (width === record.width) continue;
+      record.width = width;
+      record.callback(width);
+    }
+  });
+  observed.set(host, { width: -1, callback });
+  sharedObserver.observe(host);
+  return () => {
+    sharedObserver?.unobserve(host);
+    observed.delete(host);
+  };
+}
 
 /** Call when something that changes the drawn font changes (interface font, language, web fonts finishing loading). */
 export function invalidateEllipsisFonts() {
+  fontCache.clear();
   for (const listener of [...fontListeners]) listener();
 }
 

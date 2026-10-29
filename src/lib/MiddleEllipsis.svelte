@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import {
     ellipsisStats,
-    hostWidthFromResizeEntry,
+    observeHostWidth,
     onEllipsisFontsInvalidated,
+    resolveHostFont,
     sharedFitter,
   } from './ellipsis-fit.js';
   import type { TrackTextOverflowMode } from './track-text-overflow-context';
@@ -11,31 +12,39 @@
   interface Props {
     text: string;
     mode?: TrackTextOverflowMode;
-    /** Available width in CSS px, when the caller knows it; otherwise the width comes from the ResizeObserver. */
+    /** Available width in CSS px, when the caller knows it; otherwise the width comes from the shared ResizeObserver. */
     maxWidth?: number;
+    /** Cells that draw with the same font share one font lookup; defaults to the parent/grandparent class names. */
+    fontContext?: string;
   }
 
-  let { text, mode = 'middle', maxWidth }: Props = $props();
+  let { text, mode = 'middle', maxWidth, fontContext }: Props = $props();
   let host = $state<HTMLElement | null>(null);
   let shown = $state('');
 
-  // Neither value is reactive: the font is read once per host (and again only when fonts are invalidated), the width
-  // comes from the ResizeObserver entry, so scrolling and recycling rows never force a style recalc or a layout.
-  let font = '';
+  // None of these is reactive: the font comes from a per-context cache, the width from the shared ResizeObserver, and
+  // layout() only fits again when text, mode, width or font actually differ from the last fit.
   let observedWidth: number | null = null;
+  let lastText: string | null = null;
+  let lastMode = '';
+  let lastWidth = -1;
+  let lastFont: string | null = null;
 
   function layout(): void {
     if (!host) return;
-    if (!font) {
-      font = getComputedStyle(host).font;
-      if (ellipsisStats) ellipsisStats.fontReads++;
-    }
+    const font = resolveHostFont(host, fontContext);
     let width = maxWidth ?? observedWidth;
     if (width === null || width === undefined) {
       if (typeof ResizeObserver !== 'undefined') return; // the observer's first callback supplies it
       width = host.clientWidth;
       if (ellipsisStats) ellipsisStats.layoutReads++;
     }
+    if (text === lastText && mode === lastMode && width === lastWidth && font === lastFont) return;
+    lastText = text;
+    lastMode = mode;
+    lastWidth = width;
+    lastFont = font;
+    if (ellipsisStats) ellipsisStats.layoutRuns++;
     shown = sharedFitter.fit(text, mode, font, width);
   }
 
@@ -48,22 +57,19 @@
 
   onMount(() => {
     if (!host) return;
-    const stopFonts = onEllipsisFontsInvalidated(() => {
-      font = '';
-      layout();
-    });
+    if (ellipsisStats) ellipsisStats.mounts++;
+    const stopFonts = onEllipsisFontsInvalidated(layout);
     if (typeof ResizeObserver === 'undefined') {
       layout();
       return stopFonts;
     }
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[entries.length - 1];
-      if (entry) observedWidth = hostWidthFromResizeEntry(entry);
+    const stopObserving = observeHostWidth(host, (width) => {
+      observedWidth = width;
       layout();
     });
-    observer.observe(host);
     return () => {
-      observer.disconnect();
+      if (ellipsisStats) ellipsisStats.destroys++;
+      stopObserving();
       stopFonts();
     };
   });
