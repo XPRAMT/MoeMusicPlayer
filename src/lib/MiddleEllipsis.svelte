@@ -16,9 +16,16 @@
     maxWidth?: number;
     /** Cells that draw with the same font share one font lookup; defaults to the parent/grandparent class names. */
     fontContext?: string;
+    /**
+     * Set when the host is sized by its content (an inline-flex/shrink-to-fit parent). The host then gets the full
+     * text's width as its preferred width, so the observed width is the room really available and never the width of
+     * the already shortened text (which would keep it shortened forever once the room grows).
+     */
+    contentSized?: boolean;
   }
 
-  let { text, mode = 'middle', maxWidth, fontContext }: Props = $props();
+  let { text, mode = 'middle', maxWidth, fontContext, contentSized = false }: Props = $props();
+  let fullWidth = $state<number | null>(null);
   let host = $state<HTMLElement | null>(null);
   let shown = $state('');
 
@@ -33,6 +40,10 @@
   function layout(): void {
     if (!host) return;
     const font = resolveHostFont(host, fontContext);
+    if (contentSized) {
+      const next = text ? Math.ceil(sharedFitter.measureWidth(font, text)) : null;
+      if (next !== fullWidth) fullWidth = next;
+    }
     let width = maxWidth ?? observedWidth;
     if (width === null || width === undefined) {
       if (typeof ResizeObserver !== 'undefined') return; // the observer's first callback supplies it
@@ -75,7 +86,7 @@
   });
 </script>
 
-<span class="middle-ellipsis" bind:this={host}>{shown || text}</span>
+<span class="middle-ellipsis" bind:this={host} style:width={contentSized && fullWidth !== null ? `${fullWidth}px` : undefined}>{shown || text}</span>
 
 <style>
   .middle-ellipsis {

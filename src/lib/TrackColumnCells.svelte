@@ -179,7 +179,7 @@
     <span class={`list-column list-column-${cell.id}`} class:is-numeric={isNumericListColumn(cell.id)} class:is-audio-format-cell={cell.id === 'audioFormat'} role="gridcell" use:appTooltip={cell.title || cell.text || undefined}>
       {#if cell.id === 'audioFormat'}
         <span class="list-audio-format">
-          <MiddleEllipsis text={cell.text} mode={$textOverflowStore} />
+          <MiddleEllipsis text={cell.text} mode={$textOverflowStore} contentSized={true} />
           {#if cell.hiRes}
             <img class="list-hi-res-badge" src={hiResBadgeUrl} alt="Hi-Res" use:appTooltip={'Hi-Res'} />
           {/if}
