@@ -112,6 +112,39 @@ function sourceWidthOrFallback(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : SOURCE_COLUMN_FALLBACK_PX;
 }
 
+/** Width of the audio format column before any row was measured (the old fixed width). */
+export const AUDIO_FORMAT_COLUMN_FALLBACK_PX = 163;
+/** Room a Hi-Res row needs beside its text: the 6 px gap and the 20.4 px badge (`.list-hi-res-badge`). */
+export const AUDIO_FORMAT_HI_RES_BADGE_PX = 6 + 20.4;
+
+/** @param {{ text: string, hiRes?: boolean }} entry */
+export function audioFormatEntryKey(entry) {
+  return `${entry.hiRes === true ? '1' : '0'}${entry.text}`;
+}
+
+/**
+ * The smallest width at which the audio format column shows every given row in full: the widest format text (plus
+ * the Hi-Res badge on rows that show one) and the header title with its sort indicator.
+ * @param {{ text: string, hiRes?: boolean }[]} entries distinct format cells
+ * @param {string} headerLabel the column title
+ * @param {(text: string, kind: 'cell' | 'header') => number} measure text width in px with the list's real font
+ */
+export function computeAudioFormatColumnWidthPx(entries, headerLabel, measure) {
+  let widest = 0;
+  for (const entry of entries) {
+    if (!entry || typeof entry.text !== 'string' || entry.text === '') continue;
+    widest = Math.max(widest, measure(entry.text, 'cell') + (entry.hiRes === true ? AUDIO_FORMAT_HI_RES_BADGE_PX : 0));
+  }
+  const header = measure(headerLabel, 'header') + SOURCE_HEADER_INDICATOR_PX;
+  const width = Math.ceil(Math.max(widest, header)) + SOURCE_CELL_PADDING_PX;
+  return Number.isFinite(width) && width > 0 ? width : AUDIO_FORMAT_COLUMN_FALLBACK_PX;
+}
+
+/** @param {unknown} value */
+function audioFormatWidthOrFallback(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : AUDIO_FORMAT_COLUMN_FALLBACK_PX;
+}
+
 /** @type {Set<TrackColumnId>} */
 const COLUMN_IDS = new Set(TRACK_COLUMN_DEFINITIONS.map(({ id }) => id));
 const COLUMN_DEFINITION_BY_ID = new Map(TRACK_COLUMN_DEFINITIONS.map((column) => [column.id, column]));
@@ -301,11 +334,13 @@ export function trackListColumnCount(preferences) {
  * @param {TrackColumnPreference[]} preferences
  * @param {TrackColumnWidths | null | undefined} [widths]
  * @param {number} [sourceWidthPx] measured width of the source column (`computeSourceColumnWidthPx`)
+ * @param {number} [audioFormatWidthPx] measured width of the audio format column (`computeAudioFormatColumnWidthPx`)
  */
-export function trackListGridTemplate(preferences, widths, sourceWidthPx) {
+export function trackListGridTemplate(preferences, widths, sourceWidthPx, audioFormatWidthPx) {
   const flexible = normalizeTrackColumnWidths(widths);
   const informationColumns = visibleTrackColumns(preferences).map(({ id }) => {
     if (id === 'source') return `${sourceWidthOrFallback(sourceWidthPx)}px`;
+    if (id === 'audioFormat') return `${audioFormatWidthOrFallback(audioFormatWidthPx)}px`;
     if (RESIZABLE_TRACK_COLUMN_IDS.has(id)) {
       return `${flexible[/** @type {'title' | 'artist' | 'album'} */ (id)]}px`;
     }
@@ -320,12 +355,14 @@ export function trackListGridTemplate(preferences, widths, sourceWidthPx) {
  * @param {TrackColumnPreference[]} preferences
  * @param {TrackColumnWidths | null | undefined} [widths]
  * @param {number} [sourceWidthPx]
+ * @param {number} [audioFormatWidthPx]
  */
-export function trackListMinWidthPx(preferences, widths, sourceWidthPx) {
+export function trackListMinWidthPx(preferences, widths, sourceWidthPx, audioFormatWidthPx) {
   const flexible = normalizeTrackColumnWidths(widths);
   const visible = visibleTrackColumns(preferences);
   const information = visible.reduce((sum, column) => {
     if (column.id === 'source') return sum + sourceWidthOrFallback(sourceWidthPx);
+    if (column.id === 'audioFormat') return sum + audioFormatWidthOrFallback(audioFormatWidthPx);
     if (RESIZABLE_TRACK_COLUMN_IDS.has(column.id)) {
       return sum + flexible[/** @type {'title' | 'artist' | 'album'} */ (column.id)];
     }

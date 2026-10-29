@@ -37,6 +37,10 @@ import {
   trackListColumnCount,
   trackListGridTemplate,
   computeSourceColumnWidthPx,
+  computeAudioFormatColumnWidthPx,
+  audioFormatEntryKey,
+  AUDIO_FORMAT_COLUMN_FALLBACK_PX,
+  AUDIO_FORMAT_HI_RES_BADGE_PX,
   SOURCE_CELL_PADDING_PX,
   SOURCE_HEADER_INDICATOR_PX,
   RESIZABLE_TRACK_COLUMN_IDS,
@@ -576,8 +580,8 @@ test('the source column header and cells are centered like the numeric columns',
 test('every track list feeds the measured source width into one template for header and rows', async () => {
   for (const name of ['TrackList', 'PlaybackQueueList', 'PlaylistEntryList']) {
     const source = await readFile(new URL(`../src/lib/${name}.svelte`, import.meta.url), 'utf8');
-    assert.ok(source.includes('trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx)'));
-    assert.ok(source.includes('trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx)'));
+    assert.ok(source.includes('trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx)'));
+    assert.ok(source.includes('trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx)'));
   }
 });
 
@@ -609,4 +613,40 @@ test('a remote track shows its creation and modified times in the columns like a
   assert.equal(formatTrackColumnValue('modifiedAt', remote, formatDuration), '2026-10-21');
   assert.equal(formatTrackColumnValue('createdAt', remote, formatDuration), formatTrackColumnValue('createdAt', local, formatDuration));
   assert.equal(formatTrackColumnValue('createdAt', { ...remote, createdAtUtcMs: null }, formatDuration), '—');
+});
+
+test('audio format column fits the widest format text, counting the Hi-Res badge only on rows that show it', () => {
+  const measure = (/** @type {string} */ text) => [...text].length * 7;
+  const plain = { text: 'FLAC．44.1 kHz．16 bit', hiRes: false };
+  const hiRes = { text: 'FLAC．48 kHz．24 bit', hiRes: true };
+  const textOnly = Math.ceil(plain.text.length * 7) + SOURCE_CELL_PADDING_PX;
+  assert.equal(computeAudioFormatColumnWidthPx([plain], '音訊格式', measure), textOnly);
+  assert.equal(
+    computeAudioFormatColumnWidthPx([hiRes], '音訊格式', measure),
+    Math.ceil(hiRes.text.length * 7 + AUDIO_FORMAT_HI_RES_BADGE_PX) + SOURCE_CELL_PADDING_PX,
+  );
+  const both = computeAudioFormatColumnWidthPx([plain, hiRes], '音訊格式', measure);
+  assert.ok(both >= computeAudioFormatColumnWidthPx([plain], '音訊格式', measure));
+  assert.ok(both >= computeAudioFormatColumnWidthPx([hiRes], '音訊格式', measure));
+  // Header only (no rows yet): title plus sort indicator.
+  assert.equal(computeAudioFormatColumnWidthPx([], 'Audio format', measure), 12 * 7 + SOURCE_HEADER_INDICATOR_PX + SOURCE_CELL_PADDING_PX);
+  assert.equal(computeAudioFormatColumnWidthPx([{ text: '' }], 'x', () => Number.NaN), AUDIO_FORMAT_COLUMN_FALLBACK_PX);
+  assert.notEqual(audioFormatEntryKey(plain), audioFormatEntryKey({ ...plain, hiRes: true }));
+});
+
+test('audio format column width feeds the grid template and min width; unmeasured keeps the old 163 px', () => {
+  const columns = DEFAULT_TRACK_COLUMN_PREFERENCES.map((column) => ({ ...column, visible: true }));
+  const index = visibleTrackColumns(columns).findIndex(({ id }) => id === 'audioFormat') + 1;
+  assert.equal(trackListGridTemplate(columns, DEFAULT_TRACK_COLUMN_WIDTHS, 84).split(' ')[index], '163px');
+  assert.equal(trackListGridTemplate(columns, DEFAULT_TRACK_COLUMN_WIDTHS, 84, 201.2).split(' ')[index], '202px');
+  const narrow = trackListMinWidthPx(columns, DEFAULT_TRACK_COLUMN_WIDTHS, 84, 163);
+  assert.equal(trackListMinWidthPx(columns, DEFAULT_TRACK_COLUMN_WIDTHS, 84, 200) - narrow, 37);
+});
+
+test('every track list cell reports its audio format to the shared self-sizing column', async () => {
+  const cells = await readFile(new URL('../src/lib/TrackColumnCells.svelte', import.meta.url), 'utf8');
+  assert.ok(cells.includes('noteAudioFormatCells(cells)'));
+  const module = await readFile(new URL('../src/lib/audio-format-column-width.js', import.meta.url), 'utf8');
+  assert.ok(module.includes('createColumnTextMeasurer'), 'measures with the real list font');
+  assert.ok(module.includes('entries.has(key)'), 'measures each distinct value once');
 });

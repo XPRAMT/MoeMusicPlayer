@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { sourceColumnWidthPx } from './source-column-width.js';
+  import { audioFormatColumnWidthPx } from './audio-format-column-width.js';
   import { tr } from './i18n.js';
   import { isGroupedSortField } from './grouped-sorts.js';
   import {
@@ -117,8 +118,8 @@
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
-  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx));
-  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
 
   type ListSnapshot = ReturnType<PagedListController<TrackSummary, string>['snapshot']>;

@@ -1,0 +1,68 @@
+/** Text measurement with the track lists' real fonts, shared by the self-sizing columns (source, audio format). */
+
+/** @type {HTMLElement | null} */
+let probe = null;
+
+/** @param {CSSStyleDeclaration} style */
+function fontOf(style) {
+  return `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+}
+
+function buildProbe() {
+  if (probe || typeof document === 'undefined') return probe;
+  probe = document.createElement('div');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;left:-9999px;top:0;';
+  probe.innerHTML = '<div class="track-row"><span class="list-column"></span></div><div class="track-table-head"><span class="list-column"></span></div>';
+  document.body.appendChild(probe);
+  return probe;
+}
+
+/**
+ * A measuring function using the list's real fonts: probes carry the same classes as the list's rows and header.
+ * Returns null outside a document.
+ * @returns {((text: string, kind: 'cell' | 'header') => number) | null}
+ */
+export function createColumnTextMeasurer() {
+  const host = buildProbe();
+  if (!host || typeof document === 'undefined') return null;
+  const cellStyle = getComputedStyle(/** @type {Element} */ (host.querySelector('.track-row .list-column')));
+  const headStyle = getComputedStyle(/** @type {Element} */ (host.querySelector('.track-table-head .list-column')));
+  const context = document.createElement('canvas').getContext('2d');
+  if (!context) return null;
+  const spacing = Number.parseFloat(headStyle.letterSpacing);
+  return (text, kind) => {
+    const style = kind === 'header' ? headStyle : cellStyle;
+    context.font = fontOf(style);
+    const letters = kind === 'header' && Number.isFinite(spacing) ? spacing * [...text].length : 0;
+    return context.measureText(text).width + letters;
+  };
+}
+
+/** @type {Set<() => void>} */
+const fontListeners = new Set();
+let observing = false;
+let scheduled = false;
+
+function notifyFontChange() {
+  if (scheduled || typeof requestAnimationFrame === 'undefined') return;
+  scheduled = true;
+  requestAnimationFrame(() => {
+    scheduled = false;
+    for (const listener of fontListeners) listener();
+  });
+}
+
+/**
+ * Call `listener` (once per frame at most) whenever the list fonts may have changed: web fonts loaded, the font
+ * settings or language changed (style/class/lang on <html>), or the window resized.
+ * @param {() => void} listener
+ */
+export function onColumnFontsChange(listener) {
+  fontListeners.add(listener);
+  if (observing || typeof document === 'undefined') return;
+  observing = true;
+  document.fonts?.addEventListener?.('loadingdone', notifyFontChange);
+  new MutationObserver(notifyFontChange).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'lang'] });
+  window.addEventListener('resize', notifyFontChange);
+}

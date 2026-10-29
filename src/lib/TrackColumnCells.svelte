@@ -8,6 +8,7 @@
   import { appTooltip } from './app-tooltip.js';
   import hiResBadgeUrl from '../assets/hi-res-badge.svg';
   import { isNumericListColumn, RESIZABLE_TRACK_COLUMN_IDS } from './track-columns.js';
+  import { noteAudioFormatCells } from './audio-format-column-width.js';
 
   interface Column {
     id: string;
@@ -59,6 +60,11 @@
     resizable = false,
     onResize,
   }: Props = $props();
+
+  // The audio format column sizes itself to the widest format text the lists show (with the Hi-Res badge).
+  $effect(() => {
+    if (variant === 'item') noteAudioFormatCells(cells);
+  });
 
   const textOverflowStore = getContext<TrackTextOverflowStore | undefined>(TRACK_TEXT_OVERFLOW_CONTEXT)
     ?? readable<TrackTextOverflowMode>('end');
