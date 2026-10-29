@@ -3649,6 +3649,9 @@ input:focus-visible {
 }
 
 .configured-sources {
+  /* The title row's picker button sits between the card top and the title divider: the gap above it (the card's
+     top padding) equals the gap below it (.configured-sources-heading padding-bottom). */
+  padding-top: 10px;
   padding-bottom: 7px;
 }
 
