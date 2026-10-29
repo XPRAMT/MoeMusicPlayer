@@ -509,6 +509,8 @@ function sharedStage(layout) {
   const style = new Proxy(styleValues, {
     set(target, key, value) {
       record('style');
+      // Like a browser: `translate` is serialised without a zero second component ('0.01px 0px' reads back '0.01px').
+      if (key === 'translate' && typeof value === 'string') value = value.trim().split(/\s+/).filter((part, i, all) => !(i === 1 && parseFloat(part) === 0 && all.length === 2)).join(' ');
       target[key] = value;
       return true;
     },
@@ -605,7 +607,7 @@ test('source shape: the nudge writes only translate and transition, never a laye
   assert.match(nudge, /style\.translate = COVER_RERASTER_TRANSLATE/);
   assert.match(nudge, /style\.transition = COVER_RERASTER_TRANSITION/);
   // The raf step bails out when something else owns translate / transition now.
-  assert.match(nudge, /\(style\.translate \|\| ''\) !== COVER_RERASTER_TRANSLATE \|\| \(style\.transition \|\| ''\) !== 'none'/);
+  assert.match(nudge, /!isRerasterTranslate\(style\.translate\) \|\| \(style\.transition \|\| ''\) !== mine\.transition/);
   // The restore timer only touches the transition it set.
   assert.match(nudge, /\(style\.transition \|\| ''\) === mine\.transition/);
   for (const entry of ['function wheel', 'function down', 'function apply']) {
@@ -657,7 +659,7 @@ test('re-raster nudge: once the zoom-in is stable it moves the stage 0.01px and 
     assert.ok(node.dataset.coverZoomed !== undefined);
     assert.equal(node.style.translate ?? '', '', 'not nudged while the zoom was just applied');
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
     assert.equal(node.style.transition, 'none');
     await rig.runFrames();
     assert.equal(node.style.translate, '');
@@ -675,7 +677,7 @@ test('re-raster nudge: once the zoom-in is stable it moves the stage 0.01px and 
     await rig.wheel(-200);
     assert.equal(node.style.translate ?? '', '');
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
     await rig.runFrames();
     await wait(300);
     assert.equal(node.style.translate, '');
@@ -704,7 +706,7 @@ test('re-raster nudge: continuous zooming postpones it; no nudge at scale 1 or b
       assert.equal(node.style.translate ?? '', '', 'still zooming');
     }
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
   } finally {
     rig.destroy();
   }
@@ -721,7 +723,7 @@ test('re-raster nudge: a finger down cancels a pending nudge and it waits until 
     assert.equal(node.style.translate ?? '', '', 'no nudge under a finger');
     fire('pointerup', rig.touch());
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px', 'nudged once the gesture is over');
+    assert.equal(node.style.translate, '0.01px', 'nudged once the gesture is over');
   } finally {
     rig.destroy();
   }
@@ -734,19 +736,19 @@ test('re-raster nudge: swipe feedback wins over a nudge in flight, and its settl
     const { node } = rig;
     await rig.wheel(-300);
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
     // The swipe feedback lands before the nudge's second step.
     node.style.transition = 'none';
-    node.style.translate = '12px 0px';
+    node.style.translate = '12px';
     node.style.scale = '0.97';
     node.style.opacity = '0.9';
     await settle();
     await rig.runFrames();
-    assert.equal(node.style.translate, '12px 0px', 'the nudge did not clear the swipe translate');
+    assert.equal(node.style.translate, '12px', 'the nudge did not clear the swipe translate');
     assert.equal(node.style.scale, '0.97');
     assert.equal(node.style.transition, 'none');
     await wait(300);
-    assert.equal(node.style.translate, '12px 0px');
+    assert.equal(node.style.translate, '12px');
     assert.equal(node.style.transition, 'none', 'the restore timer left the swipe transition alone');
     // The swipe settles back by its own transition (which re-rasters the layer by itself): no nudge over it.
     node.style.transition = 'translate 180ms ease, scale 180ms ease, opacity 180ms ease';
@@ -772,9 +774,9 @@ test('re-raster nudge: swipe feedback written without any observer batch yet is 
     const { node } = rig;
     await rig.wheel(-300);
     await wait(COVER_LAYER_IDLE_MS + 40);
-    node.style.translate = '9px 0px';
+    node.style.translate = '9px';
     await rig.runFrames(); // the frame runs before any mutation observer batch
-    assert.equal(node.style.translate, '9px 0px');
+    assert.equal(node.style.translate, '9px');
     assert.equal(node.style.transition, 'none');
   } finally {
     rig.destroy();
@@ -791,10 +793,10 @@ test('re-raster nudge: a swipe written in the second step of a nudge is not undo
     await rig.runFrames(); // the nudge's transition is now running
     assert.equal(node.style.transition, 'translate 180ms');
     node.style.transition = 'none';
-    node.style.translate = '-20px 0px';
+    node.style.translate = '-20px';
     await settle();
     await wait(300);
-    assert.equal(node.style.translate, '-20px 0px');
+    assert.equal(node.style.translate, '-20px');
     assert.equal(node.style.transition, 'none');
   } finally {
     rig.destroy();
@@ -808,13 +810,13 @@ test('re-raster nudge: a wheel step during the nudge takes it back, and the new 
     const { node } = rig;
     await rig.wheel(-300);
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
     rig.fire('wheel', { deltaY: -100, deltaMode: 0, clientX: 300, clientY: 300, preventDefault() {} });
     assert.equal(node.style.translate, '', 'the wheel took the nudge back');
     await rig.runFrames();
     assert.equal(node.style.translate ?? '', '');
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
   } finally {
     rig.destroy();
   }
@@ -826,14 +828,51 @@ test('re-raster nudge: a track change at an enlarged scale (new cover element, t
   try {
     const { node } = rig;
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
     await rig.runFrames();
     await wait(300);
     assert.equal(node.style.translate, '');
     // The next cover image loads into the element: the layer needs another nudge.
     node.dispatchEvent({ type: 'load' });
     await wait(COVER_LAYER_IDLE_MS + 40);
-    assert.equal(node.style.translate, '0.01px 0px');
+    assert.equal(node.style.translate, '0.01px');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: the full sequence completes with a browser-serialised translate (regression: stuck 0.01px / transition none)', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    node.style.transition = 'none';
+    await rig.wheel(-300);
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px', 'serialised without the zero component');
+    await rig.runFrames();
+    assert.equal(node.style.translate, '', 'step 2 ran: translate cleared');
+    assert.equal(node.style.transition, 'translate 180ms', 'step 2 ran: the transition is set');
+    await wait(300);
+    assert.equal(node.style.translate, '');
+    assert.equal(node.style.transition, 'none', 'transition restored');
+  } finally {
+    rig.destroy();
+  }
+});
+
+test('re-raster nudge: a nudge whose frame never comes is taken back by the safety net', async () => {
+  const { COVER_LAYER_IDLE_MS } = await import('../src/lib/cover-zoom.js');
+  const rig = await nudgeRig(undefined);
+  try {
+    const { node } = rig;
+    await rig.wheel(-300);
+    await wait(COVER_LAYER_IDLE_MS + 40);
+    assert.equal(node.style.translate, '0.01px');
+    rig.frames.length = 0; // the animation frame is lost
+    await wait(520);
+    assert.equal(node.style.translate, '');
+    assert.equal(node.style.transition, 'none');
   } finally {
     rig.destroy();
   }

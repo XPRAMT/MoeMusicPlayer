@@ -66,3 +66,14 @@ export function nudgeOwnsStyle(style, mine) {
   return (mine.translate === undefined || (style.translate || '') === mine.translate)
     && (mine.transition === undefined || (style.transition || '') === mine.transition);
 }
+
+/**
+ * Whether an inline `translate` value is the nudge's own: a browser serialises `0.01px 0px` as `0.01px`, so compare the
+ * parsed components (first 0.01, every other zero) instead of the string.
+ * @param {string | null | undefined} value
+ */
+export function isRerasterTranslate(value) {
+  const parts = String(value ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0 || !/^0?\.01px$/.test(parts[0])) return false;
+  return parts.slice(1).every((part) => /^[-+]?0*\.?0*(px)?$/.test(part) && parseFloat(part) === 0);
+}

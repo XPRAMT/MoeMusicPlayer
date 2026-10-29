@@ -4,6 +4,7 @@ import {
   COVER_RERASTER_SCALE_EPSILON,
   createRerasterState,
   invalidateReraster,
+  isRerasterTranslate,
   markRerastered,
   observeRerasterScale,
   planReraster,
@@ -60,4 +61,15 @@ test('a new cover image (track change) asks for a nudge at the same scale', () =
   state = invalidateReraster(state, 500);
   assert.equal(ready(state, 520), 'wait');
   assert.equal(ready(state, 560), 'run');
+});
+
+test('the nudge translate is recognised in both serialisations and nothing else', () => {
+  assert.equal(isRerasterTranslate('0.01px 0px'), true);
+  assert.equal(isRerasterTranslate('0.01px'), true);
+  assert.equal(isRerasterTranslate('0.01px 0'), true);
+  assert.equal(isRerasterTranslate(''), false);
+  assert.equal(isRerasterTranslate(undefined), false);
+  assert.equal(isRerasterTranslate('12px'), false);
+  assert.equal(isRerasterTranslate('0.01px 3px'), false);
+  assert.equal(isRerasterTranslate('0.02px'), false);
 });

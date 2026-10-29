@@ -4,7 +4,7 @@
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
 import { coverDrawPlan, overlayMatchesSource, parseSwipeFeedback, snapRectToDevicePixels, withoutSwipeFeedback } from './cover-overlay.js';
-import { COVER_RERASTER_RESTORE_MS, COVER_RERASTER_TRANSITION, COVER_RERASTER_TRANSLATE, createRerasterState, invalidateReraster, markRerastered, observeRerasterScale, planReraster } from './cover-reraster.js';
+import { COVER_RERASTER_RESTORE_MS, COVER_RERASTER_TRANSITION, COVER_RERASTER_TRANSLATE, createRerasterState, invalidateReraster, isRerasterTranslate, markRerastered, observeRerasterScale, planReraster } from './cover-reraster.js';
 
 export const COVER_ZOOM_MIN = 0.5;
 export const COVER_ZOOM_REST = 1;
@@ -341,25 +341,30 @@ export function coverZoom(node, params) {
   function runNudge() {
     reraster = markRerastered(reraster);
     const style = node.style;
-    const mine = { prev: style.transition || '', transition: 'none', restoreTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null) };
+    const mine = { prev: style.transition || '', transition: 'none', restoreTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null), guardTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null) };
     nudge = mine;
     style.transition = 'none';
+    mine.transition = style.transition || 'none'; // compared against the read-back: a browser may serialise what was written
     style.translate = COVER_RERASTER_TRANSLATE;
     if (typeof getComputedStyle === 'function') void getComputedStyle(node).translate; // force style: the transition starts from here
     if (debugSwipe) console.log('[cover-reraster]', JSON.stringify({ scale: state.scale, prev: mine.prev }));
     raf(() => {
       if (nudge !== mine) return;
       // A gesture wrote the stage's properties in between (swipe feedback): it wins, nothing of ours is cleared.
-      if ((style.translate || '') !== COVER_RERASTER_TRANSLATE || (style.transition || '') !== 'none') { nudge = null; return; }
-      mine.transition = COVER_RERASTER_TRANSITION;
+      if (!isRerasterTranslate(style.translate) || (style.transition || '') !== mine.transition) { nudge = null; return; }
       style.transition = COVER_RERASTER_TRANSITION;
+      mine.transition = style.transition || COVER_RERASTER_TRANSITION;
       style.translate = '';
       mine.restoreTimer = setTimeout(() => {
         if (nudge !== mine) return;
         nudge = null;
+        if (mine.guardTimer !== null) clearTimeout(mine.guardTimer);
+        if (isRerasterTranslate(style.translate)) style.translate = ''; // safety: never leave the nudge's own value behind
         if ((style.transition || '') === mine.transition) style.transition = mine.prev;
       }, COVER_RERASTER_RESTORE_MS);
     });
+    // Safety net (a frame that never comes, e.g. a hidden page): whatever the nudge still owns is taken back.
+    mine.guardTimer = setTimeout(() => { if (nudge === mine) cancelNudge(true); }, COVER_RERASTER_RESTORE_MS + 200);
   }
 
   /** Stop a nudge in flight. `clean`: also take back what the nudge wrote and still owns; whatever a gesture replaced
@@ -369,9 +374,10 @@ export function coverZoom(node, params) {
     const mine = nudge;
     nudge = null;
     if (mine.restoreTimer !== null) clearTimeout(mine.restoreTimer);
+    if (mine.guardTimer !== null) clearTimeout(mine.guardTimer);
     if (!clean) return;
     const style = node.style;
-    if ((style.translate || '') === COVER_RERASTER_TRANSLATE) style.translate = '';
+    if (isRerasterTranslate(style.translate)) style.translate = '';
     if ((style.transition || '') === mine.transition) style.transition = mine.prev;
   }
 
@@ -445,7 +451,7 @@ export function coverZoom(node, params) {
       return;
     }
     const style = node.style;
-    if (style.scale || style.opacity || ((style.translate || '') !== '' && style.translate !== COVER_RERASTER_TRANSLATE)) cancelNudge(false);
+    if (style.scale || style.opacity || ((style.translate || '') !== '' && !isRerasterTranslate(style.translate))) cancelNudge(false);
   }
 
   /** Something outside the gesture changed the cover (another style write, class, a new image, a window resize): the
