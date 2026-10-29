@@ -7,8 +7,8 @@ import test from 'node:test';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artistIndexSource = readFileSync(path.join(root, 'src/lib/ArtistIndex.svelte'), 'utf8').replace(/\r\n/g, '\n');
 
-test('artist count and duration columns use six fullwidth character widths', () => {
-  assert.match(artistIndexSource, /const ARTIST_GRID = \$derived\(`36px \$\{titleWidth === null \? 'minmax\(150px,1fr\)' : `\$\{titleWidth\}px`\} 6em 6em 6em 6em`\);/);
+test('artist count and duration columns use the measured numeric widths (6em until measured)', () => {
+  assert.match(artistIndexSource, /\['artist:trackCount', 'artist:albumCount', 'artist:played', 'artist:trackDuration'\]\.map\(\(key\) => \(\$numericColumnWidths\[key\] \? `\$\{\$numericColumnWidths\[key\]\}px` : '6em'\)\)/);
   assert.match(artistIndexSource, /rowClassName="track-row virtual-track-row configurable-track-grid artist-index-row"/);
   assert.match(artistIndexSource, /import \{ formatDurationHours \} from '\.\/format';/);
   assert.match(artistIndexSource, /formatDurationHours\(row\.item\.playedMs\)/);

@@ -140,9 +140,9 @@ test('list headers use only the shared bottom boundary and sort buttons fill the
   assert.match(virtualFrame, /border:\s*1px solid var\(--line\)/);
   assert.doesNotMatch(albumIndex, /border-(?:top|bottom):\s*var\(--divider-width\)/);
   assert.match(playlistTree, /border-top:\s*var\(--divider-width\)/);
-  assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*-3\.25px\)/);
-  assert.match(app, /-3\.25\s*\/\s*devicePixelRatio/);
-  assert.match(app, /addEventListener\('resize', updateTrackHeaderTextOffset\)/);
+  assert.match(headerTextOffset, /top:\s*var\(--track-header-text-optical-offset,\s*0px\)/);
+  assert.match(app, /import '\.\/lib\/header-text-offset\.js'/);
+  assert.doesNotMatch(app, /updateTrackHeaderTextOffset/);
   assert.doesNotMatch(app, /--track-header-line-height/);
   assert.match(sortButton, /width:\s*100%/);
   assert.match(sortButton, /height:\s*100%/);

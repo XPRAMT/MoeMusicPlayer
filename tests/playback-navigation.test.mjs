@@ -131,7 +131,7 @@ test('the sidebar playlist group is the single playlist navigation entry and wor
   // Playlists are always expanded: no collapse toggle or state.
   assert.doesNotMatch(playlistTreeSource, /playlist-tree-toggle|expanded|matchMedia/);
   assert.match(playlistTreeSource, /<\/div>\s*<ul id="sidebar-playlist-items"/);
-  assert.match(appSource, /我的播放清單．\$\{selectedPlaylist\.name/, 'playlist top bar must include the selected playlist name');
+  assert.match(appSource, /我的播放清單．\$\{displayPlaylistName\(selectedPlaylist\.name\)/, 'playlist top bar must include the selected playlist name');
   assert.doesNotMatch(appSource, /playlist-import-button|匯入 M3U\/M3U8|exportPlaylist|importPlaylist/, 'playlist page must not show M3U import/export UI');
   assert.doesNotMatch(appSource, /\{#if playlists\.length > 0\}\s*<div class="sidebar-playlist-tree-host"/);
 });

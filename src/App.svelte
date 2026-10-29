@@ -1,6 +1,7 @@
 <script lang="ts">
   import { LANGUAGE_CHOICES, getLanguageChoice, tr } from './lib/i18n.js';
   import { displayPlaylistName, displayUnknown } from './lib/unknown-label.js';
+  import './lib/header-text-offset.js';
   import { forgetAlbumCardArtwork } from './lib/album-artwork.js';
   import { createLyricsController } from './lib/lyrics-controller.js';
   import { defaultLyricsApi } from './lib/lyrics-api';
@@ -1726,13 +1727,6 @@
   onMount(() => {
     document.title = APP_WINDOW_TITLE;
     let disposed = false;
-    const updateTrackHeaderTextOffset = (): void => {
-      const devicePixelRatio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
-      document.documentElement.style.setProperty(
-        '--track-header-text-optical-offset',
-        `${-3.25 / devicePixelRatio}px`,
-      );
-    };
     const applyAndroidInsets = (value?: AndroidWindowInsets): void => {
       let insets = value;
       if (!insets) {
@@ -1760,14 +1754,12 @@
     const handleAndroidInsets = (event: Event): void => {
       applyAndroidInsets((event as CustomEvent<AndroidWindowInsets>).detail);
     };
-    window.addEventListener('resize', updateTrackHeaderTextOffset);
     window.addEventListener('popstate', handleDetailHistoryPopState);
     window.addEventListener('moe:android-insets', handleAndroidInsets);
     window.addEventListener('keydown', handleShortcutKeydown, true);
     window.addEventListener('mousedown', handleShortcutMouseDown, true);
     window.addEventListener('wheel', handleShortcutWheel, { capture: true, passive: false });
     gamepadFrame = requestAnimationFrame(pollGamepads);
-    updateTrackHeaderTextOffset();
     applyAndroidInsets();
     if (isTauri()) {
       // Backstop sample (ADR 0028): the clock advances the bar between samples; commands, focus, visibility and
@@ -1851,7 +1843,6 @@
 
     return () => {
       disposed = true;
-      window.removeEventListener('resize', updateTrackHeaderTextOffset);
       window.removeEventListener('popstate', handleDetailHistoryPopState);
       window.removeEventListener('moe:android-insets', handleAndroidInsets);
       unlistenSyncProgress?.();

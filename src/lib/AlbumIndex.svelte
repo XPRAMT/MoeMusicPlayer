@@ -457,7 +457,7 @@
   .album-index-sort-row { box-sizing:border-box; width:100%; min-width:0; --track-list-min-width:0px; --paged-grid-template:repeat(4,minmax(0,1fr)); }
   /* Center every label, including 專輯 (a non-numeric column that defaulted to left alignment).
      The 1fr | label | 1fr grid keeps the label centered whether or not the sort indicator is shown;
-     the indicator sits in the right track. The -3.25px optical offset on label/indicator is unchanged. */
+     the indicator sits in the right track. The measured optical offset (header-text-offset.js) on label/indicator is unchanged. */
   .album-index-sort-row :global(.column-sort-button) { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); justify-content:stretch; text-align:center; }
   .album-index-sort-row :global(.column-sort-button)::before { content:""; }
   .album-index-sort-row :global(.column-sort-label) { grid-column:2; }

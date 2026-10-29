@@ -167,5 +167,5 @@ test('album index sort header centers labels independently of the sort indicator
   assert.match(source, /\.album-index-sort-row :global\(\.column-sort-button\) \{ display:grid; grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\);/);
   assert.match(source, /\.album-index-sort-row :global\(\.column-sort-label\) \{ grid-column:2; \}/);
   assert.match(source, /\.album-index-sort-row :global\(\.column-sort-indicator\) \{ grid-column:3; justify-self:start; \}/);
-  assert.match(css, /top: var\(--track-header-text-optical-offset, -3\.25px\);/);
+  assert.match(css, /top: var\(--track-header-text-optical-offset, 0px\);/);
 });
