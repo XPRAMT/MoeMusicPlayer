@@ -580,8 +580,8 @@ test('the source column header and cells are centered like the numeric columns',
 test('every track list feeds the measured source width into one template for header and rows', async () => {
   for (const name of ['TrackList', 'PlaybackQueueList', 'PlaylistEntryList']) {
     const source = await readFile(new URL(`../src/lib/${name}.svelte`, import.meta.url), 'utf8');
-    assert.ok(source.includes('trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx)'));
-    assert.ok(source.includes('trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx)'));
+    assert.ok(source.includes('trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx, $numericColumnWidths)'));
+    assert.ok(source.includes('trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx, $numericColumnWidths)'));
   }
 });
 

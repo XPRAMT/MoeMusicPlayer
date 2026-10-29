@@ -140,6 +140,73 @@ export function computeAudioFormatColumnWidthPx(entries, headerLabel, measure) {
   return Number.isFinite(width) && width > 0 ? width : AUDIO_FORMAT_COLUMN_FALLBACK_PX;
 }
 
+/**
+ * Widest realistic value of each time/number column, in its display format, with `0` standing for "a digit"
+ * (`numericColumnSample` swaps in the font's widest digit). Dates are always YYYY-MM-DD (`formatReleaseDate`,
+ * `formatCreatedAt`), track lengths M:SS with minutes past 100 for long mixes (`formatDuration`), play counts one
+ * decimal (`formatPlayCount`), artist totals HH:MM:SS past 100 hours (`formatDurationHours`), counts grouped by the
+ * locale (`toLocaleString`).
+ */
+export const NUMERIC_COLUMN_SAMPLE_PATTERNS = Object.freeze({
+  year: '0000-00-00',
+  createdAt: '0000-00-00',
+  modifiedAt: '0000-00-00',
+  duration: '000:00',
+  playCount: '0000.0',
+  hours: '000:00:00',
+  count: (99_999).toLocaleString(),
+  smallCount: (9_999).toLocaleString(),
+});
+
+/** Digit characters measured to find the widest one (fonts with proportional digits differ by glyph). */
+export const DIGITS = Object.freeze(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+
+/**
+ * The digit that draws widest in the cell font: one measurement per digit, once per font change.
+ * @param {(text: string, kind: 'cell' | 'header') => number} measure
+ */
+export function widestDigit(measure) {
+  let best = '0';
+  let bestWidth = -1;
+  for (const digit of DIGITS) {
+    const width = measure(digit, 'cell');
+    if (width > bestWidth) {
+      best = digit;
+      bestWidth = width;
+    }
+  }
+  return best;
+}
+
+/** @param {string} pattern @param {string} digit */
+export function numericColumnSample(pattern, digit) {
+  return pattern.replace(/[0-9]/g, digit);
+}
+
+/**
+ * Width that shows the widest realistic value of a time/number column and its header with the sort indicator.
+ * @param {string} pattern a `NUMERIC_COLUMN_SAMPLE_PATTERNS` value
+ * @param {string} headerLabel
+ * @param {string} digit `widestDigit(measure)`
+ * @param {(text: string, kind: 'cell' | 'header') => number} measure
+ * @param {number} fallbackPx
+ */
+export function computeNumericColumnWidthPx(pattern, headerLabel, digit, measure, fallbackPx) {
+  const sample = measure(numericColumnSample(pattern, digit), 'cell');
+  const header = measure(headerLabel, 'header') + SOURCE_HEADER_INDICATOR_PX;
+  const width = Math.ceil(Math.max(sample, header)) + SOURCE_CELL_PADDING_PX;
+  return Number.isFinite(width) && width > 0 ? width : fallbackPx;
+}
+
+/** Track list columns that size themselves from a sample value. @type {ReadonlyArray<TrackColumnId>} */
+export const NUMERIC_TRACK_COLUMN_IDS = Object.freeze(/** @type {TrackColumnId[]} */ (['year', 'createdAt', 'modifiedAt', 'duration', 'playCount']));
+
+/** @param {TrackColumnId} id @param {Record<string, number> | null | undefined} numericWidths */
+function numericWidthFor(id, numericWidths) {
+  const value = numericWidths?.[id];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : null;
+}
+
 /** @param {unknown} value */
 function audioFormatWidthOrFallback(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : AUDIO_FORMAT_COLUMN_FALLBACK_PX;
@@ -335,12 +402,15 @@ export function trackListColumnCount(preferences) {
  * @param {TrackColumnWidths | null | undefined} [widths]
  * @param {number} [sourceWidthPx] measured width of the source column (`computeSourceColumnWidthPx`)
  * @param {number} [audioFormatWidthPx] measured width of the audio format column (`computeAudioFormatColumnWidthPx`)
+ * @param {Record<string, number> | null} [numericWidths] measured widths of the time/number columns by id
  */
-export function trackListGridTemplate(preferences, widths, sourceWidthPx, audioFormatWidthPx) {
+export function trackListGridTemplate(preferences, widths, sourceWidthPx, audioFormatWidthPx, numericWidths) {
   const flexible = normalizeTrackColumnWidths(widths);
   const informationColumns = visibleTrackColumns(preferences).map(({ id }) => {
     if (id === 'source') return `${sourceWidthOrFallback(sourceWidthPx)}px`;
     if (id === 'audioFormat') return `${audioFormatWidthOrFallback(audioFormatWidthPx)}px`;
+    const numeric = numericWidthFor(id, numericWidths);
+    if (numeric !== null) return `${numeric}px`;
     if (RESIZABLE_TRACK_COLUMN_IDS.has(id)) {
       return `${flexible[/** @type {'title' | 'artist' | 'album'} */ (id)]}px`;
     }
@@ -356,13 +426,16 @@ export function trackListGridTemplate(preferences, widths, sourceWidthPx, audioF
  * @param {TrackColumnWidths | null | undefined} [widths]
  * @param {number} [sourceWidthPx]
  * @param {number} [audioFormatWidthPx]
+ * @param {Record<string, number> | null} [numericWidths]
  */
-export function trackListMinWidthPx(preferences, widths, sourceWidthPx, audioFormatWidthPx) {
+export function trackListMinWidthPx(preferences, widths, sourceWidthPx, audioFormatWidthPx, numericWidths) {
   const flexible = normalizeTrackColumnWidths(widths);
   const visible = visibleTrackColumns(preferences);
   const information = visible.reduce((sum, column) => {
     if (column.id === 'source') return sum + sourceWidthOrFallback(sourceWidthPx);
     if (column.id === 'audioFormat') return sum + audioFormatWidthOrFallback(audioFormatWidthPx);
+    const numeric = numericWidthFor(column.id, numericWidths);
+    if (numeric !== null) return sum + numeric;
     if (RESIZABLE_TRACK_COLUMN_IDS.has(column.id)) {
       return sum + flexible[/** @type {'title' | 'artist' | 'album'} */ (column.id)];
     }

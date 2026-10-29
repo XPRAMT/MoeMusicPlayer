@@ -4,6 +4,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { getErrorText, invokeCommand, type ArtistIndexEntry, type ArtistListSort } from './ipc';
   import { DEFAULT_TRACK_ROW_HEIGHT_PX } from './track-columns.js';
+  import { numericColumnWidths } from './numeric-column-widths.js';
   import { formatDurationHours } from './format';
   import { formatListOrder } from './list-order.js';
   import PagedVirtualList from './PagedVirtualList.svelte';
@@ -31,7 +32,7 @@
   void loadUiPreferences()
     .then((stored) => { if (!titleWidthDragged) titleWidth = normalizeArtistTitleWidth(stored.artistIndexTitleWidthPx); })
     .catch(() => {});
-  const ARTIST_GRID = $derived(`36px ${titleWidth === null ? 'minmax(150px,1fr)' : `${titleWidth}px`} 6em 6em 6em 6em`);
+  const ARTIST_GRID = $derived(`36px ${titleWidth === null ? 'minmax(150px,1fr)' : `${titleWidth}px`} ${['artist:trackCount', 'artist:albumCount', 'artist:played', 'artist:trackDuration'].map((key) => ($numericColumnWidths[key] ? `${$numericColumnWidths[key]}px` : '6em')).join(' ')}`);
 
   // Same column-resize handle as the track lists (TrackColumnCells), at the column border.
   function setTitleWidth(widthPx: number): void {

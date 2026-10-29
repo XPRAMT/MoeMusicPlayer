@@ -1,6 +1,7 @@
 <script lang="ts">
   import { sourceColumnWidthPx } from './source-column-width.js';
   import { audioFormatColumnWidthPx } from './audio-format-column-width.js';
+  import { numericColumnWidths } from './numeric-column-widths.js';
   import { tr } from './i18n.js';
   import { isGroupedSortField } from './grouped-sorts.js';
   import { appTooltip } from './app-tooltip.js';
@@ -75,8 +76,8 @@
   let visibleColumns = $derived(visibleTrackColumns(normalizedColumns).map(({ id }) =>
     TRACK_COLUMN_DEFINITIONS.find((definition) => definition.id === id)!,
   ));
-  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx));
-  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx));
+  let listGridTemplate = $derived(trackListGridTemplate(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx, $numericColumnWidths));
+  let listMinWidth = $derived(trackListMinWidthPx(normalizedColumns, normalizedWidths, $sourceColumnWidthPx, $audioFormatColumnWidthPx, $numericColumnWidths));
   let listColumnCount = $derived(trackListColumnCount(normalizedColumns));
   let normalizedSort = $derived(sort ? normalizeLibrarySort(sort) : null);
   let queueScope = $derived(JSON.stringify({ resetKey, sort: normalizedSort }));
