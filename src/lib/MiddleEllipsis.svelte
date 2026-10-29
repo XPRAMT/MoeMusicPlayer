@@ -1,45 +1,71 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fitEndEllipsis, fitMiddleEllipsis } from './middle-ellipsis.js';
+  import {
+    ellipsisStats,
+    hostWidthFromResizeEntry,
+    onEllipsisFontsInvalidated,
+    sharedFitter,
+  } from './ellipsis-fit.js';
   import type { TrackTextOverflowMode } from './track-text-overflow-context';
 
   interface Props {
     text: string;
     mode?: TrackTextOverflowMode;
+    /** Available width in CSS px, when the caller knows it; otherwise the width comes from the ResizeObserver. */
+    maxWidth?: number;
   }
 
-  let { text, mode = 'middle' }: Props = $props();
+  let { text, mode = 'middle', maxWidth }: Props = $props();
   let host = $state<HTMLElement | null>(null);
   let shown = $state('');
 
-  const canvas = typeof document === 'undefined' ? null : document.createElement('canvas');
-
-  function measure(value: string, font: string): number {
-    const context = canvas?.getContext('2d');
-    if (!context) return value.length;
-    context.font = font;
-    return context.measureText(value).width;
-  }
+  // Neither value is reactive: the font is read once per host (and again only when fonts are invalidated), the width
+  // comes from the ResizeObserver entry, so scrolling and recycling rows never force a style recalc or a layout.
+  let font = '';
+  let observedWidth: number | null = null;
 
   function layout(): void {
     if (!host) return;
-    const font = getComputedStyle(host).font;
-    const fit = mode === 'end' ? fitEndEllipsis : fitMiddleEllipsis;
-    shown = fit(text, host.clientWidth, (value) => measure(value, font));
+    if (!font) {
+      font = getComputedStyle(host).font;
+      if (ellipsisStats) ellipsisStats.fontReads++;
+    }
+    let width = maxWidth ?? observedWidth;
+    if (width === null || width === undefined) {
+      if (typeof ResizeObserver !== 'undefined') return; // the observer's first callback supplies it
+      width = host.clientWidth;
+      if (ellipsisStats) ellipsisStats.layoutReads++;
+    }
+    shown = sharedFitter.fit(text, mode, font, width);
   }
 
   $effect(() => {
     text;
     mode;
+    maxWidth;
     layout();
   });
 
   onMount(() => {
     if (!host) return;
-    const observer = new ResizeObserver(() => layout());
+    const stopFonts = onEllipsisFontsInvalidated(() => {
+      font = '';
+      layout();
+    });
+    if (typeof ResizeObserver === 'undefined') {
+      layout();
+      return stopFonts;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (entry) observedWidth = hostWidthFromResizeEntry(entry);
+      layout();
+    });
     observer.observe(host);
-    layout();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      stopFonts();
+    };
   });
 </script>
 
