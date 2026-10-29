@@ -21,8 +21,12 @@ date as a number (26.10.19 becomes 261019), so every day's upload to Google Play
 -Fast: the same signed APK without the slow size optimizations (no LTO, 16 codegen units; still stripped and
 opt-level s), only the APK (no AAB), written as release\moemusicplayer-android-arm64-fast.apk. For everyday small
 changes; it installs over the full build because the signing key is the same.
+-Debuggable: the debug variant of the same Gradle build (debuggable, so WebView CDP works; no release profile
+overrides, no AAB), signed with the same key as the fast and full builds, so debug, fast and release APKs install over
+each other and the app data survives. Written as release\moemusicplayer-android-arm64-debug.apk (with "-debugkey"
+suffix when MOE_ANDROID_DEBUG_KEY=1).
 #>
-param([switch]$Fast)
+param([switch]$Fast, [switch]$Debuggable)
 $ErrorActionPreference = 'Stop'
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 
@@ -44,7 +48,8 @@ $overrides = [ordered]@{
     CARGO_PROFILE_RELEASE_STRIP = 'true'
     CARGO_PROFILE_RELEASE_OPT_LEVEL = 's'
 }
-if ($Fast) { $overrides['CARGO_PROFILE_RELEASE_LTO'] = 'false'; $overrides['CARGO_PROFILE_RELEASE_CODEGEN_UNITS'] = '16' }
+if ($Debuggable) { $overrides = [ordered]@{} }
+elseif ($Fast) { $overrides['CARGO_PROFILE_RELEASE_LTO'] = 'false'; $overrides['CARGO_PROFILE_RELEASE_CODEGEN_UNITS'] = '16' }
 $configPath = $null
 $saved = @{}
 try {
@@ -77,13 +82,21 @@ try {
 
     foreach ($name in $overrides.Keys) { $saved[$name] = [Environment]::GetEnvironmentVariable($name); [Environment]::SetEnvironmentVariable($name, [string]$overrides[$name]) }
     $npx = (@(Get-Command 'npx.cmd' -CommandType Application -ErrorAction Stop))[0].Source
-    if ($Fast) { & $npx tauri android build --target aarch64 --apk --ci --config $configPath }
+    if ($Debuggable) { & $npx tauri android build --debug --target aarch64 --apk --ci --config $configPath }
+    elseif ($Fast) { & $npx tauri android build --target aarch64 --apk --ci --config $configPath }
     else { & $npx tauri android build --target aarch64 --apk --aab --ci --config $configPath }
     if ($LASTEXITCODE -ne 0) { throw "Android release build failed with exit code $LASTEXITCODE." }
 
     $outputs = Join-Path $repoRoot 'src-tauri\gen\android\app\build\outputs'
-    $apk = Join-Path $outputs 'apk\universal\release\app-universal-release.apk'
+    $variant = if ($Debuggable) { 'debug' } else { 'release' }
+    $apk = Join-Path $outputs "apk\universal\$variant\app-universal-$variant.apk"
     if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw "Missing APK: $apk" }
+    if ($Debuggable) {
+        Copy-Item -LiteralPath $apk -Destination (Join-Path $repoRoot "release\moemusicplayer-android-arm64-debug$suffix.apk") -Force
+        Write-Output "Version $version, version code $versionCode"
+        Write-Output "APK: release\moemusicplayer-android-arm64-debug$suffix.apk"
+        return
+    }
     if ($Fast) {
         Copy-Item -LiteralPath $apk -Destination (Join-Path $repoRoot "release\moemusicplayer-android-arm64-fast$suffix.apk") -Force
         Write-Output "Version $version, version code $versionCode"

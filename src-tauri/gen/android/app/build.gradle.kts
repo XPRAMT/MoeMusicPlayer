@@ -40,6 +40,8 @@ android {
     }
     buildTypes {
         getByName("debug") {
+            // The same key as the release builds when the environment provides one, the debug key otherwise.
+            signingConfig = signingConfigs.findByName("moeRelease") ?: signingConfigs.getByName("debug")
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true

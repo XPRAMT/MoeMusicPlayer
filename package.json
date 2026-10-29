@@ -11,7 +11,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "android:build:arm64": "tauri android build --debug --target aarch64 --apk --ci",
+    "android:build:arm64": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Debuggable",
     "release:windows:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Fast",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
     "android:build:arm64:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -Fast",
