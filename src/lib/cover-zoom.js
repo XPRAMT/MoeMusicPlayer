@@ -4,6 +4,7 @@
 // for tests; `coverZoom` is the Svelte action that wires the events.
 
 import { parseSwipeFeedback, withoutSwipeFeedback } from './cover-swipe-feedback.js';
+import { releasesOnMove, releasesOnWindowEvent } from './cover-pointers.js';
 import { COVER_RERASTER_RESTORE_MS, COVER_RERASTER_TRANSITION, COVER_RERASTER_TRANSLATE, createRerasterState, invalidateReraster, isRerasterTranslate, markRerastered, observeRerasterScale, planReraster } from './cover-reraster.js';
 
 export const COVER_ZOOM_MIN = 0.5;
@@ -254,6 +255,7 @@ export function coverZoom(node, params) {
   let state = { ...COVER_ZOOM_IDENTITY };
   let size = { width: 0, height: 0 };
   /** @type {Map<number, { x: number, y: number }>} */
+  /** @type {Map<number, import("./cover-pointers.js").PointerEntry>} */
   const pointers = new Map();
   /** @type {{ distance: number, scale: number, startX: number, startY: number, u: { x: number, y: number } | null, dirty: boolean } | null} */
   let pinch = null;
@@ -613,7 +615,7 @@ export function coverZoom(node, params) {
     if (!active()) return;
     interruptGlide();
     cancelNudge(true);
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = { distance: Math.max(1, pointerDistance(a, b)), scale: state.scale, startX: (a.x + b.x) / 2, startY: (a.y + b.y) / 2, u: null, dirty: false };
@@ -637,8 +639,11 @@ export function coverZoom(node, params) {
 
   /** @param {PointerEvent} event */
   function move(event) {
-    if (!pointers.has(event.pointerId)) return;
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const entry = pointers.get(event.pointerId);
+    if (!entry) return;
+    // A mouse move with no button held: its release was missed (outside the node / window), so release it now.
+    if (releasesOnMove(entry, event.buttons)) { up(event); return; }
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: entry.type });
     if (pinch && pointers.size >= 2) {
       pinch.dirty = true;
       suppressClick = true;
@@ -678,6 +683,12 @@ export function coverZoom(node, params) {
     if (isDoubleTap(lastTap, tap)) { lastTap = null; reset(); } else lastTap = tap;
   }
 
+  /** Capture-phase window pointerup / pointercancel: releases a mouse entry the node never saw the release of. Idempotent
+   *  with the node's own listener (`up` ignores an id that is no longer tracked). @param {PointerEvent} event */
+  function windowUp(event) {
+    if (releasesOnWindowEvent(pointers.get(event.pointerId))) up(event);
+  }
+
   /** The browser's own image drag would start on the first mouse move and cancel the pointer (no panning). @param {Event} event */
   function dragstart(event) {
     event.preventDefault();
@@ -711,6 +722,11 @@ export function coverZoom(node, params) {
   node.addEventListener('dblclick', dblclick);
   node.addEventListener('dragstart', dragstart);
   node.addEventListener('click', click, true);
+  const hasWindow = typeof globalThis.addEventListener === 'function';
+  if (hasWindow) {
+    globalThis.addEventListener('pointerup', windowUp, true);
+    globalThis.addEventListener('pointercancel', windowUp, true);
+  }
   return {
     /** @param {typeof params} next */
     update(next) {
@@ -748,6 +764,10 @@ export function coverZoom(node, params) {
       node.removeEventListener('dragstart', dragstart);
       node.removeEventListener('dblclick', dblclick);
       node.removeEventListener('click', click, true);
+      if (hasWindow) {
+        globalThis.removeEventListener('pointerup', windowUp, true);
+        globalThis.removeEventListener('pointercancel', windowUp, true);
+      }
       node.style.transform = '';
       delete node.dataset.coverZoomed;
       delete node.dataset.coverPannable;

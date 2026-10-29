@@ -38,6 +38,8 @@ Android：Media3 的 `ExoPlayer.setMediaItem` 會立刻拆掉正在播放的項�
 
 規則（使用者核准）：放大（倍率 > 1）且穩定（倍率變化不超過 0.0005）`COVER_LAYER_IDLE_MS`（50 ms，計時器容許 2 ms 提早）、且沒有手指／滾輪／swipe 回饋時，對 stage 做一次微移：inline `translate: 0.01px 0px` 與 `transition: none`，強制樣式計算，下一幀改為 `transition: translate 180ms` 並清掉 translate，約 260 ms 後還原先前的 transition 字串。之後每次倍率變化再度穩定都再做一次（平移不改倍率則不做）；倍率 ≤ 1 不做；換歌新圖載入（`load`、class、src、childList）與播放頁重新開啟會重設「已微移」狀態，倍率仍 > 1 時再微移一次。手勢開始（pointerdown、滾輪、套用 transform）取消尚未執行或進行中的微移並只收回自己寫的值；swipe 回饋蓋過進行中的微移時（以 MutationObserver 與第二步的屬性比對偵測）微移放棄、不清除回饋的任何屬性，restore 計時器只在 transition 仍是自己寫的字串時才還原。減少動態偏好不改變行為：位移只有百分之一像素。除錯：`localStorage['moe.debug.coverSwipe']='1'` 時每次微移記錄 `[cover-reraster]`。
 
+殘留指標清理規則：`cover-zoom.js` 的 `pointers` 只要非空就算手勢進行中（重光柵微移會一直等待），但滑鼠按下後若放開發生在封面節點之外（拖出節點或視窗、或被 swipe-dismiss 等其他處理器捕獲指標），節點收不到 pointerup，條目會殘留而使微移永遠不再觸發。因此 (1) 在 `window` 以捕獲階段監聽 `pointerup`／`pointercancel`，對追蹤中的滑鼠條目走同一個 `up()` 流程（平移、雙指、`zoomGate`、`scheduleReraster` 收尾一致，已移除的 id 直接忽略，所以與節點自己的監聽並存是冪等的）；(2) `pointermove` 時若滑鼠條目的 `buttons === 0` 就視為已放開，同樣走 `up()`。只對 `pointerType === 'mouse'`（條目記錄 `type`）；觸控與筆由系統捕獲到接觸點，`buttons` 為 0 不代表放開，不受影響。判斷規則是純函式（`src/lib/cover-pointers.js`，`tests/cover-pointers.test.mjs`）；`destroy()` 移除這兩個 window 監聽。
+
 覆蓋 canvas 的清晰度繪製已移除，連帶消除了兩個問題：swipe 彈回結束時的閃一下（canvas 與 stage 的接手時機），以及第一次滑動前的一次性模糊（尚未畫過覆蓋層）；雙擊還原動畫的覆蓋 canvas 也已移除，見下一節。
 
 ### 還原動畫跑在 stage 上；覆蓋 canvas 已移除
