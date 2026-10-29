@@ -288,14 +288,21 @@ export interface FontList {
 /** Floating lyrics (ADR 0032): the taskbar look options saved separately, plus the mode and window position. */
 export interface FloatingLyricsSettings extends LyricsLookSettings {
   enabled: boolean;
-  /** Fixed mode (click-through); false: move mode. Android keeps its own lock state on the phone. */
+  /** Fixed mode (click-through); false: move mode. Read only for the page: Rust keeps the stored value (both platforms). */
   locked: boolean;
   /** Panel width, 200–4000: CSS px on Windows, dp on Android; narrowed to the screen. The height follows the lines. */
   widthPx: number;
   /** Android only: the width while landscape (`widthPx` is portrait there). */
   landscapeWidthPx: number;
-  /** Physical pixels of the virtual desktop (Windows); null: the default place. */
+  /**
+   * The lyric area's top-left as a ratio of the screen (Windows: the whole virtual desktop; Android: the display, the
+   * portrait position); null: centred. Read only for the page.
+   */
   position: { x: number; y: number } | null;
+  /** Android only: the landscape position (same unit); Windows ignores it. Read only for the page. */
+  landscapePosition: { x: number; y: number } | null;
+  /** Always `screenRatio` in what Rust returns (its absence marks an older settings file). */
+  positionUnit?: 'screenRatio';
 }
 
 /** The Android output device the user chose (ADR 0044): kind + product name (+ Bluetooth address), since

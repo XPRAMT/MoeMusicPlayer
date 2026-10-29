@@ -8289,8 +8289,9 @@ fn settings_get_floating_lyrics(
         .map_err(|error| error.to_string())
 }
 
-/// Persist the floating-lyrics settings (ADR 0032) and apply them on Windows. The window position is owned by the
-/// window itself (saved when it moves), so the stored one is kept whatever the page sends.
+/// Persist the floating-lyrics settings (ADR 0032) and apply them on Windows. The lock state and the positions have
+/// their own writers (Windows: the lock command and the window's moves; Android: the overlay over JNI), so the stored
+/// ones are kept whatever the page sends (its copy may be stale), on every platform.
 #[tauri::command]
 async fn settings_set_floating_lyrics(
     app: AppHandle,
@@ -8301,11 +8302,8 @@ async fn settings_set_floating_lyrics(
     let saved = state
         .settings
         .update(|stored| {
-            let position = stored.floating_lyrics.position;
-            stored.floating_lyrics = settings::FloatingLyricsSettings {
-                position,
-                ..requested.clone()
-            };
+            stored.floating_lyrics =
+                settings::page_floating_lyrics(&stored.floating_lyrics, requested.clone());
             Ok(())
         })
         .map(|stored| stored.floating_lyrics)

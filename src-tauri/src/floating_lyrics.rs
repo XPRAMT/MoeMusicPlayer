@@ -2,7 +2,8 @@
 //! fed by the same events as the taskbar lyrics. Move mode: the page drags the window and shows a lock button on
 //! hover. Fixed mode: the window ignores the mouse (WS_EX_TRANSPARENT through `set_ignore_cursor_events`); a 100 ms
 //! watcher polls the cursor and makes only the unlock button's rectangle clickable while the cursor is over it.
-//! The position is saved in physical pixels and kept inside the monitors' work areas.
+//! The position is saved as a ratio of the whole virtual desktop (`player_lyrics_rules::position_ratio`, the rule
+//! Android shares) and, once put back in physical pixels, the lyric area is kept inside a monitor's work area.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,7 +23,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
 };
 
-use crate::settings::{FloatingLyricsPosition, FloatingLyricsSettings};
+use player_lyrics_rules::PxBounds;
+
+use crate::settings::{FloatingLyricsPosition as SavedPosition, FloatingLyricsSettings};
+
+/// A point in physical pixels of the virtual desktop: a window's or a lyric area's top-left.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PanelPoint {
+    pub x: i32,
+    pub y: i32,
+}
 
 pub const WINDOW_LABEL: &str = "floating-lyrics";
 pub const SETTINGS_EVENT: &str = "floating-lyrics-settings";
@@ -81,6 +91,14 @@ impl Rect {
             && x < f64::from(self.right)
             && y >= f64::from(self.top)
             && y < f64::from(self.bottom)
+    }
+    fn bounds(self) -> PxBounds {
+        PxBounds {
+            left: self.left,
+            top: self.top,
+            right: self.right,
+            bottom: self.bottom,
+        }
     }
     fn overlap_area(self, other: Rect) -> i64 {
         let width = i64::from(self.right.min(other.right)) - i64::from(self.left.max(other.left));
@@ -175,16 +193,16 @@ impl Gutters {
     };
 
     /// The window position of a lyric area whose top-left is `area`.
-    pub fn window_from_area(self, area: FloatingLyricsPosition) -> FloatingLyricsPosition {
-        FloatingLyricsPosition {
+    pub fn window_from_area(self, area: PanelPoint) -> PanelPoint {
+        PanelPoint {
             x: area.x - self.lead.max(0),
             y: area.y - self.top.max(0),
         }
     }
 
     /// The lyric area's top-left of a window at `window` (what is saved).
-    pub fn area_from_window(self, window: FloatingLyricsPosition) -> FloatingLyricsPosition {
-        FloatingLyricsPosition {
+    pub fn area_from_window(self, window: PanelPoint) -> PanelPoint {
+        PanelPoint {
             x: window.x + self.lead.max(0),
             y: window.y + self.top.max(0),
         }
@@ -298,13 +316,13 @@ pub fn apply_target(
     new_width: i32,
     old: Gutters,
     gutter: Gutters,
-    saved: Option<FloatingLyricsPosition>,
-) -> Option<FloatingLyricsPosition> {
+    saved: Option<PanelPoint>,
+) -> Option<PanelPoint> {
     let (Some(rect), Some(_)) = (shown, saved) else {
         return saved.map(|area| gutter.window_from_area(area));
     };
     let area_y = rect.top + old.top.max(0);
-    Some(FloatingLyricsPosition {
+    Some(PanelPoint {
         x: resize_around_centre(rect.left, rect.width(), old, new_width, gutter),
         y: area_y - gutter.top.max(0),
     })
@@ -315,33 +333,41 @@ pub fn apply_target(
 /// inside; the renderer uses `place_on_monitors_with` and its text insets).
 #[cfg(test)]
 pub fn place_on_monitors(
-    position: Option<FloatingLyricsPosition>,
+    position: Option<PanelPoint>,
     size: (i32, i32),
     gutter: Gutters,
     work_areas: &[Rect],
-) -> FloatingLyricsPosition {
+) -> PanelPoint {
     place_on_monitors_with(position, size, gutter, Insets::NONE, work_areas)
 }
 
 /// As `place_on_monitors`, keeping only the lyric text area inside the work area: the `insets` (transparent margins
 /// and shadow room) may go past its edges.
 pub fn place_on_monitors_with(
-    position: Option<FloatingLyricsPosition>,
+    position: Option<PanelPoint>,
     size: (i32, i32),
     gutter: Gutters,
     insets: Insets,
     work_areas: &[Rect],
-) -> FloatingLyricsPosition {
+) -> PanelPoint {
     let (width, height) = size;
+    // The shared rule (`clamp_kept_box`): the window less its insets (the lyric area and the lock column) stays inside.
     let clamp_into = |area: Rect, x: i32, y: i32| {
-        let (low_x, low_y) = (area.left - insets.left, area.top - insets.top);
-        FloatingLyricsPosition {
-            x: x.clamp(low_x, (area.right - width + insets.right).max(low_x)),
-            y: y.clamp(low_y, (area.bottom - height + insets.bottom).max(low_y)),
+        let (kept_x, kept_y) = player_lyrics_rules::clamp_kept_box(
+            (x + insets.left, y + insets.top),
+            (
+                width - insets.left - insets.right,
+                height - insets.top - insets.bottom,
+            ),
+            area.bounds(),
+        );
+        PanelPoint {
+            x: kept_x - insets.left,
+            y: kept_y - insets.top,
         }
     };
     let Some(primary) = work_areas.first().copied() else {
-        return position.unwrap_or(FloatingLyricsPosition { x: 0, y: 0 });
+        return position.unwrap_or(PanelPoint { x: 0, y: 0 });
     };
     if let Some(saved) = position {
         let window = Rect {
@@ -365,9 +391,9 @@ pub fn place_on_monitors_with(
 
 /// The position that puts the lyric area of a window of `size` (the window less its `gutter` margins and lock gutter)
 /// at the exact centre of `bounds`.
-pub fn centre_on(bounds: Rect, size: (i32, i32), gutter: Gutters) -> FloatingLyricsPosition {
+pub fn centre_on(bounds: Rect, size: (i32, i32), gutter: Gutters) -> PanelPoint {
     let lyric = gutter.lyric_width(size.0);
-    FloatingLyricsPosition {
+    PanelPoint {
         x: bounds.left + (bounds.width() - lyric) / 2 - gutter.lead.max(0),
         y: bounds.top + (bounds.height() - gutter.area_height(size.1)) / 2 - gutter.top.max(0),
     }
@@ -380,7 +406,7 @@ pub fn centre_axis(
     monitors: &[Rect],
     horizontal: bool,
     gutter: Gutters,
-) -> FloatingLyricsPosition {
+) -> PanelPoint {
     let (cx, cy) = (
         window.left + gutter.lead.max(0) + gutter.lyric_width(window.width()) / 2,
         window.top + gutter.top.max(0) + gutter.area_height(window.height()) / 2,
@@ -388,19 +414,19 @@ pub fn centre_axis(
     let holds =
         |area: &&Rect| cx >= area.left && cx < area.right && cy >= area.top && cy < area.bottom;
     let Some(monitor) = monitors.iter().find(holds).or(monitors.first()) else {
-        return FloatingLyricsPosition {
+        return PanelPoint {
             x: window.left,
             y: window.top,
         };
     };
     let centre = centre_on(*monitor, (window.width(), window.height()), gutter);
     if horizontal {
-        FloatingLyricsPosition {
+        PanelPoint {
             x: centre.x,
             y: window.top,
         }
     } else {
-        FloatingLyricsPosition {
+        PanelPoint {
             x: window.left,
             y: centre.y,
         }
@@ -452,6 +478,41 @@ fn monitors() -> Vec<(Rect, Rect, bool)> {
     // The primary monitor first (the default place and the first work area).
     list.sort_by_key(|m| !m.2);
     list
+}
+
+/// The whole virtual desktop (the bounding box of every monitor, physical px): the frame the saved ratio is taken in.
+pub fn virtual_desktop() -> Option<PxBounds> {
+    desktop_of(&monitors().iter().map(|m| m.0).collect::<Vec<_>>())
+}
+
+/// The bounding box of `monitors` (None without any non-empty one).
+pub fn desktop_of(monitors: &[Rect]) -> Option<PxBounds> {
+    monitors
+        .iter()
+        .filter(|m| m.width() > 0 && m.height() > 0)
+        .map(|m| m.bounds())
+        .reduce(|a, b| PxBounds {
+            left: a.left.min(b.left),
+            top: a.top.min(b.top),
+            right: a.right.max(b.right),
+            bottom: a.bottom.max(b.bottom),
+        })
+}
+
+/// A saved ratio as the lyric area's top-left in physical px of `desktop` (clamped later by the placement).
+pub fn area_from_ratio(saved: SavedPosition, desktop: PxBounds) -> PanelPoint {
+    PanelPoint {
+        x: player_lyrics_rules::position_px(saved.x, desktop.left, desktop.width()),
+        y: player_lyrics_rules::position_px(saved.y, desktop.top, desktop.height()),
+    }
+}
+
+/// The ratio saved for a lyric area whose top-left is `area` on `desktop`.
+pub fn ratio_from_area(area: PanelPoint, desktop: PxBounds) -> Option<SavedPosition> {
+    Some(SavedPosition {
+        x: player_lyrics_rules::position_ratio(area.x, desktop.left, desktop.width())?,
+        y: player_lyrics_rules::position_ratio(area.y, desktop.top, desktop.height())?,
+    })
 }
 
 impl Native {
@@ -585,7 +646,11 @@ pub async fn apply(app: &AppHandle, settings: &FloatingLyricsSettings) -> Result
     let (width, height) = window_size(window, settings);
     let shown = if created { None } else { window.rect() };
     let gutter = window_gutter(window, settings);
-    let wanted = apply_target(shown, width, placed_with(), gutter, settings.position);
+    let saved = settings
+        .position
+        .zip(virtual_desktop())
+        .map(|(saved, desktop)| area_from_ratio(saved, desktop));
+    let wanted = apply_target(shown, width, placed_with(), gutter, saved);
     // The move events from here on are saved with this conversion.
     if let Ok(mut guard) = PLACED_WITH.lock() {
         *guard = gutter;
@@ -631,7 +696,7 @@ pub fn fit_lines(_app: &AppHandle, has_translation: bool) {
         if let Some(rect) = window.rect() {
             place(
                 window,
-                Some(FloatingLyricsPosition {
+                Some(PanelPoint {
                     x: rect.left,
                     y: rect.top,
                 }),
@@ -646,7 +711,7 @@ pub fn nudge(_app: &AppHandle, dx: i32, dy: i32) {
     if let Some(rect) = window.rect() {
         place(
             window,
-            Some(FloatingLyricsPosition {
+            Some(PanelPoint {
                 x: rect.left + dx.clamp(-1, 1),
                 y: rect.top + dy.clamp(-1, 1),
             }),
@@ -661,7 +726,7 @@ pub fn settle_after_drag() {
     if let Some(rect) = window.rect() {
         place(
             window,
-            Some(FloatingLyricsPosition {
+            Some(PanelPoint {
                 x: rect.left,
                 y: rect.top,
             }),
@@ -684,10 +749,14 @@ pub fn shutdown(app: &AppHandle) {
 /// The window moved (dragged, or placed by us): remember the position and save it once moving stops.
 pub fn remember_position(app: &AppHandle, position: PhysicalPosition<i32>) {
     // The saved position is the lyric area's top-left, not the window's.
-    let position = placed_with().area_from_window(FloatingLyricsPosition {
+    let area = placed_with().area_from_window(PanelPoint {
         x: position.x,
         y: position.y,
     });
+    let Some(position) = virtual_desktop().and_then(|desktop| ratio_from_area(area, desktop))
+    else {
+        return;
+    };
     {
         let Ok(mut guard) = CURRENT.lock() else {
             return;
@@ -728,7 +797,7 @@ fn work_areas() -> Vec<Rect> {
 }
 
 /// Move the window to `wanted` kept inside the visible monitors; None: the default place.
-fn place(window: Native, wanted: Option<FloatingLyricsPosition>) {
+fn place(window: Native, wanted: Option<PanelPoint>) {
     let Some(rect) = window.rect() else { return };
     let size = (rect.width(), rect.height());
     let gutter = current().map_or(Gutters::NONE, |settings| window_gutter(window, &settings));
@@ -784,7 +853,7 @@ fn watch(app: AppHandle, stop: Arc<AtomicBool>) {
             if let Some(rect) = window.rect() {
                 place(
                     window,
-                    Some(FloatingLyricsPosition {
+                    Some(PanelPoint {
                         x: rect.left,
                         y: rect.top,
                     }),
@@ -843,6 +912,103 @@ mod tests {
             top,
             right,
             bottom,
+        }
+    }
+
+    #[test]
+    fn the_saved_ratio_is_of_the_whole_virtual_desktop() {
+        // A second monitor left of the primary one and a taller one right of it.
+        let monitors = [
+            rect(0, 0, 1920, 1080),
+            rect(-1920, 200, 0, 1280),
+            rect(1920, -300, 4480, 1140),
+        ];
+        let desktop = desktop_of(&monitors).unwrap();
+        assert_eq!(
+            desktop,
+            PxBounds {
+                left: -1920,
+                top: -300,
+                right: 4480,
+                bottom: 1280
+            }
+        );
+        assert_eq!(desktop_of(&[]), None);
+        let area = PanelPoint { x: 960, y: 500 };
+        let saved = ratio_from_area(area, desktop).unwrap();
+        assert_eq!(saved.x, (960.0 + 1920.0) / 6400.0);
+        assert_eq!(saved.y, 800.0 / 1580.0);
+        // Restoring gives back the same pixel, so a save after a restore does not drift.
+        assert_eq!(area_from_ratio(saved, desktop), area);
+        for x in [-1920, -1, 0, 1, 1919, 4479] {
+            let point = PanelPoint { x, y: -300 };
+            assert_eq!(
+                area_from_ratio(ratio_from_area(point, desktop).unwrap(), desktop),
+                point
+            );
+        }
+    }
+
+    #[test]
+    fn the_placement_clamp_matches_the_shared_vectors() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/fixtures/lyrics-rules-vectors.json"
+        );
+        let vectors: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let ints = |v: &serde_json::Value| -> Vec<i32> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_i64().unwrap() as i32)
+                .collect()
+        };
+        let cases = vectors["placementClamp"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for c in cases {
+            let (o, size, b, expected) = (
+                ints(&c["origin"]),
+                ints(&c["size"]),
+                ints(&c["bounds"]),
+                ints(&c["expected"]),
+            );
+            // The kept box is the window less its insets: with insets of 7 / 20 px on each side the window around the
+            // vector's box lands where the vector puts the box.
+            let insets = Insets {
+                left: 7,
+                top: 20,
+                right: 7,
+                bottom: 20,
+            };
+            let window = place_on_monitors_with(
+                Some(PanelPoint {
+                    x: o[0] - insets.left,
+                    y: o[1] - insets.top,
+                }),
+                (
+                    size[0] + insets.left + insets.right,
+                    size[1] + insets.top + insets.bottom,
+                ),
+                Gutters::NONE,
+                insets,
+                &[rect(b[0], b[1], b[2], b[3])],
+            );
+            // A window on no work area goes to the default place instead (not a clamp case).
+            let (left, top) = (o[0] - insets.left, o[1] - insets.top);
+            let on_screen = rect(b[0], b[1], b[2], b[3]).overlap_area(rect(
+                left,
+                top,
+                left + size[0] + insets.left + insets.right,
+                top + size[1] + insets.top + insets.bottom,
+            )) > 0;
+            if on_screen {
+                assert_eq!(
+                    vec![window.x + insets.left, window.y + insets.top],
+                    expected,
+                    "{c}"
+                );
+            }
         }
     }
 
@@ -938,7 +1104,7 @@ mod tests {
         let window = rect(2020, 100, 2820, 200);
         assert_eq!(
             centre_axis(window, &monitors, true, Gutters::NONE),
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: 1920 + (2560 - 800) / 2,
                 y: 100
             }
@@ -950,7 +1116,7 @@ mod tests {
         };
         assert_eq!(
             centre_axis(window, &monitors, true, lock),
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: 1920 + (2560 - 760) / 2,
                 y: 100
             }
@@ -963,14 +1129,14 @@ mod tests {
         };
         assert_eq!(
             centre_axis(window, &monitors, true, margins),
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: 1920 + (2560 - 740) / 2 - 10,
                 y: 100
             }
         );
         assert_eq!(
             centre_axis(window, &monitors, false, lock),
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: 2020,
                 y: (1440 - 100) / 2
             }
@@ -978,7 +1144,7 @@ mod tests {
         // Off every monitor: the first one.
         assert_eq!(
             centre_axis(rect(-5000, 10, -4800, 60), &monitors, true, Gutters::NONE),
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: (1920 - 200) / 2,
                 y: 10
             }
@@ -997,33 +1163,33 @@ mod tests {
         };
         // Dragged past the left/top: the window hangs out by exactly its margins, the text edge sits on 0.
         let at = place_on_monitors_with(
-            Some(FloatingLyricsPosition { x: -300, y: -60 }),
+            Some(PanelPoint { x: -300, y: -60 }),
             size,
             Gutters::NONE,
             insets,
             &[area],
         );
-        assert_eq!(at, FloatingLyricsPosition { x: -7, y: -20 });
+        assert_eq!(at, PanelPoint { x: -7, y: -20 });
         // Past the right/bottom: the lock column's right edge (window right less its margin) on 1920.
         let at = place_on_monitors_with(
-            Some(FloatingLyricsPosition { x: 1500, y: 1000 }),
+            Some(PanelPoint { x: 1500, y: 1000 }),
             size,
             Gutters::NONE,
             insets,
             &[area],
         );
-        assert_eq!(at, FloatingLyricsPosition { x: 927, y: 910 });
+        assert_eq!(at, PanelPoint { x: 927, y: 910 });
         assert_eq!(at.x + size.0 - insets.right, 1920);
         assert_eq!(at.y + size.1 - insets.bottom, 1040);
         // Without insets the old rule: the whole window inside.
         assert_eq!(
             place_on_monitors(
-                Some(FloatingLyricsPosition { x: -300, y: -60 }),
+                Some(PanelPoint { x: -300, y: -60 }),
                 size,
                 Gutters::NONE,
                 &[area]
             ),
-            FloatingLyricsPosition { x: 0, y: 0 }
+            PanelPoint { x: 0, y: 0 }
         );
     }
 
@@ -1036,20 +1202,20 @@ mod tests {
             bottom: 20,
         };
         // The saved position is the lyric area's top-left; the window is that less the margin and the top room.
-        let saved = Some(FloatingLyricsPosition { x: 1234, y: 567 });
-        let window = Some(FloatingLyricsPosition { x: 1227, y: 547 });
+        let saved = Some(PanelPoint { x: 1234, y: 567 });
+        let window = Some(PanelPoint { x: 1227, y: 547 });
         // A new window (still 1 x 1 at 0,0 from CreateWindowEx) goes to the saved position, not a resize of 0,0.
         assert_eq!(apply_target(None, 1000, gutter, gutter, saved), window);
         assert_eq!(apply_target(None, 1000, gutter, gutter, None), None);
         // An open window stays where it is even when the stored position lags a drag.
         assert_eq!(
             apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, gutter, saved),
-            Some(FloatingLyricsPosition { x: 300, y: 200 })
+            Some(PanelPoint { x: 300, y: 200 })
         );
         // ... and keeps its lyric area centre on a width change.
         assert_eq!(
             apply_target(Some(rect(500, 200, 1500, 350)), 1400, gutter, gutter, saved),
-            Some(FloatingLyricsPosition { x: 300, y: 200 })
+            Some(PanelPoint { x: 300, y: 200 })
         );
         // A bigger font (more margin and top room) moves the window, not the lyric area.
         let bigger = Gutters {
@@ -1062,7 +1228,7 @@ mod tests {
             apply_target(Some(rect(300, 200, 1300, 350)), 1000, gutter, bigger, saved).unwrap();
         assert_eq!(
             bigger.area_from_window(at),
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: 300 + 7 + (1000 - 84) / 2 - (1000 - 100) / 2,
                 y: 220
             }
@@ -1082,9 +1248,9 @@ mod tests {
             top: 20,
             bottom: 20,
         };
-        let area = FloatingLyricsPosition { x: 400, y: 300 };
+        let area = PanelPoint { x: 400, y: 300 };
         let window = gutter.window_from_area(area);
-        assert_eq!(window, FloatingLyricsPosition { x: 393, y: 280 });
+        assert_eq!(window, PanelPoint { x: 393, y: 280 });
         // Save then restore is the identity, whatever the margin and room.
         assert_eq!(gutter.area_from_window(window), area);
         let other = Gutters {
@@ -1118,7 +1284,7 @@ mod tests {
                 translated_h > plain_h,
                 "the window grows below the main row"
             );
-            let top_left = FloatingLyricsPosition { x: 600, y: 400 };
+            let top_left = PanelPoint { x: 600, y: 400 };
             assert_eq!(
                 plain.window_from_area(top_left),
                 translated.window_from_area(top_left)
@@ -1147,19 +1313,16 @@ mod tests {
         let size = (1000, 20 + 110 + 24);
         // Dragged far up-left: the area's top-left lands on the work area's.
         let at = place_on_monitors_with(
-            Some(FloatingLyricsPosition { x: -100, y: -100 }),
+            Some(PanelPoint { x: -100, y: -100 }),
             size,
             g,
             text_insets(g),
             &[work],
         );
-        assert_eq!(
-            g.area_from_window(at),
-            FloatingLyricsPosition { x: 0, y: 0 }
-        );
+        assert_eq!(g.area_from_window(at), PanelPoint { x: 0, y: 0 });
         // Far down-right: the area's bottom is on the work area's bottom, the lock column's right edge on its right.
         let at = place_on_monitors_with(
-            Some(FloatingLyricsPosition { x: 1500, y: 1000 }),
+            Some(PanelPoint { x: 1500, y: 1000 }),
             size,
             g,
             text_insets(g),
@@ -1186,7 +1349,7 @@ mod tests {
         );
         // Nudging one pixel moves the area one pixel.
         let nudged = place_on_monitors_with(
-            Some(FloatingLyricsPosition {
+            Some(PanelPoint {
                 x: centred.x,
                 y: centred.y + 1,
             }),
@@ -1222,7 +1385,7 @@ mod tests {
         let area = rect(0, 0, 1920, 1040);
         let wide = resize_around_centre(100, 1000, gutter, 1600, gutter);
         let at = place_on_monitors_with(
-            Some(FloatingLyricsPosition { x: wide, y: 100 }),
+            Some(PanelPoint { x: wide, y: 100 }),
             (1600, 150),
             gutter,
             Insets {
@@ -1274,38 +1437,38 @@ mod tests {
         );
         assert_eq!(
             default,
-            FloatingLyricsPosition {
+            PanelPoint {
                 x: 1120,
                 y: (2100 - 120) / 2
             }
         );
         assert_eq!(
             centre_on(rect(0, 0, 2560, 1440), size, Gutters::NONE),
-            FloatingLyricsPosition { x: 480, y: 660 }
+            PanelPoint { x: 480, y: 660 }
         );
         assert_eq!(
             centre_on(rect(-1920, 0, 0, 1080), (200, 100), Gutters::NONE),
-            FloatingLyricsPosition { x: -1060, y: 490 }
+            PanelPoint { x: -1060, y: 490 }
         );
-        let inside = FloatingLyricsPosition { x: 4000, y: 1000 };
+        let inside = PanelPoint { x: 4000, y: 1000 };
         assert_eq!(
             place_on_monitors(Some(inside), size, Gutters::NONE, &areas),
             inside
         );
-        let hanging = FloatingLyricsPosition { x: 5500, y: 2050 };
+        let hanging = PanelPoint { x: 5500, y: 2050 };
         assert_eq!(
             place_on_monitors(Some(hanging), size, Gutters::NONE, &areas),
-            FloatingLyricsPosition { x: 4800, y: 1992 }
+            PanelPoint { x: 4800, y: 1992 }
         );
-        let gone = FloatingLyricsPosition { x: -5000, y: 200 };
+        let gone = PanelPoint { x: -5000, y: 200 };
         assert_eq!(
             place_on_monitors(Some(gone), size, Gutters::NONE, &areas),
             default
         );
-        let straddling = FloatingLyricsPosition { x: 3000, y: 800 };
+        let straddling = PanelPoint { x: 3000, y: 800 };
         assert_eq!(
             place_on_monitors(Some(straddling), size, Gutters::NONE, &areas),
-            FloatingLyricsPosition { x: 2240, y: 800 }
+            PanelPoint { x: 2240, y: 800 }
         );
         assert_eq!(
             place_on_monitors(Some(inside), size, Gutters::NONE, &[]),

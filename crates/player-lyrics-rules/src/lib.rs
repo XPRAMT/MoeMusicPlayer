@@ -1,4 +1,5 @@
-//! Pure rules of the Windows taskbar / floating lyrics (ADR 0018, 0031, 0032, 0034).
+//! Pure rules of the Windows taskbar / floating lyrics (ADR 0018, 0031, 0032, 0034), including where the floating
+//! panel goes on both platforms (`placement`).
 //!
 //! The reference implementation: `examples/generate_vectors.rs` writes `tests/fixtures/lyrics-rules-vectors.json`
 //! from these rules (`cargo run -p player-lyrics-rules --example generate_vectors`), and the Android
@@ -10,8 +11,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub mod east_asian_width;
 pub mod glide;
+pub mod placement;
 pub mod words;
 pub use glide::*;
+pub use placement::*;
 pub use words::*;
 
 /// The separator between lines of the continuous strip (one em wide).

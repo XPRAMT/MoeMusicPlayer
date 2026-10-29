@@ -26,6 +26,7 @@ player-wavpack = { path = "../crates/player-wavpack" }
 player-flac = { path = "../crates/player-flac" }
 player-usb-audio = { path = "../crates/player-usb-audio" }
 player-remote = { path = "../crates/player-remote" }
+player-lyrics-rules = { path = "../crates/player-lyrics-rules" }
 lofty = "0.25.4"
 tauri-plugin-media-index = { path = "../plugins/tauri-plugin-media-index" }
 base64 = "0.22"

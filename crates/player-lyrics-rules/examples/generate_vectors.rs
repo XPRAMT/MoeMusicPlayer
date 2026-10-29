@@ -1055,6 +1055,100 @@ pub fn render() -> String {
             ]));
         }
     }
+    // Floating panel placement (ADR 0032): ratio <-> pixels per axis, the kept-box clamp and the restore (Android:
+    // the display is both the ratio frame and the clamp bounds).
+    let bounds =
+        |b: PxBounds| nums(&[b.left.into(), b.top.into(), b.right.into(), b.bottom.into()]);
+    let pb = |left: i32, top: i32, right: i32, bottom: i32| PxBounds {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    let mut placement_ratio = Vec::new();
+    for (px, origin, extent) in [
+        (540, 0, 1080),
+        (240, 0, 2400),
+        (0, 0, 1080),
+        (1079, 0, 1080),
+        (1080, 0, 1080),
+        (-1920, -1920, 4480),
+        (0, -1920, 4480),
+        (2559, -1920, 4480),
+        (333, 0, 1000),
+        (1, 0, 3),
+        (2, 0, 3),
+        (17, 0, 7680),
+        (-5, 0, 1080),
+        (5, 0, 0),
+    ] {
+        placement_ratio.push(J::Obj(vec![
+            ("px", num(px.into())),
+            ("origin", num(origin.into())),
+            ("extent", num(extent.into())),
+            ("ratio", opt(position_ratio(px, origin, extent))),
+        ]));
+    }
+    let mut placement_px = Vec::new();
+    for (ratio, origin, extent) in [
+        (0.5, 0, 1080),
+        (0.1, 0, 2400),
+        (0.0, 0, 1080),
+        (1.0, 0, 1080),
+        (0.25, -1920, 4480),
+        (0.3333333333333333, 0, 3),
+        (0.6666666666666666, 0, 3),
+        (0.0005, 0, 1000),
+        (0.0015, 0, 1000),
+        (-0.0005, 0, 1000),
+        (-0.25, 100, 400),
+        (1.5, 0, 1080),
+        (0.5, 7, 0),
+    ] {
+        placement_px.push(J::Obj(vec![
+            ("ratio", num(ratio)),
+            ("origin", num(origin.into())),
+            ("extent", num(extent.into())),
+            ("px", num(position_px(ratio, origin, extent).into())),
+        ]));
+    }
+    let mut placement_clamp = Vec::new();
+    for (origin, size, area) in [
+        ((100, 200), (300, 60), pb(0, 0, 1080, 2400)),
+        ((-10, -5), (300, 60), pb(0, 0, 1080, 2400)),
+        ((900, 2390), (300, 60), pb(0, 0, 1080, 2400)),
+        ((500, 10), (2000, 60), pb(0, 0, 1080, 2400)),
+        ((500, 10), (300, 3000), pb(0, 0, 1080, 2400)),
+        ((-3000, 50), (900, 80), pb(-1920, 0, 0, 1040)),
+        ((4000, 2100), (900, 80), pb(3840, 712, 6400, 2112)),
+        ((0, 0), (0, 0), pb(0, 0, 1920, 1040)),
+    ] {
+        let (x, y) = clamp_kept_box(origin, size, area);
+        placement_clamp.push(J::Obj(vec![
+            ("origin", nums(&[origin.0.into(), origin.1.into()])),
+            ("size", nums(&[size.0.into(), size.1.into()])),
+            ("bounds", bounds(area)),
+            ("expected", nums(&[x.into(), y.into()])),
+        ]));
+    }
+    let mut placement_restore = Vec::new();
+    for (ratio, size, screen) in [
+        ((0.5, 0.1), (300, 60), pb(0, 0, 1080, 2400)),
+        ((0.5, 0.1), (300, 60), pb(0, 0, 2400, 1080)),
+        ((0.9, 0.95), (300, 60), pb(0, 0, 1080, 2400)),
+        ((0.0, 0.0), (300, 60), pb(0, 0, 1080, 2400)),
+        ((1.0, 1.0), (300, 60), pb(0, 0, 1080, 2400)),
+        ((-0.2, 0.5), (300, 60), pb(0, 0, 1080, 2400)),
+        ((0.25, 0.75), (1200, 60), pb(0, 0, 1080, 2400)),
+    ] {
+        let (x, y) = restore_area_origin(ratio, screen, size, screen);
+        placement_restore.push(J::Obj(vec![
+            ("ratio", nums(&[ratio.0, ratio.1])),
+            ("size", nums(&[size.0.into(), size.1.into()])),
+            ("screen", bounds(screen)),
+            ("expected", nums(&[x.into(), y.into()])),
+        ]));
+    }
     let sung_words = [(1000.0, 1200.0), (1200.0, 1200.0), (1300.0, 1500.0)];
     let sung = [999.0, 1000.0, 1199.0, 1200.0, 1250.0, 1400.0, 1500.0]
         .iter()
@@ -1093,6 +1187,10 @@ pub fn render() -> String {
         ("stripGlide", J::Arr(strip_glide)),
         ("centreMask", J::Arr(centre_mask)),
         ("sung", J::Arr(sung)),
+        ("placementRatio", J::Arr(placement_ratio)),
+        ("placementPx", J::Arr(placement_px)),
+        ("placementClamp", J::Arr(placement_clamp)),
+        ("placementRestore", J::Arr(placement_restore)),
     ]);
     let mut out = String::new();
     write(&vectors, 0, &mut out);

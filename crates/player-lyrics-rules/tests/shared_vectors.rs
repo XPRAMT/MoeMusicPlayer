@@ -243,6 +243,48 @@ fn word_rules_match_the_shared_vectors() {
             &c.to_string(),
         );
     }
+    let ints = |v: &Value| -> Vec<i32> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_i64().unwrap() as i32)
+            .collect()
+    };
+    let bounds = |v: &Value| {
+        let b = ints(v);
+        PxBounds {
+            left: b[0],
+            top: b[1],
+            right: b[2],
+            bottom: b[3],
+        }
+    };
+    let int = |v: &Value| v.as_i64().unwrap() as i32;
+    for c in cases(&v, "placementRatio") {
+        let ratio = position_ratio(int(&c["px"]), int(&c["origin"]), int(&c["extent"]));
+        assert_eq!(ratio.is_some(), opt(&c["ratio"]).is_some(), "{c}");
+        if let (Some(actual), Some(expected)) = (ratio, opt(&c["ratio"])) {
+            close(actual, expected, &c.to_string());
+        }
+    }
+    for c in cases(&v, "placementPx") {
+        assert_eq!(
+            position_px(f(&c["ratio"]), int(&c["origin"]), int(&c["extent"])),
+            int(&c["px"]),
+            "{c}"
+        );
+    }
+    for c in cases(&v, "placementClamp") {
+        let (o, s) = (ints(&c["origin"]), ints(&c["size"]));
+        let (x, y) = clamp_kept_box((o[0], o[1]), (s[0], s[1]), bounds(&c["bounds"]));
+        assert_eq!(vec![x, y], ints(&c["expected"]), "{c}");
+    }
+    for c in cases(&v, "placementRestore") {
+        let (r, s) = (fs(&c["ratio"]), ints(&c["size"]));
+        let screen = bounds(&c["screen"]);
+        let (x, y) = restore_area_origin((r[0], r[1]), screen, (s[0], s[1]), screen);
+        assert_eq!(vec![x, y], ints(&c["expected"]), "{c}");
+    }
     for c in cases(&v, "sung") {
         assert_eq!(
             sung_word(&pairs(&c["words"]), f(&c["t"])).map_or(-1, |i| i as i64),

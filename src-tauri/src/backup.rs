@@ -10,6 +10,11 @@
 //! Nothing is replaced while the player runs: the file is checked and unpacked into
 //! `import-pending`, and the next start (before the settings and the database are opened) moves the current files into
 //! `before-import` and the imported ones into place. Several files can be imported one after the other.
+//!
+//! Device-bound settings: `manifest.json` records the `platform` the backup was made on and a zip from the other
+//! platform is refused, so the floating lyrics positions (`floatingLyrics.position`, `landscapePosition`, ADR 0032)
+//! never reach a device of the other kind through a zip. A `settings.json` imported on its own carries no platform:
+//! its positions are kept as they are (a restored position is always clamped onto the screen).
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -1196,6 +1201,49 @@ mod tests {
         apply_pending_import(&target).unwrap();
         assert!(fs::read_to_string(target.join(FAVOURITES_NAME)).unwrap().contains("source"));
         assert!(target.join(BEFORE_IMPORT_DIRECTORY).join(SETTINGS_NAME).is_file());
+    }
+
+    #[test]
+    fn the_floating_lyrics_lock_and_positions_travel_with_the_settings() {
+        let scratch = Scratch::new("floating-positions");
+        let source = data_folder(&scratch, "source");
+        let saved = crate::settings::FloatingLyricsSettings {
+            locked: true,
+            position: Some(crate::settings::FloatingLyricsPosition { x: 0.5, y: 0.1 }),
+            landscape_position: Some(crate::settings::FloatingLyricsPosition { x: 0.25, y: 0.75 }),
+            ..Default::default()
+        };
+        let store =
+            SettingsStore::open(source.join(SETTINGS_NAME), AppSettings::default()).unwrap();
+        store
+            .update(|settings| {
+                settings.floating_lyrics = saved.clone();
+                Ok(())
+            })
+            .unwrap();
+        drop(store);
+        // The manifest says where the backup was made (a zip from the other platform is refused, see above).
+        let archive = export_selected(
+            &scratch,
+            &source,
+            &selection(false, true, false, false),
+            None,
+        )
+        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&zip_text(&archive, MANIFEST_NAME)).unwrap();
+        assert_eq!(manifest["platform"], platform_name());
+        let target = data_folder(&scratch, "target");
+        stage_import(&target, &archive, platform_name()).unwrap();
+        apply_pending_import(&target).unwrap();
+        let restored = SettingsStore::open(target.join(SETTINGS_NAME), AppSettings::default())
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .floating_lyrics;
+        assert!(restored.locked);
+        assert_eq!(restored.position, saved.position);
+        assert_eq!(restored.landscape_position, saved.landscape_position);
     }
 
     #[test]

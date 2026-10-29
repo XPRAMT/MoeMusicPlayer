@@ -24,7 +24,7 @@ test('floating lyrics settings repair field by field with their own defaults', (
     align: 'middle',
     textEffect: 'stroke',
     locked: true,
-    position: { x: -1200, y: 30.5 },
+    position: { x: 'left', y: 0.5 },
   });
   assert.equal(repaired.enabled, true);
   assert.equal(repaired.fontSizePx, 28);
@@ -57,8 +57,15 @@ test('floating lyrics settings repair field by field with their own defaults', (
   assert.equal(repaired.locked, true);
   assert.equal(repaired.position, null);
   assert.equal(repaired.showTranslation, true);
-  assert.deepEqual(normalizeFloatingLyricsSettings({ position: { x: -1200, y: 300 } }).position, { x: -1200, y: 300 });
-  assert.equal(normalizeFloatingLyricsSettings({ position: { x: 5_000_000, y: 0 } }).position, null);
+  // Positions are screen ratios (settings.rs FloatingLyricsPosition), 0 and 1 included; outside -1..2 they are dropped.
+  assert.deepEqual(normalizeFloatingLyricsSettings({ position: { x: 0.25, y: 0.1 } }).position, { x: 0.25, y: 0.1 });
+  assert.deepEqual(normalizeFloatingLyricsSettings({ position: { x: 0, y: 1 } }).position, { x: 0, y: 1 });
+  assert.equal(normalizeFloatingLyricsSettings({ position: { x: 5, y: 0 } }).position, null);
+  assert.equal(normalizeFloatingLyricsSettings({ position: { x: -1200, y: 300 } }).position, null);
+  assert.equal(normalizeFloatingLyricsSettings({ position: { x: Number.NaN, y: 0 } }).position, null);
+  assert.deepEqual(normalizeFloatingLyricsSettings({ landscapePosition: { x: 0.5, y: 0.75 } }).landscapePosition, { x: 0.5, y: 0.75 });
+  assert.equal(normalizeFloatingLyricsSettings({ landscapePosition: { x: 0.5 } }).landscapePosition, null);
+  assert.equal(normalizeFloatingLyricsSettings({}).landscapePosition, null);
   assert.equal(normalizeFloatingLyricsSettings({ fontSizePx: 0.2 }).fontSizePx, 1);
   assert.equal('displayMode' in normalizeFloatingLyricsSettings({}), false);
 });

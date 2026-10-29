@@ -1,5 +1,6 @@
 ﻿// Floating lyrics (ADR 0032): the taskbar lyrics' look options saved separately (settings.rs `FloatingLyricsSettings`),
-// plus the move/fixed mode and the window position. The line, translation and marquee rules are the taskbar ones.
+// plus the move/fixed mode and the panel position. The line, translation and marquee rules are the taskbar ones.
+// `locked`, `position` and `landscapePosition` are only shown here: Rust keeps the stored ones whatever the page sends.
 
 import {
   LYRICS_HIDE_WHEN_PAUSED_DEFAULT,
@@ -80,7 +81,11 @@ export function pressFloatingLyricsNudge(step, done, timers = globalThis) {
     done();
   };
 }
-export const FLOATING_LYRICS_POSITION_LIMIT = 1_000_000;
+/**
+ * The saved position is the lyric area's top-left as a ratio of the screen (settings.rs `FloatingLyricsPosition`,
+ * `player_lyrics_rules::position_ratio`); values outside this range are dropped like in Rust.
+ */
+export const FLOATING_LYRICS_POSITION_RATIO_RANGE = Object.freeze({ min: -1, max: 2 });
 
 /** @typedef {import('./ipc').FloatingLyricsSettings} FloatingLyricsSettings */
 
@@ -104,6 +109,7 @@ export const DEFAULT_FLOATING_LYRICS_SETTINGS = Object.freeze({
   hideWhenPaused: LYRICS_HIDE_WHEN_PAUSED_DEFAULT,
   locked: false,
   position: null,
+  landscapePosition: null,
 });
 
 /** @param {unknown} value @returns {number} */
@@ -121,12 +127,13 @@ export function floatingLyricsWidthField(isAndroid, landscape) {
   return isAndroid && landscape ? 'landscapeWidthPx' : 'widthPx';
 }
 
-/** @param {unknown} value @returns {{ x: number, y: number } | null} */
+/** A saved position (screen ratio, see FLOATING_LYRICS_POSITION_RATIO_RANGE). @param {unknown} value @returns {{ x: number, y: number } | null} */
 export function normalizeFloatingLyricsPosition(value) {
   if (typeof value !== 'object' || value === null) return null;
   const { x, y } = /** @type {Record<string, unknown>} */ (value);
-  if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
-  if (Math.abs(/** @type {number} */ (x)) > FLOATING_LYRICS_POSITION_LIMIT || Math.abs(/** @type {number} */ (y)) > FLOATING_LYRICS_POSITION_LIMIT) return null;
+  const { min, max } = FLOATING_LYRICS_POSITION_RATIO_RANGE;
+  const valid = (/** @type {unknown} */ item) => typeof item === 'number' && Number.isFinite(item) && item >= min && item <= max;
+  if (!valid(x) || !valid(y)) return null;
   return { x: /** @type {number} */ (x), y: /** @type {number} */ (y) };
 }
 
@@ -176,6 +183,7 @@ export function normalizeFloatingLyricsSettings(value) {
     hideWhenPaused: typeof source.hideWhenPaused === 'boolean' ? source.hideWhenPaused : defaults.hideWhenPaused,
     locked: typeof source.locked === 'boolean' ? source.locked : defaults.locked,
     position: normalizeFloatingLyricsPosition(source.position),
+    landscapePosition: normalizeFloatingLyricsPosition(source.landscapePosition),
   };
 }
 

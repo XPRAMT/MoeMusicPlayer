@@ -1283,16 +1283,49 @@ fn is_hex_color(value: &str) -> bool {
         && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Window position of the floating lyrics, in physical pixels of the virtual desktop (Windows; ADR 0032).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Saved place of the floating lyrics panel (ADR 0032): the lyric area's top-left as a ratio of the screen, `x =
+/// (areaX - screenLeft) / screenWidth`, `y` likewise (`player_lyrics_rules::position_ratio`). The screen is the whole
+/// virtual desktop on Windows and the display in that orientation on Android; a restored position is always clamped so
+/// the lyric area stays visible.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct FloatingLyricsPosition {
-    pub x: i32,
-    pub y: i32,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl FloatingLyricsPosition {
+    /// Ratios outside this range (or not finite) are dropped: a saved area origin is on the screen (0..1); the slack
+    /// covers a desktop that shrank since.
+    pub const RATIO_RANGE: (f64, f64) = (-1.0, 2.0);
+
+    pub fn is_valid(self) -> bool {
+        let (low, high) = Self::RATIO_RANGE;
+        [self.x, self.y]
+            .iter()
+            .all(|value| value.is_finite() && (low..=high).contains(value))
+    }
+}
+
+/// What `floatingLyrics.position` is measured in. Written with every file; a file without it is older and holds integer
+/// physical pixels of the Windows virtual desktop, converted once when it is read (see `lenient_floating_lyrics`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum FloatingLyricsPositionUnit {
+    #[default]
+    #[serde(rename = "screenRatio")]
+    ScreenRatio,
+}
+
+/// The old position (before `positionUnit`): the lyric area's top-left in physical pixels of the Windows virtual desktop.
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct LegacyFloatingLyricsPosition {
+    x: i32,
+    y: i32,
 }
 
 /// Floating lyrics (ADR 0032): the same look options as the taskbar lyrics, saved separately, plus the move/fixed
-/// mode and the window position. Android keeps its own overlay position and lock state on the phone.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// mode and the panel position (both platforms). `locked`, `position` and `landscapePosition` change only through their
+/// own commands (Windows) or the overlay's saves over JNI (Android, `android_floating`), never from the settings page.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FloatingLyricsSettings {
     pub enabled: bool,
@@ -1327,9 +1360,17 @@ pub struct FloatingLyricsSettings {
     #[serde(default = "default_hide_when_paused")]
     pub hide_when_paused: bool,
     /// Fixed mode: click-through, only the unlock button reacts. False: move mode (draggable).
+    #[serde(default)]
     pub locked: bool,
-    /// None: the default place on the primary monitor.
+    /// None: centred (Windows: on the primary monitor). On Android the portrait position.
+    #[serde(default)]
     pub position: Option<FloatingLyricsPosition>,
+    /// Android only: the landscape position (`position` is the portrait one there); Windows ignores it.
+    #[serde(default)]
+    pub landscape_position: Option<FloatingLyricsPosition>,
+    /// The unit of the positions (always the screen ratio; its absence marks an older file, see the type).
+    #[serde(default)]
+    pub position_unit: FloatingLyricsPositionUnit,
 }
 
 impl FloatingLyricsSettings {
@@ -1338,8 +1379,8 @@ impl FloatingLyricsSettings {
     pub const DEFAULT_WIDTH_PX: u16 = 800;
     /// Stored range; the page and the window also keep the lyric area within the current screen's width.
     pub const WIDTH_RANGE_PX: (u16, u16) = (100, 8192);
-    /// Far outside any real desktop; such a position is dropped.
-    pub const POSITION_LIMIT: i32 = 1_000_000;
+    /// Far outside any real desktop; such an old pixel position is dropped instead of converted.
+    pub const LEGACY_POSITION_LIMIT: i32 = 1_000_000;
 
     pub fn normalized(mut self) -> Self {
         let look = TaskbarLyricsSettings {
@@ -1366,11 +1407,11 @@ impl FloatingLyricsSettings {
             .clamp(Self::WIDTH_RANGE_PX.0, Self::WIDTH_RANGE_PX.1);
         self.translation_scale_percent = look.translation_scale_percent;
         self.custom_color = look.custom_color;
-        if self.position.is_some_and(|position| {
-            position.x.abs() > Self::POSITION_LIMIT || position.y.abs() > Self::POSITION_LIMIT
-        }) {
-            self.position = None;
-        }
+        self.position = self.position.filter(|position| position.is_valid());
+        self.landscape_position = self
+            .landscape_position
+            .filter(|position| position.is_valid());
+        self.position_unit = FloatingLyricsPositionUnit::ScreenRatio;
         self
     }
 }
@@ -1396,12 +1437,82 @@ impl Default for FloatingLyricsSettings {
             hide_when_paused: default_hide_when_paused(),
             locked: false,
             position: None,
+            landscape_position: None,
+            position_unit: FloatingLyricsPositionUnit::ScreenRatio,
         }
+    }
+}
+
+/// Whether a stored `floatingLyrics` still holds an old pixel position (a position and no `positionUnit`): reading it
+/// converts it, so the file is written back once.
+fn floating_lyrics_has_legacy_position(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|object| {
+            !object.contains_key("positionUnit")
+                && object
+                    .get("position")
+                    .is_some_and(|position| !position.is_null())
+        })
+}
+
+/// The bounds old pixel positions are converted with: the Windows virtual desktop now. None elsewhere (Android never
+/// used the old field, so such a value is a Windows desktop position and is dropped there).
+fn legacy_position_desktop() -> Option<player_lyrics_rules::PxBounds> {
+    #[cfg(target_os = "windows")]
+    return crate::floating_lyrics::virtual_desktop();
+    #[cfg(not(target_os = "windows"))]
+    None
+}
+
+/// What the settings page may change: everything but `locked`, `position` and `landscapePosition`, which keep the
+/// `stored` values (they change only through their own commands or the Android overlay's saves).
+pub fn page_floating_lyrics(
+    stored: &FloatingLyricsSettings,
+    requested: FloatingLyricsSettings,
+) -> FloatingLyricsSettings {
+    FloatingLyricsSettings {
+        locked: stored.locked,
+        position: stored.position,
+        landscape_position: stored.landscape_position,
+        ..requested
     }
 }
 
 /// Missing, malformed or out-of-range values fall back to the floating defaults field by field.
 pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> FloatingLyricsSettings {
+    let desktop = if floating_lyrics_has_legacy_position(value.as_ref()) {
+        legacy_position_desktop()
+    } else {
+        None
+    };
+    lenient_floating_lyrics_with(value, desktop)
+}
+
+/// The old pixel position as a ratio of `desktop` (None: dropped, the panel is centred).
+fn legacy_floating_position(
+    value: Option<serde_json::Value>,
+    desktop: Option<player_lyrics_rules::PxBounds>,
+) -> Option<FloatingLyricsPosition> {
+    let legacy: LegacyFloatingLyricsPosition = serde_json::from_value(value?).ok()?;
+    let limit = FloatingLyricsSettings::LEGACY_POSITION_LIMIT;
+    if legacy.x.abs() > limit || legacy.y.abs() > limit {
+        return None;
+    }
+    let desktop = desktop?;
+    Some(FloatingLyricsPosition {
+        x: player_lyrics_rules::position_ratio(legacy.x, desktop.left, desktop.width())?,
+        y: player_lyrics_rules::position_ratio(legacy.y, desktop.top, desktop.height())?,
+    })
+}
+
+/// `lenient_floating_lyrics` with the desktop old pixel positions are converted with. The unit is told by the
+/// `positionUnit` marker, never guessed from the values: with it the positions are ratios; without it the file is
+/// older, `position` is integer desktop pixels (converted with `desktop`) and there is no landscape position.
+fn lenient_floating_lyrics_with(
+    value: Option<serde_json::Value>,
+    desktop: Option<player_lyrics_rules::PxBounds>,
+) -> FloatingLyricsSettings {
     let defaults = FloatingLyricsSettings::default();
     let Some(object) = value.as_ref().and_then(serde_json::Value::as_object) else {
         return defaults;
@@ -1416,6 +1527,12 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
         field(name)
             .and_then(|value| value.as_u64())
             .map_or(fallback, |value| value.min(255) as u8)
+    };
+    let ratio_unit = field("positionUnit")
+        .and_then(|value| serde_json::from_value::<FloatingLyricsPositionUnit>(value).ok())
+        .is_some();
+    let ratio = |name: &str| {
+        field(name).and_then(|value| serde_json::from_value::<FloatingLyricsPosition>(value).ok())
     };
     FloatingLyricsSettings {
         enabled: flag("enabled", defaults.enabled),
@@ -1461,7 +1578,17 @@ pub(crate) fn lenient_floating_lyrics(value: Option<serde_json::Value>) -> Float
             .unwrap_or(defaults.animation),
         hide_when_paused: flag("hideWhenPaused", defaults.hide_when_paused),
         locked: flag("locked", defaults.locked),
-        position: field("position").and_then(|value| serde_json::from_value(value).ok()),
+        position: if ratio_unit {
+            ratio("position")
+        } else {
+            legacy_floating_position(field("position"), desktop)
+        },
+        landscape_position: if ratio_unit {
+            ratio("landscapePosition")
+        } else {
+            None
+        },
+        position_unit: FloatingLyricsPositionUnit::ScreenRatio,
     }
     .normalized()
 }
@@ -3105,6 +3232,8 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
         })
         .is_some();
     let raw: RawSettings = serde_json::from_value(value)?;
+    let legacy_floating_position =
+        floating_lyrics_has_legacy_position(raw.floating_lyrics.as_ref());
     let version = raw.schema_version.unwrap_or(0);
     if version > SETTINGS_SCHEMA_VERSION {
         return Err(SettingsError::UnsupportedVersion(version));
@@ -3182,7 +3311,7 @@ fn read_settings(path: &Path) -> Result<(AppSettings, bool), SettingsError> {
     settings.validate()?;
     Ok((
         settings,
-        version != SETTINGS_SCHEMA_VERSION || legacy_clarity_migrated,
+        version != SETTINGS_SCHEMA_VERSION || legacy_clarity_migrated || legacy_floating_position,
     ))
 }
 
@@ -4093,7 +4222,9 @@ mod tests {
             "useCustomColor": true,
             "textEffect": "stroke",
             "locked": true,
-            "position": {"x": -1200, "y": 300},
+            "positionUnit": "screenRatio",
+            "position": {"x": 0.25, "y": 0.5},
+            "landscapePosition": {"x": 0.1, "y": 0.9},
             "showTranslation": "yes"
         })));
         assert!(parsed.enabled && parsed.locked && parsed.use_custom_color);
@@ -4107,23 +4238,182 @@ mod tests {
         assert_eq!(parsed.text_effect, LyricsTextEffect::Stroke);
         assert_eq!(
             parsed.position,
-            Some(FloatingLyricsPosition { x: -1200, y: 300 })
+            Some(FloatingLyricsPosition { x: 0.25, y: 0.5 })
+        );
+        assert_eq!(
+            parsed.landscape_position,
+            Some(FloatingLyricsPosition { x: 0.1, y: 0.9 })
         );
         assert_eq!(parsed.show_translation, defaults.show_translation);
-        let far = lenient_floating_lyrics(Some(
-            serde_json::json!({"position": {"x": 5_000_000, "y": 0}}),
-        ));
-        assert_eq!(far.position, None);
-        let broken = lenient_floating_lyrics(Some(
-            serde_json::json!({"position": "here", "customColor": "red"}),
-        ));
-        assert_eq!(broken.position, None);
+        let far = lenient_floating_lyrics(Some(serde_json::json!({
+            "positionUnit": "screenRatio",
+            "position": {"x": 5.0, "y": 0.0},
+            "landscapePosition": {"x": 0.5, "y": -1.5}
+        })));
+        assert_eq!((far.position, far.landscape_position), (None, None));
+        let broken = lenient_floating_lyrics(Some(serde_json::json!({
+            "positionUnit": "screenRatio",
+            "position": "here",
+            "landscapePosition": {"x": "a", "y": 0},
+            "customColor": "red"
+        })));
+        assert_eq!((broken.position, broken.landscape_position), (None, None));
         assert_eq!(
             broken.custom_color,
             TaskbarLyricsSettings::DEFAULT_CUSTOM_COLOR
         );
         let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["positionUnit"], "screenRatio");
         assert_eq!(lenient_floating_lyrics(Some(json)), parsed);
+    }
+
+    #[test]
+    fn old_pixel_positions_are_told_by_the_missing_unit_and_converted_once() {
+        let desktop = player_lyrics_rules::PxBounds {
+            left: -1920,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        // No `positionUnit`: an older file, integer pixels of the virtual desktop (the lyric area's top-left).
+        let old = lenient_floating_lyrics_with(
+            Some(serde_json::json!({"locked": true, "position": {"x": -1200, "y": 300}})),
+            Some(desktop),
+        );
+        assert!(old.locked);
+        assert_eq!(
+            old.position,
+            Some(FloatingLyricsPosition {
+                x: 720.0 / 3840.0,
+                y: 300.0 / 1080.0
+            })
+        );
+        assert_eq!(old.landscape_position, None);
+        // 0 and 1 are pixels without the marker and ratios with it: the unit is never guessed from the values.
+        let pixels = lenient_floating_lyrics_with(
+            Some(serde_json::json!({"position": {"x": 0, "y": 1}})),
+            Some(desktop),
+        );
+        assert_eq!(
+            pixels.position,
+            Some(FloatingLyricsPosition {
+                x: 0.5,
+                y: 1.0 / 1080.0
+            })
+        );
+        let ratio = lenient_floating_lyrics_with(
+            Some(serde_json::json!({"positionUnit": "screenRatio", "position": {"x": 0, "y": 1}})),
+            Some(desktop),
+        );
+        assert_eq!(
+            ratio.position,
+            Some(FloatingLyricsPosition { x: 0.0, y: 1.0 })
+        );
+        // No desktop to convert with (Android, or no monitor), far away or not integers: dropped (centred).
+        for (value, bounds) in [
+            (serde_json::json!({"position": {"x": 10, "y": 20}}), None),
+            (
+                serde_json::json!({"position": {"x": 5_000_000, "y": 0}}),
+                Some(desktop),
+            ),
+            (
+                serde_json::json!({"position": {"x": 0.5, "y": 0.5}}),
+                Some(desktop),
+            ),
+        ] {
+            assert_eq!(
+                lenient_floating_lyrics_with(Some(value), bounds).position,
+                None
+            );
+        }
+        assert!(floating_lyrics_has_legacy_position(Some(
+            &serde_json::json!({"position": {"x": 1, "y": 2}})
+        )));
+        assert!(!floating_lyrics_has_legacy_position(Some(
+            &serde_json::json!({"position": null})
+        )));
+        assert!(!floating_lyrics_has_legacy_position(Some(
+            &serde_json::json!({"positionUnit": "screenRatio", "position": {"x": 0.1, "y": 0.2}})
+        )));
+        // Written back with the marker: reading it again is the identity (no second conversion).
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(!floating_lyrics_has_legacy_position(Some(&json)));
+        assert_eq!(lenient_floating_lyrics_with(Some(json), None), old);
+    }
+
+    #[test]
+    fn a_file_with_an_old_position_is_written_back_with_the_unit() {
+        let directory = test_directory("floating-lyrics-legacy-position");
+        let path = directory.join("settings.json");
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let floating = value["floatingLyrics"].as_object_mut().unwrap();
+        floating.remove("positionUnit");
+        floating.remove("landscapePosition");
+        floating.insert("position".into(), serde_json::json!({"x": 100, "y": 200}));
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let first = SettingsStore::open(&path, AppSettings::default())
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .floating_lyrics;
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["floatingLyrics"]["positionUnit"], "screenRatio");
+        // Converted with this machine's desktop (none: dropped); a ratio either way, never the pixels again.
+        if let Some(position) = first.position {
+            assert!(position.is_valid());
+            assert_ne!((position.x, position.y), (100.0, 200.0));
+        }
+        let second = SettingsStore::open(&path, AppSettings::default())
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .floating_lyrics;
+        // serde_json reads floats to within the last bit; any such difference is far below a pixel.
+        let close =
+            |a: Option<FloatingLyricsPosition>, b: Option<FloatingLyricsPosition>| match (a, b) {
+                (Some(a), Some(b)) => (a.x - b.x).abs() < 1e-12 && (a.y - b.y).abs() < 1e-12,
+                (a, b) => a.is_none() && b.is_none(),
+            };
+        assert!(
+            close(second.position, first.position),
+            "converted only once"
+        );
+    }
+
+    #[test]
+    fn the_page_never_overwrites_the_lock_state_or_the_positions() {
+        let stored = FloatingLyricsSettings {
+            locked: true,
+            position: Some(FloatingLyricsPosition { x: 0.2, y: 0.3 }),
+            landscape_position: Some(FloatingLyricsPosition { x: 0.4, y: 0.5 }),
+            ..FloatingLyricsSettings::default()
+        };
+        let stale = FloatingLyricsSettings {
+            enabled: true,
+            font_size_px: 40,
+            locked: false,
+            position: None,
+            landscape_position: Some(FloatingLyricsPosition { x: 0.9, y: 0.9 }),
+            ..FloatingLyricsSettings::default()
+        };
+        let saved = page_floating_lyrics(&stored, stale);
+        assert!(saved.enabled);
+        assert_eq!(saved.font_size_px, 40);
+        assert!(saved.locked);
+        assert_eq!(saved.position, stored.position);
+        assert_eq!(saved.landscape_position, stored.landscape_position);
+        // The page may leave the three out entirely (older pages, or a page that does not know them).
+        let partial: FloatingLyricsSettings = serde_json::from_value({
+            let mut value = serde_json::to_value(FloatingLyricsSettings::default()).unwrap();
+            let object = value.as_object_mut().unwrap();
+            for key in ["locked", "position", "landscapePosition", "positionUnit"] {
+                object.remove(key);
+            }
+            value
+        })
+        .unwrap();
+        assert_eq!(partial, FloatingLyricsSettings::default());
     }
 
     #[test]
