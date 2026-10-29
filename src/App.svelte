@@ -1,6 +1,6 @@
 <script lang="ts">
   import { LANGUAGE_CHOICES, getLanguageChoice, tr } from './lib/i18n.js';
-  import { displayUnknown } from './lib/unknown-label.js';
+  import { displayPlaylistName, displayUnknown } from './lib/unknown-label.js';
   import { forgetAlbumCardArtwork } from './lib/album-artwork.js';
   import { createLyricsController } from './lib/lyrics-controller.js';
   import { defaultLyricsApi } from './lib/lyrics-api';
@@ -978,7 +978,7 @@
           ? tr("專輯．{0}", [selectedAlbum?.unmarked ? tr('其它') : selectedAlbum?.displayName ?? ''])
       : activeView === 'playlists'
         ? selectedPlaylist
-          ? tr("我的播放清單．{0}", [selectedPlaylist.name.trim() || tr('未命名播放清單')])
+          ? tr("我的播放清單．{0}", [displayPlaylistName(selectedPlaylist.name)])
           : tr('我的播放清單')
         : activeView === 'queue'
           ? tr('播放佇列')
@@ -3523,7 +3523,7 @@
       if (!result) return;
       await loadPlaylists(result.playlist.id);
       await loadSources();
-      sourceSyncSummary = tr("已加入播放清單「{0}」。", [result.playlist.name]);
+      sourceSyncSummary = tr("已加入播放清單「{0}」。", [displayPlaylistName(result.playlist.name)]);
     } catch (error) {
       sourceError = getErrorText(error);
     } finally {
@@ -5239,11 +5239,11 @@
                   <ul class="sync-progress-sources">
                     {#each syncProgressSources as source (source.sourceId)}
                       <li data-source-id={source.sourceId}>
-                        <span class="sync-progress-source-name">{source.displayName}</span>
+                        <span class="sync-progress-source-name">{displayPlaylistName(source.displayName)}</span>
                         <span class="sync-progress-source-detail">{syncProgressLine(source)}</span>
                         {#if source.total !== null && source.stage !== 'finished'}
                           <progress
-                            aria-label={tr("{0} 階段進度", [source.displayName])}
+                            aria-label={tr("{0} 階段進度", [displayPlaylistName(source.displayName)])}
                             max={Math.max(1, source.total)}
                             value={Math.min(source.processed, Math.max(1, source.total))}
                           ></progress>
@@ -5642,7 +5642,7 @@
               </div>
             {:else if selectedPlaylist}
               <div class="playlist-browser">
-                <section class="playlist-detail" aria-label={selectedPlaylist.name.trim() || tr('未命名播放清單')}>
+                <section class="playlist-detail" aria-label={displayPlaylistName(selectedPlaylist.name)}>
                   <PlaylistEntryList
                     playlistId={selectedPlaylist.id}
                     resetKey={playlistListRevision}

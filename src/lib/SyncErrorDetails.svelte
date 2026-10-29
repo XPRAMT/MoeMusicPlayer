@@ -1,5 +1,6 @@
 ﻿<script lang="ts">
   import { tr } from './i18n.js';
+  import { displayPlaylistName } from './unknown-label.js';
   import { invokeCommand, type LibrarySource, type SourceSyncResult } from './ipc';
 
   let {
@@ -93,7 +94,7 @@
 
     {#each savedErrorFallbacks as source (source.id)}
       <div class="sync-saved-error">
-        <strong>{source.displayName}{tr("：上次記錄的同步錯誤原因")}</strong>
+        <strong>{displayPlaylistName(source.displayName)}{tr("：上次記錄的同步錯誤原因")}</strong>
         <p>{tr("未保存逐項明細，可能來自先前同步。")}</p>
         <code>{source.lastError?.trim()}</code>
       </div>

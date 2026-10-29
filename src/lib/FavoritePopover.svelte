@@ -6,6 +6,7 @@
   import { getPopoverHorizontalShiftPx } from './volume-popover-position.js';
   import { readSafeInsets } from './safe-viewport.js';
   import { appTooltip } from './app-tooltip.js';
+  import { displayPlaylistName } from './unknown-label.js';
 
   interface Props {
     trackId: string | null;
@@ -243,10 +244,10 @@
                   type="checkbox"
                   checked={playlist.selected}
                   disabled={!playlist.writable || loading || busySourceId !== null}
-                  aria-label={tr("加入{0}", [playlist.displayName])}
+                  aria-label={tr("加入{0}", [displayPlaylistName(playlist.displayName)])}
                   onchange={(event) => void changeMembership(playlist, event.currentTarget.checked)}
                 />
-                <span>{playlist.displayName}</span>
+                <span>{displayPlaylistName(playlist.displayName)}</span>
                 {#if !playlist.writable}
                   <small>
                     {#if playlist.reason === 'notOnServer'}

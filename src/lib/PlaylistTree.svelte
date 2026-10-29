@@ -4,6 +4,7 @@
   import type { PlaylistSummary } from './ipc';
   import { appTooltip } from './app-tooltip.js';
   import MiddleEllipsis from './MiddleEllipsis.svelte';
+  import { displayPlaylistName } from './unknown-label.js';
 
   interface Props {
     playlists: PlaylistSummary[];
@@ -36,12 +37,12 @@
           class:selected={active && selectedPlaylistId === playlist.id}
           type="button"
           aria-current={active && selectedPlaylistId === playlist.id ? 'page' : undefined}
-          use:appTooltip={playlist.name.trim() || tr('未命名播放清單')}
+          use:appTooltip={displayPlaylistName(playlist.name)}
           onclick={() => choosePlaylist(playlist.id)}
         >
           <IconPlaylist size={17} stroke={1.6} aria-hidden="true" />
           <span class="playlist-tree-copy">
-            <strong><MiddleEllipsis text={playlist.name.trim() || tr('未命名播放清單')} mode="end" /></strong>
+            <strong><MiddleEllipsis text={displayPlaylistName(playlist.name)} mode="end" /></strong>
             <small>{playlist.entryCount.toLocaleString()} {tr("個項目")}</small>
           </span>
         </button>

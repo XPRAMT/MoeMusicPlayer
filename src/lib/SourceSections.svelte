@@ -3,6 +3,7 @@
   // source (this device or a remote server). The pages only supply the lists and what the buttons do.
   import { tr } from './i18n.js';
   import { appTooltip } from './app-tooltip.js';
+  import { displayPlaylistName } from './unknown-label.js';
 
   export type SourceRow = {
     id: string;
@@ -52,7 +53,7 @@
 {#snippet sourceRows(rows: SourceRow[], removable: 'source' | 'excluded')}
   {#each rows as row (row.id)}
     <div class="configured-source">
-      <div class="configured-source-copy"><strong>{row.displayName}</strong><small class="configured-source-location" use:appTooltip={row.location}>{row.location}</small></div>
+      <div class="configured-source-copy"><strong>{displayPlaylistName(row.displayName)}</strong><small class="configured-source-location" use:appTooltip={row.location}>{row.location}</small></div>
       <div class="configured-source-actions">
         {#if removable === 'source'}
           <label><input type="checkbox" checked={row.enabled} {disabled} onchange={(event) => onToggle(row, event.currentTarget.checked)} />{tr("啟用")}</label>
