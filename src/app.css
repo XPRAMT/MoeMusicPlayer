@@ -3652,14 +3652,15 @@ input:focus-visible {
   padding-bottom: 7px;
 }
 
-.excluded-folder-picker {
-  /* Match the top 「選擇資料夾」row spacing after the registered-sources list. */
-  margin-top: 13px;
+.configured-sources-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.configured-sources.excluded-folders {
-  /* Same gap as between the top picker row and 「已加入的來源」. */
-  margin-top: 13px;
+.configured-sources-heading > .soft-button {
+  flex: none;
 }
 
 .configured-sources-heading {

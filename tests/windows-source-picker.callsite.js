@@ -51,7 +51,7 @@
   await page.waitForSelector('.app-shell');
   await page.getByRole('button', { name: '設定', exact: true }).click();
   await page.getByRole('tab', { name: '音樂來源' }).click();
-  await page.locator('.source-folder-form, .source-folder-picker').first().waitFor();
+  await page.locator('.source-folder-form, .configured-sources-heading').first().waitFor();
 
   const pickerButton = page.getByRole('button', { name: '選擇資料夾', exact: true });
   await pickerButton.waitFor();
