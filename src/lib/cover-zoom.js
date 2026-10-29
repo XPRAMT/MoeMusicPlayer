@@ -270,7 +270,7 @@ export function coverZoom(node, params) {
   let reraster = createRerasterState(1, clock());
   /** @type {ReturnType<typeof setTimeout> | null} */
   let rerasterTimer = null;
-  /** The nudge in flight: the transition to restore, what it last wrote as `transition`, its restore timer. @type {{ prev: string, transition: string, restoreTimer: ReturnType<typeof setTimeout> | null } | null} */
+  /** The nudge in flight: the transition to restore, what it last wrote as `transition`, its restore timer. @type {{ prev: string, transition: string, restoreTimer: ReturnType<typeof setTimeout> | null, guardTimer: ReturnType<typeof setTimeout> | null } | null} */
   let nudge = null;
   /** Re-checks of the nudge timer made while swipe feedback was on the stage. */
   let feedbackWaits = 0;
