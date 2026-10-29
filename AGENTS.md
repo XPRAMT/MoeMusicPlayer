@@ -115,4 +115,5 @@ MoeMusicPlayer 是以本機音樂庫為核心的 Windows／Android 播放器。�
 - Tauri IPC、使用者資料、播放生命週期及更新流程：[`src-tauri/AGENTS.md`](src-tauri/AGENTS.md)
 - Rust Core、SQLite、排序／分組、跨平台資料與音訊邊界：[`crates/AGENTS.md`](crates/AGENTS.md)
 - 各功能目前狀態（行為、關鍵名稱、待驗收項目）：`docs/status/` 下依領域分檔，入口見「功能索引」。
+- 反覆修復過的功能的修復經過、邊界情況與驗證方式：`docs/lessons/`。改播放頁封面縮放（`cover-zoom.md`）、專輯詳情頁收合／摘要／封面掃描（`album-detail.md`）、Android root／Shizuku 與 USB 獨佔權限（`android-privileged-permissions.md`）、藍牙取樣率跟隨／混音器取樣率（`bluetooth-rate-follow.md`）之前先讀對應檔。
 - 產品詞彙：[`CONTEXT.md`](CONTEXT.md)；架構決策：[`docs/adr/`](docs/adr/)

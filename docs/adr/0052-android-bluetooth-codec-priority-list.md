@@ -45,3 +45,5 @@ Kotlin `BluetoothCodecChoiceTest` (keys, stack order, shown/reorder, target, swi
 ## Not done / not verified
 
 Not verified on any device: that `codecsLocalCapabilities` carries the codecs the phone can encode on the NX809J (including LHDC and other vendor codecs on Android 15+, and what `getCodecId()` returns for them); that `setCodecConfigPreference` with the built config (extended type copied from the headset's capability, priority highest, codec-specific 0) switches the WF-1000XM6 between LDAC and AAC/SBC and what the mute sounds like; that capability priorities give a sensible stack order; the restore after the switch is turned off; the broadcast timing at connect (the order is applied once the stack announced or the helper read the codecs); Shizuku; Android 13 and 14 (no extended codecs).
+
+修復經過、邊界情況與驗證方式：[`docs/lessons/bluetooth-rate-follow.md`](../lessons/bluetooth-rate-follow.md)。

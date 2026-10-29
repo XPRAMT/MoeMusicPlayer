@@ -37,3 +37,5 @@ Status: 已採納
 ### 列表文字省略的快取（效能）
 
 手機（Android）捲動曲庫列表 25 秒的 CDP CPU 剖析：主執行緒 64% 非閒置，`MiddleEllipsis` 約 4.3 秒（`measureText` 1.2 秒、`canvas.getContext` 0.4 秒、儲存格 `layout()` 自身 2.2 秒加 GC）。原因：每個儲存格每次 `layout()` 都讀 `getComputedStyle(host).font`（強制樣式重算）與 `host.clientWidth`（強制版面），並對每次量測呼叫 `getContext` 與設定 `context.font`，再對切片字串二分搜尋 `measureText`，沒有任何快取；虛擬列表換列時 20–30 列 × 3 欄全部重做。改為：共用 LRU 快取（寬度與結果各 4096 筆）、放得下就不搜尋、寬度取自 `ResizeObserver`、字型每個儲存格只讀一次、全 App 共用一個 canvas context。演算法與輸出不變（`ellipsis-fit.test.mjs` 與原演算法逐字比對）。實測（手機 debug 版，相同 25 秒捲動）：第一版（只加快取）反而升到 87% 非閒置，原因是字型在每個儲存格每次排版都重讀（約 21 萬次）；修正為字型依 `fontContext` 快取、共用一個 `ResizeObserver`、寬度沒變就跳過排版後，非閒置 37.6%（原 64%）、量測文字與 `getContext` 約 0.07 秒（原 1.6 秒）、字型讀取 11 次、版面讀取 0 次、排版次數等於觀察器回呼次數。未達 30% 的目標；剩下的成本主要是虛擬列表換列時的元件建立與銷毀（25 秒約 8,300 次，鍵為曲目 id，換曲目必然新建，屬設計結果）。不做逐字元寬度近似與讀寫階段批次化（使用者決定）。
+
+修復經過、邊界情況與驗證方式：[`docs/lessons/album-detail.md`](../lessons/album-detail.md)。
